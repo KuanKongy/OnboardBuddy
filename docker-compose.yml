@@ -1,0 +1,25 @@
+services:
+  backend-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.api
+    env_file:
+      - backend/.env
+    ports:
+      - "3000:3000"
+
+  backend-worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile.worker
+    env_file:
+      - backend/.env
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend-api

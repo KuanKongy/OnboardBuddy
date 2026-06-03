@@ -5,6 +5,10 @@
 - Sahib Rao
 - Bradley Sakran
 
+## Milestone 1
+- [Proposal document](doc/Team-15-proposal.pdf)
+- [Design document](doc/Team-15-design.pdf)
+
 # OnboardBuddy
 
 ## Project Description
@@ -37,15 +41,115 @@ When code changes, the platform compares file and symbol hashes across analysis 
 
 | Layer | Technology |
 | ----- | ----- |
-| Frontend | React + TypeScript, React Flow / D3.js |
-| Backend | Node.js + Express + TypeScript |
+| Frontend | React + TypeScript, Tailwind CSS, React Flow / D3.js |
+| Backend API | Node.js + Express + TypeScript |
+| Backend Worker | Node.js + TypeScript |
 | Static Analysis | TypeScript Compiler API |
 | Auth | Supabase Auth |
 | Database | Supabase PostgreSQL |
-| Repo Access | GitHub API + Git CLI |
+| Queue / Cache | Redis |
+| Repo Access | GitHub API + Git operations |
 | AI | OpenAI API (explanation generation only) |
 | Infra | Docker, GitHub Actions |
 
-## Milestone 1
-- [Proposal document](doc/Team-15-proposal.pdf)
-- [Design document](doc/Team-15-design.pdf)
+## Local Setup
+
+This repository is scaffolded as an npm workspace with separate frontend and backend packages.
+
+### Prerequisites
+
+- Node.js 22+
+- npm 10+
+- Supabase project
+- Redis instance for worker queues
+- GitHub OAuth app credentials
+- OpenAI API key, only if cloud-assisted explanations are enabled
+
+### Install
+
+```sh
+npm install
+```
+
+### Environment
+
+Create local env files from the templates:
+
+```sh
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+```
+
+Fill in the Supabase, Redis, GitHub OAuth, and OpenAI values as needed.
+
+### Database
+
+The initial schema is in:
+
+```txt
+backend/supabase/migrations/001_initial_schema.sql
+```
+
+Apply it through the Supabase SQL editor or your team's migration flow.
+
+### Development
+
+Run the frontend plus backend API and worker:
+
+```sh
+npm run dev
+```
+
+Run one app:
+
+```sh
+npm run dev:backend
+npm run dev:frontend
+```
+
+Run backend processes separately:
+
+```sh
+npm run dev:api -w backend
+npm run dev:worker -w backend
+```
+
+Backend entrypoints are intentionally separate:
+
+- API: `backend/src/api/server.ts`
+- Worker: `backend/src/worker/index.ts`
+
+Backend tests follow the same split:
+
+- API tests: `backend/test/api`
+- Worker tests: `backend/test/worker`
+- Analysis/ranking/AI/drift skeletons: `backend/test/analysis`, `backend/test/ranking`, `backend/test/ai`, `backend/test/drift`
+
+Default local URLs:
+
+- Backend API: `http://localhost:3000/api`
+- Health check: `http://localhost:3000/api/health`
+- Frontend: `http://localhost:5173`
+
+### Verification
+
+```sh
+npm run lint
+npm run test
+npm run build
+```
+
+The current implementation is intentionally a backbone only. The health check and app shell are real; product features are represented by placeholders and todo-style tests.
+
+### Docker
+
+After creating `backend/.env`, build and run the backend API, backend worker, and frontend containers:
+
+```sh
+docker compose up --build
+```
+
+The API and worker use separate Dockerfiles:
+
+- API: `backend/Dockerfile.api`
+- Worker: `backend/Dockerfile.worker`
