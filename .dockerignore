@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.git
+.DS_Store
+backend/tmp
+frontend/dist
+backend/dist
+.env
+.env.*
