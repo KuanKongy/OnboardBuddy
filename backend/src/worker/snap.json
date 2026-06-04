@@ -25,7 +25,7 @@
       }
     ],
     "detectedLanguage": "typescript",
-    "scannedAt": "2026-06-04T05:15:58.145Z"
+    "scannedAt": "2026-06-04T05:27:59.701Z"
   },
   "fileAnalyses": [
     {
@@ -84,6 +84,12 @@
           "kind": "arrow-function",
           "exported": true,
           "signature": "(email: string) => string",
+          "parameters": [
+            {
+              "name": "email",
+              "type": "string"
+            }
+          ],
           "isAsync": false,
           "callsSymbols": [
             "email.trim().toLowerCase",
@@ -131,6 +137,12 @@
           "kind": "function",
           "exported": true,
           "signature": "(scope: string) => Logger",
+          "parameters": [
+            {
+              "name": "scope",
+              "type": "string"
+            }
+          ],
           "isAsync": false,
           "callsSymbols": [
             "console.log",
@@ -195,6 +207,7 @@
             {
               "name": "listActiveUsers",
               "signature": "() => Promise<UserSummary[]>",
+              "parameters": [],
               "isAsync": true,
               "accessibility": "public"
             }
@@ -301,5 +314,5 @@
       "src/index.ts"
     ]
   },
-  "createdAt": "2026-06-04T05:15:58.379Z"
+  "createdAt": "2026-06-04T05:27:59.936Z"
 }
