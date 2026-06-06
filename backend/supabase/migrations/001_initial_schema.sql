@@ -17,25 +17,9 @@ create table public.github_connections (
   unique (user_id, github_user_id)
 );
 
-create table public.teams (
-  id uuid primary key default gen_random_uuid(),
-  name varchar not null,
-  created_by uuid not null references public.users(id) on delete restrict,
-  created_at timestamptz not null default now()
-);
-
-create table public.team_members (
-  team_id uuid not null references public.teams(id) on delete cascade,
-  user_id uuid not null references public.users(id) on delete cascade,
-  role varchar not null check (role in ('owner', 'admin', 'member')),
-  joined_at timestamptz not null default now(),
-  primary key (team_id, user_id)
-);
-
 create table public.projects (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
-  team_id uuid references public.teams(id) on delete set null,
   repo_owner varchar not null,
   repo_name varchar not null,
   branch varchar not null,
@@ -45,12 +29,39 @@ create table public.projects (
   unique (user_id, repo_owner, repo_name, branch)
 );
 
+create table public.project_members (
+  project_id uuid not null references public.projects(id) on delete cascade,
+  user_id uuid not null references public.users(id) on delete cascade,
+  permission_tier varchar not null check (permission_tier in ('owner', 'admin', 'developer')),
+  developer_role varchar not null default 'general'
+    check (developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  joined_at timestamptz not null default now(),
+  primary key (project_id, user_id)
+);
+
+create table public.project_invitations (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  email varchar not null,
+  permission_tier varchar not null default 'developer'
+    check (permission_tier in ('owner', 'admin', 'developer')),
+  developer_role varchar
+    check (developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  invited_by uuid not null references public.users(id) on delete restrict,
+  accepted_by uuid references public.users(id) on delete set null,
+  status varchar not null default 'pending'
+    check (status in ('pending', 'accepted', 'revoked', 'expired')),
+  created_at timestamptz not null default now(),
+  expires_at timestamptz,
+  accepted_at timestamptz
+);
+
 create table public.project_settings (
   project_id uuid primary key references public.projects(id) on delete cascade,
   ignored_paths text[] not null default array['node_modules', 'dist', '.git', '.env'],
   ai_enabled boolean not null default false,
-  default_role varchar not null default 'general'
-    check (default_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  default_developer_role varchar not null default 'general'
+    check (default_developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   file_limit integer not null default 5000 check (file_limit > 0),
   loc_limit integer not null default 250000 check (loc_limit > 0)
 );
@@ -70,9 +81,28 @@ create table public.analysis_snapshots (
   unique (project_id, commit_hash)
 );
 
+create table public.analysis_jobs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  snapshot_id uuid references public.analysis_snapshots(id) on delete set null,
+  requested_by uuid not null references public.users(id) on delete restrict,
+  job_type varchar not null
+    check (job_type in ('analyze_project', 'generate_onboarding', 'regenerate_section')),
+  role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  status varchar not null default 'queued'
+    check (status in ('queued', 'running', 'complete', 'failed')),
+  progress_pct integer not null default 0 check (progress_pct between 0 and 100),
+  current_step varchar,
+  error_message text,
+  created_at timestamptz not null default now(),
+  started_at timestamptz,
+  finished_at timestamptz
+);
+
 create table public.graph_nodes (
   id uuid primary key default gen_random_uuid(),
   snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,
   type varchar not null,
   name varchar not null,
   file_path varchar not null,
@@ -129,10 +159,36 @@ create table public.workflow_scores (
   ranking_reasons text[] not null default '{}'
 );
 
-create table public.package_sections (
+create table public.onboarding_packages (
   id uuid primary key default gen_random_uuid(),
   snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
-  type varchar not null,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  role varchar not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  status varchar not null default 'generating'
+    check (status in ('generating', 'draft', 'approved', 'stale', 'failed')),
+  generated_by uuid not null references public.users(id) on delete restrict,
+  analyzed_commit varchar not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, role, analyzed_commit)
+);
+
+create table public.package_sections (
+  id uuid primary key default gen_random_uuid(),
+  package_id uuid not null references public.onboarding_packages(id) on delete cascade,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  type varchar not null
+    check (type in (
+      'start_here',
+      'entry_points',
+      'critical_25',
+      'workflow_guide',
+      'data_schema',
+      'safety_rails',
+      'dependency_graph',
+      'architecture',
+      'doc_health'
+    )),
   title varchar not null,
   content text not null default '',
   confidence varchar not null default 'low' check (confidence in ('high', 'medium', 'low')),
@@ -140,6 +196,7 @@ create table public.package_sections (
     check (review_status in ('draft', 'approved', 'edited', 'stale', 'regenerate_requested')),
   analyzed_commit varchar not null,
   role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  generation_context jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   reviewed_at timestamptz,
   reviewed_by uuid references public.users(id) on delete set null
@@ -149,6 +206,8 @@ create table public.source_receipts (
   id uuid primary key default gen_random_uuid(),
   section_id uuid not null references public.package_sections(id) on delete cascade,
   node_id uuid references public.graph_nodes(id) on delete set null,
+  node_stable_key varchar,
+  node_hash varchar,
   file_path varchar not null,
   symbol_name varchar,
   line_start integer,
@@ -179,29 +238,40 @@ create table public.stale_flags (
 create table public.role_paths (
   id uuid primary key default gen_random_uuid(),
   snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  package_id uuid not null references public.onboarding_packages(id) on delete cascade,
   role varchar not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   step_order integer not null,
   workflow_id uuid references public.workflows(id) on delete set null,
   section_id uuid references public.package_sections(id) on delete set null,
   title varchar not null,
   reason text not null,
-  unique (snapshot_id, role, step_order)
+  unique (package_id, step_order)
 );
 
 create index idx_github_connections_user_id on public.github_connections(user_id);
-create index idx_team_members_user_id on public.team_members(user_id);
+create index idx_project_members_user_id on public.project_members(user_id);
+create index idx_project_invitations_project_id on public.project_invitations(project_id);
+create index idx_project_invitations_email on public.project_invitations(email);
+create index idx_project_invitations_email_status on public.project_invitations(email, status);
+create unique index idx_project_invitations_pending_unique_email
+  on public.project_invitations(project_id, lower(email))
+  where status = 'pending';
 create index idx_projects_user_id on public.projects(user_id);
-create index idx_projects_team_id on public.projects(team_id);
 create index idx_analysis_snapshots_project_id on public.analysis_snapshots(project_id);
+create index idx_analysis_jobs_project_status on public.analysis_jobs(project_id, status);
 create index idx_graph_nodes_snapshot_id on public.graph_nodes(snapshot_id);
 create index idx_graph_nodes_file_path on public.graph_nodes(snapshot_id, file_path);
+create unique index idx_graph_nodes_snapshot_stable_key on public.graph_nodes(snapshot_id, stable_key);
 create index idx_graph_edges_snapshot_id on public.graph_edges(snapshot_id);
 create index idx_graph_edges_source_node_id on public.graph_edges(source_node_id);
 create index idx_graph_edges_target_node_id on public.graph_edges(target_node_id);
 create index idx_workflows_snapshot_id on public.workflows(snapshot_id);
 create index idx_workflow_steps_workflow_id on public.workflow_steps(workflow_id);
+create index idx_onboarding_packages_project_role on public.onboarding_packages(project_id, role);
 create index idx_package_sections_snapshot_id on public.package_sections(snapshot_id);
+create index idx_package_sections_package_id on public.package_sections(package_id);
 create index idx_source_receipts_section_id on public.source_receipts(section_id);
+create index idx_source_receipts_node_stable_key on public.source_receipts(node_stable_key);
 create index idx_doc_links_snapshot_id on public.doc_links(snapshot_id);
 create index idx_stale_flags_snapshot_id on public.stale_flags(snapshot_id);
 create index idx_role_paths_snapshot_role on public.role_paths(snapshot_id, role);
