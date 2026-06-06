@@ -1,10 +1,10 @@
 import { Activity, BookOpen, GitBranch, Network, ShieldCheck } from "lucide-react";
 import { NavLink, Route, Routes } from "react-router-dom";
 import { DashboardPage } from "./pages/DashboardPage";
-import { DriftPage } from "./pages/DriftPage";
 import { GraphPage } from "./pages/GraphPage";
 import { ImportPage } from "./pages/ImportPage";
 import { PackagePage } from "./pages/PackagePage";
+import { StaleSectionsPage } from "./pages/StaleSectionsPage";
 import { WalkthroughPage } from "./pages/WalkthroughPage";
 
 const navItems = [
@@ -50,7 +50,7 @@ export default function App() {
           <Route path="/package" element={<PackagePage />} />
           <Route path="/walkthrough" element={<WalkthroughPage />} />
           <Route path="/graph" element={<GraphPage />} />
-          <Route path="/drift" element={<DriftPage />} />
+          <Route path="/stale-sections" element={<StaleSectionsPage />} />
         </Routes>
       </main>
     </div>
