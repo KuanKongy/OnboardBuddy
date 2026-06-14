@@ -4,7 +4,10 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "types": ["vitest/globals", "@testing-library/jest-dom"],
-    "baseUrl": "."
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }
