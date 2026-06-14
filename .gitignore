@@ -12,3 +12,6 @@ coverage/
 backend/tmp/
 backend/.supabase/
 frontend/.vite/
+doc/Team*.md
+doc/Design.md
+backend/github-app.pem

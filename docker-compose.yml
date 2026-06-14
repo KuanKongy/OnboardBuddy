@@ -5,6 +5,8 @@ services:
       dockerfile: backend/Dockerfile.api
     env_file:
       - backend/.env
+    volumes:
+      - ./backend/github-app.pem:/app/backend/github-app.pem:ro
     ports:
       - "3000:3000"
 
@@ -14,6 +16,8 @@ services:
       dockerfile: backend/Dockerfile.worker
     env_file:
       - backend/.env
+    volumes:
+      - ./backend/github-app.pem:/app/backend/github-app.pem:ro
 
   frontend:
     build:

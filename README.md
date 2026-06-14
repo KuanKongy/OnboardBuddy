@@ -54,102 +54,70 @@ When code changes, the platform compares file and symbol hashes across analysis 
 
 ## Local Setup
 
-This repository is scaffolded as an npm workspace with separate frontend and backend packages.
+The app runs via **Docker Compose only**. Frontend, backend API, and backend worker start together as containers. External services (Supabase, Upstash Redis, GitHub, OpenRouter) stay in the cloud — see [doc/DEVOPS.md](doc/DEVOPS.md) for full setup.
 
 ### Prerequisites
 
-- Node.js 22+
-- npm 10+
-- Supabase project
-- Redis instance for BullMQ worker queues
-- GitHub OAuth app credentials
-- OpenRouter API key and default OpenAI provider/model values, only if cloud-assisted explanations are enabled
-
-### Install
-
-```sh
-npm install
-```
+- Docker and Docker Compose
+- Supabase project (Auth + PostgreSQL)
+- Upstash Redis (TCP/TLS endpoint for BullMQ)
+- GitHub OAuth App (Supabase login) and GitHub App (repo import)
+- OpenRouter API key (if cloud-assisted AI explanations are enabled)
 
 ### Environment
 
-Create local env files from the templates:
+Create env files from the templates and fill in your credentials:
 
 ```sh
 cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env
 ```
 
-Fill in the Supabase, Redis/BullMQ, GitHub OAuth, and OpenRouter/OpenAI default-provider values as needed.
+`backend/.env` is required — the API and worker containers load it via `docker-compose.yml`.
 
 ### Database
 
-The initial schema is in:
+Apply the initial schema once in Supabase (SQL Editor or `psql`):
 
 ```txt
 backend/supabase/migrations/001_initial_schema.sql
 ```
 
-Apply it through the Supabase SQL editor or your team's migration flow.
+The migration is idempotent. To reset everything, run `backend/supabase/migrations/000_drop_all.sql`, then apply `001_initial_schema.sql` again.
 
-### Development
+### Start the app
 
-Run the frontend plus backend API and worker:
-
-```sh
-npm run dev
-```
-
-Run one app:
-
-```sh
-npm run dev:backend
-npm run dev:frontend
-```
-
-Run backend processes separately:
-
-```sh
-npm run dev:api -w backend
-npm run dev:worker -w backend
-```
-
-Backend entrypoints are intentionally separate:
-
-- API: `backend/src/api/server.ts`
-- Worker: `backend/src/worker/index.ts`
-
-Backend tests follow the same split:
-
-- API tests: `backend/test/api`
-- Worker tests: `backend/test/worker`
-- Analysis/ranking/AI/incremental re-analysis skeletons: `backend/test/analysis`, `backend/test/ranking`, `backend/test/ai`, `backend/test/incremental-reanalysis`
-
-Default local URLs:
-
-- Backend API: `http://localhost:3000/api`
-- Health check: `http://localhost:3000/api/health`
-- Frontend: `http://localhost:5173`
-
-### Verification
-
-```sh
-npm run lint
-npm run test
-npm run build
-```
-
-The current implementation is intentionally a backbone only. The health check and app shell are real; product features are represented by placeholders and todo-style tests.
-
-### Docker
-
-After creating `backend/.env`, build and run the backend API, backend worker, and frontend containers:
+From the repo root:
 
 ```sh
 docker compose up --build
 ```
 
-The API and worker use separate Dockerfiles:
+Run in the background:
+
+```sh
+docker compose up --build -d
+```
+
+Ensure `frontend/.env` exists before building — Vite reads it during the frontend image build to embed Supabase and API settings.
+
+Stop:
+
+```sh
+docker compose down
+```
+
+### Services and URLs
+
+| Service | Container | URL |
+| ------- | --------- | --- |
+| Frontend | `frontend` | http://localhost:5173 |
+| Backend API | `backend-api` | http://localhost:3000/api |
+| Health check | `backend-api` | http://localhost:3000/api/health |
+| Backend worker | `backend-worker` | (no HTTP port) |
+
+Dockerfiles:
 
 - API: `backend/Dockerfile.api`
 - Worker: `backend/Dockerfile.worker`
+- Frontend: `frontend/Dockerfile`
