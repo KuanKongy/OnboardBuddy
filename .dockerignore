@@ -7,4 +7,6 @@ backend/tmp
 frontend/dist
 backend/dist
 .env
+backend/.env
 .env.*
+!frontend/.env
