@@ -204,15 +204,9 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { installation_id } = req.body as { installation_id: number };
-
-    if (!installation_id) {
-      res.status(400).json({ error: "installation_id is required" });
-      return;
-    }
 
     const projectResult = await query(
-      `SELECT id, repo_owner, repo_name, branch FROM projects WHERE id = $1`,
+      `SELECT id, branch FROM projects WHERE id = $1`,
       [projectId],
     );
     if (projectResult.rows.length === 0) {
@@ -220,12 +214,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       return;
     }
 
-    const project = projectResult.rows[0] as {
-      id: string;
-      repo_owner: string;
-      repo_name: string;
-      branch: string;
-    };
+    const project = projectResult.rows[0] as { id: string; branch: string };
 
     await query(
       `UPDATE projects SET status = 'analyzing' WHERE id = $1`,
@@ -235,23 +224,13 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     const jobResult = await query(
       `INSERT INTO analysis_jobs (project_id, requested_by, job_type, status, current_step)
        VALUES ($1, $2, 'analyze_project', 'queued', 'Waiting for worker')
-       RETURNING id, status, job_type`,
+       RETURNING id, status`,
       [projectId, userId],
     );
 
     const dbJobId: string = jobResult.rows[0].id;
 
-    const jobData: AnalysisJobData = {
-      jobId: dbJobId,
-      projectId,
-      triggeredBy: userId,
-      repoOwner: project.repo_owner,
-      repoName: project.repo_name,
-      branch: project.branch,
-      installationId: installation_id,
-    };
-
-    await analysisQueue.add('analyze_project', jobData, {
+    await analysisQueue.add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },
