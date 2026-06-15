@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { analysisQueue } from "../../lib/queue.js";
+import type { AnalysisJobData } from "../../lib/queue.js";
 
 export const projectsRouter = Router();
 
@@ -200,11 +202,17 @@ projectsRouter.delete("/:id", requireProjectAccess("owner"), async (req, res) =>
 
 projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
-    const projectId = req.params.id;
+    const projectId = req.params.id as string;
     const userId = req.user!.id;
+    const { installation_id } = req.body as { installation_id: number };
+
+    if (!installation_id) {
+      res.status(400).json({ error: "installation_id is required" });
+      return;
+    }
 
     const projectResult = await query(
-      `SELECT id, branch FROM projects WHERE id = $1`,
+      `SELECT id, repo_owner, repo_name, branch FROM projects WHERE id = $1`,
       [projectId],
     );
     if (projectResult.rows.length === 0) {
@@ -212,7 +220,12 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       return;
     }
 
-    const project = projectResult.rows[0] as { id: string; branch: string };
+    const project = projectResult.rows[0] as {
+      id: string;
+      repo_owner: string;
+      repo_name: string;
+      branch: string;
+    };
 
     await query(
       `UPDATE projects SET status = 'analyzing' WHERE id = $1`,
@@ -226,9 +239,27 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       [projectId, userId],
     );
 
+    const dbJobId: string = jobResult.rows[0].id;
+
+    const jobData: AnalysisJobData = {
+      jobId: dbJobId,
+      projectId,
+      triggeredBy: userId,
+      repoOwner: project.repo_owner,
+      repoName: project.repo_name,
+      branch: project.branch,
+      installationId: installation_id,
+    };
+
+    await analysisQueue.add('analyze_project', jobData, {
+      jobId: dbJobId,
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 5000 },
+    });
+
     res.status(202).json({
       analysis: {
-        id: jobResult.rows[0].id,
+        id: dbJobId,
         status: jobResult.rows[0].status,
         mode: "initial",
         branch: project.branch,
