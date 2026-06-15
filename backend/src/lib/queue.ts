@@ -17,9 +17,4 @@ export { connection };
 export interface AnalysisJobData {
   jobId: string;
   projectId: string;
-  triggeredBy: string;
-  repoOwner: string;
-  repoName: string;
-  branch: string;
-  installationId: number;
 }
