@@ -1,3 +1,6 @@
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import "dotenv/config";
 
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 5000);
