@@ -1,18 +1,30 @@
 import { Queue, QueueOptions } from 'bullmq';
 
-const connection = {
-  host: process.env.REDIS_HOST ?? 'localhost',
-  port: Number(process.env.REDIS_PORT ?? 6379),
-  password: process.env.REDIS_PASSWORD,
-};
+function buildConnection() {
+  const url = process.env.REDIS_URL;
+  if (url) {
+    const parsed = new URL(url);
+    return {
+      host: parsed.hostname,
+      port: Number(parsed.port) || 6379,
+      password: parsed.password || undefined,
+      tls: parsed.protocol === 'rediss:' ? {} : undefined,
+    };
+  }
+  return {
+    host: process.env.REDIS_HOST ?? 'localhost',
+    port: Number(process.env.REDIS_PORT ?? 6379),
+    password: process.env.REDIS_PASSWORD,
+  };
+}
+
+export const connection = buildConnection();
 
 const queueOpts: QueueOptions = { connection };
 
 export const ANALYSIS_QUEUE = 'analysis';
 
 export const analysisQueue = new Queue(ANALYSIS_QUEUE, queueOpts);
-
-export { connection };
 
 export interface AnalysisJobData {
   jobId: string;
