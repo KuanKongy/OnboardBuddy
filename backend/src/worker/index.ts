@@ -111,6 +111,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       );
       const snapshotId = snapResult.rows[0]!.id;
 
+      // Clear stale graph data from previous scan of same commit
+      await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
+
       // Insert graph_nodes (one per file module)
       const nodeIdMap = new Map<string, string>(); // relativePath → DB id
       for (const node of snapshot.graph.nodes) {
