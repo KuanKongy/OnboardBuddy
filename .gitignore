@@ -15,3 +15,5 @@ frontend/.vite/
 doc/Team*.md
 doc/Design.md
 backend/github-app.pem
+
+migrations/
