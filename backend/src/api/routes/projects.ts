@@ -214,6 +214,16 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       return;
     }
 
+    // Reject if a job is already queued or running for this project
+    const activeJob = await query(
+      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
+      [projectId],
+    );
+    if (activeJob.rows.length > 0) {
+      res.status(409).json({ error: "Analysis already in progress for this project" });
+      return;
+    }
+
     const project = projectResult.rows[0] as { id: string; branch: string };
 
     await query(
@@ -231,7 +241,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     const dbJobId: string = jobResult.rows[0].id;
 
     await analysisQueue.add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
-      jobId: dbJobId,
+      jobId: projectId,  // dedup key: one active BullMQ job per project
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },
     });
