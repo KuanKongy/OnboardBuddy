@@ -1,5 +1,5 @@
-import { AuthService } from './services/authService';
-import { signToken } from './utils/jwtUtil';
+import { AuthService } from './services/authService.js';
+import { signToken } from './utils/jwtUtil.js';
 
 export const authService = new AuthService();
 
