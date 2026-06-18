@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { analysisQueue } from "../../lib/queue.js";
+import type { AnalysisJobData } from "../../lib/queue.js";
 
 export const projectsRouter = Router();
 
@@ -200,7 +202,7 @@ projectsRouter.delete("/:id", requireProjectAccess("owner"), async (req, res) =>
 
 projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
-    const projectId = req.params.id;
+    const projectId = req.params.id as string;
     const userId = req.user!.id;
 
     const projectResult = await query(
@@ -209,6 +211,16 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     );
     if (projectResult.rows.length === 0) {
       res.status(404).json({ error: "Project not found" });
+      return;
+    }
+
+    // Reject if a job is already queued or running for this project
+    const activeJob = await query(
+      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
+      [projectId],
+    );
+    if (activeJob.rows.length > 0) {
+      res.status(409).json({ error: "Analysis already in progress for this project" });
       return;
     }
 
@@ -222,13 +234,21 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     const jobResult = await query(
       `INSERT INTO analysis_jobs (project_id, requested_by, job_type, status, current_step)
        VALUES ($1, $2, 'analyze_project', 'queued', 'Waiting for worker')
-       RETURNING id, status, job_type`,
+       RETURNING id, status`,
       [projectId, userId],
     );
 
+    const dbJobId: string = jobResult.rows[0].id;
+
+    await analysisQueue.add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
+      jobId: projectId,  // dedup key: one active BullMQ job per project
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 5000 },
+    });
+
     res.status(202).json({
       analysis: {
-        id: jobResult.rows[0].id,
+        id: dbJobId,
         status: jobResult.rows[0].status,
         mode: "initial",
         branch: project.branch,

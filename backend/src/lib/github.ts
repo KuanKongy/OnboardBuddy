@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -145,4 +147,49 @@ export async function listBranches(
   }
 
   return (await res.json()) as Branch[];
+}
+
+export async function getCommitSha(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+): Promise<string> {
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/commits/${branch}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github.sha',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API error (${res.status}): ${body}`);
+  }
+
+  return res.text();
+}
+
+export async function downloadZipball(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+  destPath: string,
+): Promise<void> {
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/zipball/${branch}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!res.ok || !res.body) {
+    const body = await res.text();
+    throw new Error(`GitHub zipball error (${res.status}): ${body}`);
+  }
+
+  await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), fs.createWriteStream(destPath));
 }
