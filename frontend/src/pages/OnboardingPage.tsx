@@ -282,6 +282,97 @@ export function OnboardingPage() {
           </DropdownMenu>
         </div>
 
+        {/* Compact controls for non-xl screens (role, status, actions) */}
+        <div className="flex flex-wrap items-center gap-2 border-b bg-background px-4 py-2 xl:hidden">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="xs" className="gap-1 text-[12px]">
+                <span className="max-w-[100px] truncate">
+                  {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
+                </span>
+                <ChevronDown className="h-3 w-3 shrink-0" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              {ROLES.map((role) => (
+                <DropdownMenuItem
+                  key={role.key}
+                  onSelect={() => {
+                    setSelectedRole(role.key);
+                    setActiveSectionId("start-here");
+                    setMarkedReviewed(false);
+                  }}
+                  className="text-xs"
+                >
+                  <span className="flex-1">{role.label}</span>
+                  {MOCK_ONBOARDING_PACKAGES[role.key]?.status === "missing" ||
+                  !MOCK_ONBOARDING_PACKAGES[role.key] ? (
+                    <span className="text-[10px] text-muted-foreground">Missing</span>
+                  ) : (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {statusLabel(MOCK_ONBOARDING_PACKAGES[role.key]!.status)}
+                    </Badge>
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {isMissing ? (
+            <Badge variant="destructive" className="text-[11px]">Missing</Badge>
+          ) : generating ? (
+            <Badge variant="secondary" className="gap-1 text-[11px]">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" /> Generating
+            </Badge>
+          ) : (
+            <Badge variant={statusVariant(pkg.status)} className="text-[11px]">
+              {markedReviewed ? "Approved" : statusLabel(pkg.status)}
+            </Badge>
+          )}
+
+          <div className="ml-auto flex items-center gap-1">
+            {isMissing ? (
+              <Button size="xs" className="gap-1" onClick={handleGenerate} disabled={generating}>
+                {generating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3" />
+                )}
+                {generating ? "Generating…" : "Generate"}
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className={`gap-1 ${markedReviewed ? "border-emerald-600 text-emerald-500" : ""}`}
+                  onClick={() => setMarkedReviewed(!markedReviewed)}
+                >
+                  <CheckCircle2 className="h-3 w-3" />
+                  <span className="hidden sm:inline">{markedReviewed ? "Reviewed" : "Mark Reviewed"}</span>
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="xs" variant="outline" className="gap-1">
+                      <Download className="h-3 w-3" />
+                      <span className="hidden sm:inline">Export</span>
+                      <ChevronDown className="h-3 w-3" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-40">
+                    <DropdownMenuItem className="text-xs" onSelect={() => handleExport("markdown")}>
+                      <FileText className="mr-2 h-3 w-3" /> Markdown file
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-xs" onSelect={() => handleExport("pdf")}>
+                      <FileCode2 className="mr-2 h-3 w-3" /> PDF
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </>
+            )}
+          </div>
+        </div>
+
         {/* body */}
         <div className="flex-1 px-5 py-5">
           {isMissing ? (
