@@ -8,6 +8,8 @@ import { AccountSettingsPage } from "@/pages/AccountSettingsPage";
 import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EmptyStubPage } from "@/pages/EmptyStubPage";
+import { GraphPage } from "@/pages/GraphPage";
+import { OnboardingPage } from "@/pages/OnboardingPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
@@ -44,6 +46,8 @@ export default function App() {
           <Route path="/signup" element={<SignupPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
+          <Route path="/dev/graph/:id" element={<GraphPage />} />
+
           <Route element={<ProtectedRoute />}>
             <Route element={<AuthenticatedLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
@@ -54,9 +58,9 @@ export default function App() {
 
             <Route path="/projects/:id" element={<ProjectLayout />}>
               <Route index element={<ProjectOverviewPage />} />
-              <Route path="onboarding" element={<EmptyStubPage title="Your Onboarding" />} />
+              <Route path="onboarding" element={<OnboardingPage />} />
               <Route path="architecture" element={<EmptyStubPage title="Architecture" />} />
-              <Route path="dependencies" element={<EmptyStubPage title="Dependencies" />} />
+              <Route path="dependencies" element={<GraphPage />} />
               <Route path="walkthrough" element={<EmptyStubPage title="Walkthrough" />} />
               <Route path="team" element={<TeamPage />} />
               <Route path="settings" element={<ProjectSettingsPage />} />
