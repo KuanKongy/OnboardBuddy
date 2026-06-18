@@ -97,7 +97,7 @@ frontend/src/
 | `/projects/:id` | ProjectOverviewPage | Implemented |
 | `/projects/:id/onboarding` | EmptyStubPage | Stubbed |
 | `/projects/:id/architecture` | EmptyStubPage | Stubbed |
-| `/projects/:id/dependencies` | EmptyStubPage | Stubbed |
+| `/projects/:id/dependencies` | GraphPage | Implemented (module dependency graph) |
 | `/projects/:id/walkthrough` | EmptyStubPage | Stubbed |
 | `/projects/:id/team` | TeamPage | Implemented |
 | `/projects/:id/settings` | ProjectSettingsPage | Implemented |
@@ -138,6 +138,13 @@ Font: Inter (system font stack fallback).
 - Analysis status with progress bar
 - Stats placeholders (files, symbols, workflows)
 - Role packages table
+
+### GraphPage (`/projects/:id/dependencies`)
+- Renders the module dependency graph (Feature 2's "module dependency graph" view) using `reactflow`
+- Data comes from `fetchDependencyGraph(projectId)` in `lib/graphData.ts`, which currently resolves a static fixture (`lib/mockGraphData.ts`) shaped like the analysis pipeline's eventual output (`repoIndex`, `fileAnalyses`, `graph.{nodes,edges,entryPoints}`); swapping in the real `GET /projects/:id/graph` endpoint once the analysis pipeline ships is a one-line change in that file
+- `lib/graphLayout.ts` computes a layered (left-to-right) layout via longest-path-from-root leveling from the graph's entry points — no layout library dependency needed for this graph size
+- `components/graph/` holds `ModuleNode` (custom React Flow node), `DependencyGraphView` (canvas + neighbor highlighting on selection), `GraphToolbar` (search + kind filter), and `NodeDetailPanel` (drill-down into a file's exported symbols and imports — the "source receipt" stub)
+- Architecture map, class/interface graph, role-based filtering, and workflow graph views are not yet implemented (`/projects/:id/architecture` and `/projects/:id/walkthrough` remain `EmptyStubPage`)
 
 ### TeamPage
 - Member grid with avatar, email, role/tier badges
