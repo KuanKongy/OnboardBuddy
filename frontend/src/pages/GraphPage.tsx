@@ -103,7 +103,7 @@ export function GraphPage() {
         totalCount={snapshot.graph.nodes.length}
       />
 
-      <div className="h-[480px] w-full rounded-xl border border-border">
+      <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
         <DependencyGraphView
           nodes={positionedNodes}
           edges={visibleEdges}
