@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
-import { analysisQueue } from "../../lib/queue.js";
-import type { AnalysisJobData } from "../../lib/queue.js";
+import { analysisQueue, summaryQueue } from "../../lib/queue.js";
+import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 
 export const projectsRouter = Router();
 
@@ -196,6 +196,88 @@ projectsRouter.delete("/:id", requireProjectAccess("owner"), async (req, res) =>
     res.json({ success: true });
   } catch (err) {
     console.error("Delete project error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const userId = req.user!.id;
+
+    const snapResult = await query(
+      `SELECT id, commit_hash FROM analysis_snapshots
+       WHERE project_id = $1 AND status = 'complete'
+       ORDER BY created_at DESC LIMIT 1`,
+      [projectId],
+    );
+    if (snapResult.rows.length === 0) {
+      res.status(409).json({ error: "No completed analysis snapshot found — run analysis first" });
+      return;
+    }
+    const snap = snapResult.rows[0] as { id: string; commit_hash: string };
+
+    const jobResult = await query(
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
+       VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
+       RETURNING id`,
+      [projectId, snap.id, userId],
+    );
+    const dbJobId: string = jobResult.rows[0].id;
+
+    await summaryQueue.add('generate_summary', {
+      jobId: dbJobId,
+      snapshotId: snap.id,
+      projectId,
+      triggeredBy: userId,
+    } satisfies SummaryJobData, {
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 3000 },
+      removeOnComplete: { count: 10 },
+      removeOnFail: { count: 10 },
+    });
+
+    res.status(202).json({ jobId: dbJobId, snapshotId: snap.id });
+  } catch (err) {
+    console.error("Summarize error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.get("/:id/summary", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+
+    const result = await query(
+      `SELECT op.id AS package_id, op.role, op.status AS package_status,
+              op.analyzed_commit, op.created_at,
+              json_agg(
+                json_build_object(
+                  'id', ps.id,
+                  'type', ps.type,
+                  'title', ps.title,
+                  'content', ps.content,
+                  'confidence', ps.confidence,
+                  'review_status', ps.review_status
+                ) ORDER BY ps.created_at
+              ) FILTER (WHERE ps.id IS NOT NULL) AS sections
+       FROM onboarding_packages op
+       LEFT JOIN package_sections ps ON ps.package_id = op.id
+       WHERE op.project_id = $1
+       GROUP BY op.id
+       ORDER BY op.created_at DESC
+       LIMIT 1`,
+      [projectId],
+    );
+
+    if (result.rows.length === 0) {
+      res.status(404).json({ error: "No summary available yet" });
+      return;
+    }
+
+    res.json({ summary: result.rows[0] });
+  } catch (err) {
+    console.error("Get summary error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

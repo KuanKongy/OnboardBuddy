@@ -23,10 +23,19 @@ export const connection = buildConnection();
 const queueOpts: QueueOptions = { connection };
 
 export const ANALYSIS_QUEUE = 'analysis';
+export const SUMMARY_QUEUE = 'summary';
 
 export const analysisQueue = new Queue(ANALYSIS_QUEUE, queueOpts);
+export const summaryQueue = new Queue(SUMMARY_QUEUE, queueOpts);
 
 export interface AnalysisJobData {
   jobId: string;
   projectId: string;
+}
+
+export interface SummaryJobData {
+  jobId: string;
+  snapshotId: string;
+  projectId: string;
+  triggeredBy: string;
 }
