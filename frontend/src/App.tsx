@@ -9,15 +9,17 @@ import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EmptyStubPage } from "@/pages/EmptyStubPage";
 import { GraphPage } from "@/pages/GraphPage";
-import { OnboardingPage } from "@/pages/OnboardingPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
 import { LoginPage } from "@/pages/LoginPage";
+import { OnboardingPage } from "@/pages/OnboardingPage";
+import { ProjectListPage } from "@/pages/ProjectListPage";
 import { ProjectOverviewPage } from "@/pages/ProjectOverviewPage";
 import { ProjectSettingsPage } from "@/pages/ProjectSettingsPage";
 import { SignupPage } from "@/pages/SignupPage";
 import { TeamPage } from "@/pages/TeamPage";
+import { WalkthroughTab } from "@/pages/WalkthroughTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function AuthenticatedLayout() {
@@ -51,6 +53,7 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AuthenticatedLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/list" element={<ProjectListPage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/invitations" element={<InvitationsPage />} />
               <Route path="/settings" element={<AccountSettingsPage />} />
@@ -61,7 +64,7 @@ export default function App() {
               <Route path="onboarding" element={<OnboardingPage />} />
               <Route path="architecture" element={<EmptyStubPage title="Architecture" />} />
               <Route path="dependencies" element={<GraphPage />} />
-              <Route path="walkthrough" element={<EmptyStubPage title="Walkthrough" />} />
+              <Route path="walkthrough" element={<WalkthroughTab />} />
               <Route path="team" element={<TeamPage />} />
               <Route path="settings" element={<ProjectSettingsPage />} />
             </Route>

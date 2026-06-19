@@ -12,6 +12,13 @@ coverage/
 backend/tmp/
 backend/.supabase/
 frontend/.vite/
+
+# Throwaway UI preview harness (see frontend-ui-preview-harness memory)
+frontend/preview.html
+frontend/src/preview.tsx
+frontend/hybrid.html
+frontend/src/hybrid/
+
 doc/Team*.md
 doc/Design.md
 backend/github-app.pem

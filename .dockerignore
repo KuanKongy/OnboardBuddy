@@ -10,3 +10,4 @@ backend/dist
 backend/.env
 .env.*
 !frontend/.env
+frontend/src/hybrid

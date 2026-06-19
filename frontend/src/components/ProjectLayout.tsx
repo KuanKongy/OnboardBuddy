@@ -11,11 +11,11 @@ import {
   Users,
 } from "lucide-react";
 import { Link, NavLink, Outlet, useParams } from "react-router-dom";
-import { useAuth } from "@/contexts/AuthContext";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { AccountCard } from "@/components/AccountCard";
 import { SidebarProvider, SidebarShell, SidebarToggle, useSidebar } from "@/components/SidebarShell";
 
 const projectNavItems = [
@@ -25,11 +25,11 @@ const projectNavItems = [
   { to: "dependencies", label: "Dependencies", icon: Network, end: false },
   { to: "walkthrough", label: "Walkthrough", icon: Route, end: false },
   { to: "team", label: "Team", icon: Users, end: false },
+  { to: "settings", label: "Settings", icon: Settings, end: false },
 ];
 
 function ProjectSidebar() {
   const { project, loading } = useProject();
-  const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
   const { setOpen } = useSidebar();
 
@@ -83,31 +83,11 @@ function ProjectSidebar() {
         })}
       </nav>
 
-      <Separator />
-
-      <div className="px-2 py-2">
-        <NavLink
-          to={`/projects/${id}/settings`}
-          onClick={() => setOpen(false)}
-          className={({ isActive }) =>
-            `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-              isActive
-                ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-            }`
-          }
-        >
-          <Settings className="h-3.5 w-3.5" />
-          Settings
-        </NavLink>
+      <div className="px-2">
+        <Separator />
       </div>
-
-      <Separator />
-
-      <div className="px-3 py-2">
-        <div className="truncate text-[11px] text-muted-foreground">
-          {user?.email}
-        </div>
+      <div className="px-2 py-2">
+        <AccountCard />
       </div>
     </SidebarShell>
   );
