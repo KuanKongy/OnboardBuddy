@@ -10,8 +10,9 @@ import 'dotenv/config';
 dns.setDefaultResultOrder('ipv4first');
 
 import { Worker, Job } from 'bullmq';
-import { ANALYSIS_QUEUE, connection } from '../lib/queue.js';
-import type { AnalysisJobData } from '../lib/queue.js';
+import { ANALYSIS_QUEUE, connection, summaryQueue } from '../lib/queue.js';
+import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
+import './summaryWorker.js';
 import { getCommitSha, downloadZipball } from '../lib/github.js';
 import { decrypt } from '../lib/encryption.js';
 import { runAnalysis } from './engine/analysisRunner.js';
@@ -91,6 +92,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const fileCount = snapshot.repoIndex.files.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
+    let snapshotId = '';
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -109,7 +111,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
          RETURNING id`,
         [projectId, commitHash, branch, fileCount, symbolCount, workflowFiles.length, JSON.stringify(snapshot.errors)],
       );
-      const snapshotId = snapResult.rows[0]!.id;
+      snapshotId = snapResult.rows[0]!.id;
 
       // Clear stale graph data from previous scan of same commit
       await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
@@ -169,6 +171,26 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     } finally {
       client.release();
     }
+
+    // Enqueue summary generation job
+    const summaryJobResult = await query(
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
+       VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
+       RETURNING id`,
+      [projectId, snapshotId, user_id],
+    );
+    const summaryDbJobId: string = summaryJobResult.rows[0].id;
+    await summaryQueue.add('generate_summary', {
+      jobId: summaryDbJobId,
+      snapshotId,
+      projectId,
+      triggeredBy: user_id,
+    } satisfies SummaryJobData, {
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 3000 },
+      removeOnComplete: { count: 10 },
+      removeOnFail: { count: 10 },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await query(

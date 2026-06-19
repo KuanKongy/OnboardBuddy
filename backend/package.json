@@ -16,6 +16,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@openrouter/sdk": "^0.13.7",
     "@supabase/supabase-js": "^2.49.8",
     "bullmq": "^5.78.1",
     "cors": "^2.8.5",
