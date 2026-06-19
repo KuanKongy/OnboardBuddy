@@ -7,6 +7,10 @@ import { Separator } from "@/components/ui/separator";
 export function AccountSettingsPage() {
   const { user, signOut, signInWithGithub } = useAuth();
 
+  const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
+  const fullName =
+    (meta.full_name as string) || (meta.name as string) || "—";
+
   const memberSince = user?.created_at
     ? new Date(user.created_at).toLocaleDateString(undefined, {
         year: "numeric",
@@ -27,6 +31,10 @@ export function AccountSettingsPage() {
         <CardContent className="p-3">
           <h2 className="mb-2 text-xs font-medium text-foreground">Profile</h2>
           <div className="space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Full name</span>
+              <span className="font-medium text-foreground">{fullName}</span>
+            </div>
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground">Email</span>
               <span className="font-medium text-foreground">{user?.email}</span>

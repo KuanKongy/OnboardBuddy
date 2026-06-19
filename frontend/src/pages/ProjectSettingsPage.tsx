@@ -1,4 +1,4 @@
-import { AlertTriangle, GitBranch, Loader2, Save, Trash2 } from "lucide-react";
+import { AlertTriangle, GitBranch, Loader2, RefreshCw, Save, Shield, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
@@ -31,9 +31,11 @@ export function ProjectSettingsPage() {
 
   const [ignoredPaths, setIgnoredPaths] = useState("");
   const [defaultRole, setDefaultRole] = useState("general");
+  const [aiEnabled, setAiEnabled] = useState(false);
   const [fileLimit, setFileLimit] = useState(5000);
   const [locLimit, setLocLimit] = useState(250000);
   const [saving, setSaving] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -47,6 +49,7 @@ export function ProjectSettingsPage() {
     if (project?.settings) {
       setIgnoredPaths(project.settings.ignored_paths.join("\n"));
       setDefaultRole(project.settings.default_developer_role);
+      setAiEnabled(project.settings.ai_enabled);
       setFileLimit(project.settings.file_limit);
       setLocLimit(project.settings.loc_limit);
     }
@@ -62,6 +65,7 @@ export function ProjectSettingsPage() {
         body: JSON.stringify({
           ignored_paths: ignoredPaths.split("\n").map((p) => p.trim()).filter(Boolean),
           default_developer_role: defaultRole,
+          ai_enabled: aiEnabled,
           file_limit: fileLimit,
           loc_limit: locLimit,
         }),
@@ -73,6 +77,19 @@ export function ProjectSettingsPage() {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleReanalyze() {
+    setAnalyzing(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
+      refetch();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to start analysis");
+    } finally {
+      setAnalyzing(false);
     }
   }
 
@@ -159,7 +176,61 @@ export function ProjectSettingsPage() {
 
         <Card>
           <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Analysis limits</h3>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
+                <div>
+                  <p className="text-xs font-medium text-foreground">Cloud-assisted AI</p>
+                  <p className="text-[11px] text-muted-foreground">
+                    Sends only selected code snippets to generate explanations.
+                    Graph and ranking run locally either way.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={aiEnabled}
+                aria-label="Cloud-assisted AI"
+                disabled={!canEdit}
+                onClick={() => setAiEnabled((v) => !v)}
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                  aiEnabled ? "bg-primary" : "bg-input"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${
+                    aiEnabled ? "translate-x-4" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+            <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+              <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+              <p className="text-[11px] text-muted-foreground">
+                Read-only access · secrets filtered · no full repository stored.
+                The browser never receives full repository source.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-medium text-foreground">Analysis limits</h3>
+              {canEdit && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={handleReanalyze}
+                  disabled={analyzing || project.status === "analyzing"}
+                >
+                  <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
+                  Re-analyze
+                </Button>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label className="text-xs">Max files</Label>

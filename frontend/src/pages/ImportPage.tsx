@@ -3,6 +3,8 @@ import {
   GitBranch,
   Loader2,
   Rocket,
+  Shield,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -73,6 +75,7 @@ export function ImportPage() {
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(true);
 
   useEffect(() => {
     setInstallationsLoading(true);
@@ -147,12 +150,16 @@ export function ImportPage() {
         }),
       }) as { project: { id: string } };
 
-      if (ignoredPaths.length > 0) {
-        await apiFetch(`/projects/${project.id}/settings`, {
-          method: "PUT",
-          body: JSON.stringify({ ignored_paths: ignoredPaths }),
-        });
-      }
+      // Persist privacy choices. Only send ignored_paths when the user added
+      // some, so we don't overwrite the backend's sensible default ignore list.
+      const settings: { ai_enabled: boolean; ignored_paths?: string[] } = {
+        ai_enabled: aiEnabled,
+      };
+      if (ignoredPaths.length > 0) settings.ignored_paths = ignoredPaths;
+      await apiFetch(`/projects/${project.id}/settings`, {
+        method: "PUT",
+        body: JSON.stringify(settings),
+      });
 
       await apiFetch(`/projects/${project.id}/analyze`, { method: "POST" });
       navigate("/dashboard");
@@ -362,6 +369,50 @@ export function ImportPage() {
                       </div>
                     </div>
                   )}
+                </div>
+              </>
+            )}
+
+            {/* Privacy & AI */}
+            {selectedRepo && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2">
+                      <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
+                      <div>
+                        <p className="text-xs font-medium text-foreground">Cloud-assisted AI</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          Sends only selected code snippets to generate explanations.
+                          Graph and ranking run locally either way.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={aiEnabled}
+                      aria-label="Cloud-assisted AI"
+                      onClick={() => setAiEnabled((v) => !v)}
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                        aiEnabled ? "bg-primary" : "bg-input"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${
+                          aiEnabled ? "translate-x-4" : "translate-x-0.5"
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+                    <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <p className="text-[11px] text-muted-foreground">
+                      Read-only access · secrets filtered · no full repository stored.
+                      The browser never receives full repository source.
+                    </p>
+                  </div>
                 </div>
               </>
             )}

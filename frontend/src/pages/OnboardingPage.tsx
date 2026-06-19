@@ -15,8 +15,11 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
+import { apiFetch } from "@/lib/api";
+import { fetchOnboardingPackage } from "@/lib/onboardingData";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -177,16 +180,30 @@ function SectionView({
 // ── main page ─────────────────────────────────────────────────────────────────
 
 export function OnboardingPage() {
-  const { project } = useProject();
+  const { id } = useParams<{ id: string }>();
+  const { project, refetch } = useProject();
 
   const [selectedRole, setSelectedRole] = useState<string>("general");
   const [activeSectionId, setActiveSectionId] = useState<SectionId>("start-here");
+  const [pkg, setPkg] = useState<OnboardingPackage | null>(null);
   const [generating, setGenerating] = useState(false);
   const [regeneratingSection, setRegeneratingSection] = useState(false);
   const [markedReviewed, setMarkedReviewed] = useState(false);
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
 
-  const pkg: OnboardingPackage | undefined = MOCK_ONBOARDING_PACKAGES[selectedRole];
+  // Pull the onboarding package from the API; falls back to mock data while the
+  // backend endpoint is still pending (see fetchOnboardingPackage).
+  useEffect(() => {
+    if (!id) return;
+    fetchOnboardingPackage(id, selectedRole).then(setPkg);
+  }, [id, selectedRole]);
+
+  // Analysis runs at the project level, so a project that's analyzing means a
+  // package is being (re)generated. Keep the generating UI in sync with it.
+  useEffect(() => {
+    setGenerating(project?.status === "analyzing");
+  }, [project?.status]);
+
   const isMissing = !pkg || pkg.status === "missing";
   const canManage =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
@@ -194,11 +211,16 @@ export function OnboardingPage() {
   const sections = isMissing ? [] : pkg.sections;
   const activeSection = sections.find((s) => s.id === activeSectionId);
 
-  function handleGenerate() {
+  async function handleGenerate() {
+    if (!id) return;
     setGenerating(true);
-    setTimeout(() => {
+    try {
+      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
+      refetch(); // project.status flips to analyzing; the effect keeps `generating` in sync
+      fetchOnboardingPackage(id, selectedRole).then(setPkg);
+    } catch {
       setGenerating(false);
-    }, 2000);
+    }
   }
 
   function handleRegenerateSection() {

@@ -1,4 +1,12 @@
-import { AlertTriangle, GitBranch, MoreVertical, Trash2 } from "lucide-react";
+import {
+  CheckCircle2,
+  CircleDashed,
+  GitBranch,
+  Loader2,
+  MoreVertical,
+  Trash2,
+  XCircle,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,12 +32,18 @@ export interface Project {
   last_analyzed_at: string | null;
 }
 
-const defaultStatus = { label: "Ready", progress: 0 };
+const defaultStatus = {
+  label: "Ready",
+  progress: 0,
+  tone: "text-muted-foreground",
+  bar: "bg-muted-foreground/40",
+  icon: CircleDashed,
+};
 const statusConfig = {
   idle: defaultStatus,
-  analyzing: { label: "In Progress", progress: 45 },
-  complete: { label: "Complete", progress: 100 },
-  failed: { label: "Failed", progress: 0 },
+  analyzing: { label: "In Progress", progress: 45, tone: "text-primary", bar: "bg-primary", icon: Loader2 },
+  complete: { label: "Complete", progress: 100, tone: "text-emerald-400", bar: "bg-emerald-500", icon: CheckCircle2 },
+  failed: { label: "Failed", progress: 0, tone: "text-destructive", bar: "bg-destructive", icon: XCircle },
 };
 
 const tierColors: Record<string, string> = {
@@ -48,6 +62,7 @@ export function ProjectCard({
 }) {
   const navigate = useNavigate();
   const status = statusConfig[project.status] ?? defaultStatus;
+  const StatusIcon = status.icon;
   const canManage = project.permission_tier === "owner" || project.permission_tier === "admin";
 
   async function handleDelete() {
@@ -63,18 +78,23 @@ export function ProjectCard({
       <CardContent className="p-3">
         <div className="mb-2 flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold text-foreground">
-              {project.repo_name}
-            </h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="truncate text-sm font-semibold text-foreground">
+                {project.repo_name}
+              </h3>
+              <Badge className={`text-[10px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
+                {project.permission_tier.toUpperCase()}
+              </Badge>
+            </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <GitBranch className="h-3 w-3" />
               {project.branch}
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Badge className={`text-[10px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
-              {project.permission_tier.toUpperCase()}
-            </Badge>
+            <StatusIcon
+              className={`h-4 w-4 ${status.tone} ${project.status === "analyzing" ? "animate-spin" : ""}`}
+            />
             {canManage && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -97,12 +117,12 @@ export function ProjectCard({
           <span className="text-muted-foreground">
             {project.status === "analyzing" ? `Analyzing ${status.progress}%` : status.label}
           </span>
-          <span className={project.status === "complete" ? "text-emerald-400" : project.status === "analyzing" ? "text-primary" : "text-muted-foreground"}>
+          <span className={status.tone}>
             {status.label}
           </span>
         </div>
 
-        <Progress value={status.progress} className="mb-2.5 h-1" />
+        <Progress value={status.progress} indicatorClassName={status.bar} className="mb-2.5 h-1" />
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 text-[11px]">

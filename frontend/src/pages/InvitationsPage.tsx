@@ -1,5 +1,6 @@
 import { CheckCircle, Loader2, Plus, Users } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,6 +27,7 @@ const roleOptions = [
 ];
 
 export function InvitationsPage() {
+  const navigate = useNavigate();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -46,18 +48,16 @@ export function InvitationsPage() {
 
   const selected = invitations.find((inv) => inv.id === selectedId);
 
-  async function handleAccept(id: string) {
+  async function handleAccept(invitation: Invitation) {
     setAccepting(true);
     try {
-      await apiFetch(`/invitations/${id}/accept`, {
+      await apiFetch(`/invitations/${invitation.id}/accept`, {
         method: "POST",
         body: JSON.stringify({ developer_role: selectedRole }),
       });
-      setInvitations((prev) => prev.filter((inv) => inv.id !== id));
-      setSelectedId(null);
+      navigate(`/projects/${invitation.project_id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to accept invitation");
-    } finally {
       setAccepting(false);
     }
   }
@@ -73,8 +73,13 @@ export function InvitationsPage() {
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
-        <Button variant="ghost" size="xs" className="text-muted-foreground" asChild>
-          <a href="/dashboard">&larr; Back</a>
+        <Button
+          variant="ghost"
+          size="xs"
+          className="text-muted-foreground"
+          onClick={() => navigate("/dashboard")}
+        >
+          &larr; Back
         </Button>
         <h1 className="text-lg font-semibold text-foreground">Pending Invitations</h1>
       </div>
@@ -125,7 +130,14 @@ export function InvitationsPage() {
                       {inv.permission_tier}
                     </Badge>
                   </div>
-                  <Badge variant="outline" className="mt-1.5 text-[10px]">Pending</Badge>
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <Badge variant="outline" className="text-[10px]">Pending</Badge>
+                    <Badge variant="outline" className="text-[10px] capitalize">
+                      {inv.developer_role
+                        ? `${inv.developer_role} role`
+                        : "Role not selected"}
+                    </Badge>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -163,9 +175,27 @@ export function InvitationsPage() {
                   </div>
                 </div>
 
-                {!selected.developer_role && (
+                <Separator className="my-3" />
+                {selected.developer_role ? (
+                  // Inviter preassigned the role — show it read-only (design: "read-only or omitted").
                   <>
-                    <Separator className="my-3" />
+                    <p className="mb-2 text-xs font-medium text-foreground">Developer Role</p>
+                    {(() => {
+                      const role = roleOptions.find((r) => r.value === selected.developer_role);
+                      return (
+                        <div className="flex w-full items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
+                          <span className="text-xs font-medium capitalize text-foreground">
+                            {role?.label ?? selected.developer_role}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {role?.tech ?? "Assigned by inviter"}
+                          </span>
+                        </div>
+                      );
+                    })()}
+                  </>
+                ) : (
+                  <>
                     <p className="mb-2 text-xs font-medium text-foreground">Select Developer Role</p>
                     <div className="space-y-1.5">
                       {roleOptions.map((role) => (
@@ -191,6 +221,8 @@ export function InvitationsPage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    // No decline endpoint in the API; dismiss client-side only.
+                    // The invitation reappears on refresh until backend support exists.
                     onClick={() => {
                       setInvitations((prev) => prev.filter((inv) => inv.id !== selected.id));
                       setSelectedId(null);
@@ -198,7 +230,7 @@ export function InvitationsPage() {
                   >
                     Decline
                   </Button>
-                  <Button size="sm" disabled={accepting} onClick={() => handleAccept(selected.id)}>
+                  <Button size="sm" disabled={accepting} onClick={() => handleAccept(selected)}>
                     {accepting ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
