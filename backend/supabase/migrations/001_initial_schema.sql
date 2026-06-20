@@ -16,9 +16,12 @@ create extension if not exists "vector";
 
 create table if not exists public.users (
   id uuid primary key,
-  email varchar not null unique,
+  email varchar not null,
   created_at timestamptz not null default now()
 );
+
+alter table public.users
+  drop constraint if exists users_email_key;
 
 create table if not exists public.github_connections (
   id uuid primary key default gen_random_uuid(),
@@ -31,7 +34,7 @@ create table if not exists public.github_connections (
   refresh_token_expires_at timestamptz,
   scopes text[] not null default '{}',
   created_at timestamptz not null default now(),
-  unique (user_id, github_user_id)
+  unique (user_id)
 );
 
 alter table public.github_connections
