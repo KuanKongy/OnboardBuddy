@@ -182,14 +182,12 @@ export function ImportPage() {
 
       // Persist privacy choices. Only send ignored_paths when the user added
       // some, so we don't overwrite the backend's sensible default ignore list.
-      const settings: { ai_enabled: boolean; ignored_paths?: string[] } = {
-        ai_enabled: true,
-      };
-      if (ignoredPaths.length > 0) settings.ignored_paths = ignoredPaths;
-      await apiFetch(`/projects/${project.id}/settings`, {
-        method: "PUT",
-        body: JSON.stringify(settings),
-      });
+      if (ignoredPaths.length > 0) {
+        await apiFetch(`/projects/${project.id}/settings`, {
+          method: "PUT",
+          body: JSON.stringify({ ignored_paths: ignoredPaths }),
+        });
+      }
 
       await apiFetch(`/projects/${project.id}/analyze`, { method: "POST" });
       navigate("/dashboard");
@@ -405,7 +403,7 @@ export function ImportPage() {
               </>
             )}
 
-            {/* Privacy & AI */}
+            {/* Privacy */}
             {selectedRepo && (
               <>
                 <Separator />
