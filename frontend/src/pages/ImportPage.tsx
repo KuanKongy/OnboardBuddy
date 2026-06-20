@@ -57,6 +57,7 @@ export function ImportPage() {
   const [installUrl, setInstallUrl] = useState("");
   const [appName, setAppName] = useState("GitHub App");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [githubAppConnected, setGithubAppConnected] = useState(false);
 
   const [installations, setInstallations] = useState<Installation[]>([]);
   const [installationsLoading, setInstallationsLoading] = useState(true);
@@ -84,14 +85,19 @@ export function ImportPage() {
       apiFetch("/github/app").catch(() => null),
       apiFetch("/github/installations"),
     ])
-      .then(([appInfo, instData]: [{ name: string; install_url: string } | null, { installations: Installation[] }]) => {
+      .then(([appInfo, instData]: [
+        { name: string; install_url: string } | null,
+        { github_connected?: boolean; installations: Installation[] },
+      ]) => {
         if (appInfo) {
           setAppName(appInfo.name);
           setInstallUrl(appInfo.install_url);
         }
+        setGithubAppConnected(Boolean(instData.github_connected));
         setInstallations(instData.installations);
       })
       .catch((err) => {
+        setGithubAppConnected(false);
         setInstallations([]);
         setSelectedInstallation("");
         setRepos([]);
@@ -153,6 +159,11 @@ export function ImportPage() {
   async function handleAuthorizeGitHubApp() {
     setError("");
     try {
+      if (githubAppConnected && installUrl) {
+        window.location.href = installUrl;
+        return;
+      }
+
       sessionStorage.setItem("onboardbuddy.github.after_oauth", "install");
       await connectGithub();
     } catch (err: unknown) {
@@ -227,7 +238,7 @@ export function ImportPage() {
                   <p className="text-xs text-muted-foreground">No installations found.</p>
                   <div className="mt-2 flex justify-center gap-2">
                     <Button size="xs" onClick={handleAuthorizeGitHubApp}>
-                      Connect {appName}
+                      {githubAppConnected ? `Install ${appName}` : `Connect ${appName}`}
                     </Button>
                     <Button variant="outline" size="xs" onClick={() => setRefreshKey((k) => k + 1)}>
                       Refresh

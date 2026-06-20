@@ -13,6 +13,7 @@ import {
 } from "../../lib/github.js";
 import {
   GitHubReconnectRequiredError,
+  getUserGithubConnection,
   linkInstallationToUser,
   listInstallationsForUser,
   saveGithubConnection,
@@ -192,9 +193,14 @@ githubRouter.post("/installations/link", async (req, res) => {
 githubRouter.get("/installations", async (req, res) => {
   try {
     const userId = req.user!.id;
+    const connection = await getUserGithubConnection(userId);
     const { installations } = await listInstallationsForUser(userId);
 
-    res.json({ installations });
+    res.json({
+      github_connected: connection !== null,
+      github_username: connection?.githubUsername ?? null,
+      installations,
+    });
   } catch (err) {
     console.error("List installations error:", err);
     handleGitHubRouteError(res, err, "Failed to list GitHub installations");
