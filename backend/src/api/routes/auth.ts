@@ -135,6 +135,14 @@ authRouter.post("/github/save-token", requireAuth, async (req, res) => {
       return;
     }
 
+    // Ensure public.users row exists (handles users created before trigger)
+    await query(
+      `INSERT INTO public.users (id, email)
+       VALUES ($1, COALESCE((SELECT email FROM auth.users WHERE id = $1), ''))
+       ON CONFLICT (id) DO NOTHING`,
+      [userId],
+    );
+
     const encryptedToken = encrypt(access_token);
 
     await query(

@@ -28,7 +28,9 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
   const imports: ImportRecord[] = [];
   const exports: ExportRecord[] = [];
 
-  visitNode(sourceFile);
+  for (const statement of sourceFile.statements) {
+    visitTopLevel(statement);
+  }
 
   return {
     filePath,
@@ -40,7 +42,7 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     parseErrors: parsed.errors,
   };
 
-  function visitNode(node: ts.Node): void {
+  function visitTopLevel(node: ts.Node): void {
     switch (node.kind) {
       case ts.SyntaxKind.ImportDeclaration:
         imports.push(extractImport(node as ts.ImportDeclaration, filePath));
@@ -49,6 +51,18 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
       case ts.SyntaxKind.ExportDeclaration:
         exports.push(extractExportDeclaration(node as ts.ExportDeclaration, filePath));
         break;
+
+      case ts.SyntaxKind.ExportAssignment: {
+        const exportAssign = node as ts.ExportAssignment;
+        exports.push({
+          fromFile: filePath,
+          namedExports: [],
+          isReExport: false,
+          isDefault: true,
+          expression: exportAssign.expression.getText(sourceFile),
+        });
+        break;
+      }
 
       case ts.SyntaxKind.ClassDeclaration: {
         const sym = extractClass(node as ts.ClassDeclaration, filePath, sourceFile);
@@ -86,8 +100,6 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
         break;
       }
     }
-
-    ts.forEachChild(node, visitNode);
   }
 }
 
@@ -98,6 +110,7 @@ function extractImport(node: ts.ImportDeclaration, filePath: string): ImportReco
   const isTypeOnly = node.importClause?.isTypeOnly ?? false;
   const named: NamedImportItem[] = [];
   let defaultImport: string | undefined;
+  let namespaceImport: string | undefined;
 
   const clause = node.importClause;
   if (clause) {
@@ -105,13 +118,17 @@ function extractImport(node: ts.ImportDeclaration, filePath: string): ImportReco
       defaultImport = clause.name.text;
     }
     const bindings = clause.namedBindings;
-    if (bindings && ts.isNamedImports(bindings)) {
-      for (const el of bindings.elements) {
-        named.push({
-          name: el.propertyName?.text ?? el.name.text,
-          isTypeOnly: el.isTypeOnly,
-          alias: el.propertyName ? el.name.text : null,
-        });
+    if (bindings) {
+      if (ts.isNamedImports(bindings)) {
+        for (const el of bindings.elements) {
+          named.push({
+            name: el.propertyName?.text ?? el.name.text,
+            isTypeOnly: el.isTypeOnly,
+            alias: el.propertyName ? el.name.text : null,
+          });
+        }
+      } else if (ts.isNamespaceImport(bindings)) {
+        namespaceImport = bindings.name.text;
       }
     }
   }
@@ -121,6 +138,7 @@ function extractImport(node: ts.ImportDeclaration, filePath: string): ImportReco
     toSpecifier: specifier,
     namedImports: named,
     defaultImport,
+    namespaceImport,
     isTypeOnly,
   };
 }

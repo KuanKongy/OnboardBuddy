@@ -2,17 +2,29 @@ import { apiFetch } from "@/lib/api";
 import { mockGraphData } from "@/lib/mockGraphData";
 import type { AnalysisSnapshot } from "@/types/graph";
 
-// Attempts the real dependency-graph endpoint, falling back to mock data while
-// the analysis pipeline is still pending (the route currently returns 501).
-// Once it ships, GraphPage starts rendering real snapshots with no changes.
+export interface GraphResponse {
+  projectId: string;
+  snapshotId: string;
+  clustered: boolean;
+  totalNodes: number;
+  totalEdges: number;
+  graph: { nodes: Array<{ id: string; label: string; kind: string; metadata: Record<string, unknown> }>; edges: Array<{ id: string; source: string; target: string; kind: string }>; entryPoints: string[] };
+  fileAnalyses: unknown[];
+}
+
 export async function fetchDependencyGraph(
   projectId: string,
-): Promise<AnalysisSnapshot> {
+  cluster?: string,
+): Promise<GraphResponse> {
+  const url = cluster
+    ? `/projects/${projectId}/graph/dependencies?cluster=${encodeURIComponent(cluster)}`
+    : `/projects/${projectId}/graph/dependencies`;
   try {
-    return (await apiFetch(
-      `/projects/${projectId}/graph/dependencies`,
-    )) as AnalysisSnapshot;
+    return (await apiFetch(url)) as GraphResponse;
   } catch {
-    return { ...mockGraphData, projectId };
+    if (import.meta.env.DEV) {
+      return { ...mockGraphData, projectId, snapshotId: "", clustered: false, totalNodes: 0, totalEdges: 0 } as unknown as GraphResponse;
+    }
+    throw new Error("Failed to load dependency graph data");
   }
 }

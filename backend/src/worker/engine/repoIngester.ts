@@ -23,31 +23,47 @@ export async function cloneRepo(githubUrl: string, targetDir: string): Promise<s
   return targetDir;
 }
 
-export async function buildRepoIndex(rootPath: string): Promise<RepoIndex> {
+export interface RepoIndexOptions {
+  ignoredPaths?: string[];
+  fileLimit?: number;
+}
+
+export async function buildRepoIndex(rootPath: string, options?: RepoIndexOptions): Promise<RepoIndex> {
   const absRoot = path.resolve(rootPath);
 
   if (!fs.existsSync(absRoot)) {
     throw new Error(`Repo path does not exist: ${absRoot}`);
   }
 
+  const ignorePatterns = [
+    ...IGNORE_PATTERNS,
+    ...(options?.ignoredPaths ?? []),
+  ];
+
   const allFiles = await glob('**/*.{ts,tsx,js,jsx,mjs,cjs}', {
     cwd: absRoot,
-    ignore: IGNORE_PATTERNS,
+    ignore: ignorePatterns,
     absolute: true,
   });
 
-  const entries: FileEntry[] = allFiles.map((absPath) => {
-    const ext = path.extname(absPath);
-    const language: SupportedLanguage = TS_EXTENSIONS.has(ext) ? 'typescript' : 'javascript';
-    const stat = fs.statSync(absPath);
+  const filesToProcess = options?.fileLimit
+    ? allFiles.slice(0, options.fileLimit)
+    : allFiles;
 
-    return {
-      relativePath: path.relative(absRoot, absPath),
-      absolutePath: absPath,
-      language,
-      sizeBytes: stat.size,
-    };
-  });
+  const entries: FileEntry[] = await Promise.all(
+    filesToProcess.map(async (absPath) => {
+      const ext = path.extname(absPath);
+      const language: SupportedLanguage = TS_EXTENSIONS.has(ext) ? 'typescript' : 'javascript';
+      const stat = await fs.promises.stat(absPath);
+
+      return {
+        relativePath: path.relative(absRoot, absPath),
+        absolutePath: absPath,
+        language,
+        sizeBytes: stat.size,
+      };
+    }),
+  );
 
   const tsCount = entries.filter((e) => e.language === 'typescript').length;
   const detectedLanguage: SupportedLanguage = tsCount >= entries.length / 2 ? 'typescript' : 'javascript';

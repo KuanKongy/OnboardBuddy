@@ -1,39 +1,68 @@
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
-import { fetchDependencyGraph } from "@/lib/graphData";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { fetchDependencyGraph, type GraphResponse } from "@/lib/graphData";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
-import type { AnalysisSnapshot } from "@/types/graph";
+import type { GraphNode, GraphEdge } from "@/types/graph";
 
 type EdgeFilter = "imports" | "exports";
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
-  const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null);
+  const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [edgeFilter, setEdgeFilter] = useState<EdgeFilter>("imports");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [activeCluster, setActiveCluster] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadGraph(cluster?: string) {
     if (!id) return;
     setLoading(true);
     setError("");
-    fetchDependencyGraph(id)
-      .then(setSnapshot)
+    setSelectedNodeId(null);
+    fetchDependencyGraph(id, cluster)
+      .then(setData)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [id]);
+  }
+
+  useEffect(() => { loadGraph(); }, [id]);
+
+  const nodes: GraphNode[] = useMemo(() => {
+    if (!data) return [];
+    return data.graph.nodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+      kind: n.kind,
+      metadata: {
+        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+        importCount: (n.metadata?.importCount as number) ?? 0,
+        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+      },
+    }));
+  }, [data]);
+
+  const edges: GraphEdge[] = useMemo(() => {
+    if (!data) return [];
+    return data.graph.edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      kind: e.kind,
+    }));
+  }, [data]);
 
   const filteredNodeIds = useMemo(() => {
-    if (!snapshot) return new Set<string>();
     const query = search.trim().toLowerCase();
     return new Set(
-      snapshot.graph.nodes
+      nodes
         .filter((node) => {
           if (!query) return true;
           return (
@@ -44,78 +73,116 @@ export function GraphPage() {
         })
         .map((node) => node.id),
     );
-  }, [snapshot, search]);
+  }, [nodes, search]);
 
   const visibleNodes = useMemo(
-    () => snapshot?.graph.nodes.filter((node) => filteredNodeIds.has(node.id)) ?? [],
-    [snapshot, filteredNodeIds],
+    () => nodes.filter((node) => filteredNodeIds.has(node.id)),
+    [nodes, filteredNodeIds],
   );
 
   const visibleEdges = useMemo(
-    () =>
-      snapshot?.graph.edges.filter(
-        (edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target),
-      ) ?? [],
-    [snapshot, filteredNodeIds],
+    () => edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target)),
+    [edges, filteredNodeIds],
   );
 
   const positionedNodes = useMemo(
-    () =>
-      snapshot
-        ? layoutDependencyGraph(visibleNodes, visibleEdges, snapshot.graph.entryPoints)
-        : [],
-    [snapshot, visibleNodes, visibleEdges],
+    () => layoutDependencyGraph(visibleNodes, visibleEdges, data?.graph.entryPoints ?? []),
+    [visibleNodes, visibleEdges, data],
   );
 
-  const selectedNode = snapshot?.graph.nodes.find((n) => n.id === selectedNodeId);
-  const selectedFileAnalysis = snapshot?.fileAnalyses.find(
-    (f) => f.relativePath === selectedNodeId,
-  );
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-5 w-5 animate-spin text-primary" />
-      </div>
-    );
-  }
-
-  if (error || !snapshot) {
-    return (
-      <div className="py-20 text-center text-sm text-destructive">
-        {error || "No graph data available"}
-      </div>
-    );
-  }
+  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
   return (
     <div>
-      <div className="mb-3">
-        <h1 className="text-lg font-semibold text-foreground">Dependency map</h1>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {activeCluster && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => { setActiveCluster(null); loadGraph(); }}
+            >
+              <ArrowLeft className="mr-1 h-3 w-3" />
+              All clusters
+            </Button>
+          )}
+          <h1 className="text-lg font-semibold text-foreground">
+            Dependency map
+            {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
+          </h1>
+        </div>
+        {data && (
+          <Badge variant="outline" className="text-[10px]">
+            {data.totalNodes} files · {data.totalEdges} edges
+            {data.clustered && " (clustered)"}
+          </Badge>
+        )}
       </div>
 
-      <GraphToolbar
-        search={search}
-        onSearchChange={setSearch}
-        edgeFilter={edgeFilter}
-        onEdgeFilterChange={setEdgeFilter}
-        matchCount={visibleNodes.length}
-        totalCount={snapshot.graph.nodes.length}
-      />
+      {loading && (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+        </div>
+      )}
 
-      <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
-        <DependencyGraphView
-          nodes={positionedNodes}
-          edges={visibleEdges}
-          entryPoints={snapshot.graph.entryPoints}
-          selectedNodeId={selectedNodeId}
-          onSelectNode={setSelectedNodeId}
-          edgeFilter={edgeFilter}
-        />
-      </div>
+      {(error || (!data && !loading)) && (
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground">
+              {error || "No graph data available yet"}
+            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Run an analysis first to generate the dependency graph, or retry if analysis has completed.
+            </p>
+          </div>
+          <Button variant="outline" size="xs" onClick={() => loadGraph(activeCluster ?? undefined)}>
+            <RefreshCw className="mr-1 h-3 w-3" />
+            Retry
+          </Button>
+        </div>
+      )}
 
-      {selectedNode && (
-        <NodeInfoPanel node={selectedNode} fileAnalysis={selectedFileAnalysis} />
+      {data && !loading && (
+        <>
+          {data.clustered && (
+            <p className="mb-3 text-xs text-muted-foreground">
+              Large codebase ({data.totalNodes} files) — showing directory clusters. Click a cluster to drill in.
+            </p>
+          )}
+
+          <GraphToolbar
+            search={search}
+            onSearchChange={setSearch}
+            edgeFilter={edgeFilter}
+            onEdgeFilterChange={setEdgeFilter}
+            matchCount={visibleNodes.length}
+            totalCount={nodes.length}
+          />
+
+          <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
+            <DependencyGraphView
+              nodes={positionedNodes}
+              edges={visibleEdges}
+              entryPoints={data.graph.entryPoints}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={(nodeId) => {
+                if (data.clustered && nodeId?.startsWith("cluster:")) {
+                  const dir = nodeId.replace("cluster:", "");
+                  setActiveCluster(dir);
+                  loadGraph(dir);
+                } else {
+                  setSelectedNodeId(nodeId);
+                }
+              }}
+              edgeFilter={edgeFilter}
+            />
+          </div>
+
+          {selectedNode && !data.clustered && (
+            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} />
+          )}
+        </>
       )}
     </div>
   );

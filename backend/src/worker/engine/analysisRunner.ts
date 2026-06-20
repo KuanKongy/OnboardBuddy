@@ -8,6 +8,8 @@ export interface RunAnalysisOptions {
   projectId: string;
   triggeredBy: string;
   repoPath: string;
+  ignoredPaths?: string[];
+  fileLimit?: number;
 }
 
 export async function runAnalysis(opts: RunAnalysisOptions): Promise<AnalysisSnapshot> {
@@ -15,7 +17,10 @@ export async function runAnalysis(opts: RunAnalysisOptions): Promise<AnalysisSna
   const errors: string[] = [];
 
   // 1. Index repo files
-  const repoIndex = await buildRepoIndex(opts.repoPath);
+  const repoIndex = await buildRepoIndex(opts.repoPath, {
+    ignoredPaths: opts.ignoredPaths,
+    fileLimit: opts.fileLimit,
+  });
   const tsFiles = filterByLanguage(repoIndex, 'typescript');
 
   // 2. Create TS compiler program over all files at once (needed for cross-file type info)
