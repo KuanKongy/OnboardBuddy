@@ -10,7 +10,7 @@ import 'dotenv/config';
 dns.setDefaultResultOrder('ipv4first');
 
 import { Worker, Job } from 'bullmq';
-import { ANALYSIS_QUEUE, connection, summaryQueue } from '../lib/queue.js';
+import { ANALYSIS_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken } from '../lib/github.js';
@@ -246,7 +246,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         [projectId, snapshotId, user_id],
       );
       const summaryDbJobId: string = summaryJobResult.rows[0].id;
-      await summaryQueue.add('generate_summary', {
+      await getSummaryQueue().add('generate_summary', {
         jobId: summaryDbJobId,
         snapshotId,
         projectId,

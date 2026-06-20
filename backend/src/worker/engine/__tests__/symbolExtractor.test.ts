@@ -102,7 +102,7 @@ describe('symbolExtractor — authService.ts', () => {
   });
 
   it('imports signToken, verifyToken, TokenPayload from jwtUtil', () => {
-    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil');
+    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil.js');
     expect(imp).to.exist;
     const names = imp!.namedImports.map((n) => n.name);
     expect(names).to.include('signToken');
@@ -111,7 +111,7 @@ describe('symbolExtractor — authService.ts', () => {
   });
 
   it('import from jwtUtil is not type-only', () => {
-    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil');
+    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil.js');
     expect(imp!.isTypeOnly).to.be.false;
   });
 });
@@ -126,13 +126,13 @@ describe('symbolExtractor — index.ts', () => {
   });
 
   it('imports AuthService from services/authService', () => {
-    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './services/authService');
+    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './services/authService.js');
     expect(imp).to.exist;
     expect(imp!.namedImports.map((n) => n.name)).to.include('AuthService');
   });
 
   it('imports signToken from utils/jwtUtil', () => {
-    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './utils/jwtUtil');
+    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './utils/jwtUtil.js');
     expect(imp).to.exist;
     expect(imp!.namedImports.map((n) => n.name)).to.include('signToken');
   });
