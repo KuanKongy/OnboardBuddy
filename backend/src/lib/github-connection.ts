@@ -120,19 +120,16 @@ export async function saveGithubConnection(
   token: GitHubAppUserToken,
 ): Promise<void> {
   await query(
+    `DELETE FROM github_connections WHERE user_id = $1`,
+    [userId],
+  );
+
+  await query(
     `INSERT INTO github_connections (
        user_id, github_user_id, github_username, access_token_encrypted,
        access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at, scopes
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, '{}')
-     ON CONFLICT (user_id, github_user_id)
-     DO UPDATE SET
-       github_username = EXCLUDED.github_username,
-       access_token_encrypted = EXCLUDED.access_token_encrypted,
-       access_token_expires_at = EXCLUDED.access_token_expires_at,
-       refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
-       refresh_token_expires_at = EXCLUDED.refresh_token_expires_at,
-       scopes = EXCLUDED.scopes`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, '{}')`,
     [
       userId,
       githubUserId,

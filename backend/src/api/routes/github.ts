@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 import {
+  type GitHubUser,
   exchangeGitHubAppOAuthCode,
   getAppInstallation,
   getAppInfo,
@@ -56,6 +58,38 @@ async function ensurePublicUser(userId: string, email: string): Promise<void> {
   );
 }
 
+async function assertAuthorizedGitHubMatchesSupabaseIdentity(
+  userId: string,
+  githubUser: GitHubUser,
+): Promise<void> {
+  const { data, error } = await supabaseAdmin.auth.admin.getUserById(userId);
+  if (error) {
+    throw new Error(`Could not verify Supabase user identity: ${error.message}`);
+  }
+
+  const githubIdentity = data.user?.identities?.find((identity) => identity.provider === "github");
+  if (!githubIdentity) {
+    return;
+  }
+
+  const identityData = (githubIdentity.identity_data ?? {}) as Record<string, unknown>;
+  const expectedId = Number(identityData.provider_id ?? identityData.sub ?? githubIdentity.id);
+  const expectedLogin = String(
+    identityData.user_name ??
+      identityData.preferred_username ??
+      "",
+  ).toLowerCase();
+
+  const idMatches = expectedId > 0 && expectedId === githubUser.id;
+  const loginMatches = expectedLogin.length > 0 && expectedLogin === githubUser.login.toLowerCase();
+
+  if (!idMatches && !loginMatches) {
+    throw new Error(
+      `GitHub App authorization account ${githubUser.login} does not match the signed-in GitHub account.`,
+    );
+  }
+}
+
 githubRouter.get("/app", async (req, res) => {
   try {
     const state = createInstallationState(req.user!.id);
@@ -102,6 +136,7 @@ githubRouter.post("/oauth/complete", async (req, res) => {
 
     const token = await exchangeGitHubAppOAuthCode(code, githubOAuthRedirectUri());
     const githubUser = await getGitHubUser(token.accessToken);
+    await assertAuthorizedGitHubMatchesSupabaseIdentity(userId, githubUser);
     await ensurePublicUser(userId, req.user!.email);
     await saveGithubConnection(userId, githubUser.id, githubUser.login, token);
 
