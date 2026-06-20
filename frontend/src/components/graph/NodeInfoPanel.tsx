@@ -10,7 +10,7 @@ interface NodeInfoPanelProps {
 const FUNCTION_KINDS = new Set(["function", "arrow-function", "method"]);
 const INTERFACE_KINDS = new Set(["interface", "type"]);
 
-export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
+export function NodeInfoPanel({ node: _node, fileAnalysis }: NodeInfoPanelProps) {
   const functions = fileAnalysis?.symbols.filter((s) => FUNCTION_KINDS.has(s.kind)) ?? [];
   const interfaces = fileAnalysis?.symbols.filter((s) => INTERFACE_KINDS.has(s.kind)) ?? [];
   const imports = fileAnalysis?.imports ?? [];

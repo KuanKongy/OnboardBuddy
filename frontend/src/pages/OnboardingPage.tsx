@@ -39,7 +39,6 @@ import type {
   SourceReceipt,
 } from "@/types/onboarding";
 import {
-  MOCK_ONBOARDING_PACKAGES,
   ROLES,
   SECTION_NAV_ORDER,
 } from "@/lib/mockOnboardingData";
@@ -194,7 +193,6 @@ export function OnboardingPage() {
   const [pkg, setPkg] = useState<OnboardingPackage | null>(null);
   const [generating, setGenerating] = useState(false);
   const [regeneratingSection, setRegeneratingSection] = useState(false);
-  const [markedReviewed, setMarkedReviewed] = useState(false);
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
   const [roleStatuses, setRoleStatuses] = useState<Record<string, string>>({});
   const fetchAbortRef = useRef<AbortController | null>(null);
@@ -255,10 +253,49 @@ export function OnboardingPage() {
     setTimeout(() => setRegeneratingSection(false), 1500);
   }
 
-  function handleExport(format: "markdown" | "pdf") {
-    // In real impl: GET /api/projects/:id/onboarding/export?role=...&format=...
-    const filename = `onboarding-${selectedRole}.${format === "pdf" ? "pdf" : "md"}`;
-    alert(`Exporting ${filename} (mock — real endpoint: GET /api/projects/:id/onboarding/export?role=${selectedRole}&format=${format})`);
+  const currentSectionData = pkg?.sections.find((s) => s.id === activeSectionId);
+  const markedReviewed = currentSectionData?.reviewStatus === "approved";
+
+  async function handleExport(format: "markdown" | "pdf") {
+    if (!id) return;
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/projects/${id}/onboarding/export?role=${encodeURIComponent(selectedRole)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${(await (await import("@/lib/supabase")).supabase.auth.getSession()).data.session?.access_token}`,
+          },
+        },
+      );
+      if (!response.ok) throw new Error("Export failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `onboarding-${selectedRole}.${format === "pdf" ? "pdf" : "md"}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export error:", err);
+    }
+  }
+
+  async function handleToggleReview() {
+    if (!id || !pkg) return;
+    const sectionData = pkg.sections.find((s) => s.id === activeSectionId);
+    if (!sectionData?.sectionId) return;
+    const newStatus = sectionData.reviewStatus === "approved" ? "draft" : "approved";
+    try {
+      await apiFetch(`/projects/${id}/onboarding/sections/${sectionData.sectionId}/review`, {
+        method: "PATCH",
+        body: JSON.stringify({ review_status: newStatus }),
+      });
+      fetchOnboardingPackage(id, selectedRole).then((data) => { if (data) setPkg(data); });
+    } catch (err) {
+      console.error("Review update error:", err);
+    }
   }
 
   return (
@@ -351,7 +388,6 @@ export function OnboardingPage() {
                     onSelect={() => {
                       setSelectedRole(role.key);
                       setActiveSectionId("start-here");
-                      setMarkedReviewed(false);
                     }}
                     className="text-xs"
                   >
@@ -399,7 +435,7 @@ export function OnboardingPage() {
                   size="xs"
                   variant="outline"
                   className={`gap-1 ${markedReviewed ? "border-emerald-600 text-emerald-500" : ""}`}
-                  onClick={() => setMarkedReviewed(!markedReviewed)}
+                  onClick={handleToggleReview}
                 >
                   <CheckCircle2 className="h-3 w-3" />
                   <span className="hidden sm:inline">{markedReviewed ? "Reviewed" : "Mark Reviewed"}</span>
@@ -533,7 +569,6 @@ export function OnboardingPage() {
                     onSelect={() => {
                       setSelectedRole(role.key);
                       setActiveSectionId("start-here");
-                      setMarkedReviewed(false);
                     }}
                     className="text-xs"
                   >
@@ -578,7 +613,7 @@ export function OnboardingPage() {
               </Button>
             ) : (
               <>
-                <Button size="xs" variant="outline" className="w-full justify-start gap-1.5">
+                <Button size="xs" variant="outline" className="w-full justify-start gap-1.5" onClick={handleToggleReview}>
                   <Eye className="h-3 w-3" /> Review
                 </Button>
 
@@ -604,7 +639,7 @@ export function OnboardingPage() {
                 <Button
                   size="xs"
                   className={`w-full justify-start gap-1.5 ${markedReviewed ? "bg-emerald-600 hover:bg-emerald-700" : ""}`}
-                  onClick={() => setMarkedReviewed(!markedReviewed)}
+                  onClick={handleToggleReview}
                 >
                   <CheckCircle2 className="h-3 w-3" />
                   {markedReviewed ? "Reviewed" : "Mark Reviewed"}

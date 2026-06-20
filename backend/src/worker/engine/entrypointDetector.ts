@@ -1,5 +1,4 @@
-import * as ts from 'typescript';
-import type { FileAnalysis, SymbolInfo } from '../types/analysis.js';
+import type { FileAnalysis } from '../types/analysis.js';
 import { query } from '../../lib/db.js';
 
 export interface DetectedEntrypoint {
@@ -13,19 +12,19 @@ export interface DetectedEntrypoint {
 
 const ROUTE_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'all', 'use']);
 
-const EXPRESS_PATTERNS = [
+const _EXPRESS_PATTERNS = [
   /\.(get|post|put|patch|delete|all|use)\s*\(\s*['"`]/,
   /router\.(get|post|put|patch|delete|all|use)\s*\(/,
   /app\.(get|post|put|patch|delete|all|use)\s*\(/,
 ];
 
-const EVENT_PATTERNS = [
+const _EVENT_PATTERNS = [
   /\.on\s*\(\s*['"`]/,
   /addEventListener\s*\(/,
   /\.subscribe\s*\(/,
 ];
 
-const CLI_PATTERNS = [
+const _CLI_PATTERNS = [
   /\.command\s*\(/,
   /program\.action\s*\(/,
   /yargs/,

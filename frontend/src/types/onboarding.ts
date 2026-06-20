@@ -34,8 +34,11 @@ export interface ContentBlock {
 
 export interface OnboardingSection {
   id: SectionId;
+  sectionId?: string;
   label: string;
+  type?: string;
   status: SectionStatus;
+  reviewStatus?: string;
   confidence: ConfidenceLevel;
   reviewedBy?: string;
   reviewedAt?: string;
