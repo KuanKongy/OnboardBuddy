@@ -1,6 +1,6 @@
 import { Worker, Job } from 'bullmq';
 import type { PoolClient } from 'pg';
-import { SUMMARY_QUEUE, connection, summaryQueue } from '../lib/queue.js';
+import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query, pool } from '../lib/db.js';
 import { chatCompletion, SUMMARY_MODEL } from '../lib/openrouter.js';
@@ -647,7 +647,7 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
         );
         const roleJobId = roleJobResult.rows[0]?.id;
         if (roleJobId) {
-          await summaryQueue.add(`generate_summary_${nextRole}`, {
+          await getSummaryQueue().add(`generate_summary_${nextRole}`, {
             jobId: roleJobId,
             snapshotId,
             projectId,

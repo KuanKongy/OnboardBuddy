@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
-import { analysisQueue, summaryQueue } from "../../lib/queue.js";
+import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { userCanAccessInstallation } from "../../lib/github-connection.js";
 
@@ -255,7 +255,7 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     );
     const dbJobId: string = jobResult.rows[0].id;
 
-    await summaryQueue.add('generate_summary', {
+    await getSummaryQueue().add('generate_summary', {
       jobId: dbJobId,
       snapshotId: snap.id,
       projectId,
@@ -392,7 +392,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
 
     const dbJobId: string = jobResult.rows[0].id;
 
-    await analysisQueue.add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
+    await getAnalysisQueue().add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },

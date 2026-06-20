@@ -25,8 +25,21 @@ const queueOpts: QueueOptions = { connection };
 export const ANALYSIS_QUEUE = 'analysis';
 export const SUMMARY_QUEUE = 'summary';
 
-export const analysisQueue = new Queue(ANALYSIS_QUEUE, queueOpts);
-export const summaryQueue = new Queue(SUMMARY_QUEUE, queueOpts);
+// Queues are created lazily on first use rather than at module load. BullMQ opens
+// a Redis connection as soon as a Queue is constructed, so eager top-level
+// creation would connect to Redis just by importing this module — e.g. when the
+// API routes are loaded during tests, producing noisy ECONNREFUSED errors. With
+// memoized getters, nothing connects until something actually enqueues a job.
+let analysisQueueInstance: Queue | undefined;
+let summaryQueueInstance: Queue | undefined;
+
+export function getAnalysisQueue(): Queue {
+  return (analysisQueueInstance ??= new Queue(ANALYSIS_QUEUE, queueOpts));
+}
+
+export function getSummaryQueue(): Queue {
+  return (summaryQueueInstance ??= new Queue(SUMMARY_QUEUE, queueOpts));
+}
 
 export interface AnalysisJobData {
   jobId: string;
