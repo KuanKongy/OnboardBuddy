@@ -1,6 +1,6 @@
 import { Queue, QueueOptions } from 'bullmq';
 
-function buildConnection() {
+export function buildConnection() {
   const url = process.env.REDIS_URL;
   if (url) {
     const parsed = new URL(url);
