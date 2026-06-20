@@ -83,7 +83,9 @@ https://<ref>.supabase.co/auth/v1/callback
 
 **What it does:** Grants OnboardBuddy read-only access to repository contents and
 metadata. Users install this App on their GitHub account, and the backend uses
-its credentials to download repo archives for analysis.
+its credentials to download repo archives for analysis. The GitHub App also
+performs user authorization so OnboardBuddy can list only the installations
+accessible to the connected GitHub user.
 
 **What data it holds:** None — installation tokens are short-lived.
 
@@ -93,6 +95,8 @@ its credentials to download repo archives for analysis.
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | App client ID |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | App client secret |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` private key file (default: `./github-app.pem`) |
+| `GITHUB_INSTALL_STATE_SECRET` | `backend/.env` | Secret used to sign GitHub App install state; falls back to `TOKEN_ENCRYPTION_KEY` |
+| `FRONTEND_URL` | `backend/.env` | Frontend origin used for GitHub App OAuth/setup redirects, e.g. `http://localhost:5173` |
 
 ### 5. OpenRouter (AI)
 
@@ -107,6 +111,34 @@ so the `openai` npm package works directly.
 | `OPENROUTER_API_KEY` | `backend/.env` | API key from openrouter.ai |
 | `OPENROUTER_BASE_URL` | `backend/.env` | `https://openrouter.ai/api/v1` |
 | `OPENROUTER_MODEL` | `backend/.env` | Model identifier (e.g. `openai/gpt-4o-mini`) |
+
+### 6. OpenAI Embeddings (for RAG)
+
+**What it does:** Generates vector embeddings for onboarding section content,
+enabling semantic search and retrieval-augmented generation. Uses
+`text-embedding-3-small` (1536 dimensions) by default.
+
+**What data it holds:** None — embeddings are stored in PostgreSQL (pgvector).
+
+| Env var | `.env` file | Description |
+|---|---|---|
+| `EMBEDDINGS_API_KEY` | `backend/.env` | OpenAI API key for embeddings |
+| `EMBEDDINGS_BASE_URL` | `backend/.env` | `https://api.openai.com/v1` (default) |
+| `EMBEDDINGS_MODEL` | `backend/.env` | `text-embedding-3-small` (default) |
+
+### 7. BullMQ Worker Configuration
+
+The worker uses the following tuning parameters to balance responsiveness vs
+Upstash Redis cost:
+
+| Env var | Default | Description |
+|---|---|---|
+| `WORKER_POLL_INTERVAL_MS` | `30000` | BullMQ `drainDelay`: how long to wait between idle polls. Jobs still picked up instantly via ZSET signal. |
+| `WORKER_CONCURRENCY` | `2` | Max parallel jobs per worker process |
+
+**Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
+to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
+plan ($10/month) for unlimited commands.
 
 ---
 
@@ -180,7 +212,8 @@ so the `openai` npm package works directly.
 2. Fill in:
    - **App name:** OnboardBuddy Repo Access (or anything unique)
    - **Homepage URL:** `http://localhost:5173`
-   - **Callback URL:** `http://localhost:5173/auth/callback`
+   - **Callback URL:** `http://localhost:5173/github/oauth/callback`
+   - **Setup URL:** `http://localhost:5173/github/setup`
    - **Webhook:** uncheck "Active" (we don't need webhooks)
 3. Under **Permissions → Repository permissions**:
    - **Contents:** Read-only
@@ -405,8 +438,8 @@ The full authentication flow using Supabase + GitHub OAuth:
 3. Supabase redirects the browser to the **GitHub OAuth App** consent screen.
 4. After the user grants access, GitHub redirects back to the **Supabase callback
    URL** (`https://<ref>.supabase.co/auth/v1/callback`).
-5. Supabase creates a session and stores the `provider_token` (the GitHub access
-   token from the OAuth exchange).
+5. Supabase creates a session for OnboardBuddy. The GitHub provider token from
+   this login is not used for repository import.
 6. The browser is redirected to `/auth/callback` on the frontend, which extracts
    the session from the URL hash/query params.
 7. On every subsequent API request, the frontend sends the Supabase JWT in the
@@ -462,18 +495,33 @@ The full authentication flow using Supabase + GitHub OAuth:
 
 **Step-by-step:**
 
-1. The user **installs the OnboardBuddy GitHub App** on their GitHub account
-   (from the App's public install page or github.com/settings/installations).
-   This grants OnboardBuddy read-only access to the selected repositories.
-2. The frontend calls **`GET /api/github/installations`** to fetch a list of
-   installations and their accessible repositories.
-3. The user **selects a repository and branch** in the UI.
-4. The frontend calls **`POST /api/projects`** to create a project record in the
+1. The logged-in user connects GitHub from Account Settings. The frontend calls
+   **`GET /api/github/oauth/start`** and redirects to the GitHub App user
+   authorization URL.
+2. GitHub redirects to **`/github/oauth/callback?code=...&state=...`**. The
+   frontend calls **`POST /api/github/oauth/complete`**. The backend verifies
+   state, exchanges the code with the GitHub App client ID/secret, and stores a
+   GitHub App user access token plus refresh token in `github_connections`.
+   Later installation-list requests refresh this token automatically when it is
+   close to expiry.
+3. The user opens the signed install URL returned by **`GET /api/github/app`**.
+   The URL includes short-lived `state` tied to that OnboardBuddy user.
+4. The user installs or configures the OnboardBuddy GitHub App. GitHub redirects
+   to **`/github/setup?installation_id=...&state=...`**.
+5. The frontend calls **`POST /api/github/installations/link`**. The backend
+   verifies state and confirms the connected GitHub user can access that
+   installation through GitHub's user-scoped installations endpoint before
+   linking it.
+6. The frontend calls **`GET /api/github/installations`**. The backend uses the
+   stored GitHub App user access token and GitHub's user-scoped endpoint, so only
+   installations accessible to that user are returned.
+7. The user **selects a repository and branch** in the UI.
+8. The frontend calls **`POST /api/projects`** to create a project record in the
    database (owner, repo name, branch).
-5. The frontend calls **`POST /api/projects/:id/analyze`** to kick off analysis.
-6. The backend API **enqueues an analysis job** on the BullMQ queue in Upstash
+9. The frontend calls **`POST /api/projects/:id/analyze`** to kick off analysis.
+10. The backend API **enqueues an analysis job** on the BullMQ queue in Upstash
    Redis.
-7. The backend worker **claims the job** from the queue.
-8. The worker **downloads the repo archive** from GitHub using the GitHub App's
+11. The backend worker **claims the job** from the queue.
+12. The worker **downloads the repo archive** from GitHub using the GitHub App's
    installation token, then runs static analysis and (optionally) AI-powered
    explanation generation. Results are written back to the database.

@@ -7,7 +7,7 @@ const GITHUB_API = "https://api.github.com";
 
 export interface Installation {
   id: number;
-  account: { login: string };
+  account: { login: string; type?: string };
   app_id: number;
 }
 
@@ -23,6 +23,18 @@ export interface Repo {
 export interface Branch {
   name: string;
   commit: { sha: string };
+}
+
+export interface GitHubUser {
+  id: number;
+  login: string;
+}
+
+export interface GitHubAppUserToken {
+  accessToken: string;
+  expiresAt: Date | null;
+  refreshToken: string | null;
+  refreshTokenExpiresAt: Date | null;
 }
 
 function base64url(buf: Buffer): string {
@@ -92,9 +104,9 @@ export async function getAppInfo(): Promise<{ slug: string; name: string; html_u
   return data;
 }
 
-export async function listAppInstallations(): Promise<Installation[]> {
+export async function getAppInstallation(installationId: number): Promise<Installation> {
   const jwt = createAppJwt();
-  const res = await fetch(`${GITHUB_API}/app/installations`, {
+  const res = await fetch(`${GITHUB_API}/app/installations/${installationId}`, {
     headers: {
       Authorization: `Bearer ${jwt}`,
       Accept: "application/vnd.github+json",
@@ -107,11 +119,138 @@ export async function listAppInstallations(): Promise<Installation[]> {
     throw new Error(`GitHub API error (${res.status}): ${body}`);
   }
 
-  return (await res.json()) as Installation[];
+  return (await res.json()) as Installation;
+}
+
+export async function exchangeGitHubAppOAuthCode(
+  code: string,
+  redirectUri: string,
+): Promise<GitHubAppUserToken> {
+  const res = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: process.env.GITHUB_APP_CLIENT_ID,
+      client_secret: process.env.GITHUB_APP_CLIENT_SECRET,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub OAuth error (${res.status}): ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (!data.access_token) {
+    throw new Error(data.error_description ?? data.error ?? "GitHub OAuth did not return an access token");
+  }
+
+  return {
+    accessToken: data.access_token,
+    expiresAt: secondsFromNow(data.expires_in),
+    refreshToken: data.refresh_token ?? null,
+    refreshTokenExpiresAt: secondsFromNow(data.refresh_token_expires_in),
+  };
+}
+
+export async function refreshGitHubAppUserToken(
+  refreshToken: string,
+): Promise<GitHubAppUserToken> {
+  const res = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      client_id: process.env.GITHUB_APP_CLIENT_ID,
+      client_secret: process.env.GITHUB_APP_CLIENT_SECRET,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub OAuth refresh error (${res.status}): ${body}`);
+  }
+
+  const data = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    refresh_token?: string;
+    refresh_token_expires_in?: number;
+    error?: string;
+    error_description?: string;
+  };
+  if (!data.access_token) {
+    throw new Error(data.error_description ?? data.error ?? "GitHub OAuth did not return a refreshed access token");
+  }
+
+  return {
+    accessToken: data.access_token,
+    expiresAt: secondsFromNow(data.expires_in),
+    refreshToken: data.refresh_token ?? null,
+    refreshTokenExpiresAt: secondsFromNow(data.refresh_token_expires_in),
+  };
+}
+
+export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
+  const res = await fetch(`${GITHUB_API}/user`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API error (${res.status}): ${body}`);
+  }
+
+  return (await res.json()) as GitHubUser;
+}
+
+function secondsFromNow(seconds: number | undefined): Date | null {
+  if (!seconds) return null;
+  return new Date(Date.now() + seconds * 1000);
+}
+
+export async function listUserInstallations(
+  userAccessToken: string,
+): Promise<Installation[]> {
+  const res = await fetch(`${GITHUB_API}/user/installations`, {
+    headers: {
+      Authorization: `Bearer ${userAccessToken}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API error (${res.status}): ${body}`);
+  }
+
+  const data = (await res.json()) as { installations: Installation[] };
+  return data.installations;
 }
 
 export async function listInstallationRepos(installationToken: string): Promise<Repo[]> {
-  const res = await fetch(`${GITHUB_API}/installation/repositories`, {
+  const res = await fetch(`${GITHUB_API}/installation/repositories?per_page=100`, {
     headers: {
       Authorization: `Bearer ${installationToken}`,
       Accept: "application/vnd.github+json",

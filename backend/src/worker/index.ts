@@ -13,11 +13,21 @@ import { Worker, Job } from 'bullmq';
 import { ANALYSIS_QUEUE, connection, summaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
-import { getCommitSha, downloadZipball } from '../lib/github.js';
-import { decrypt } from '../lib/encryption.js';
+import { getCommitSha, downloadZipball, getInstallationToken } from '../lib/github.js';
 import { runAnalysis } from './engine/analysisRunner.js';
+import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
+import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
+import { extractWorkflows, persistWorkflows } from './engine/workflowExtractor.js';
+import { rankCriticalFiles, persistRankings } from './engine/criticalRanker.js';
 import { query, pool } from '../lib/db.js';
 import { glob } from 'glob';
+
+interface AnalysisCheckpoint {
+  lastCompletedStep?: number;
+  tmpDir?: string;
+  snapshotId?: string;
+  commitHash?: string;
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -30,32 +40,52 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
   const updateStep = (step: string, pct = 0) =>
     query(
-      `UPDATE analysis_jobs SET current_step = $1, progress_pct = $2, status = 'running', started_at = COALESCE(started_at, NOW()) WHERE id = $3`,
-      [step, pct, jobId],
+      `UPDATE analysis_jobs
+       SET current_step = $1,
+           progress_pct = $2,
+           status = 'running',
+           started_at = COALESCE(started_at, NOW()),
+           step_log = step_log || $4::jsonb
+       WHERE id = $3`,
+      [step, pct, jobId, JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
 
-  // 1. Look up project
+  const saveCheckpoint = (cp: AnalysisCheckpoint) =>
+    query(
+      `UPDATE analysis_jobs SET checkpoint = $1 WHERE id = $2`,
+      [JSON.stringify(cp), jobId],
+    );
+
+  // 1. Look up project + settings
   await updateStep('Loading project', 5);
   const projectResult = await query(
-    `SELECT user_id, repo_owner, repo_name, branch FROM projects WHERE id = $1`,
+    `SELECT p.user_id, p.repo_owner, p.repo_name, p.branch, p.github_installation_id,
+            ps.ignored_paths, ps.file_limit, ps.loc_limit, ps.ai_enabled
+     FROM projects p
+     LEFT JOIN project_settings ps ON ps.project_id = p.id
+     WHERE p.id = $1`,
     [projectId],
   );
   if (projectResult.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
 
-  const { user_id, repo_owner, repo_name, branch } = projectResult.rows[0] as {
+  const { user_id, repo_owner, repo_name, branch, github_installation_id,
+          ignored_paths, file_limit, loc_limit, ai_enabled } = projectResult.rows[0] as {
     user_id: string;
     repo_owner: string;
     repo_name: string;
     branch: string;
+    github_installation_id: string | null;
+    ignored_paths: string[] | null;
+    file_limit: number | null;
+    loc_limit: number | null;
+    ai_enabled: boolean | null;
   };
 
-  // 2. Fetch OAuth token
-  const connResult = await query(
-    `SELECT access_token_encrypted FROM github_connections WHERE user_id = $1`,
-    [user_id],
-  );
-  if (connResult.rows.length === 0) throw new Error(`No GitHub connection for user: ${user_id}`);
-  const token = decrypt(connResult.rows[0].access_token_encrypted as string);
+  // 2. Mint fresh installation token (short-lived, on demand)
+  if (!github_installation_id) {
+    throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
+  }
+  const token = await getInstallationToken(Number(github_installation_id));
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-${projectId}-`));
   const zipPath = path.join(tmpDir, 'repo.zip');
@@ -79,7 +109,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
     // 6. Run AST analysis
     await updateStep('Analyzing codebase', 50);
-    const snapshot = await runAnalysis({ projectId, triggeredBy: user_id, repoPath: repoRoot });
+    const snapshot = await runAnalysis({
+      projectId,
+      triggeredBy: user_id,
+      repoPath: repoRoot,
+      ignoredPaths: ignored_paths ?? undefined,
+      fileLimit: file_limit ?? undefined,
+    });
+    await saveCheckpoint({ lastCompletedStep: 6, tmpDir, commitHash: commitHash });
 
     // 7. Count workflow files
     const workflowFiles = await glob('**/*.{yml,yaml}', {
@@ -93,6 +130,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
     let snapshotId = '';
+    const nodeIdMap = new Map<string, string>();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -113,12 +151,15 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       );
       snapshotId = snapResult.rows[0]!.id;
 
-      // Clear stale graph data from previous scan of same commit
+      // Clear stale data from previous scan of same commit
+      await client.query(`DELETE FROM workflows WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM entrypoints WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM side_effects WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM critical_rankings WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
 
       // Insert graph_nodes (one per file module)
-      const nodeIdMap = new Map<string, string>(); // relativePath → DB id
       for (const node of snapshot.graph.nodes) {
         const exportedSymbols = node.metadata.exportedSymbols;
         const nodeHash = stableHash(JSON.stringify(exportedSymbols));
@@ -151,19 +192,6 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         );
       }
 
-      // Link job to snapshot + mark complete
-      await client.query(
-        `UPDATE analysis_jobs
-         SET status = 'complete', snapshot_id = $1, current_step = 'Complete', progress_pct = 100, finished_at = NOW()
-         WHERE id = $2`,
-        [snapshotId, jobId],
-      );
-
-      await client.query(
-        `UPDATE projects SET status = 'complete', last_analyzed_at = NOW() WHERE id = $1`,
-        [projectId],
-      );
-
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -172,30 +200,71 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       client.release();
     }
 
-    // Enqueue summary generation job
-    const summaryJobResult = await query(
-      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
-       RETURNING id`,
-      [projectId, snapshotId, user_id],
+    // 9. Run advanced pipeline steps (entrypoints, side effects, workflows, rankings)
+    await updateStep('Detecting entrypoints', 85);
+    const entrypoints = detectEntrypoints(snapshot.fileAnalyses);
+    await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
+
+    await updateStep('Detecting side effects', 88);
+    const sideEffects = detectSideEffects(snapshot.fileAnalyses);
+    await persistSideEffects(snapshotId, sideEffects, nodeIdMap);
+
+    await updateStep('Extracting workflows', 90);
+    const workflows = extractWorkflows(
+      snapshot.fileAnalyses,
+      snapshot.graph,
+      entrypoints,
+      sideEffects,
     );
-    const summaryDbJobId: string = summaryJobResult.rows[0].id;
-    await summaryQueue.add('generate_summary', {
-      jobId: summaryDbJobId,
-      snapshotId,
-      projectId,
-      triggeredBy: user_id,
-    } satisfies SummaryJobData, {
-      attempts: 2,
-      backoff: { type: 'fixed', delay: 3000 },
-      removeOnComplete: { count: 10 },
-      removeOnFail: { count: 10 },
-    });
+    await persistWorkflows(snapshotId, workflows, nodeIdMap);
+
+    await updateStep('Ranking critical files', 93);
+    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
+    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
+    const rankings = rankCriticalFiles(snapshot.fileAnalyses, snapshot.graph, entrypointKeys, sideEffectKeys);
+    await persistRankings(snapshotId, rankings, nodeIdMap);
+
+    // 10. Mark job complete
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'complete', snapshot_id = $1, current_step = 'Complete', progress_pct = 100, finished_at = NOW(),
+           step_log = step_log || $3::jsonb
+       WHERE id = $2`,
+      [snapshotId, jobId, JSON.stringify([{ step: 'Complete', pct: 100, ts: new Date().toISOString() }])],
+    );
+    await query(
+      `UPDATE projects SET status = 'complete', last_analyzed_at = NOW() WHERE id = $1`,
+      [projectId],
+    );
+
+    // Enqueue summary generation job (only if AI is enabled)
+    if (ai_enabled !== false) {
+      const summaryJobResult = await query(
+        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
+         VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
+         RETURNING id`,
+        [projectId, snapshotId, user_id],
+      );
+      const summaryDbJobId: string = summaryJobResult.rows[0].id;
+      await summaryQueue.add('generate_summary', {
+        jobId: summaryDbJobId,
+        snapshotId,
+        projectId,
+        triggeredBy: user_id,
+      } satisfies SummaryJobData, {
+        attempts: 2,
+        backoff: { type: 'fixed', delay: 3000 },
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 10 },
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await query(
-      `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW() WHERE id = $2`,
-      [message, jobId],
+      `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW(),
+           step_log = step_log || $3::jsonb
+       WHERE id = $2`,
+      [message, jobId, JSON.stringify([{ step: `Failed: ${message.slice(0, 100)}`, pct: 0, ts: new Date().toISOString() }])],
     );
     await query(`UPDATE projects SET status = 'failed' WHERE id = $1`, [projectId]);
     throw err;
@@ -210,14 +279,19 @@ const worker = new Worker<AnalysisJobData>(
   {
     connection,
     concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
+    drainDelay: Number(process.env.WORKER_POLL_INTERVAL_MS ?? 30000),
+    stalledInterval: 120_000,
+    lockDuration: 600_000,
+    removeOnComplete: { count: 5 },
+    removeOnFail: { count: 5 },
   },
 );
 
-worker.on('completed', (job) => {
+worker.on('completed', (job: Job<AnalysisJobData>) => {
   console.log(`[worker] job ${job.id} completed (project=${job.data.projectId})`);
 });
 
-worker.on('failed', (job, err) => {
+worker.on('failed', (job: Job<AnalysisJobData> | undefined, err: Error) => {
   console.error(`[worker] job ${job?.id} failed (project=${job?.data.projectId}):`, err.message);
 });
 

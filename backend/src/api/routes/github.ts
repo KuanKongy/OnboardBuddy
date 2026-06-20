@@ -1,21 +1,72 @@
 import { Router } from "express";
+import { query } from "../../lib/db.js";
 import {
+  exchangeGitHubAppOAuthCode,
+  getAppInstallation,
   getAppInfo,
-  listAppInstallations,
+  getGitHubUser,
   getInstallationToken,
   listInstallationRepos,
   listBranches,
 } from "../../lib/github.js";
+import {
+  GitHubReconnectRequiredError,
+  linkInstallationToUser,
+  listInstallationsForUser,
+  saveGithubConnection,
+  userCanAccessInstallation,
+} from "../../lib/github-connection.js";
+import {
+  createInstallationState,
+  verifyInstallationState,
+} from "../../lib/github-installation-state.js";
 
 export const githubRouter = Router();
 
-githubRouter.get("/app", async (_req, res) => {
+function handleGitHubRouteError(
+  res: import("express").Response,
+  err: unknown,
+  fallbackMessage = "Internal server error",
+): void {
+  if (err instanceof GitHubReconnectRequiredError) {
+    res.status(403).json({
+      error: err.message,
+      code: "github_reconnect_required",
+    });
+    return;
+  }
+
+  res.status(500).json({ error: fallbackMessage });
+}
+
+function frontendUrl(): string {
+  return (process.env.FRONTEND_URL ?? process.env.CORS_ORIGIN ?? "http://localhost:5173").replace(/\/$/, "");
+}
+
+function githubOAuthRedirectUri(): string {
+  return `${frontendUrl()}/github/oauth/callback`;
+}
+
+async function ensurePublicUser(userId: string, email: string): Promise<void> {
+  await query(
+    `INSERT INTO public.users (id, email)
+     VALUES ($1, $2)
+     ON CONFLICT (id) DO NOTHING`,
+    [userId, email || `${userId}@users.onboardbuddy.local`],
+  );
+}
+
+githubRouter.get("/app", async (req, res) => {
   try {
+    const state = createInstallationState(req.user!.id);
     const info = await getAppInfo();
+    const installUrl = new URL(`https://github.com/apps/${info.slug}/installations/new`);
+    installUrl.searchParams.set("state", state);
+
     res.json({
       name: info.name,
       slug: info.slug,
-      install_url: `https://github.com/apps/${info.slug}/installations/new`,
+      install_url: installUrl.toString(),
     });
   } catch (err) {
     console.error("Get app info error:", err);
@@ -23,26 +74,116 @@ githubRouter.get("/app", async (_req, res) => {
   }
 });
 
-githubRouter.get("/installations", async (_req, res) => {
+githubRouter.get("/oauth/start", async (req, res) => {
   try {
-    const installations = await listAppInstallations();
+    const state = createInstallationState(req.user!.id);
+    const url = new URL("https://github.com/login/oauth/authorize");
+    url.searchParams.set("client_id", process.env.GITHUB_APP_CLIENT_ID ?? "");
+    url.searchParams.set("redirect_uri", githubOAuthRedirectUri());
+    url.searchParams.set("state", state);
+
+    res.json({ authorization_url: url.toString() });
+  } catch (err) {
+    console.error("Start GitHub OAuth error:", err);
+    res.status(500).json({ error: "Failed to start GitHub OAuth" });
+  }
+});
+
+githubRouter.post("/oauth/complete", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { code, state } = req.body as { code?: string; state?: string };
+    if (!code || !state) {
+      res.status(400).json({ error: "code and state are required" });
+      return;
+    }
+
+    verifyInstallationState(state, userId);
+
+    const token = await exchangeGitHubAppOAuthCode(code, githubOAuthRedirectUri());
+    const githubUser = await getGitHubUser(token.accessToken);
+    await ensurePublicUser(userId, req.user!.email);
+    await saveGithubConnection(userId, githubUser.id, githubUser.login, token);
+
+    res.json({
+      github_user: {
+        id: githubUser.id,
+        login: githubUser.login,
+      },
+    });
+  } catch (err) {
+    console.error("Complete GitHub OAuth error:", err);
+    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to complete GitHub OAuth" });
+  }
+});
+
+githubRouter.post("/installations/link", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { installation_id, state } = req.body as {
+      installation_id?: string | number;
+      state?: string;
+    };
+
+    const installationId = Number(installation_id);
+    if (!installationId || Number.isNaN(installationId) || !state) {
+      res.status(400).json({ error: "installation_id and state are required" });
+      return;
+    }
+
+    verifyInstallationState(state, userId);
+
+    const allowed = await userCanAccessInstallation(userId, installationId);
+    if (!allowed) {
+      res.status(403).json({ error: "This GitHub user cannot access that installation" });
+      return;
+    }
+
+    const installation = await getAppInstallation(installationId);
+    await linkInstallationToUser(userId, installation);
+
+    res.json({
+      installation: {
+        id: installation.id,
+        account: installation.account,
+      },
+    });
+  } catch (err) {
+    console.error("Link installation error:", err);
+    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to link installation" });
+  }
+});
+
+githubRouter.get("/installations", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { installations } = await listInstallationsForUser(userId);
+
     res.json({ installations });
   } catch (err) {
     console.error("List installations error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    handleGitHubRouteError(res, err, "Failed to list GitHub installations");
   }
 });
 
 githubRouter.get("/repos", async (req, res) => {
   try {
+    const userId = req.user!.id;
     const installationId = Number(req.query.installation_id);
-    if (!installationId) {
+    if (!installationId || Number.isNaN(installationId)) {
       res.status(400).json({ error: "installation_id query parameter is required" });
+      return;
+    }
+
+    const allowed = await userCanAccessInstallation(userId, installationId);
+    if (!allowed) {
+      res.status(403).json({ error: "You do not have access to this GitHub installation" });
       return;
     }
 
     const installationToken = await getInstallationToken(installationId);
     const repos = await listInstallationRepos(installationToken);
+
     res.json({
       repos: repos.map((repo) => ({
         id: repo.id,
@@ -55,16 +196,23 @@ githubRouter.get("/repos", async (req, res) => {
     });
   } catch (err) {
     console.error("List repos error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    handleGitHubRouteError(res, err);
   }
 });
 
 githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
   try {
+    const userId = req.user!.id;
     const { owner, repo } = req.params;
     const installationId = Number(req.query.installation_id);
-    if (!installationId) {
+    if (!installationId || Number.isNaN(installationId)) {
       res.status(400).json({ error: "installation_id query parameter is required" });
+      return;
+    }
+
+    const allowed = await userCanAccessInstallation(userId, installationId);
+    if (!allowed) {
+      res.status(403).json({ error: "You do not have access to this GitHub installation" });
       return;
     }
 
@@ -73,6 +221,6 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
     res.json({ branches });
   } catch (err) {
     console.error("List branches error:", err);
-    res.status(500).json({ error: "Internal server error" });
+    handleGitHubRouteError(res, err);
   }
 });

@@ -50,11 +50,16 @@ export function layoutDependencyGraph(
     queue.push(id);
   }
 
-  while (queue.length > 0) {
+  // BFS with iteration cap to prevent infinite loops from cycles
+  const maxIterations = nodes.length * nodes.length;
+  let iterations = 0;
+  while (queue.length > 0 && iterations < maxIterations) {
+    iterations++;
     const current = queue.shift()!;
     const currentLevel = level.get(current) ?? 0;
     for (const next of outgoing.get(current) ?? []) {
       const candidate = currentLevel + 1;
+      if (candidate > nodes.length) continue; // prevent deep cycle traversal
       if (level.get(next) === undefined || candidate > level.get(next)!) {
         level.set(next, candidate);
         queue.push(next);

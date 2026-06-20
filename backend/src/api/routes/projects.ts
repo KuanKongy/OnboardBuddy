@@ -3,6 +3,7 @@ import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { analysisQueue, summaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
+import { userCanAccessInstallation } from "../../lib/github-connection.js";
 
 export const projectsRouter = Router();
 
@@ -41,27 +42,47 @@ projectsRouter.post("/", async (req, res) => {
   const client = await pool.connect();
   try {
     const userId = req.user!.id;
-    const { repo_owner, repo_name, branch, default_developer_role } = req.body as {
+    const { repo_owner, repo_name, branch, github_installation_id, default_developer_role } = req.body as {
       repo_owner: string;
       repo_name: string;
       branch: string;
+      github_installation_id?: string;
       default_developer_role?: string;
     };
 
-    if (!repo_owner || !repo_name || !branch) {
-      res.status(400).json({ error: "repo_owner, repo_name, and branch are required" });
+    if (!repo_owner || !repo_name || !branch || !github_installation_id) {
+      res.status(400).json({ error: "repo_owner, repo_name, branch, and github_installation_id are required" });
       return;
     }
 
     const role = default_developer_role ?? "general";
+    const installationId = Number(github_installation_id);
+    if (!installationId || Number.isNaN(installationId)) {
+      res.status(400).json({ error: "github_installation_id must be a valid installation ID" });
+      return;
+    }
+
+    const allowedInstallation = await userCanAccessInstallation(userId, installationId);
+    if (!allowedInstallation) {
+      res.status(403).json({ error: "You do not have access to this GitHub installation" });
+      return;
+    }
 
     await client.query("BEGIN");
 
+    // Ensure public.users row exists (handles users created before trigger was set up)
+    await client.query(
+      `INSERT INTO public.users (id, email)
+       VALUES ($1, COALESCE((SELECT email FROM auth.users WHERE id = $1), ''))
+       ON CONFLICT (id) DO NOTHING`,
+      [userId],
+    );
+
     const projectResult = await client.query(
-      `INSERT INTO projects (user_id, repo_owner, repo_name, branch)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO projects (user_id, repo_owner, repo_name, branch, github_installation_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
-      [userId, repo_owner, repo_name, branch],
+      [userId, repo_owner, repo_name, branch, github_installation_id],
     );
     const project = projectResult.rows[0];
 
@@ -205,6 +226,15 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     const projectId = req.params.id as string;
     const userId = req.user!.id;
 
+    const settingsResult = await query(
+      `SELECT ai_enabled FROM project_settings WHERE project_id = $1`,
+      [projectId],
+    );
+    if (settingsResult.rows.length > 0 && settingsResult.rows[0].ai_enabled === false) {
+      res.status(403).json({ error: "AI features are disabled for this project" });
+      return;
+    }
+
     const snapResult = await query(
       `SELECT id, commit_hash FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
@@ -282,48 +312,88 @@ projectsRouter.get("/:id/summary", requireProjectAccess(), async (req, res) => {
   }
 });
 
+projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+
+    const jobResult = await query(
+      `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step,
+              aj.checkpoint, aj.step_log, aj.error_message, aj.created_at, aj.started_at, aj.finished_at,
+              s.file_count, s.symbol_count, s.workflow_count, s.commit_hash
+       FROM analysis_jobs aj
+       LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       WHERE aj.project_id = $1
+       ORDER BY aj.created_at DESC
+       LIMIT 5`,
+      [projectId],
+    );
+
+    const latestSnapshot = await query(
+      `SELECT id, file_count, symbol_count, workflow_count, commit_hash, created_at
+       FROM analysis_snapshots
+       WHERE project_id = $1 AND status = 'complete'
+       ORDER BY created_at DESC LIMIT 1`,
+      [projectId],
+    );
+
+    res.json({
+      jobs: jobResult.rows,
+      latestSnapshot: latestSnapshot.rows[0] ?? null,
+    });
+  } catch (err) {
+    console.error("Analysis status error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), async (req, res) => {
+  const client = await pool.connect();
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
 
-    const projectResult = await query(
-      `SELECT id, branch FROM projects WHERE id = $1`,
+    await client.query("BEGIN");
+
+    const projectResult = await client.query(
+      `SELECT id, branch FROM projects WHERE id = $1 FOR UPDATE`,
       [projectId],
     );
     if (projectResult.rows.length === 0) {
+      await client.query("ROLLBACK");
       res.status(404).json({ error: "Project not found" });
       return;
     }
 
-    // Reject if a job is already queued or running for this project
-    const activeJob = await query(
+    const activeJob = await client.query(
       `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
       [projectId],
     );
     if (activeJob.rows.length > 0) {
+      await client.query("ROLLBACK");
       res.status(409).json({ error: "Analysis already in progress for this project" });
       return;
     }
 
     const project = projectResult.rows[0] as { id: string; branch: string };
 
-    await query(
+    await client.query(
       `UPDATE projects SET status = 'analyzing' WHERE id = $1`,
       [projectId],
     );
 
-    const jobResult = await query(
+    const jobResult = await client.query(
       `INSERT INTO analysis_jobs (project_id, requested_by, job_type, status, current_step)
        VALUES ($1, $2, 'analyze_project', 'queued', 'Waiting for worker')
        RETURNING id, status`,
       [projectId, userId],
     );
 
+    await client.query("COMMIT");
+
     const dbJobId: string = jobResult.rows[0].id;
 
     await analysisQueue.add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
-      jobId: projectId,  // dedup key: one active BullMQ job per project
+      jobId: dbJobId,
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },
     });
@@ -337,7 +407,10 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       },
     });
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     console.error("Start analysis error:", err);
     res.status(500).json({ error: "Internal server error" });
+  } finally {
+    client.release();
   }
 });

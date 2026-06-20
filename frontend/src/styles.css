@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
 
 @theme inline {
   /* Cool "slate" dark palette anchored on #0A0D13 (oklch 0.159 0.014 264) for
