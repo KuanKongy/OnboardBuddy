@@ -4,7 +4,6 @@ import {
   Loader2,
   Rocket,
   Shield,
-  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -22,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 
 interface Installation {
@@ -50,6 +50,7 @@ const developerRoles = [
 
 export function ImportPage() {
   const navigate = useNavigate();
+  const { connectGithub } = useAuth();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -75,7 +76,6 @@ export function ImportPage() {
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
-  const [aiEnabled, setAiEnabled] = useState(true);
 
   useEffect(() => {
     setInstallationsLoading(true);
@@ -91,7 +91,15 @@ export function ImportPage() {
         }
         setInstallations(instData.installations);
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setInstallations([]);
+        setSelectedInstallation("");
+        setRepos([]);
+        setSelectedRepo("");
+        setBranches([]);
+        setSelectedBranch("");
+        setError(err.message);
+      })
       .finally(() => setInstallationsLoading(false));
   }, [refreshKey]);
 
@@ -102,7 +110,13 @@ export function ImportPage() {
     setSelectedBranch("");
     apiFetch(`/github/repos?installation_id=${selectedInstallation}`)
       .then((data: { repos: Repo[] }) => setRepos(data.repos))
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setRepos([]);
+        setSelectedRepo("");
+        setBranches([]);
+        setSelectedBranch("");
+        setError(err.message);
+      })
       .finally(() => setReposLoading(false));
   }, [selectedInstallation]);
 
@@ -120,7 +134,11 @@ export function ImportPage() {
         const defaultBranch = data.branches.find((b) => b.name === repo.default_branch);
         if (defaultBranch) setSelectedBranch(defaultBranch.name);
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        setBranches([]);
+        setSelectedBranch("");
+        setError(err.message);
+      })
       .finally(() => setBranchesLoading(false));
   }, [selectedRepo, selectedInstallation, repos]);
 
@@ -130,6 +148,17 @@ export function ImportPage() {
       setIgnoredPaths((prev) => [...prev, path]);
     }
     setIgnoreInput("");
+  }
+
+  async function handleAuthorizeGitHubApp() {
+    setError("");
+    try {
+      sessionStorage.setItem("onboardbuddy.github.after_oauth", "install");
+      await connectGithub();
+    } catch (err: unknown) {
+      sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+      setError(err instanceof Error ? err.message : "Failed to connect GitHub App");
+    }
   }
 
   const repo = repos.find((r) => r.full_name === selectedRepo);
@@ -146,6 +175,7 @@ export function ImportPage() {
           repo_owner: repo.owner,
           repo_name: repo.name,
           branch: selectedBranch,
+          github_installation_id: selectedInstallation,
           default_developer_role: developerRole,
         }),
       }) as { project: { id: string } };
@@ -153,7 +183,7 @@ export function ImportPage() {
       // Persist privacy choices. Only send ignored_paths when the user added
       // some, so we don't overwrite the backend's sensible default ignore list.
       const settings: { ai_enabled: boolean; ignored_paths?: string[] } = {
-        ai_enabled: aiEnabled,
+        ai_enabled: true,
       };
       if (ignoredPaths.length > 0) settings.ignored_paths = ignoredPaths;
       await apiFetch(`/projects/${project.id}/settings`, {
@@ -196,14 +226,9 @@ export function ImportPage() {
                 <div className="rounded-md border border-dashed border-border p-3 text-center">
                   <p className="text-xs text-muted-foreground">No installations found.</p>
                   <div className="mt-2 flex justify-center gap-2">
-                    {installUrl && (
-                      <Button size="xs" asChild>
-                        <a href={installUrl} target="_blank" rel="noopener noreferrer">
-                          Install {appName}
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
-                      </Button>
-                    )}
+                    <Button size="xs" onClick={handleAuthorizeGitHubApp}>
+                      Connect {appName}
+                    </Button>
                     <Button variant="outline" size="xs" onClick={() => setRefreshKey((k) => k + 1)}>
                       Refresh
                     </Button>
@@ -234,6 +259,13 @@ export function ImportPage() {
                         Configure repositories <ExternalLink className="h-2.5 w-2.5" />
                       </a>
                     )}
+                    <button
+                      type="button"
+                      onClick={handleAuthorizeGitHubApp}
+                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                    >
+                      Authorize GitHub App
+                    </button>
                     <button
                       type="button"
                       onClick={() => setRefreshKey((k) => k + 1)}
@@ -378,34 +410,6 @@ export function ImportPage() {
               <>
                 <Separator />
                 <div className="space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-2">
-                      <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
-                      <div>
-                        <p className="text-xs font-medium text-foreground">Cloud-assisted AI</p>
-                        <p className="text-[11px] text-muted-foreground">
-                          Sends only selected code snippets to generate explanations.
-                          Graph and ranking run locally either way.
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={aiEnabled}
-                      aria-label="Cloud-assisted AI"
-                      onClick={() => setAiEnabled((v) => !v)}
-                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
-                        aiEnabled ? "bg-primary" : "bg-input"
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${
-                          aiEnabled ? "translate-x-4" : "translate-x-0.5"
-                        }`}
-                      />
-                    </button>
-                  </div>
                   <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
                     <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
                     <p className="text-[11px] text-muted-foreground">

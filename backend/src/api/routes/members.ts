@@ -114,11 +114,24 @@ membersRouter.patch("/members/:userId", requireProjectAccess("owner", "admin"), 
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;
+    const callerId = req.user!.id;
     const callerTier = req.projectMember!.permission_tier;
     const { permission_tier, developer_role } = req.body as {
       permission_tier?: string;
       developer_role?: string;
     };
+
+    const VALID_TIERS = ["owner", "admin", "developer"];
+    const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"];
+
+    if (permission_tier !== undefined && !VALID_TIERS.includes(permission_tier)) {
+      res.status(400).json({ error: "Invalid permission_tier" });
+      return;
+    }
+    if (developer_role !== undefined && !VALID_ROLES.includes(developer_role)) {
+      res.status(400).json({ error: "Invalid developer_role" });
+      return;
+    }
 
     const targetResult = await query(
       `SELECT permission_tier FROM project_members WHERE project_id = $1 AND user_id = $2`,
@@ -132,8 +145,24 @@ membersRouter.patch("/members/:userId", requireProjectAccess("owner", "admin"), 
 
     const targetTier = (targetResult.rows[0] as { permission_tier: string }).permission_tier;
 
-    if (callerTier === "admin" && targetTier !== "developer") {
-      res.status(403).json({ error: "Admins can only modify developers" });
+    if (targetTier === "owner" && targetUserId === callerId && permission_tier && permission_tier !== "owner") {
+      res.status(403).json({ error: "Cannot demote yourself as the project owner" });
+      return;
+    }
+
+    if (callerTier === "admin") {
+      if (targetTier !== "developer") {
+        res.status(403).json({ error: "Admins can only modify developers" });
+        return;
+      }
+      if (permission_tier && permission_tier !== "developer") {
+        res.status(403).json({ error: "Admins cannot promote members above developer" });
+        return;
+      }
+    }
+
+    if (callerTier === "owner" && permission_tier === "owner" && targetUserId !== callerId) {
+      res.status(403).json({ error: "Cannot assign owner tier to another member. Use ownership transfer instead." });
       return;
     }
 
@@ -173,6 +202,12 @@ membersRouter.delete("/members/:userId", requireProjectAccess("owner", "admin"),
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;
+    const callerTier = req.projectMember!.permission_tier;
+
+    if (targetUserId === req.user!.id) {
+      res.status(403).json({ error: "Cannot remove yourself" });
+      return;
+    }
 
     const targetResult = await query(
       `SELECT permission_tier FROM project_members WHERE project_id = $1 AND user_id = $2`,
@@ -185,8 +220,14 @@ membersRouter.delete("/members/:userId", requireProjectAccess("owner", "admin"),
     }
 
     const targetTier = (targetResult.rows[0] as { permission_tier: string }).permission_tier;
+
     if (targetTier === "owner") {
       res.status(403).json({ error: "Cannot remove the project owner" });
+      return;
+    }
+
+    if (callerTier === "admin" && targetTier !== "developer") {
+      res.status(403).json({ error: "Admins can only remove developers" });
       return;
     }
 

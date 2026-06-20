@@ -15,8 +15,9 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import ReactMarkdown from "react-markdown";
+import { useEffect, useRef, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
 import { apiFetch } from "@/lib/api";
 import { fetchOnboardingPackage } from "@/lib/onboardingData";
@@ -42,6 +43,7 @@ import {
   ROLES,
   SECTION_NAV_ORDER,
 } from "@/lib/mockOnboardingData";
+import { ReceiptViewer } from "@/components/ReceiptViewer";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -162,7 +164,9 @@ function SectionView({
       {section.blocks.map((block, bi) => (
         <div key={bi}>
           <h3 className="mb-1.5 text-[13px] font-semibold text-foreground">{block.title}</h3>
-          <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">{block.body}</p>
+          <div className="prose prose-sm prose-invert mb-3 max-w-none text-[13px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
+            <ReactMarkdown>{block.body}</ReactMarkdown>
+          </div>
           {block.receipts.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {block.receipts.map((r, ri) => (
@@ -181,22 +185,45 @@ function SectionView({
 
 export function OnboardingPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const { project, refetch } = useProject();
 
-  const [selectedRole, setSelectedRole] = useState<string>("general");
+  const initialRole = searchParams.get("role") ?? project?.developer_role ?? "general";
+  const [selectedRole, setSelectedRole] = useState<string>(initialRole);
   const [activeSectionId, setActiveSectionId] = useState<SectionId>("start-here");
   const [pkg, setPkg] = useState<OnboardingPackage | null>(null);
   const [generating, setGenerating] = useState(false);
   const [regeneratingSection, setRegeneratingSection] = useState(false);
   const [markedReviewed, setMarkedReviewed] = useState(false);
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
+  const [roleStatuses, setRoleStatuses] = useState<Record<string, string>>({});
+  const fetchAbortRef = useRef<AbortController | null>(null);
 
-  // Pull the onboarding package from the API; falls back to mock data while the
-  // backend endpoint is still pending (see fetchOnboardingPackage).
   useEffect(() => {
     if (!id) return;
-    fetchOnboardingPackage(id, selectedRole).then(setPkg);
+    fetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
+
+    fetchOnboardingPackage(id, selectedRole)
+      .then((data) => { if (!controller.signal.aborted) setPkg(data); })
+      .catch(() => {});
+
+    return () => { controller.abort(); };
   }, [id, selectedRole]);
+
+  useEffect(() => {
+    if (!id) return;
+    ROLES.forEach((role) => {
+      fetchOnboardingPackage(id, role.key)
+        .then((data) => {
+          setRoleStatuses((prev) => ({ ...prev, [role.key]: data?.status ?? "missing" }));
+        })
+        .catch(() => {
+          setRoleStatuses((prev) => ({ ...prev, [role.key]: "missing" }));
+        });
+    });
+  }, [id, project?.status]);
 
   // Analysis runs at the project level, so a project that's analyzing means a
   // package is being (re)generated. Keep the generating UI in sync with it.
@@ -316,27 +343,31 @@ export function OnboardingPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-44">
-              {ROLES.map((role) => (
-                <DropdownMenuItem
-                  key={role.key}
-                  onSelect={() => {
-                    setSelectedRole(role.key);
-                    setActiveSectionId("start-here");
-                    setMarkedReviewed(false);
-                  }}
-                  className="text-xs"
-                >
-                  <span className="flex-1">{role.label}</span>
-                  {MOCK_ONBOARDING_PACKAGES[role.key]?.status === "missing" ||
-                  !MOCK_ONBOARDING_PACKAGES[role.key] ? (
-                    <span className="text-[10px] text-muted-foreground">Missing</span>
-                  ) : (
-                    <Badge variant="secondary" className="text-[10px]">
-                      {statusLabel(MOCK_ONBOARDING_PACKAGES[role.key]!.status)}
-                    </Badge>
-                  )}
-                </DropdownMenuItem>
-              ))}
+              {ROLES.map((role) => {
+                const rs = roleStatuses[role.key] ?? "missing";
+                return (
+                  <DropdownMenuItem
+                    key={role.key}
+                    onSelect={() => {
+                      setSelectedRole(role.key);
+                      setActiveSectionId("start-here");
+                      setMarkedReviewed(false);
+                    }}
+                    className="text-xs"
+                  >
+                    <span className="flex-1">{role.label}</span>
+                    {rs === "missing" ? (
+                      <span className="text-[10px] text-muted-foreground">Not generated</span>
+                    ) : rs === "generating" ? (
+                      <Badge variant="secondary" className="text-[10px]">Generating</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {statusLabel(rs as PackageStatus)}
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -494,27 +525,31 @@ export function OnboardingPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              {ROLES.map((role) => (
-                <DropdownMenuItem
-                  key={role.key}
-                  onSelect={() => {
-                    setSelectedRole(role.key);
-                    setActiveSectionId("start-here");
-                    setMarkedReviewed(false);
-                  }}
-                  className="text-xs"
-                >
-                  <span className="flex-1">{role.label}</span>
-                  {MOCK_ONBOARDING_PACKAGES[role.key]?.status === "missing" ||
-                  !MOCK_ONBOARDING_PACKAGES[role.key] ? (
-                    <span className="text-[10px] text-muted-foreground">Missing</span>
-                  ) : (
-                    <Badge variant="secondary" className="text-[10px]">
-                      {statusLabel(MOCK_ONBOARDING_PACKAGES[role.key]!.status)}
-                    </Badge>
-                  )}
-                </DropdownMenuItem>
-              ))}
+              {ROLES.map((role) => {
+                const rs = roleStatuses[role.key] ?? "missing";
+                return (
+                  <DropdownMenuItem
+                    key={role.key}
+                    onSelect={() => {
+                      setSelectedRole(role.key);
+                      setActiveSectionId("start-here");
+                      setMarkedReviewed(false);
+                    }}
+                    className="text-xs"
+                  >
+                    <span className="flex-1">{role.label}</span>
+                    {rs === "missing" ? (
+                      <span className="text-[10px] text-muted-foreground">Not generated</span>
+                    ) : rs === "generating" ? (
+                      <Badge variant="secondary" className="text-[10px]">Generating</Badge>
+                    ) : (
+                      <Badge variant="secondary" className="text-[10px]">
+                        {statusLabel(rs as PackageStatus)}
+                      </Badge>
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -617,49 +652,12 @@ export function OnboardingPage() {
         )}
       </aside>
 
-      {/* ── receipt modal ── */}
+      {/* ── receipt viewer ── */}
       {receiptModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setReceiptModal(null)}
-        >
-          <div
-            className="w-full max-w-md rounded-lg border bg-background p-5 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-3 flex items-start justify-between gap-2">
-              <div>
-                <p className="text-[13px] font-semibold text-foreground">
-                  {receiptModal.filePath}
-                  {receiptModal.lineStart &&
-                    ` : ${receiptModal.lineStart}${receiptModal.lineEnd ? `–${receiptModal.lineEnd}` : ""}`}
-                </p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">Source receipt</p>
-              </div>
-              <Button variant="ghost" size="xs" onClick={() => setReceiptModal(null)}>
-                <X className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge className={`text-[11px] border ${confidenceBg(receiptModal.confidence)}`} variant="outline">
-                {receiptModal.confidence.charAt(0).toUpperCase() + receiptModal.confidence.slice(1)} confidence
-              </Badge>
-              {receiptModal.staleness === "stale" && (
-                <Badge variant="outline" className="border-amber-500/30 text-[11px] text-amber-400">
-                  <AlertTriangle className="mr-1 h-2.5 w-2.5" /> Stale
-                </Badge>
-              )}
-              <span className="text-[11px] text-muted-foreground">{receiptModal.ageLabel}</span>
-            </div>
-            <p className="mt-4 text-[12px] text-muted-foreground">
-              In the full implementation, clicking a source receipt opens the code viewer at this file/line range.
-              <br />
-              <span className="font-mono text-[11px]">
-                GET /api/projects/:id/onboarding/sections/:sectionId
-              </span>
-            </p>
-          </div>
-        </div>
+        <ReceiptViewer
+          receipt={receiptModal}
+          onClose={() => setReceiptModal(null)}
+        />
       )}
     </div>
   );

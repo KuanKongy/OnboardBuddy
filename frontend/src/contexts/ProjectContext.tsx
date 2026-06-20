@@ -1,7 +1,9 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -45,19 +47,31 @@ export function ProjectProvider({
   const [project, setProject] = useState<ProjectData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
 
-  function fetchProject() {
+  const fetchProject = useCallback(() => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError("");
-    apiFetch(`/projects/${projectId}`)
-      .then((data: { project: ProjectData }) => setProject(data.project))
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }
+    apiFetch(`/projects/${projectId}`, { signal: controller.signal })
+      .then((data: { project: ProjectData }) => {
+        if (!controller.signal.aborted) setProject(data.project);
+      })
+      .catch((err) => {
+        if (!controller.signal.aborted) setError(err.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+  }, [projectId]);
 
   useEffect(() => {
     fetchProject();
-  }, [projectId]);
+    return () => { abortRef.current?.abort(); };
+  }, [fetchProject]);
 
   return (
     <ProjectContext.Provider

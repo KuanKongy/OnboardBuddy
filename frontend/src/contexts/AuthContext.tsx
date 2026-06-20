@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { saveGithubTokenFromSession } from "../lib/saveGithubToken";
+import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
 
 interface AuthContextValue {
@@ -17,6 +18,7 @@ interface AuthContextValue {
   signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   signInWithGithub: () => Promise<void>;
+  connectGithub: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -78,9 +80,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
+  async function connectGithub() {
+    sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+    const { authorization_url } = await apiFetch("/github/oauth/start") as {
+      authorization_url: string;
+    };
+    window.location.href = authorization_url;
+  }
+
   return (
     <AuthContext.Provider
-      value={{ user, session, loading, signIn, signUp, signOut, signInWithGithub }}
+      value={{ user, session, loading, signIn, signUp, signOut, signInWithGithub, connectGithub }}
     >
       {children}
     </AuthContext.Provider>

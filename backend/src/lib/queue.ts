@@ -38,4 +38,5 @@ export interface SummaryJobData {
   snapshotId: string;
   projectId: string;
   triggeredBy: string;
+  role?: string;
 }
