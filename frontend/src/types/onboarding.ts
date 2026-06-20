@@ -17,6 +17,10 @@ export interface SourceReceipt {
   lineStart?: number;
   lineEnd?: number;
   symbolName?: string;
+  snippet?: string;
+  claim?: string;
+  commitHash?: string;
+  nodeStableKey?: string;
   staleness: "fresh" | "stale";
   confidence: ConfidenceLevel;
   ageLabel: string;

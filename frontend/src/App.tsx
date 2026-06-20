@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router-dom";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Sidebar } from "@/components/Sidebar";
@@ -9,6 +10,8 @@ import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { EmptyStubPage } from "@/pages/EmptyStubPage";
 import { GraphPage } from "@/pages/GraphPage";
+import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
+import { GitHubOAuthCallbackPage } from "@/pages/GitHubOAuthCallbackPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
@@ -21,6 +24,34 @@ import { SignupPage } from "@/pages/SignupPage";
 import { TeamPage } from "@/pages/TeamPage";
 import { WalkthroughTab } from "@/pages/WalkthroughTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  override state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-background p-6">
+          <div className="max-w-md text-center">
+            <h1 className="mb-2 text-lg font-semibold text-foreground">Something went wrong</h1>
+            <p className="mb-4 text-sm text-muted-foreground">{this.state.error?.message}</p>
+            <button
+              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+              onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            >
+              Reload page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function AuthenticatedLayout() {
   return (
@@ -40,6 +71,7 @@ function AuthenticatedLayout() {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <AuthProvider>
       <TooltipProvider>
         <Routes>
@@ -53,6 +85,8 @@ export default function App() {
           <Route element={<ProtectedRoute />}>
             <Route element={<AuthenticatedLayout />}>
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/github/oauth/callback" element={<GitHubOAuthCallbackPage />} />
+              <Route path="/github/setup" element={<GitHubSetupPage />} />
               <Route path="/list" element={<ProjectListPage />} />
               <Route path="/import" element={<ImportPage />} />
               <Route path="/invitations" element={<InvitationsPage />} />
@@ -72,5 +106,6 @@ export default function App() {
         </Routes>
       </TooltipProvider>
     </AuthProvider>
+    </ErrorBoundary>
   );
 }

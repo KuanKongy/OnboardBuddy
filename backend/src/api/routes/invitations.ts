@@ -57,7 +57,14 @@ invitationsRouter.get("/:invitationId", async (req, res) => {
 });
 
 invitationsRouter.post("/:invitationId/accept", async (req, res) => {
-  const client = await pool.connect();
+  let client: import("pg").PoolClient | undefined;
+  try {
+    client = await pool.connect();
+  } catch (err) {
+    console.error("Accept invitation: failed to acquire DB connection:", err);
+    res.status(503).json({ error: "Service temporarily unavailable" });
+    return;
+  }
   try {
     const { invitationId } = req.params;
     const userId = req.user!.id;
@@ -67,13 +74,15 @@ invitationsRouter.post("/:invitationId/accept", async (req, res) => {
     await client.query("BEGIN");
 
     const invResult = await client.query(
-      `SELECT * FROM project_invitations WHERE id = $1 FOR UPDATE`,
+      `SELECT * FROM project_invitations
+       WHERE id = $1 AND (expires_at IS NULL OR expires_at > NOW())
+       FOR UPDATE`,
       [invitationId],
     );
 
     if (invResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      res.status(404).json({ error: "Invitation not found" });
+      res.status(404).json({ error: "Invitation not found or expired" });
       return;
     }
 
@@ -131,7 +140,7 @@ invitationsRouter.post("/:invitationId/accept", async (req, res) => {
       member: memberResult.rows[0],
     });
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     if (err instanceof Error && err.message.includes("duplicate key")) {
       res.status(409).json({ error: "You are already a member of this project" });
       return;

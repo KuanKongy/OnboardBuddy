@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 
 export function AccountSettingsPage() {
-  const { user, signOut, signInWithGithub } = useAuth();
+  const { user, signOut, connectGithub } = useAuth();
 
   const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const fullName =
@@ -51,18 +51,23 @@ export function AccountSettingsPage() {
         <CardContent className="p-3">
           <h2 className="mb-2 text-xs font-medium text-foreground">GitHub Connection</h2>
           {githubIdentity ? (
-            <div className="flex items-center gap-2">
-              <Github className="h-3.5 w-3.5 text-foreground" />
-              <span className="text-xs font-medium text-foreground">
-                Connected as{" "}
-                {(githubIdentity.identity_data as Record<string, string>)
-                  ?.user_name ?? "GitHub User"}
-              </span>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Github className="h-3.5 w-3.5 text-foreground" />
+                <span className="text-xs font-medium text-foreground">
+                  Connected as{" "}
+                  {(githubIdentity.identity_data as Record<string, string>)
+                    ?.user_name ?? "GitHub User"}
+                </span>
+              </div>
+              <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                Authorize GitHub App
+              </Button>
             </div>
           ) : (
-            <Button variant="outline" size="xs" onClick={() => signInWithGithub()}>
+            <Button variant="outline" size="xs" onClick={() => connectGithub()}>
               <Github className="h-3 w-3" />
-              Connect GitHub
+              Authorize GitHub App
             </Button>
           )}
         </CardContent>

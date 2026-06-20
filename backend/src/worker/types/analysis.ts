@@ -117,6 +117,7 @@ export interface ImportRecord {
   resolvedPath?: string;     // absolute path if resolvable
   namedImports: NamedImportItem[];
   defaultImport?: string;
+  namespaceImport?: string;  // import * as X from '...'
   isTypeOnly: boolean;
 }
 
@@ -125,6 +126,8 @@ export interface ExportRecord {
   namedExports: string[];
   defaultExport?: string;
   isReExport: boolean;
+  isDefault?: boolean;       // export default expression
+  expression?: string;       // text of default export expression
   sourceSpecifier?: string;  // for re-exports: the specifier being re-exported
 }
 
