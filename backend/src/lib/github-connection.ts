@@ -15,6 +15,7 @@ export class GitHubReconnectRequiredError extends Error {
 }
 
 export interface GithubConnection {
+  githubUserId: number;
   githubUsername: string;
   accessToken: string;
   accessTokenExpiresAt: Date | null;
@@ -46,6 +47,7 @@ export async function getUserGithubConnection(
   };
 
   return {
+    githubUserId: Number(row.github_user_id),
     githubUsername: row.github_username,
     accessToken: decrypt(row.access_token_encrypted),
     accessTokenExpiresAt: toDate(row.access_token_expires_at),
@@ -55,7 +57,7 @@ export async function getUserGithubConnection(
 }
 
 /**
- * Lists GitHub App installations accessible to the connected GitHub user.
+ * Lists GitHub App installations owned by the connected GitHub account.
  * This requires a GitHub App user access token. Repo access still uses
  * installation tokens after the user selects an installation.
  */
@@ -70,13 +72,28 @@ export async function listInstallationsForUser(
   try {
     const accessToken = await getValidGithubAppUserAccessToken(userId, connection);
     const installations = await listUserInstallations(accessToken);
-    return { installations };
+    return {
+      installations: installations.filter((installation) =>
+        belongsToConnectedGitHubAccount(installation, connection),
+      ),
+    };
   } catch (err) {
     if (err instanceof Error && err.message.includes("authorized to a GitHub App")) {
       throw new GitHubReconnectRequiredError();
     }
     throw err;
   }
+}
+
+function belongsToConnectedGitHubAccount(
+  installation: Installation,
+  connection: GithubConnection,
+): boolean {
+  if (typeof installation.account.id === "number") {
+    return installation.account.id === connection.githubUserId;
+  }
+
+  return installation.account.login.toLowerCase() === connection.githubUsername.toLowerCase();
 }
 
 /**
