@@ -102,7 +102,7 @@ All GitHub routes require authentication.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/github/app` | Get GitHub App info (name, slug, install URL) |
-| `GET` | `/github/installations` | List all installations of the GitHub App |
+| `GET` | `/github/installations` | List installations for the connected GitHub account |
 | `GET` | `/github/repos` | List repos for a specific installation |
 | `GET` | `/github/repos/:owner/:repo/branches` | List branches for a repo |
 
@@ -116,7 +116,8 @@ Uses the GitHub App's own JWT (signed with the private key) to call `GET /app`.
 
 **Response:** `200 { installations: [{ id, account: { login } }] }`
 
-Uses the GitHub App JWT to call `GET /app/installations`.
+Uses the connected user's GitHub App user token and only returns installations
+owned by that connected GitHub account.
 
 #### `GET /github/repos?installation_id=<id>`
 
