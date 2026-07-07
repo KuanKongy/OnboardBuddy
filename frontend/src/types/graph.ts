@@ -69,6 +69,43 @@ export interface DependencyGraph {
   entryPoints: string[];
 }
 
+export type ArchitectureComponentType =
+  | "entry"
+  | "gateway"
+  | "service"
+  | "database"
+  | "worker"
+  | "frontend"
+  | "utility"
+  | "config"
+  | "tests"
+  | "module";
+
+export interface ArchitectureComponent {
+  id: string;
+  label: string;
+  directory: string;
+  type: ArchitectureComponentType;
+  files: string[];
+  exportedSymbols: string[];
+  importCount: number;
+  dependentCount: number;
+}
+
+export interface ArchitectureEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: string;
+  weight: number;
+}
+
+export interface ArchitectureGraph {
+  components: ArchitectureComponent[];
+  edges: ArchitectureEdge[];
+  entryComponentIds: string[];
+}
+
 export interface AnalysisSnapshot {
   projectId: string;
   triggeredBy: string;
