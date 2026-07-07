@@ -119,7 +119,7 @@ export function DependencyGraphView({
         proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="oklch(0.3 0 0)" />
-        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground [&_button:hover]:!bg-accent" />
+        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-foreground [&_button_svg]:!fill-foreground [&_button:hover]:!bg-accent" />
         <MiniMap
           pannable
           zoomable

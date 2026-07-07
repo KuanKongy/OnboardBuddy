@@ -180,6 +180,89 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
   }
 });
 
+// Full uncapped file-level graph for the latest snapshot. The frontend
+// derives the high-level architecture map (component grouping + aggregated
+// edges) from this, so no clustering or node cap is applied here.
+graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+
+    const snapshotResult = await query(
+      `SELECT id FROM analysis_snapshots
+       WHERE project_id = $1 AND status = 'complete'
+       ORDER BY created_at DESC LIMIT 1`,
+      [projectId],
+    );
+    if (snapshotResult.rows.length === 0) {
+      res.status(404).json({ error: "No completed analysis snapshot found" });
+      return;
+    }
+    const snapshotId = snapshotResult.rows[0].id as string;
+
+    const [nodesResult, edgesResult] = await Promise.all([
+      query(
+        `SELECT id, stable_key, type, name, file_path, metadata
+         FROM graph_nodes WHERE snapshot_id = $1`,
+        [snapshotId],
+      ),
+      query(
+        `SELECT e.id, e.source_node_id, e.target_node_id, e.type
+         FROM graph_edges e WHERE e.snapshot_id = $1`,
+        [snapshotId],
+      ),
+    ]);
+
+    type NodeRow = { id: string; stable_key: string; type: string; name: string; file_path: string; metadata: Record<string, unknown> };
+    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; type: string };
+
+    const allNodes = nodesResult.rows as NodeRow[];
+    const allEdges = edgesResult.rows as EdgeRow[];
+
+    const nodeIdToKey = new Map<string, string>();
+    for (const n of allNodes) nodeIdToKey.set(n.id, n.stable_key);
+
+    const nodes = allNodes.map((n) => ({
+      id: n.stable_key,
+      label: n.name,
+      kind: n.type,
+      metadata: {
+        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+        importCount: (n.metadata?.importCount as number) ?? 0,
+        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+      },
+    }));
+
+    const edges = allEdges
+      .map((e) => ({
+        id: e.id,
+        source: nodeIdToKey.get(e.source_node_id) ?? '',
+        target: nodeIdToKey.get(e.target_node_id) ?? '',
+        kind: e.type,
+      }))
+      .filter((e) => e.source && e.target);
+
+    const entryPointSet = new Set<string>();
+    for (const n of allNodes) {
+      if (n.type === 'entrypoint' || n.file_path.includes('index.')) {
+        entryPointSet.add(n.stable_key);
+      }
+    }
+
+    res.json({
+      projectId,
+      snapshotId,
+      clustered: false,
+      totalNodes: allNodes.length,
+      totalEdges: allEdges.length,
+      graph: { nodes, edges, entryPoints: Array.from(entryPointSet) },
+      fileAnalyses: [],
+    });
+  } catch (err) {
+    console.error("Graph architecture error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
   try {
     const nodeId = req.params.nodeId;
