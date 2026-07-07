@@ -1,8 +1,6 @@
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
-
 type EdgeFilter = "imports" | "exports";
 
 interface GraphToolbarProps {
@@ -14,11 +12,9 @@ interface GraphToolbarProps {
   totalCount: number;
 }
 
-const FILTERS: { key: EdgeFilter | "callgraph" | "coverage"; label: string; active?: boolean }[] = [
+const FILTERS: { key: EdgeFilter; label: string }[] = [
   { key: "imports", label: "Imports" },
   { key: "exports", label: "Exports" },
-  { key: "callgraph", label: "Call graph" },
-  { key: "coverage", label: "Coverage overlay" },
 ];
 
 export function GraphToolbar({
@@ -42,28 +38,17 @@ export function GraphToolbar({
       </div>
 
       <div className="flex items-center gap-1">
-        {FILTERS.map((f) => {
-          const isEdgeFilter = f.key === "imports" || f.key === "exports";
-          const isActive = isEdgeFilter && edgeFilter === f.key;
-          const isDisabled = !isEdgeFilter;
-
-          return (
-            <Button
-              key={f.key}
-              size="sm"
-              variant={isActive ? "default" : "outline"}
-              disabled={isDisabled}
-              onClick={() => isEdgeFilter && onEdgeFilterChange(f.key as EdgeFilter)}
-              className={cn(
-                "h-8 px-3 text-xs",
-                isDisabled && "cursor-not-allowed opacity-40",
-              )}
-              title={isDisabled ? "Coming soon" : undefined}
-            >
-              {f.label}
-            </Button>
-          );
-        })}
+        {FILTERS.map((f) => (
+          <Button
+            key={f.key}
+            size="sm"
+            variant={edgeFilter === f.key ? "default" : "outline"}
+            onClick={() => onEdgeFilterChange(f.key)}
+            className="h-8 px-3 text-xs"
+          >
+            {f.label}
+          </Button>
+        ))}
       </div>
 
       <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">
