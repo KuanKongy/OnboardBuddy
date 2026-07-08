@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { saveGithubTokenFromSession } from "@/lib/saveGithubToken";
 import { supabase } from "@/lib/supabase";
 
 export function AuthCallbackPage() {
@@ -13,27 +12,13 @@ export function AuthCallbackPage() {
   useEffect(() => {
     let cancelled = false;
 
-    async function finishAuth(session: NonNullable<
-      Awaited<ReturnType<typeof supabase.auth.getSession>>["data"]["session"]
-    >) {
-      try {
-        await saveGithubTokenFromSession(session);
-      } catch (saveError) {
-        console.error("Failed to save GitHub token:", saveError);
-      }
-
-      if (!cancelled) {
-        navigate("/dashboard", { replace: true });
-      }
-    }
-
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
 
       if (event === "SIGNED_IN" && session) {
-        void finishAuth(session);
+        navigate("/dashboard", { replace: true });
         return;
       }
 
@@ -42,14 +27,14 @@ export function AuthCallbackPage() {
       }
     });
 
-    void supabase.auth.getSession().then(({ data: { session }, error }) => {
+    void supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
       if (cancelled) return;
-      if (error) {
-        setError(error.message);
+      if (sessionError) {
+        setError(sessionError.message);
         return;
       }
       if (session) {
-        void finishAuth(session);
+        navigate("/dashboard", { replace: true });
       }
     });
 
