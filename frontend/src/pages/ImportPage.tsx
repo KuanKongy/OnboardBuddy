@@ -58,6 +58,7 @@ export function ImportPage() {
   const [appName, setAppName] = useState("GitHub App");
   const [refreshKey, setRefreshKey] = useState(0);
   const [githubAppConnected, setGithubAppConnected] = useState(false);
+  const [githubAppUsername, setGithubAppUsername] = useState<string | null>(null);
 
   const [installations, setInstallations] = useState<Installation[]>([]);
   const [installationsLoading, setInstallationsLoading] = useState(true);
@@ -94,6 +95,7 @@ export function ImportPage() {
           setInstallUrl(appInfo.install_url);
         }
         setGithubAppConnected(Boolean(instData.github_connected));
+        setGithubAppUsername((instData as { github_username?: string }).github_username ?? null);
         setInstallations(instData.installations);
       })
       .catch((err) => {
@@ -222,6 +224,22 @@ export function ImportPage() {
           {error && (
             <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
+              {error.includes("reconnect") && (
+                <button
+                  type="button"
+                  onClick={() => connectGithub()}
+                  className="ml-2 font-medium underline"
+                >
+                  Reconnect GitHub
+                </button>
+              )}
+            </div>
+          )}
+
+          {githubAppConnected && githubAppUsername && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Shield className="h-3 w-3" />
+              GitHub App linked to <span className="font-medium text-foreground">@{githubAppUsername}</span>
             </div>
           )}
 

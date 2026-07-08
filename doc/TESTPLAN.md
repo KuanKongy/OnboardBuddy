@@ -21,9 +21,22 @@ npm install
 
 ### Environment Files
 
-**For automated tests:** No `.env` files or Docker are needed. Tests call the same backend engine functions the worker uses, with a shared fixture repo (`backend/src/worker/fixtures/simple/`). The API boots in-process via Supertest with placeholder env vars from `backend/test/setup.ts`. See [TESTING.md](./TESTING.md) for the full test catalog and layer breakdown.
+**For unit tests (Tier 1):** No `.env` files or Docker are needed. Tests call the same backend engine functions the worker uses, with a shared fixture repo (`backend/src/worker/fixtures/simple/`). The API boots in-process via Supertest with placeholder env vars from `backend/test/setup.ts`. See [TESTING.md](./TESTING.md) for the full test catalog and layer breakdown.
 
-**For manual tests (and future integration tests):** Docker + real credentials:
+```bash
+npm run test    # backend + frontend unit tests (no Docker)
+npm run lint
+npm run build
+```
+
+**For stack tests (Tier 2) and manual tests:** Docker + real credentials:
+
+```bash
+docker compose up --build -d
+npm run test:stack   # Playwright smoke tests against the running stack
+```
+
+**For manual browser checklists:** Docker + real credentials:
 
 1. Place `backend/.env` in the `backend/` directory (submitted on UBC Mail).
 2. Place `frontend/.env` in the `frontend/` directory (submitted on UBC Mail).

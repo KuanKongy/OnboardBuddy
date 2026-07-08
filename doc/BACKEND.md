@@ -1,5 +1,13 @@
 # Backend API Documentation
 
+This document describes the **HTTP REST API** exposed by the OnboardBuddy backend. It covers every route the frontend (or any API client) can call: authentication, GitHub integration, projects, team management, analysis results, and onboarding content.
+
+**URL prefix:** All routes are mounted under `/api`. A path written as `/auth/login` in code is called as **`/api/auth/login`** — e.g. `http://localhost:3000/api/auth/login`. Paths in the tables below omit the prefix for brevity; prepend `/api` for the full URL.
+
+**Related docs:** Background jobs (analysis, AI summary) are part of the backend but have no HTTP surface — see [Pipeline.md](./Pipeline.md).
+
+---
+
 ## Architecture
 
 The backend is an **Express 5** application written in TypeScript. It runs on Node.js and serves a REST API under the `/api` prefix.
@@ -7,262 +15,509 @@ The backend is an **Express 5** application written in TypeScript. It runs on No
 **Key libraries:**
 
 - `express` v5 — HTTP server and routing
-- `pg` — PostgreSQL client (direct queries via connection pool, no ORM)
+- `pg` — PostgreSQL client (connection pool, no ORM)
 - `jose` — JWKS-based JWT verification for Supabase tokens
 - `@supabase/supabase-js` — Admin operations (user creation, sign-out)
 - `cors`, `express.json()` — standard middleware
 
-**Entry point:** `backend/src/api/server.ts`
+**HTTP entry point:** `backend/src/api/server.ts` — starts Express, mounts `/api`, listens on `PORT` (default 3000).
 
-DNS is configured with `dns.setDefaultResultOrder("ipv4first")` to work around IPv6 issues in Docker environments.
+**Worker process:** `backend/src/worker/index.ts` — same codebase, separate Node process. Consumes BullMQ jobs from Redis (repo analysis, onboarding generation). Triggered by API routes such as `POST /projects/:id/analyze`; progress read via `GET /projects/:id/analysis-status`. Job types, pipeline stages, and engine modules are documented in [Pipeline.md](./Pipeline.md).
+
+DNS uses `ipv4first` to avoid IPv6 issues in Docker.
 
 ---
 
 ## Authentication
 
-### JWT Verification (`backend/src/lib/verifySupabaseJwt.ts`)
+Two separate systems: **Supabase login** (who you are in OnboardBuddy) and **GitHub App authorization** (which GitHub account/repos you can import). Logging in does not connect GitHub.
 
-Supabase access tokens are verified using the **JWKS** endpoint at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`. The `jose` library fetches and caches the signing keys automatically.
+### Token types
 
-### `requireAuth` Middleware (`backend/src/api/middleware/auth.ts`)
+Three tokens in the system. Confusing them was the root cause of Bug #18 and #13.
 
-- Extracts the `Bearer` token from the `Authorization` header
-- Verifies the JWT via JWKS
-- Attaches `req.user` with `{ id, email }` from the token payload
-- Returns `401` if the token is missing, invalid, or expired
+| Token | Prefix | Lifetime | Stored where | Purpose |
+|-------|--------|----------|--------------|---------|
+| Supabase JWT | `eyJ…` | ~1 hour | Frontend only (`session.access_token`) | Identity — authenticates every API call via `Authorization: Bearer` |
+| GitHub App user token | `ghu_` + `ghr_` | 8 hours (access) / 6 months (refresh) | `github_connections` (encrypted) | Ownership — asks GitHub which installations this user owns |
+| GitHub installation token | — | 1 hour | Not stored (ephemeral) | Repo access — lists repos/branches and downloads zipballs |
 
-All routes except `/api/health` and `/api/auth/signup|login` require authentication.
+**Supabase JWT** is an identity token — it says who the user is in OnboardBuddy. It never touches GitHub. The Supabase client SDK refreshes it automatically (~1 hour cycle); our backend only verifies the JWT that arrives in the `Authorization` header. When a user signs in with GitHub via Supabase, the result is still a Supabase JWT — GitHub is just the identity provider.
+
+**GitHub App user token** is a pair: access (`ghu_`, 8h) + refresh (`ghr_`, 6mo), returned together when the user authorizes the GitHub App. The access token calls `GET /user/installations` — the only secure way to ask GitHub which installations belong to this user. When the access token expires, the server uses the refresh token to silently get a new pair from GitHub (no user interaction). GitHub invalidates the old refresh token on use (one-time use). If a concurrent request races and the refresh token is already consumed, the code re-reads the DB to pick up the token saved by the winning request. After 6 months without use, the refresh token expires and the user must re-authorize (`403` with `code: "github_reconnect_required"`). Both tokens are stored encrypted in one `github_connections` row.
+
+**GitHub installation token** is ephemeral — generated from the App's private key + installation ID, scoped to repos that installation can access. A new one is minted per request (repos, branches, zipball download). Never stored.
+
+**Encryption:** Stored tokens (`ghu_`, `ghr_`) use AES-256-GCM with a random 12-byte IV per call. Same plaintext → different ciphertext every time. Format: `iv:authTag:ciphertext`. Key: `TOKEN_ENCRYPTION_KEY` env var (32 bytes / 64 hex chars).
+
+### JWT verification (`backend/src/lib/verifySupabaseJwt.ts`)
+
+Supabase access tokens verified via JWKS at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`. Keys fetched and cached by `jose`.
+
+### `requireAuth` (`backend/src/api/middleware/auth.ts`)
+
+Extracts `Bearer` token from `Authorization`, verifies JWT, sets `req.user = { id, email }`. Returns `401` if missing, invalid, or expired.
+
+**Public routes (no Bearer token):** `GET /api/health`, `POST /api/auth/signup`, `POST /api/auth/login`
+
+The frontend stores `session.access_token` from login and sends it on every other API call. That token is a Supabase JWT — not a GitHub token.
+
+### GitHub App authorization (repo import only)
+
+Required before listing installations/repos or creating a project. Flow:
+
+| Step | Route | Saved to DB |
+|------|-------|-------------|
+| Authorize GitHub App | `GET /github/oauth/start` → GitHub → `POST /github/oauth/complete` | Encrypted GitHub App user token → `github_connections` |
+| Install App on a GitHub org/user | `POST /github/installations/link` | `github_installations` row |
+| Import repo | `POST /projects` | `projects.github_installation_id` (ownership checked first) |
+
+Email/password users link GitHub on first App auth; re-auth must use the same GitHub account. Users who signed in via GitHub must authorize the same `@username`. OAuth URL includes `prompt=select_account` to force explicit GitHub account selection. Server auto-refreshes GitHub tokens; expired refresh returns `403` with `code: "github_reconnect_required"`. Logout does not delete the GitHub App connection — it persists so the user does not re-authorize on next login.
 
 ---
 
 ## Authorization
 
-### `requireProjectAccess` Middleware (`backend/src/api/middleware/project-access.ts`)
+### `requireProjectAccess` (`backend/src/api/middleware/project-access.ts`)
 
-A factory function that returns middleware enforcing project membership and optional tier restrictions.
+Factory for project-scoped routes:
 
-```typescript
-requireProjectAccess()                    // any member
-requireProjectAccess("owner", "admin")    // owner or admin only
-requireProjectAccess("owner")             // owner only
-```
+- `requireProjectAccess()` — any member
+- `requireProjectAccess("owner", "admin")` — owner or admin
+- `requireProjectAccess("owner")` — owner only
 
-- Queries `project_members` to verify the user belongs to the project
-- Checks `permission_tier` against allowed tiers (if specified)
-- Attaches `req.projectMember` with `{ project_id, user_id, permission_tier, developer_role }`
-- Returns `403` if the user is not a member or lacks the required tier
+Queries `project_members`, checks tier, attaches `req.projectMember`. Returns `403` if not a member or tier too low; DB errors return `500`.
 
-**Permission tiers** (highest to lowest): `owner` > `admin` > `developer`
+**Tiers:** `owner` > `admin` > `developer`
+
+### GitHub installation access (`backend/src/lib/github-connection.ts`)
+
+`userCanAccessInstallation()` and `getInstallationTokenForUser()` run before listing repos or minting installation tokens — ensures users only access their own GitHub installations.
 
 ---
 
 ## API Endpoints
 
-All endpoints are prefixed with `/api`.
+Unless noted, routes require header `Authorization: Bearer <access_token>` (the Supabase JWT from `POST /auth/login`).
 
-### Auth (`/api/auth`)
+**Request/response notation:**
+
+| Part | Meaning |
+|------|---------|
+| Input | JSON body, query string, or `no body` for GET/DELETE with no payload |
+| → | HTTP status code and JSON response shape (unless noted, e.g. Markdown download) |
+| Errors | Status code — when it occurs |
+
+Example: `Input: { email, password }` → `200 { user, session }` means POST that JSON and expect status 200 with that response.
+
+---
+
+### Health
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/auth/signup` | No | Create a new user account |
-| `POST` | `/auth/login` | No | Sign in and receive access token |
-| `POST` | `/auth/logout` | Yes | Invalidate the current session |
-| `GET` | `/auth/me` | Yes | Get current user profile with GitHub connection status |
-| `POST` | `/auth/github/save-token` | Yes | Store encrypted GitHub OAuth token |
+| GET | `/health` | No | Liveness check for load balancers and dev |
 
-#### `POST /auth/signup`
+#### GET /health
 
-**Request:** `{ email: string, password: string }`
-**Response:** `201 { user: { id, email } }`
-**Errors:** `400` missing fields, `409` email already taken, `422` validation error
+Returns whether the API process is running. No authentication.
 
-#### `POST /auth/login`
-
-**Request:** `{ email: string, password: string }`
-**Response:** `200 { user: { id, email }, session: { access_token } }`
-**Errors:** `400` missing fields, `401` invalid credentials
-
-#### `GET /auth/me`
-
-**Response:** `200 { user: { id, email, created_at, github_connected, github_username } }`
-
-#### `POST /auth/github/save-token`
-
-**Request:** `{ github_user_id: number, github_username: string, access_token: string, scopes: string[] }`
-**Response:** `200 { success: true }`
-
-The access token is encrypted with AES-256-GCM before storage.
+Input: no body → 200 `{ status: "ok" }`  
+Errors: none expected
 
 ---
 
-### GitHub (`/api/github`)
+### Auth (`/auth`)
 
-All GitHub routes require authentication.
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/auth/signup` | No | Create account (email confirmed immediately) |
+| POST | `/auth/login` | No | Sign in; returns JWT access token |
+| POST | `/auth/logout` | Yes | Invalidate current session |
+| GET | `/auth/me` | Yes | Profile + whether GitHub App is connected |
+
+#### POST /auth/signup
+
+Creates a new OnboardBuddy user via Supabase admin API. Does not return a session — client must call login afterward.
+
+Input: `{ email, password }` → 201 `{ user: { id, email } }`  
+Errors: 400 — email or password missing · 409 — email already registered · 422 — Supabase rejected the input · 500 — server failure
+
+#### POST /auth/login
+
+Authenticates with email and password. Returns a Supabase JWT; the frontend stores `session.access_token` and sends it as `Authorization: Bearer …` on all protected routes.
+
+Input: `{ email, password }` → 200 `{ user: { id, email }, session: { access_token } }`  
+Errors: 400 — email or password missing · 401 — wrong email or password · 500 — server failure
+
+#### POST /auth/logout
+
+Invalidates the Supabase session tied to the current Bearer token. GitHub App connections persist — the user does not need to re-authorize the App on next login.
+
+Input: no body → 200 `{ success: true }`  
+Errors: 401 — not authenticated · 422 — Supabase could not sign out the token · 500 — server failure
+
+#### GET /auth/me
+
+Returns the authenticated user's profile and GitHub App connection status from `github_connections` (not the same as signing in with GitHub via Supabase).
+
+Input: no body → 200 `{ user: { id, email, created_at, github_connected, github_username } }`  
+Errors: 401 — not authenticated · 404 — user row missing in DB · 500 — server failure
+
+---
+
+### GitHub (`/github`)
+
+All routes require auth. Connects the user's GitHub account for repo import — separate from Supabase login.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/github/app` | Get GitHub App info (name, slug, install URL) |
-| `GET` | `/github/installations` | List installations for the connected GitHub account |
-| `GET` | `/github/repos` | List repos for a specific installation |
-| `GET` | `/github/repos/:owner/:repo/branches` | List branches for a repo |
+| GET | `/github/app` | App name/slug + install URL with signed state |
+| GET | `/github/oauth/start` | Start GitHub App user OAuth |
+| POST | `/github/oauth/complete` | Exchange OAuth code; save encrypted token |
+| POST | `/github/installations/link` | Record installation after App install |
+| GET | `/github/installations` | Installations for connected GitHub account only |
+| GET | `/github/repos` | Repos accessible to an installation |
+| GET | `/github/repos/:owner/:repo/branches` | Branches for a repo |
+| DELETE | `/github/connection` | Disconnect GitHub App (clear tokens) |
 
-#### `GET /github/app`
+#### GET /github/app
 
-**Response:** `200 { name, slug, install_url }`
+Fetches GitHub App metadata using an App JWT (`github-app.pem`). Returns an install URL with signed `state` for linking after the user installs the App.
 
-Uses the GitHub App's own JWT (signed with the private key) to call `GET /app`.
+Input: no body → 200 `{ name, slug, install_url }`  
+Errors: 401 — not authenticated · 500 — GitHub App config error (e.g. missing PEM)
 
-#### `GET /github/installations`
+#### GET /github/oauth/start
 
-**Response:** `200 { installations: [{ id, account: { login } }] }`
+Builds the GitHub App OAuth authorize URL with `prompt=select_account` so the user must explicitly pick a GitHub account. Frontend redirects the browser there so the user grants repo access.
 
-Uses the connected user's GitHub App user token and only returns installations
-owned by that connected GitHub account.
+Input: no body → 200 `{ authorization_url }`  
+Errors: 401 — not authenticated · 500 — failed to build OAuth URL
 
-#### `GET /github/repos?installation_id=<id>`
+#### POST /github/oauth/complete
 
-**Response:** `200 { repos: [{ id, name, full_name, owner, private, default_branch }] }`
+Completes OAuth after redirect. Verifies signed `state`, exchanges `code` for a GitHub App user token, checks the GitHub account matches the Supabase user, encrypts and stores the token in `github_connections`.
 
-Obtains an installation token, then lists repos accessible to that installation.
+Input: `{ code, state }` → 200 `{ github_user: { id, login } }`  
+Errors: 400 — missing/invalid code or state, identity mismatch, or account already linked · 500 — server failure
 
-#### `GET /github/repos/:owner/:repo/branches?installation_id=<id>`
+#### POST /github/installations/link
 
-**Response:** `200 { branches: [{ name, commit: { sha } }] }`
+Called after the user installs the App on GitHub. Associates an `installation_id` with the user when they own that installation.
 
----
+Input: `{ installation_id, state }` → 200 `{ installation: { id, account } }`  
+Errors: 400 — missing installation_id or state · 403 — user cannot access this installation · 500 — server failure
 
-### Projects (`/api/projects`)
+#### GET /github/installations
 
-All project routes require authentication.
+Lists GitHub App installations visible to the connected GitHub account using the stored user token. Does not return other users' installations.
 
-| Method | Path | Auth Tier | Description |
-|--------|------|-----------|-------------|
-| `GET` | `/projects` | Any member | List all projects the user belongs to |
-| `POST` | `/projects` | Any user | Create a new project |
-| `GET` | `/projects/:id` | Any member | Get project details with settings |
-| `PUT` | `/projects/:id/settings` | Owner/Admin | Update project settings |
-| `DELETE` | `/projects/:id` | Owner | Delete a project |
-| `POST` | `/projects/:id/analyze` | Owner/Admin | Trigger analysis |
+Input: no body → 200 `{ github_connected, github_username, installations: [{ id, account: { login } }] }`  
+Errors: 401 — not authenticated · 403 — GitHub token expired; reconnect required · 500 — server failure
 
-#### `GET /projects`
+#### GET /github/repos
 
-**Response:** `200 { projects: [{ id, repo_owner, repo_name, branch, status, permission_tier, developer_role, stale_count, ... }] }`
+Lists repositories an installation can access. Mints an installation token only after verifying the user owns `installation_id`.
 
-Joins `project_members` to include the caller's tier/role and a lateral subquery for stale flag count.
+Input: query `?installation_id=<id>` → 200 `{ repos: [{ id, name, full_name, owner, private, default_branch }] }`  
+Errors: 400 — installation_id missing or not a number · 403 — installation not owned by user · 500 — server failure
 
-#### `POST /projects`
+#### GET /github/repos/:owner/:repo/branches
 
-**Request:** `{ repo_owner: string, repo_name: string, branch: string, default_developer_role?: string }`
-**Response:** `201 { project: { ... } }`
+Lists branch names and tip commits for a repo under the given installation.
 
-Creates the project, project settings, and adds the creator as `owner` — all in a single transaction.
+Input: query `?installation_id=<id>` → 200 `{ branches: [{ name, commit: { sha } }] }`  
+Errors: 400 — installation_id missing or invalid · 403 — installation not owned · 500 — server failure
 
-#### `GET /projects/:id`
+#### DELETE /github/connection
 
-**Response:** `200 { project: { ..., settings: { ... }, permission_tier, developer_role } }`
+Disconnects the user's GitHub App link. Deletes their `github_connections` and `github_installations` rows. After this, `/github/installations` returns an empty list and the user must re-authorize the GitHub App to import repos.
 
-#### `PUT /projects/:id/settings`
-
-**Request (all optional):** `{ ignored_paths?: string[], default_developer_role?: string, file_limit?: number, loc_limit?: number }`
-**Response:** `200 { settings: { ... } }`
-
-Only updates the fields that are provided.
-
-#### `DELETE /projects/:id`
-
-**Response:** `200 { success: true }`
-
-Cascading deletes remove members, invitations, snapshots, and analysis jobs.
-
-#### `POST /projects/:id/analyze`
-
-**Response:** `202 { analysis: { id, status, mode, branch } }`
-
-Sets project status to `analyzing` and inserts an analysis job into `analysis_jobs`.
+Input: no body → 200 `{ success: true }`  
+Errors: 401 — not authenticated · 500 — server failure
 
 ---
 
-### Invitations (`/api/invitations`)
+### Projects (`/projects`)
 
-All invitation routes require authentication.
+| Method | Path | Tier | Description |
+|--------|------|------|-------------|
+| GET | `/projects` | member | List projects the user belongs to |
+| POST | `/projects` | any | Create project from an imported repo |
+| GET | `/projects/:id` | member | Project details + settings |
+| PUT | `/projects/:id/settings` | owner/admin | Update analysis/onboarding settings |
+| DELETE | `/projects/:id` | owner | Delete project and related data (CASCADE) |
+| POST | `/projects/:id/analyze` | owner/admin | Queue static analysis worker job |
+| GET | `/projects/:id/analysis-status` | member | Recent jobs + latest snapshot stats |
+| GET | `/projects/:id/summary` | member | Latest onboarding package summary |
+| POST | `/projects/:id/summarize` | owner/admin | Queue AI onboarding generation job |
+
+#### GET /projects
+
+Returns all projects where the caller is a member, including their tier, developer role, and count of stale onboarding sections from the latest snapshot.
+
+Input: no body → 200 `{ projects: [{ id, repo_owner, repo_name, branch, status, permission_tier, developer_role, stale_count, ... }] }`  
+Errors: 401 — not authenticated · 500 — server failure
+
+#### POST /projects
+
+Creates a project for a GitHub repo/branch. Validates `github_installation_id` ownership, then inserts project, default settings, and owner membership in one transaction.
+
+Input: `{ repo_owner, repo_name, branch, github_installation_id, default_developer_role? }` → 201 `{ project }`  
+Errors: 400 — required field missing · 403 — installation not owned · 409 — project already exists for repo/branch · 500 — server failure
+
+#### GET /projects/:id
+
+Returns project row, settings JSON, and the caller's membership tier/role.
+
+Input: no body → 200 `{ project: { ..., settings, permission_tier, developer_role } }`  
+Errors: 401 — not authenticated · 403 — not a project member · 404 — project not found · 500 — server failure
+
+#### PUT /projects/:id/settings
+
+Updates only the settings fields present in the body.
+
+Input: `{ ignored_paths?, ai_enabled?, default_developer_role?, file_limit?, loc_limit? }` → 200 `{ settings }`  
+Errors: 400 — no settings fields in body · 401 — not authenticated · 403 — not owner/admin · 404 — project not found · 500 — server failure
+
+#### DELETE /projects/:id
+
+Deletes the project row; related members, jobs, snapshots, and packages removed via database CASCADE.
+
+Input: no body → 200 `{ success: true }`  
+Errors: 401 — not authenticated · 403 — not project owner · 500 — server failure
+
+#### POST /projects/:id/analyze
+
+Starts static repo analysis: sets project status to `analyzing`, inserts an `analysis_jobs` row, enqueues a BullMQ job for the worker (see [Pipeline.md](./Pipeline.md)).
+
+Input: no body → 202 `{ analysis: { id, status, mode, branch } }`  
+Errors: 401 — not authenticated · 403 — not owner/admin · 404 — project not found · 409 — analysis already queued or running · 500 — server failure
+
+#### GET /projects/:id/analysis-status
+
+Returns the five most recent analysis/summary jobs plus stats from the latest completed snapshot (file count, symbols, workflows, commit).
+
+Input: no body → 200 `{ jobs: [...], latestSnapshot: { file_count, symbol_count, ... } | null }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+
+#### GET /projects/:id/summary
+
+Returns the most recent onboarding package (any role) with aggregated section metadata — used by summary views.
+
+Input: no body → 200 `{ summary: { package_id, role, sections, ... } }`  
+Errors: 401 — not authenticated · 403 — not a member · 404 — no package generated yet · 500 — server failure
+
+#### POST /projects/:id/summarize
+
+Queues AI onboarding generation for the latest completed analysis snapshot. Requires `ai_enabled` in project settings.
+
+Input: no body → 202 `{ jobId, snapshotId }`  
+Errors: 401 — not authenticated · 403 — not owner/admin or AI disabled for project · 409 — no completed analysis snapshot · 500 — server failure
+
+---
+
+### Invitations (`/invitations`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/invitations` | List pending invitations for the current user |
-| `GET` | `/invitations/:invitationId` | Get a specific invitation |
-| `POST` | `/invitations/:invitationId/accept` | Accept an invitation and join the project |
+| GET | `/invitations` | Pending invites for the caller's email |
+| GET | `/invitations/:invitationId` | Single invite detail |
+| POST | `/invitations/:invitationId/accept` | Accept invite and join project |
 
-#### `GET /invitations`
+#### GET /invitations
 
-**Response:** `200 { invitations: [{ id, project_id, repo_owner, repo_name, branch, permission_tier, developer_role, invited_by_email, status }] }`
+Lists pending project invitations addressed to the authenticated user's email.
 
-Filters by the current user's email (case-insensitive) and `status = 'pending'`.
+Input: no body → 200 `{ invitations: [{ id, project_id, repo_owner, repo_name, branch, permission_tier, developer_role, invited_by_email, status }] }`  
+Errors: 401 — not authenticated · 500 — server failure
 
-#### `POST /invitations/:invitationId/accept`
+#### GET /invitations/:invitationId
 
-**Request:** `{ developer_role?: string }`
-**Response:** `200 { project: { ... }, member: { ... } }`
+Returns one invitation if it belongs to the caller's email.
 
-Runs in a transaction: updates invitation status, inserts into `project_members`.
+Input: no body → 200 `{ invitation }`  
+Errors: 401 — not authenticated · 403 — invitation sent to a different email · 404 — invitation not found · 500 — server failure
+
+#### POST /invitations/:invitationId/accept
+
+Accepts a pending invitation: marks it accepted and adds the user to `project_members` with the invite's tier. `developer_role` comes from the invite or request body.
+
+Input: `{ developer_role? }` → 200 `{ project, member }`  
+Errors: 400 — developer_role required but missing on invite and body · 403 — invitation for another account · 404 — not found or expired · 409 — already accepted or already a member · 503 — database unavailable · 500 — server failure
 
 ---
 
-### Members (`/api/projects/:id/members`)
+### Members (`/projects/:id/members`)
 
-All member routes require authentication and project membership.
+| Method | Path | Tier | Description |
+|--------|------|------|-------------|
+| GET | `/members` | member | List project members |
+| GET | `/members/invitations` | member | Pending invites for this project |
+| POST | `/members/invitations` | owner/admin | Invite a user by email |
+| PATCH | `/members/invitations/:invitationId` | owner/admin | Revoke a pending invite |
+| PATCH | `/members/members/:userId` | owner/admin | Update member tier or role |
+| DELETE | `/members/members/:userId` | owner/admin | Remove a member |
 
-| Method | Path | Auth Tier | Description |
-|--------|------|-----------|-------------|
-| `GET` | `/projects/:id/members` | Any member | List project members |
-| `GET` | `/projects/:id/members/invitations` | Any member | List pending invitations for the project |
-| `POST` | `/projects/:id/members/invitations` | Owner/Admin | Invite a user by email |
-| `PATCH` | `/projects/:id/members/invitations/:invitationId` | Owner/Admin | Revoke a pending invitation |
-| `PATCH` | `/projects/:id/members/members/:userId` | Owner/Admin | Update a member's tier or role |
-| `DELETE` | `/projects/:id/members/members/:userId` | Owner/Admin | Remove a member (cannot remove owner) |
+#### GET /members
 
-#### `POST /projects/:id/members/invitations`
+Lists all members of the project with email and join date.
 
-**Request:** `{ email: string, permission_tier: string, developer_role?: string }`
-**Response:** `201 { invitation: { ... } }`
-**Errors:** `409` if a pending invitation already exists for that email.
+Input: no body → 200 `{ members: [{ project_id, user_id, permission_tier, developer_role, email, joined_at }] }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
 
-#### `PATCH /projects/:id/members/members/:userId`
+#### GET /members/invitations
 
-**Request (all optional):** `{ permission_tier?: string, developer_role?: string }`
-**Response:** `200 { member: { ... } }`
+Lists pending invitations created for this project.
 
-Admins can only modify members with `developer` tier. Owners can modify anyone.
+Input: no body → 200 `{ invitations: [...] }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+
+#### POST /members/invitations
+
+Sends a pending invitation to join the project with the given permission tier and optional developer role.
+
+Input: `{ email, permission_tier, developer_role? }` → 201 `{ invitation }`  
+Errors: 400 — email or permission_tier missing · 401 — not authenticated · 403 — not owner/admin · 409 — pending invite already exists for email · 500 — server failure
+
+#### PATCH /members/invitations/:invitationId
+
+Revokes a pending invitation (sets status to `revoked`).
+
+Input: no body → 200 `{ invitation }`  
+Errors: 401 — not authenticated · 403 — not owner/admin · 404 — no pending invitation with that id · 500 — server failure
+
+#### PATCH /members/members/:userId
+
+Updates a member's permission tier and/or developer role. Admins may only change developers; owners cannot assign owner to someone else.
+
+Input: `{ permission_tier?, developer_role? }` → 200 `{ member }`  
+Errors: 400 — invalid tier/role or no fields to update · 401 — not authenticated · 403 — caller lacks permission for this change · 404 — member not found · 500 — server failure
+
+#### DELETE /members/members/:userId
+
+Removes a member from the project. Cannot remove yourself or the project owner.
+
+Input: no body → 200 `{ success: true }`  
+Errors: 401 — not authenticated · 403 — not allowed (self, owner, or admin removing non-developer) · 404 — member not found · 500 — server failure
+
+---
+
+### Graph (`/projects/:id/graph`)
+
+Reads from the latest completed analysis snapshot.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/graph/dependencies` | Module dependency graph |
+| GET | `/graph/nodes/:nodeId` | Detail for one graph node |
+
+#### GET /graph/dependencies
+
+Returns nodes and edges for the dependency graph. Auto-clusters by directory when node count exceeds 20; optional `?cluster=` for cluster drill-down.
+
+Input: query `?cluster=<dir>` (optional) → 200 `{ projectId, snapshotId, graph: { nodes, edges, entryPoints }, totalNodes, totalEdges, ... }`  
+Errors: 401 — not authenticated · 403 — not a member · 404 — no completed analysis snapshot · 500 — server failure
+
+#### GET /graph/nodes/:nodeId
+
+Returns metadata for a single node (file path, symbol name, line range, etc.).
+
+Input: no body → 200 `{ node: { id, stable_key, type, name, file_path, line_start, line_end, metadata } }`  
+Errors: 401 — not authenticated · 403 — not a member · 404 — node not found · 500 — server failure
+
+---
+
+### Workflows (`/projects/:id/workflows`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/workflows` | Ranked workflows from latest snapshot |
+| GET | `/workflows/:workflowId/walkthrough` | Ordered steps for one workflow |
+
+#### GET /workflows
+
+Lists workflows extracted during analysis, sorted by importance score. Empty array if no snapshot yet.
+
+Input: no body → 200 `{ workflows: [...], snapshotId }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+
+#### GET /workflows/:workflowId/walkthrough
+
+Returns workflow metadata and ordered steps (file, symbol, explanation) for the walkthrough UI.
+
+Input: no body → 200 `{ workflow, steps: [{ step_order, file_path, symbol_name, explanation, ... }] }`  
+Errors: 401 — not authenticated · 403 — not a member · 404 — workflow not found · 500 — server failure
+
+---
+
+### Onboarding (`/projects/:id/onboarding`)
+
+| Method | Path | Tier | Description |
+|--------|------|------|-------------|
+| GET | `/onboarding` | member | Onboarding sections for a role |
+| GET | `/onboarding/sections/:sectionId/receipts` | member | Source code receipts for a section |
+| GET | `/onboarding/validate` | owner/admin | Validate section citations |
+| GET | `/onboarding/export` | member | Download package as Markdown |
+| PATCH | `/onboarding/sections/:sectionId/review` | owner/admin | Mark section reviewed |
+
+#### GET /onboarding
+
+Returns the onboarding package for a developer role (query `?role=` or caller's `developer_role`). Includes sections, content blocks, and inline receipts. Returns `status: "missing"` if no package exists yet.
+
+Input: query `?role=backend` (optional) → 200 `{ package: { id, role, status, sections: [{ id, label, blocks, reviewStatus, ... }] } }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+
+#### GET /onboarding/sections/:sectionId/receipts
+
+Returns source receipts (file paths, line ranges, snippets) backing a section's claims.
+
+Input: no body → 200 `{ receipts: [{ file_path, symbol_name, line_start, line_end, snippet, ... }] }`  
+Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+
+#### GET /onboarding/validate
+
+Runs citation validation against graph nodes for the latest onboarding package.
+
+Input: no body → 200 `{ validations: [...] }`  
+Errors: 401 — not authenticated · 403 — not owner/admin · 404 — no onboarding package · 500 — server failure
+
+#### GET /onboarding/export
+
+Streams a Markdown file of all sections for the given role.
+
+Input: query `?role=backend` (optional) → 200 Markdown attachment (`Content-Type: text/markdown`)  
+Errors: 401 — not authenticated · 403 — not a member · 404 — no package for role · 500 — server failure
+
+#### PATCH /onboarding/sections/:sectionId/review
+
+Sets a section's review status. When all sections are approved, the package status becomes `approved`.
+
+Input: `{ review_status: "approved" | "draft" }` → 200 `{ section }`  
+Errors: 400 — review_status not approved or draft · 401 — not authenticated · 403 — not owner/admin · 404 — section not found · 500 — server failure
 
 ---
 
 ## Database Access
 
-The backend connects to **Supabase PostgreSQL** via the `pg` Pool, using the `DATABASE_URL` environment variable (connection pooler endpoint recommended for Docker).
-
 **Module:** `backend/src/lib/db.ts`
 
-```typescript
-import { Pool } from "pg";
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export { pool, query };
-```
-
-All queries use parameterized statements (`$1`, `$2`, etc.) to prevent SQL injection. Transactions use `pool.connect()` with explicit `BEGIN`/`COMMIT`/`ROLLBACK`.
+Connects to Supabase PostgreSQL via `pg` Pool (`DATABASE_URL`; pooler recommended for Docker). Parameterized queries prevent SQL injection. Transactions: `pool.connect()` + `BEGIN`/`COMMIT`/`ROLLBACK`.
 
 ---
 
 ## GitHub App Integration
 
-**Module:** `backend/src/lib/github.ts`
+**Modules:** `backend/src/lib/github.ts`, `backend/src/lib/github-connection.ts`
 
-The app authenticates to the GitHub API in two ways:
+| Token | How minted | Used for |
+|-------|------------|----------|
+| App JWT | RS256 with `github-app.pem` | App metadata, mint installation tokens |
+| GitHub App user token | OAuth code exchange; stored encrypted | List user's installations, ownership checks |
+| Installation token | App JWT + `installation_id` | List repos/branches; worker zipball fetch (~1h TTL) |
 
-1. **App-level JWT** — for endpoints like `GET /app`, `GET /app/installations`. Signed with the private key (`github-app.pem`) using RS256.
-2. **Installation token** — for repo-scoped operations. Obtained by calling `POST /app/installations/:id/access_tokens` with the App JWT.
-
-**Environment variables:**
-- `GITHUB_APP_ID` — the numeric App ID
-- `GITHUB_APP_PRIVATE_KEY_PATH` — path to the PEM file (e.g., `./github-app.pem`)
+Installation tokens only minted after `userCanAccessInstallation()` passes.
 
 ---
 
@@ -270,30 +525,30 @@ The app authenticates to the GitHub API in two ways:
 
 **Module:** `backend/src/lib/encryption.ts`
 
-GitHub OAuth tokens are encrypted at rest using **AES-256-GCM**.
+GitHub tokens encrypted at rest with **AES-256-GCM**.
 
-- **Key:** 32-byte hex string from `TOKEN_ENCRYPTION_KEY` env var
-- **Format:** `iv:authTag:ciphertext` (all hex-encoded)
-- **Functions:** `encrypt(plaintext)` and `decrypt(encrypted)`
+- Key: 32-byte hex from `TOKEN_ENCRYPTION_KEY`
+- Format: `iv:authTag:ciphertext` (hex)
+- Functions: `encrypt()`, `decrypt()`
+
+OAuth/install `state` HMAC uses `GITHUB_INSTALL_STATE_SECRET` (defaults to encryption key).
 
 ---
 
 ## Error Handling
 
-All endpoints return errors in the format:
+Failures return `{ "error": "message" }`. GitHub token refresh failure also includes `code: "github_reconnect_required"`.
 
-```json
-{ "error": "Human-readable error message" }
-```
-
-**Standard status codes:**
-- `400` — Bad request (missing required fields)
-- `401` — Authentication required or token invalid
-- `403` — Insufficient permissions
-- `404` — Resource not found
-- `409` — Conflict (duplicate resource)
-- `422` — Validation error
-- `500` — Internal server error
+| Code | Meaning |
+|------|---------|
+| `400` | Bad request / missing fields |
+| `401` | Auth required or token invalid |
+| `403` | Forbidden / insufficient tier / GitHub access denied |
+| `404` | Not found |
+| `409` | Conflict (duplicate, job running, etc.) |
+| `422` | Validation error |
+| `500` | Internal server error |
+| `503` | Service unavailable (DB pool) |
 
 ---
 
@@ -301,12 +556,18 @@ All endpoints return errors in the format:
 
 | Variable | Description |
 |----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string (Supabase connection pooler) |
-| `SUPABASE_URL` | Supabase project URL (e.g., `https://xxx.supabase.co`) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key (admin operations) |
+| `DATABASE_URL` | PostgreSQL connection string (Supabase pooler) |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (admin ops) |
+| `REDIS_URL` | BullMQ queue (Upstash TCP) |
 | `GITHUB_APP_ID` | GitHub App numeric ID |
-| `GITHUB_APP_PRIVATE_KEY_PATH` | Path to GitHub App PEM private key |
-| `GITHUB_CLIENT_ID` | GitHub OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth App client secret |
-| `TOKEN_ENCRYPTION_KEY` | 64-char hex string for AES-256-GCM encryption |
-| `PORT` | Server port (default: 3001) |
+| `GITHUB_APP_CLIENT_ID` | GitHub App OAuth client ID |
+| `GITHUB_APP_CLIENT_SECRET` | GitHub App OAuth secret |
+| `GITHUB_APP_PRIVATE_KEY_PATH` | PEM path (default `./github-app.pem`) |
+| `GITHUB_CLIENT_ID` | Supabase login OAuth app (frontend) |
+| `GITHUB_CLIENT_SECRET` | Supabase login OAuth secret |
+| `TOKEN_ENCRYPTION_KEY` | 64-char hex AES key |
+| `GITHUB_INSTALL_STATE_SECRET` | OAuth state HMAC secret |
+| `FRONTEND_URL` | OAuth redirect base |
+| `CORS_ORIGIN` | Allowed browser origin |
+| `PORT` | Server port (default 3000) |
