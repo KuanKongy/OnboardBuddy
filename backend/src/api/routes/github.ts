@@ -251,7 +251,9 @@ githubRouter.get("/repos", async (req, res) => {
       })),
     });
   } catch (err) {
-    console.error("List repos error:", err);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("List repos error:", err);
+    }
     handleGitHubRouteError(res, err);
   }
 });
@@ -270,7 +272,9 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
     const branches = await listBranches(installationToken, owner, repo);
     res.json({ branches });
   } catch (err) {
-    console.error("List branches error:", err);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("List branches error:", err);
+    }
     handleGitHubRouteError(res, err);
   }
 });
