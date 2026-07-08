@@ -79,18 +79,3 @@ describe("GET /api/auth/me", () => {
     expect(res.body).to.have.property("error");
   });
 });
-
-describe("POST /api/auth/github/save-token", () => {
-  it("returns 401 when unauthenticated", async () => {
-    const res = await request(app)
-      .post("/api/auth/github/save-token")
-      .send({
-        github_user_id: 123,
-        github_username: "testuser",
-        access_token: "gho_abc123",
-        scopes: [],
-      });
-
-    expect(res.status).to.equal(401);
-  });
-});

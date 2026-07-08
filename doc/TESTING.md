@@ -58,7 +58,7 @@ These tests boot the real Express app in-process via Supertest. `backend/test/se
 
 | File | Endpoints Covered | Tests |
 |------|-------------------|-------|
-| `test/api/auth.test.ts` | `POST /signup` (3 validation), `POST /login` (2 validation), `POST /logout` (2 auth), `GET /me` (1 auth), `POST /github/save-token` (1 auth) | 9 |
+| `test/api/auth.test.ts` | `POST /signup` (3 validation), `POST /login` (2 validation), `POST /logout` (2 auth), `GET /me` (1 auth) | 8 |
 | `test/api/github.test.ts` | `GET /github/app`, `GET /github/installations`, `GET /github/repos`, `GET /github/repos/:owner/:repo/branches` | 4 |
 | `test/api/projects.test.ts` | `GET /projects` (2: no auth + malformed header), `POST /projects`, `GET /projects/:id`, `DELETE /projects/:id`, `POST /projects/:id/analyze`, `PUT /projects/:id/settings` | 7 |
 | `test/api/members.test.ts` | `GET /projects/:id/members`, `GET /members/invitations`, `POST /members/invitations`, `PATCH /members/:userId`, `DELETE /members/:userId` | 5 |

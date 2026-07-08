@@ -39,7 +39,7 @@ projectsRouter.get("/", async (req, res) => {
 });
 
 projectsRouter.post("/", async (req, res) => {
-  const client = await pool.connect();
+  let client: Awaited<ReturnType<typeof pool.connect>> | undefined;
   try {
     const userId = req.user!.id;
     const { repo_owner, repo_name, branch, github_installation_id, default_developer_role } = req.body as {
@@ -67,6 +67,8 @@ projectsRouter.post("/", async (req, res) => {
       res.status(403).json({ error: "You do not have access to this GitHub installation" });
       return;
     }
+
+    client = await pool.connect();
 
     await client.query("BEGIN");
 
@@ -102,7 +104,9 @@ projectsRouter.post("/", async (req, res) => {
 
     res.status(201).json({ project });
   } catch (err) {
-    await client.query("ROLLBACK");
+    if (client) {
+      await client.query("ROLLBACK").catch(() => {});
+    }
     if (
       err instanceof Error &&
       err.message.includes("duplicate key")
@@ -113,7 +117,7 @@ projectsRouter.post("/", async (req, res) => {
     console.error("Create project error:", err);
     res.status(500).json({ error: "Internal server error" });
   } finally {
-    client.release();
+    client?.release();
   }
 });
 

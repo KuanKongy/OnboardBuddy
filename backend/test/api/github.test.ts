@@ -1,16 +1,24 @@
 import { expect } from "chai";
 import request from "supertest";
 import { createApp } from "../../src/api/app.js";
-import { encrypt } from "../../src/lib/encryption.js";
+import {
+  MOCK_GITHUB_ACCOUNTS,
+  mockGithubConnection,
+  mockGithubInstallationsFetch,
+} from "../helpers/githubMocks.js";
 import {
   authHeader,
   installTestAuth,
-  mockQuery,
   resetTestHarness,
 } from "../helpers/testHarness.js";
 
 const app = createApp();
 const originalFetch = globalThis.fetch;
+
+function resetGithubMocks(): void {
+  globalThis.fetch = originalFetch;
+  resetTestHarness();
+}
 
 describe("GET /api/github/app", () => {
   it("returns 401 when unauthenticated", async () => {
@@ -22,10 +30,7 @@ describe("GET /api/github/app", () => {
 });
 
 describe("GET /api/github/installations", () => {
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    resetTestHarness();
-  });
+  afterEach(resetGithubMocks);
 
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).get("/api/github/installations");
@@ -43,17 +48,14 @@ describe("GET /api/github/installations", () => {
       .set(authHeader());
 
     expect(res.status).to.equal(200);
-    expect(res.body.github_username).to.equal("KuanKongy");
+    expect(res.body.github_username).to.equal(MOCK_GITHUB_ACCOUNTS.owner.login);
     expect(res.body.installations.map((inst: { account: { login: string } }) => inst.account.login))
-      .to.deep.equal(["KuanKongy"]);
+      .to.deep.equal([MOCK_GITHUB_ACCOUNTS.owner.login]);
   });
 });
 
 describe("GET /api/github/repos", () => {
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-    resetTestHarness();
-  });
+  afterEach(resetGithubMocks);
 
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app)
@@ -70,7 +72,7 @@ describe("GET /api/github/repos", () => {
 
     const res = await request(app)
       .get("/api/github/repos")
-      .query({ installation_id: 9002 })
+      .query({ installation_id: MOCK_GITHUB_ACCOUNTS.otherUser.installationId })
       .set(authHeader());
 
     expect(res.status).to.equal(403);
@@ -79,6 +81,8 @@ describe("GET /api/github/repos", () => {
 });
 
 describe("GET /api/github/repos/:owner/:repo/branches", () => {
+  afterEach(resetGithubMocks);
+
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app)
       .get("/api/github/repos/owner/repo/branches")
@@ -86,47 +90,18 @@ describe("GET /api/github/repos/:owner/:repo/branches", () => {
 
     expect(res.status).to.equal(401);
   });
-});
 
-function mockGithubConnection(): void {
-  mockQuery((text) => {
-    if (text.includes("FROM github_connections")) {
-      return {
-        rows: [{
-          github_user_id: 101,
-          github_username: "KuanKongy",
-          access_token_encrypted: encrypt("github-user-token"),
-          access_token_expires_at: new Date(Date.now() + 60 * 60 * 1000),
-          refresh_token_encrypted: null,
-          refresh_token_expires_at: null,
-        }],
-      };
-    }
+  it("rejects branch access through another account's installation", async () => {
+    installTestAuth();
+    mockGithubConnection();
+    mockGithubInstallationsFetch();
 
-    throw new Error(`Unexpected query: ${text}`);
+    const res = await request(app)
+      .get("/api/github/repos/owner/repo/branches")
+      .query({ installation_id: MOCK_GITHUB_ACCOUNTS.otherUser.installationId })
+      .set(authHeader());
+
+    expect(res.status).to.equal(403);
+    expect(res.body.error).to.include("You do not have access");
   });
-}
-
-function mockGithubInstallationsFetch(): void {
-  const calls: string[] = [];
-
-  globalThis.fetch = (async (input: string | URL | Request) => {
-    const url = input.toString();
-    calls.push(url);
-
-    if (url === "https://api.github.com/user/installations") {
-      return new Response(JSON.stringify({
-        installations: [
-          { id: 9001, account: { id: 101, login: "KuanKongy", type: "User" }, app_id: 123456 },
-          { id: 9002, account: { id: 202, login: "ng-eugene", type: "User" }, app_id: 123456 },
-          { id: 9003, account: { id: 303, login: "en80801-arch", type: "User" }, app_id: 123456 },
-        ],
-      }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    throw new Error(`Unexpected GitHub fetch: ${url}; previous calls: ${calls.join(", ")}`);
-  }) as typeof fetch;
-}
+});

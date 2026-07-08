@@ -7,12 +7,14 @@ import {
   getAppInstallation,
   getAppInfo,
   getGitHubUser,
-  getInstallationToken,
   listInstallationRepos,
   listBranches,
 } from "../../lib/github.js";
 import {
+  assertGithubAccountCanBeLinked,
+  GitHubInstallationAccessError,
   GitHubReconnectRequiredError,
+  getInstallationTokenForUser,
   getUserGithubConnection,
   linkInstallationToUser,
   listInstallationsForUser,
@@ -36,6 +38,11 @@ function handleGitHubRouteError(
       error: err.message,
       code: "github_reconnect_required",
     });
+    return;
+  }
+
+  if (err instanceof GitHubInstallationAccessError) {
+    res.status(403).json({ error: err.message });
     return;
   }
 
@@ -116,6 +123,7 @@ githubRouter.get("/oauth/start", async (req, res) => {
     url.searchParams.set("client_id", process.env.GITHUB_APP_CLIENT_ID ?? "");
     url.searchParams.set("redirect_uri", githubOAuthRedirectUri());
     url.searchParams.set("state", state);
+    url.searchParams.set("prompt", "select_account");
 
     res.json({ authorization_url: url.toString() });
   } catch (err) {
@@ -138,6 +146,7 @@ githubRouter.post("/oauth/complete", async (req, res) => {
     const token = await exchangeGitHubAppOAuthCode(code, githubOAuthRedirectUri());
     const githubUser = await getGitHubUser(token.accessToken);
     await assertAuthorizedGitHubMatchesSupabaseIdentity(userId, githubUser);
+    await assertGithubAccountCanBeLinked(userId, githubUser.id, githubUser.login);
     await ensurePublicUser(userId, req.user!.email);
     await saveGithubConnection(userId, githubUser.id, githubUser.login, token);
 
@@ -190,6 +199,18 @@ githubRouter.post("/installations/link", async (req, res) => {
   }
 });
 
+githubRouter.delete("/connection", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    await query(`DELETE FROM github_connections WHERE user_id = $1`, [userId]);
+    await query(`DELETE FROM github_installations WHERE user_id = $1`, [userId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Disconnect GitHub error:", err);
+    res.status(500).json({ error: "Failed to disconnect GitHub" });
+  }
+});
+
 githubRouter.get("/installations", async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -216,13 +237,7 @@ githubRouter.get("/repos", async (req, res) => {
       return;
     }
 
-    const allowed = await userCanAccessInstallation(userId, installationId);
-    if (!allowed) {
-      res.status(403).json({ error: "You do not have access to this GitHub installation" });
-      return;
-    }
-
-    const installationToken = await getInstallationToken(installationId);
+    const installationToken = await getInstallationTokenForUser(userId, installationId);
     const repos = await listInstallationRepos(installationToken);
 
     res.json({
@@ -251,13 +266,7 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
       return;
     }
 
-    const allowed = await userCanAccessInstallation(userId, installationId);
-    if (!allowed) {
-      res.status(403).json({ error: "You do not have access to this GitHub installation" });
-      return;
-    }
-
-    const installationToken = await getInstallationToken(installationId);
+    const installationToken = await getInstallationTokenForUser(userId, installationId);
     const branches = await listBranches(installationToken, owner, repo);
     res.json({ branches });
   } catch (err) {
