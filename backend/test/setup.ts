@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+process.env.NODE_ENV = "test";
 process.env.SUPABASE_URL = process.env.SUPABASE_URL || "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY || "sb_secret_test_key_placeholder";

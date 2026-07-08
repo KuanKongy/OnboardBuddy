@@ -18,7 +18,9 @@ export async function requireAuth(
     req.user = await verifySupabaseAccessToken(token);
     next();
   } catch (err) {
-    console.error("JWT verification failed:", err);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("JWT verification failed:", err);
+    }
     res.status(401).json({ error: "Invalid or expired token" });
   }
 }
