@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { PoolClient } from "pg";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
@@ -39,7 +40,7 @@ projectsRouter.get("/", async (req, res) => {
 });
 
 projectsRouter.post("/", async (req, res) => {
-  let client: Awaited<ReturnType<typeof pool.connect>> | undefined;
+  let client: PoolClient | undefined;
   try {
     const userId = req.user!.id;
     const { repo_owner, repo_name, branch, github_installation_id, default_developer_role } = req.body as {

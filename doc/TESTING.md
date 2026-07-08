@@ -15,8 +15,10 @@ npm run test -w frontend   # 20 passing
 npm run lint               # 0 errors
 npm run build              # frontend + backend compile
 
-# Layer 3: full app (Docker + real .env — manual / future integration tests)
-docker compose up --build
+# Layer 3: stack smoke tests (Docker required)
+docker compose up --build -d
+npm run test:stack         # API health + frontend landing page via Playwright
+docker compose down
 ```
 
 ---

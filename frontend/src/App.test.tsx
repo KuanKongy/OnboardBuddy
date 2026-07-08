@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, act } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import App from "./App";
 
@@ -14,13 +14,19 @@ vi.mock("./lib/supabase", () => ({
   },
 }));
 
-describe("App", () => {
-  it("redirects unauthenticated users to the intro page", () => {
+async function renderApp(route: string) {
+  await act(async () => {
     render(
-      <MemoryRouter initialEntries={["/"]}>
+      <MemoryRouter initialEntries={[route]}>
         <App />
       </MemoryRouter>,
     );
+  });
+}
+
+describe("App", () => {
+  it("redirects unauthenticated users to the intro page", async () => {
+    await renderApp("/");
 
     expect(
       screen.getByRole("heading", {
@@ -29,24 +35,16 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows login page at /login", () => {
-    render(
-      <MemoryRouter initialEntries={["/login"]}>
-        <App />
-      </MemoryRouter>,
-    );
+  it("shows login page at /login", async () => {
+    await renderApp("/login");
 
     expect(
       screen.getByRole("heading", { name: /welcome back/i }),
     ).toBeInTheDocument();
   });
 
-  it("shows signup page at /signup", () => {
-    render(
-      <MemoryRouter initialEntries={["/signup"]}>
-        <App />
-      </MemoryRouter>,
-    );
+  it("shows signup page at /signup", async () => {
+    await renderApp("/signup");
 
     expect(
       screen.getByRole("heading", { name: /create an account/i }),
@@ -54,13 +52,8 @@ describe("App", () => {
   });
 
   it("redirects /dashboard to login when unauthenticated", async () => {
-    render(
-      <MemoryRouter initialEntries={["/dashboard"]}>
-        <App />
-      </MemoryRouter>,
-    );
+    await renderApp("/dashboard");
 
-    // ProtectedRoute should redirect to /login
     await vi.waitFor(() => {
       expect(
         screen.getByRole("heading", { name: /welcome back/i }),
