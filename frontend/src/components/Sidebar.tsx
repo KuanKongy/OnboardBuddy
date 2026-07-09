@@ -23,7 +23,7 @@ export function Sidebar() {
         <span className="text-sm font-semibold text-foreground">OnboardBuddy</span>
       </div>
 
-      <nav className="flex-1 space-y-0.5 px-2 py-1">
+      <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
