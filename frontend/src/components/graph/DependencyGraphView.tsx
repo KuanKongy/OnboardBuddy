@@ -4,16 +4,38 @@ import ReactFlow, {
   BackgroundVariant,
   Controls,
   MiniMap,
+  Panel,
   ReactFlowProvider,
   type Edge,
   type Node,
+  type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
+import { GraphLegend } from "@/components/graph/GraphLegend";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
 import type { PositionedNode } from "@/lib/graphLayout";
 import type { GraphEdge } from "@/types/graph";
 
-const nodeTypes = { module: ModuleNode };
+// Wraps ModuleNode with an entry-point marker rather than editing
+// ModuleNode.tsx directly (that file is owned by a parallel change).
+function EntryAwareModuleNode(props: NodeProps<ModuleNodeData>) {
+  return (
+    <div className="relative">
+      {props.data.isEntryPoint && (
+        <span
+          title="Entry point"
+          className="absolute -left-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground shadow"
+        >
+          ▶
+        </span>
+      )}
+      <ModuleNode {...props} />
+    </div>
+  );
+}
+
+const nodeTypes = { module: EntryAwareModuleNode };
 
 interface DependencyGraphViewProps {
   nodes: PositionedNode[];
@@ -127,6 +149,12 @@ export function DependencyGraphView({
           nodeColor="oklch(0.28 0 0)"
           maskColor="oklch(0.17 0 0 / 0.7)"
         />
+        <Panel position="top-left">
+          <GraphLegend />
+        </Panel>
+        <Panel position="top-center">
+          <GraphFirstVisitHint />
+        </Panel>
       </ReactFlow>
     </ReactFlowProvider>
   );
