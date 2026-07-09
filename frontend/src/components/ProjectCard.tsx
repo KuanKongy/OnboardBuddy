@@ -82,11 +82,11 @@ export function ProjectCard({
               <h3 className="truncate text-sm font-semibold text-foreground">
                 {project.repo_name}
               </h3>
-              <Badge className={`text-[10px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
+              <Badge className={`text-[11px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
                 {project.permission_tier.toUpperCase()}
               </Badge>
             </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
               <GitBranch className="h-3 w-3" />
               {project.branch}
             </div>
@@ -113,7 +113,7 @@ export function ProjectCard({
           </div>
         </div>
 
-        <div className="mb-1.5 flex items-center justify-between text-[11px]">
+        <div className="mb-1.5 flex items-center justify-between text-xs">
           <span className="text-muted-foreground">
             {project.status === "analyzing" ? `Analyzing ${status.progress}%` : status.label}
           </span>
@@ -125,7 +125,7 @@ export function ProjectCard({
         <Progress value={status.progress} indicatorClassName={status.bar} className="mb-2.5 h-1" />
 
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 text-[11px]">
+          <div className="flex items-center gap-3 text-xs">
             <span className="text-muted-foreground">
               STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
             </span>

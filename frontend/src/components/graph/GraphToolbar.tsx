@@ -66,7 +66,7 @@ export function GraphToolbar({
         })}
       </div>
 
-      <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">
+      <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">
         {matchCount} / {totalCount} modules
       </span>
     </div>

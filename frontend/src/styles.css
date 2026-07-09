@@ -16,7 +16,7 @@
   --color-secondary: oklch(0.255 0.025 266);
   --color-secondary-foreground: oklch(0.93 0.008 264);
   --color-muted: oklch(0.255 0.025 266);
-  --color-muted-foreground: oklch(0.6 0.02 265);
+  --color-muted-foreground: oklch(0.64 0.02 265);
   --color-accent: oklch(0.275 0.028 266);
   --color-accent-foreground: oklch(0.93 0.008 264);
   --color-destructive: oklch(0.577 0.245 27.325);
@@ -54,6 +54,6 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-size: 13px;
+    font-size: 14px;
   }
 }

@@ -29,11 +29,11 @@ export function AccountCard() {
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
       <Avatar className="size-7">
-        <AvatarFallback className="text-[11px]">{initials(name)}</AvatarFallback>
+        <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-foreground">{name}</div>
-        <div className="truncate text-[11px] text-muted-foreground">{title}</div>
+        <div className="truncate text-xs text-muted-foreground">{title}</div>
       </div>
       <Button
         variant="ghost"

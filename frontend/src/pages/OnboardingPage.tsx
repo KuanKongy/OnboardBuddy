@@ -98,7 +98,7 @@ function ReceiptChip({
   return (
     <button
       onClick={() => onClick(receipt)}
-      className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-[11px] font-mono transition-colors hover:border-primary/50 hover:bg-accent ${
+      className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 text-xs font-mono transition-colors hover:border-primary/50 hover:bg-accent ${
         receipt.staleness === "stale"
           ? "border-amber-500/30 bg-amber-500/5"
           : "border-border bg-muted/40"
@@ -143,17 +143,17 @@ function SectionView({
     <div className="space-y-6">
       {/* section header */}
       <div className="flex flex-wrap items-center gap-2">
-        <Badge className={`text-[11px] border ${confidenceBg(section.confidence)}`} variant="outline">
+        <Badge className={`text-xs border ${confidenceBg(section.confidence)}`} variant="outline">
           {section.confidence.charAt(0).toUpperCase() + section.confidence.slice(1)} confidence
         </Badge>
         {section.status === "stale" && (
-          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/5 text-[11px] text-amber-400">
+          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-400">
             <AlertTriangle className="mr-1 h-2.5 w-2.5" />
             Stale
           </Badge>
         )}
         {section.reviewedBy && (
-          <span className="text-[11px] text-muted-foreground">
+          <span className="text-xs text-muted-foreground">
             Reviewed by <span className="font-medium text-foreground">@{section.reviewedBy}</span>
             {section.reviewedAt && ` · ${section.reviewedAt}`}
           </span>
@@ -266,7 +266,7 @@ export function OnboardingPage() {
       {/* ── left section nav ── */}
       <aside className="sticky top-0 hidden h-screen w-48 shrink-0 flex-col overflow-y-auto border-r lg:flex">
         <div className="px-3 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Sections
           </p>
         </div>
@@ -357,11 +357,11 @@ export function OnboardingPage() {
                   >
                     <span className="flex-1">{role.label}</span>
                     {rs === "missing" ? (
-                      <span className="text-[10px] text-muted-foreground">Not generated</span>
+                      <span className="text-[11px] text-muted-foreground">Not generated</span>
                     ) : rs === "generating" ? (
-                      <Badge variant="secondary" className="text-[10px]">Generating</Badge>
+                      <Badge variant="secondary" className="text-[11px]">Generating</Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge variant="secondary" className="text-[11px]">
                         {statusLabel(rs as PackageStatus)}
                       </Badge>
                     )}
@@ -372,13 +372,13 @@ export function OnboardingPage() {
           </DropdownMenu>
 
           {isMissing ? (
-            <Badge variant="destructive" className="text-[11px]">Missing</Badge>
+            <Badge variant="destructive" className="text-xs">Missing</Badge>
           ) : generating ? (
-            <Badge variant="secondary" className="gap-1 text-[11px]">
+            <Badge variant="secondary" className="gap-1 text-xs">
               <Loader2 className="h-2.5 w-2.5 animate-spin" /> Generating
             </Badge>
           ) : (
-            <Badge variant={statusVariant(pkg.status)} className="text-[11px]">
+            <Badge variant={statusVariant(pkg.status)} className="text-xs">
               {markedReviewed ? "Approved" : statusLabel(pkg.status)}
             </Badge>
           )}
@@ -492,17 +492,17 @@ export function OnboardingPage() {
       <aside className="sticky top-0 hidden h-screen w-52 shrink-0 flex-col gap-4 overflow-y-auto border-l px-4 py-4 xl:flex">
         {/* package status */}
         <div>
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Package Status
           </p>
           {isMissing ? (
-            <Badge variant="destructive" className="text-[11px]">Missing</Badge>
+            <Badge variant="destructive" className="text-xs">Missing</Badge>
           ) : generating ? (
-            <Badge variant="secondary" className="gap-1 text-[11px]">
+            <Badge variant="secondary" className="gap-1 text-xs">
               <Loader2 className="h-2.5 w-2.5 animate-spin" /> Generating
             </Badge>
           ) : (
-            <Badge variant={statusVariant(pkg.status)} className="text-[11px]">
+            <Badge variant={statusVariant(pkg.status)} className="text-xs">
               {markedReviewed ? "Approved" : statusLabel(pkg.status)}
             </Badge>
           )}
@@ -512,7 +512,7 @@ export function OnboardingPage() {
 
         {/* role selector */}
         <div>
-          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Role
           </p>
           <DropdownMenu>
@@ -539,11 +539,11 @@ export function OnboardingPage() {
                   >
                     <span className="flex-1">{role.label}</span>
                     {rs === "missing" ? (
-                      <span className="text-[10px] text-muted-foreground">Not generated</span>
+                      <span className="text-[11px] text-muted-foreground">Not generated</span>
                     ) : rs === "generating" ? (
-                      <Badge variant="secondary" className="text-[10px]">Generating</Badge>
+                      <Badge variant="secondary" className="text-[11px]">Generating</Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-[10px]">
+                      <Badge variant="secondary" className="text-[11px]">
                         {statusLabel(rs as PackageStatus)}
                       </Badge>
                     )}
@@ -558,7 +558,7 @@ export function OnboardingPage() {
 
         {/* actions */}
         <div>
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Actions
           </p>
           <div className="space-y-1.5">
@@ -619,7 +619,7 @@ export function OnboardingPage() {
           <>
             <Separator />
             <div>
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Admin Only
               </p>
               <Button
@@ -644,7 +644,7 @@ export function OnboardingPage() {
         {!isMissing && pkg.generatedAt && (
           <>
             <Separator />
-            <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Clock className="h-3 w-3" />
               Generated {new Date(pkg.generatedAt).toLocaleDateString()}
             </div>

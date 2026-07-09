@@ -49,22 +49,22 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </span>
       </div>
 
-      <p className="mb-2 truncate text-[11px] text-muted-foreground">{typeInfo.description}</p>
+      <p className="mb-2 truncate text-xs text-muted-foreground">{typeInfo.description}</p>
 
       {data.selected && (
         <div className="mb-2 flex flex-wrap items-center gap-1">
           {complexity && (
-            <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400">
+            <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-orange-500/20 text-orange-400">
               {complexity}
             </span>
           )}
-          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-green-500/20 text-green-400">
+          <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-green-500/20 text-green-400">
             {coverage}% Cov
           </span>
         </div>
       )}
 
-      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <span>{data.exportedSymbols.length} exports</span>
         <span className="text-border">·</span>
         <span>{data.importCount} imports</span>

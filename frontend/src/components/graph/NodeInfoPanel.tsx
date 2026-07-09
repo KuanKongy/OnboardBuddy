@@ -21,15 +21,15 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
         {/* Column 1: Functions */}
         <div className="flex-1 p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-foreground">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
               Functions
             </h3>
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
               {functions.length}
             </span>
           </div>
           {functions.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">No functions exported</p>
+            <p className="text-xs text-muted-foreground">No functions exported</p>
           ) : (
             <ul className="space-y-1.5">
               {functions.map((fn) => (
@@ -38,7 +38,7 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
                   <div>
                     <span className="text-[12px] font-mono text-foreground">{fn.name}()</span>
                     {fn.signature && (
-                      <p className="max-w-[160px] truncate text-[10px] text-muted-foreground">
+                      <p className="max-w-[160px] truncate text-[11px] text-muted-foreground">
                         {fn.signature}
                       </p>
                     )}
@@ -52,7 +52,7 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
             <div key={cls.name} className="mt-3">
               <Separator className="mb-2" />
               <div className="mb-1.5 flex items-center gap-1.5">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Class</span>
+                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Class</span>
               </div>
               <div className="flex items-start gap-1.5">
                 <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
@@ -64,14 +64,14 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
 
         {/* Column 2: Imports + Interfaces */}
         <div className="flex-1 p-4">
-          <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-foreground">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-foreground">
             Imports
-            <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
               {imports.length}
             </span>
           </h3>
           {imports.length === 0 ? (
-            <p className="text-[11px] text-muted-foreground">No imports</p>
+            <p className="text-xs text-muted-foreground">No imports</p>
           ) : (
             <ul className="mb-4 space-y-1.5">
               {imports.map((imp) => (
@@ -80,7 +80,7 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
                   <div>
                     <span className="text-[12px] font-mono text-muted-foreground">{imp.toSpecifier}</span>
                     {imp.namedImports.length > 0 && (
-                      <p className="text-[10px] text-muted-foreground/70">
+                      <p className="text-[11px] text-muted-foreground/70">
                         {imp.namedImports.join(", ")}
                       </p>
                     )}
@@ -93,9 +93,9 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
           {interfaces.length > 0 && (
             <>
               <Separator className="mb-3" />
-              <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground">
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-foreground">
                 Interfaces
-                <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
                   {interfaces.length}
                 </span>
               </h3>
