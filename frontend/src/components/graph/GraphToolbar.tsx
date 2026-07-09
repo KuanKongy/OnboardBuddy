@@ -68,7 +68,7 @@ export function GraphToolbar({
             return (
               <Tooltip key={f.key}>
                 <TooltipTrigger asChild>
-                  <span className="inline-flex cursor-help">{button}</span>
+                  <span tabIndex={0} className="inline-flex cursor-help">{button}</span>
                 </TooltipTrigger>
                 <TooltipContent side="top">
                   Once enabled, highlights files with low or missing test coverage. Coming soon.

@@ -149,7 +149,7 @@ function MarkReviewedButton({
       <TooltipContent>
         {reviewed
           ? "Click to mark as not reviewed."
-          : "Marking a section as reviewed tells your team the content has been checked for accuracy."}
+          : "Marks this section as reviewed for you on this device. Team-wide review sharing is coming soon."}
       </TooltipContent>
     </Tooltip>
   );
@@ -422,7 +422,7 @@ export function OnboardingPage() {
             </Badge>
           ) : (
             <Badge variant={statusVariant(pkg.status)} className="text-xs">
-              {markedReviewed ? "Approved" : statusLabel(pkg.status)}
+              {markedReviewed ? "Reviewed" : statusLabel(pkg.status)}
             </Badge>
           )}
 
@@ -541,7 +541,7 @@ export function OnboardingPage() {
             </Badge>
           ) : (
             <Badge variant={statusVariant(pkg.status)} className="text-xs">
-              {markedReviewed ? "Approved" : statusLabel(pkg.status)}
+              {markedReviewed ? "Reviewed" : statusLabel(pkg.status)}
             </Badge>
           )}
         </div>

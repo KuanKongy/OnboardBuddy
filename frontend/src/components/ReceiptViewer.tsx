@@ -26,7 +26,7 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <span className="inline-flex cursor-help">
+        <span tabIndex={0} className="inline-flex cursor-help">
           <Badge
             variant="outline"
             className={`text-xs border ${confidenceBadgeClasses(confidence)}`}
