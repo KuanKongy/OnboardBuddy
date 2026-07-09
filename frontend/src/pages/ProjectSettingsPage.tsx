@@ -110,7 +110,7 @@ export function ProjectSettingsPage() {
     <div className="max-w-xl">
       <div className="mb-3 flex items-center justify-between">
         <h1 className="text-lg font-semibold text-foreground">Project Settings</h1>
-        <Badge variant="outline" className="text-[10px] capitalize">{project.permission_tier}</Badge>
+        <Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>
       </div>
 
       {error && (
@@ -125,11 +125,11 @@ export function ProjectSettingsPage() {
             <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
             <div className="space-y-1.5">
               <div>
-                <Label className="text-[10px] text-muted-foreground">Repository</Label>
+                <Label className="text-[11px] text-muted-foreground">Repository</Label>
                 <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
               </div>
               <div>
-                <Label className="text-[10px] text-muted-foreground">Branch</Label>
+                <Label className="text-[11px] text-muted-foreground">Branch</Label>
                 <div className="flex items-center gap-1 text-xs text-foreground">
                   <GitBranch className="h-3 w-3 text-muted-foreground" />
                   {project.branch}
@@ -168,7 +168,7 @@ export function ProjectSettingsPage() {
               disabled={!canEdit}
               className="text-[13px]"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground">
               One path per line. These will be excluded from analysis.
             </p>
           </CardContent>
@@ -181,7 +181,7 @@ export function ProjectSettingsPage() {
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
                 <div>
                   <p className="text-xs font-medium text-foreground">Cloud-assisted AI</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Sends only selected code snippets to generate explanations.
                     Graph and ranking run locally either way.
                   </p>
@@ -207,7 +207,7 @@ export function ProjectSettingsPage() {
             </div>
             <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
               <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Read-only access · secrets filtered · no full repository stored.
                 The browser never receives full repository source.
               </p>
@@ -267,7 +267,7 @@ export function ProjectSettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-foreground">Delete project</p>
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-xs text-muted-foreground">
                     Permanently delete this project and all data.
                   </p>
                 </div>

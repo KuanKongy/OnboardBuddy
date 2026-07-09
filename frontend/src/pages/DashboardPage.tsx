@@ -80,7 +80,7 @@ function StatCard({
         </div>
         <div>
           <div className="text-lg font-semibold leading-none text-foreground">{value}</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{label}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{label}</div>
         </div>
       </CardContent>
     </Card>
@@ -124,7 +124,7 @@ export function DashboardPage() {
               <Mail className="h-3.5 w-3.5" />
               Join Project
               {inviteCount > 0 && (
-                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
                   {inviteCount}
                 </span>
               )}
@@ -179,7 +179,7 @@ export function DashboardPage() {
             <div className="lg:col-span-2">
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-foreground">Recent projects</h2>
-                <Link to="/list" className="text-[11px] text-primary hover:underline">
+                <Link to="/list" className="text-xs text-primary hover:underline">
                   View all
                 </Link>
               </div>
@@ -212,9 +212,9 @@ export function DashboardPage() {
                             <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${item.tone}`} />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-[12px] text-foreground">{item.repo}</p>
-                              <p className="text-[11px] text-muted-foreground">{item.text}</p>
+                              <p className="text-xs text-muted-foreground">{item.text}</p>
                             </div>
-                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
                               {timeAgo(item.at)}
                             </span>
                           </Link>

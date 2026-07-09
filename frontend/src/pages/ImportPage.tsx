@@ -265,7 +265,7 @@ export function ImportPage() {
                         href={installUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+                        className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                       >
                         Configure repositories <ExternalLink className="h-2.5 w-2.5" />
                       </a>
@@ -273,14 +273,14 @@ export function ImportPage() {
                     <button
                       type="button"
                       onClick={handleAuthorizeGitHubApp}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                      className="text-xs text-muted-foreground hover:text-foreground"
                     >
                       Authorize GitHub App
                     </button>
                     <button
                       type="button"
                       onClick={() => setRefreshKey((k) => k + 1)}
-                      className="text-[11px] text-muted-foreground hover:text-foreground"
+                      className="text-xs text-muted-foreground hover:text-foreground"
                     >
                       Refresh
                     </button>
@@ -386,7 +386,7 @@ export function ImportPage() {
                     <div className="mt-2 space-y-1.5">
                       <div className="flex flex-wrap gap-1">
                         {ignoredPaths.map((p) => (
-                          <Badge key={p} variant="secondary" className="gap-0.5 pr-1 text-[11px]">
+                          <Badge key={p} variant="secondary" className="gap-0.5 pr-1 text-xs">
                             {p}
                             <button
                               type="button"
@@ -423,7 +423,7 @@ export function ImportPage() {
                 <div className="space-y-2">
                   <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
                     <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-xs text-muted-foreground">
                       Read-only access · secrets filtered · no full repository stored.
                       The browser never receives full repository source.
                     </p>

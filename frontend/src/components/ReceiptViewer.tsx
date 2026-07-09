@@ -25,7 +25,7 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
   return (
     <Badge
       variant="outline"
-      className={`text-[11px] border ${confidenceBadgeClasses(confidence)}`}
+      className={`text-xs border ${confidenceBadgeClasses(confidence)}`}
     >
       <Shield className="mr-1 h-2.5 w-2.5" />
       {confidence.charAt(0).toUpperCase() + confidence.slice(1)}
@@ -96,7 +96,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             {receipt.staleness === "stale" ? (
               <Badge
                 variant="outline"
-                className="border-amber-500/30 bg-amber-500/5 text-[11px] text-amber-400"
+                className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-400"
               >
                 <AlertTriangle className="mr-1 h-2.5 w-2.5" />
                 Stale — source has changed
@@ -104,13 +104,13 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             ) : (
               <Badge
                 variant="outline"
-                className="border-emerald-500/30 bg-emerald-500/5 text-[11px] text-emerald-400"
+                className="border-emerald-500/30 bg-emerald-500/5 text-xs text-emerald-400"
               >
                 <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
                 Current
               </Badge>
             )}
-            <span className="text-[11px] text-muted-foreground">
+            <span className="text-xs text-muted-foreground">
               {receipt.ageLabel}
             </span>
           </div>
@@ -119,7 +119,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
           {receipt.snippet && (
             <div className="rounded-md border bg-muted/30">
               <div className="border-b px-3 py-1.5">
-                <span className="text-[11px] font-medium text-muted-foreground">
+                <span className="text-xs font-medium text-muted-foreground">
                   Source Evidence
                 </span>
               </div>
@@ -132,7 +132,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
           {/* Claim (what this receipt proves) */}
           {receipt.claim && (
             <div className="rounded-md border px-3 py-2.5">
-              <p className="text-[11px] font-medium text-muted-foreground">
+              <p className="text-xs font-medium text-muted-foreground">
                 This receipt supports:
               </p>
               <p className="mt-1 text-[13px] text-foreground">{receipt.claim}</p>
@@ -140,7 +140,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
           )}
 
           {/* Metadata */}
-          <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
+          <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
             {receipt.commitHash && (
               <span className="font-mono">
                 commit: {receipt.commitHash.slice(0, 8)}

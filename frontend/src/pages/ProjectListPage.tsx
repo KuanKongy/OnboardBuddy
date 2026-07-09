@@ -90,7 +90,7 @@ export function ProjectListPage() {
               key={f.value}
               type="button"
               onClick={() => setFilter(f.value)}
-              className={`shrink-0 rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              className={`shrink-0 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 filter === f.value
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -157,7 +157,7 @@ export function ProjectListPage() {
               <p className="text-[13px] font-medium text-foreground">
                 Add New Repository
               </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 Import from GitHub
               </p>
             </Link>

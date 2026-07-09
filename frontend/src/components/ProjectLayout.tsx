@@ -49,7 +49,7 @@ function ProjectSidebar() {
             <h2 className="truncate text-sm font-semibold text-foreground">
               {project.repo_name}
             </h2>
-            <Badge variant="outline" className="mt-1 gap-1 text-[11px]">
+            <Badge variant="outline" className="mt-1 gap-1 text-xs">
               <GitBranch className="h-2.5 w-2.5" />
               {project.branch}
             </Badge>

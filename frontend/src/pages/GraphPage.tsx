@@ -112,7 +112,7 @@ export function GraphPage() {
           </h1>
         </div>
         {data && (
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-[11px]">
             {data.totalNodes} files · {data.totalEdges} edges
             {data.clustered && " (clustered)"}
           </Badge>
