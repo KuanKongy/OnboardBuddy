@@ -302,9 +302,14 @@ export function OnboardingPage() {
         <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-2.5">
           <div className="flex items-center gap-2">
             <BookOpen className="h-4 w-4 text-muted-foreground" />
-            <h1 className="text-sm font-semibold text-foreground">
-              {activeSection?.label ?? "Your Onboarding"}
-            </h1>
+            <div>
+              <h1 className="text-lg font-semibold text-foreground">
+                {activeSection?.label ?? "Your Onboarding"}
+              </h1>
+              <p className="text-xs text-muted-foreground">
+                Your role-based reading path through this codebase.
+              </p>
+            </div>
           </div>
           {/* mobile section selector */}
           <DropdownMenu>

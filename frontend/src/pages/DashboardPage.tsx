@@ -117,7 +117,12 @@ export function DashboardPage() {
       <div className="mb-0.5 text-xs text-muted-foreground">Overview &gt; Dashboard</div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
+          <p className="text-xs text-muted-foreground">
+            All your connected repositories and their analysis status in one place.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" asChild>
             <Link to="/invitations">

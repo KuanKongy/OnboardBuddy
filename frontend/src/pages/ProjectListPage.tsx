@@ -57,7 +57,12 @@ export function ProjectListPage() {
       </div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Project list</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Project list</h1>
+          <p className="text-xs text-muted-foreground">
+            Every project you have access to, in one searchable list.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" asChild>
             <Link to="/invitations">

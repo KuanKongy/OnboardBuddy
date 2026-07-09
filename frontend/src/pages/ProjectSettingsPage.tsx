@@ -108,8 +108,13 @@ export function ProjectSettingsPage() {
 
   return (
     <div className="max-w-xl">
-      <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Project Settings</h1>
+      <div className="mb-3 flex items-start justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Project Settings</h1>
+          <p className="text-xs text-muted-foreground">
+            Analysis and privacy settings for this project.
+          </p>
+        </div>
         <Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>
       </div>
 

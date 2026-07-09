@@ -25,7 +25,12 @@ export function AccountSettingsPage() {
 
   return (
     <div className="max-w-xl">
-      <h1 className="mb-4 text-lg font-semibold text-foreground">Account Settings</h1>
+      <div className="mb-4">
+        <h1 className="text-lg font-semibold text-foreground">Account Settings</h1>
+        <p className="text-xs text-muted-foreground">
+          Your profile, GitHub connection, and account access.
+        </p>
+      </div>
 
       <Card className="mb-3">
         <CardContent className="p-3">

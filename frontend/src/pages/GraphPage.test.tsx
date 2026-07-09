@@ -1,15 +1,18 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
 
 function renderGraphPage() {
   return render(
-    <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
-      <Routes>
-        <Route path="/projects/:id/dependencies" element={<GraphPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
+        <Routes>
+          <Route path="/projects/:id/dependencies" element={<GraphPage />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   );
 }
 

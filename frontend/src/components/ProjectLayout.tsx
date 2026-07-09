@@ -15,17 +15,60 @@ import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountCard } from "@/components/AccountCard";
 import { SidebarProvider, SidebarShell, SidebarToggle, useSidebar } from "@/components/SidebarShell";
 
 const projectNavItems = [
-  { to: "", label: "Project Overview", icon: LayoutDashboard, end: true },
-  { to: "onboarding", label: "Your Onboarding", icon: BookOpen, end: false },
-  { to: "architecture", label: "Architecture", icon: Map, end: false },
-  { to: "dependencies", label: "Dependencies", icon: Network, end: false },
-  { to: "walkthrough", label: "Walkthrough", icon: Route, end: false },
-  { to: "team", label: "Team", icon: Users, end: false },
-  { to: "settings", label: "Settings", icon: Settings, end: false },
+  {
+    to: "",
+    label: "Project Overview",
+    icon: LayoutDashboard,
+    end: true,
+    description: "Health and analysis summary for this repository.",
+  },
+  {
+    to: "onboarding",
+    label: "Your Onboarding",
+    icon: BookOpen,
+    end: false,
+    description: "Your role-based reading path through this codebase.",
+  },
+  {
+    to: "architecture",
+    label: "Architecture",
+    icon: Map,
+    end: false,
+    description: "A high-level map of the codebase's structure and layers.",
+  },
+  {
+    to: "dependencies",
+    label: "Dependencies",
+    icon: Network,
+    end: false,
+    description: "Which files and modules depend on which — a map for orienting yourself.",
+  },
+  {
+    to: "walkthrough",
+    label: "Walkthrough",
+    icon: Route,
+    end: false,
+    description: "A guided step-by-step tour through a real code path.",
+  },
+  {
+    to: "team",
+    label: "Team",
+    icon: Users,
+    end: false,
+    description: "Who has access to this project and their permissions.",
+  },
+  {
+    to: "settings",
+    label: "Settings",
+    icon: Settings,
+    end: false,
+    description: "Analysis and privacy settings for this project.",
+  },
 ];
 
 function ProjectSidebar() {
@@ -63,22 +106,26 @@ function ProjectSidebar() {
         {projectNavItems.map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink
-              key={item.to}
-              to={`/projects/${id}/${item.to}`}
-              end={item.end}
-              onClick={() => setOpen(false)}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                  isActive
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                }`
-              }
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {item.label}
-            </NavLink>
+            <Tooltip key={item.to}>
+              <TooltipTrigger asChild>
+                <NavLink
+                  to={`/projects/${id}/${item.to}`}
+                  end={item.end}
+                  onClick={() => setOpen(false)}
+                  className={({ isActive }) =>
+                    `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                      isActive
+                        ? "bg-accent text-accent-foreground"
+                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                    }`
+                  }
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {item.label}
+                </NavLink>
+              </TooltipTrigger>
+              <TooltipContent side="right">{item.description}</TooltipContent>
+            </Tooltip>
           );
         })}
       </nav>

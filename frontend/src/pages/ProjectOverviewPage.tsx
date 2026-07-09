@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 
 const rolesList = [
@@ -151,8 +152,13 @@ export function ProjectOverviewPage() {
         <Badge variant="outline" className="text-[11px] capitalize">{project.developer_role}</Badge>
       </div>
 
-      <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Overview</h1>
+      <div className="mb-3 flex items-start justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Overview</h1>
+          <p className="text-xs text-muted-foreground">
+            Health and analysis summary for this repository.
+          </p>
+        </div>
         {canManage && (
           <Button
             variant="outline"
@@ -224,18 +230,31 @@ export function ProjectOverviewPage() {
 
             {/* Live step display */}
             <div className="mb-1.5 flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1.5 text-muted-foreground">
-                {isActive && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-                {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
-                {latestJob?.status === "failed" && <AlertTriangle className="h-3 w-3 text-destructive" />}
-                {isActive
-                  ? latestJob.current_step ?? "Processing..."
-                  : latestJob?.status === "complete"
-                    ? "Analysis complete"
-                    : latestJob?.status === "failed"
-                      ? "Analysis failed"
-                      : "Not yet analyzed"}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex cursor-help items-center gap-1.5 text-muted-foreground underline decoration-dotted underline-offset-2">
+                    {isActive && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                    {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+                    {latestJob?.status === "failed" && <AlertTriangle className="h-3 w-3 text-destructive" />}
+                    {isActive
+                      ? latestJob.current_step ?? "Processing..."
+                      : latestJob?.status === "complete"
+                        ? "Analysis complete"
+                        : latestJob?.status === "failed"
+                          ? "Analysis failed"
+                          : "Not yet analyzed"}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isActive
+                    ? "The repository is being parsed and its onboarding content generated."
+                    : latestJob?.status === "complete"
+                      ? "The repository has been parsed and its onboarding content generated."
+                      : latestJob?.status === "failed"
+                        ? "Analysis hit an error and did not finish — see the message below, or retry."
+                        : "This repository hasn't been analyzed yet."}
+                </TooltipContent>
+              </Tooltip>
               <Badge
                 variant={latestJob?.status === "complete" ? "default" : latestJob?.status === "failed" ? "destructive" : "secondary"}
                 className="text-[11px]"
