@@ -35,7 +35,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !bg-muted-foreground" />
 
       <div className="mb-1 flex items-center gap-1.5">
-        <span className="flex-1 truncate text-[13px] font-semibold text-foreground">
+        <span className="flex-1 truncate text-[13px] font-semibold text-foreground" title={data.label}>
           {data.label}
         </span>
         {data.selected && <Star className="h-3 w-3 flex-shrink-0 fill-primary text-primary" />}
@@ -49,7 +49,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </span>
       </div>
 
-      <p className="mb-2 truncate text-xs text-muted-foreground">{typeInfo.description}</p>
+      <p className="mb-2 truncate text-xs text-muted-foreground" title={typeInfo.description}>{typeInfo.description}</p>
 
       {data.selected && (
         <div className="mb-2 flex flex-wrap items-center gap-1">

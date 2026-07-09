@@ -3,6 +3,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { BackLink } from "@/components/BackLink";
 
 export function AccountSettingsPage() {
   const { user, signOut, connectGithub } = useAuth();
@@ -25,6 +26,7 @@ export function AccountSettingsPage() {
 
   return (
     <div className="max-w-xl">
+      <BackLink className="mb-3" />
       <div className="mb-4">
         <h1 className="text-lg font-semibold text-foreground">Account Settings</h1>
         <p className="text-xs text-muted-foreground">

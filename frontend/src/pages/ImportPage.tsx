@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { BackLink } from "@/components/BackLink";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 
@@ -212,6 +213,7 @@ export function ImportPage() {
 
   return (
     <div className="mx-auto max-w-lg">
+      <BackLink className="mb-3" />
       <Card>
         <CardContent className="p-4">
           <h1 className="text-lg font-semibold text-foreground">Import a repository</h1>

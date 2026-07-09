@@ -24,6 +24,7 @@ import { fetchOnboardingPackage } from "@/lib/onboardingData";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -117,6 +118,40 @@ function ReceiptChip({
         <AlertTriangle className="h-2.5 w-2.5 text-amber-400" />
       )}
     </button>
+  );
+}
+
+function MarkReviewedButton({
+  reviewed,
+  onClick,
+  className = "",
+}: {
+  reviewed: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          size="xs"
+          variant={reviewed ? "secondary" : "outline"}
+          className={`gap-1.5 ${
+            reviewed ? "border border-emerald-600/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20" : ""
+          } ${className}`}
+          onClick={onClick}
+          aria-label={reviewed ? "Reviewed. Click to mark as not reviewed." : "Mark as reviewed"}
+        >
+          {reviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+          {reviewed ? "Reviewed" : "Mark as reviewed"}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {reviewed
+          ? "Click to mark as not reviewed."
+          : "Marking a section as reviewed tells your team the content has been checked for accuracy."}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -289,7 +324,7 @@ export function OnboardingPage() {
                 }`}
               >
                 <SectionStatusDot status={status} />
-                <span className="truncate">{label}</span>
+                <span className="truncate" title={label}>{label}</span>
               </button>
             );
           })}
@@ -341,7 +376,10 @@ export function OnboardingPage() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="xs" className="gap-1 text-[12px]">
-                <span className="max-w-[100px] truncate">
+                <span
+                  className="max-w-[100px] truncate"
+                  title={ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
+                >
                   {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
                 </span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
@@ -400,15 +438,10 @@ export function OnboardingPage() {
               </Button>
             ) : (
               <>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className={`gap-1 ${markedReviewed ? "border-emerald-600 text-emerald-500" : ""}`}
+                <MarkReviewedButton
+                  reviewed={markedReviewed}
                   onClick={() => setMarkedReviewed(!markedReviewed)}
-                >
-                  <CheckCircle2 className="h-3 w-3" />
-                  <span className="hidden sm:inline">{markedReviewed ? "Reviewed" : "Mark Reviewed"}</span>
-                </Button>
+                />
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button size="xs" variant="outline" className="gap-1">
@@ -523,7 +556,10 @@ export function OnboardingPage() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="xs" className="w-full justify-between gap-1 text-[12px]">
-                <span className="truncate">
+                <span
+                  className="truncate"
+                  title={ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
+                >
                   {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
                 </span>
                 <ChevronDown className="h-3 w-3 shrink-0" />
@@ -606,14 +642,11 @@ export function OnboardingPage() {
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <Button
-                  size="xs"
-                  className={`w-full justify-start gap-1.5 ${markedReviewed ? "bg-emerald-600 hover:bg-emerald-700" : ""}`}
+                <MarkReviewedButton
+                  reviewed={markedReviewed}
                   onClick={() => setMarkedReviewed(!markedReviewed)}
-                >
-                  <CheckCircle2 className="h-3 w-3" />
-                  {markedReviewed ? "Reviewed" : "Mark Reviewed"}
-                </Button>
+                  className="w-full justify-start"
+                />
               </>
             )}
           </div>

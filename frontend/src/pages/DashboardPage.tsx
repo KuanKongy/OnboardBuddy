@@ -216,7 +216,7 @@ export function DashboardPage() {
                           >
                             <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${item.tone}`} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[12px] text-foreground">{item.repo}</p>
+                              <p className="truncate text-[12px] text-foreground" title={item.repo}>{item.repo}</p>
                               <p className="text-xs text-muted-foreground">{item.text}</p>
                             </div>
                             <span className="shrink-0 text-[11px] text-muted-foreground">
