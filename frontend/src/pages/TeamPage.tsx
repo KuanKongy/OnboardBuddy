@@ -204,7 +204,7 @@ export function TeamPage() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Team</h1>
           <p className="text-xs text-muted-foreground">
-            {project.repo_name}
+            Who has access to {project.repo_name} and their permissions
             {!loading && ` · ${members.length} member${members.length !== 1 ? "s" : ""}`}
           </p>
         </div>

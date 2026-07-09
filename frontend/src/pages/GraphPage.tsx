@@ -94,7 +94,7 @@ export function GraphPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-start justify-between">
         <div className="flex items-center gap-2">
           {activeCluster && (
             <Button
@@ -106,10 +106,15 @@ export function GraphPage() {
               All clusters
             </Button>
           )}
-          <h1 className="text-lg font-semibold text-foreground">
-            Dependency map
-            {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
-          </h1>
+          <div>
+            <h1 className="text-lg font-semibold text-foreground">
+              Dependency map
+              {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              Which files and modules depend on which — a map for orienting yourself.
+            </p>
+          </div>
         </div>
         {data && (
           <Badge variant="outline" className="text-[11px]">

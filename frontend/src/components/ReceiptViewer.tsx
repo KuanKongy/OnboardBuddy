@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SourceReceipt } from "@/types/onboarding";
 
 function confidenceBadgeClasses(c: string) {
@@ -23,13 +24,22 @@ function confidenceBadgeClasses(c: string) {
 
 function ConfidenceBadge({ confidence }: { confidence: string }) {
   return (
-    <Badge
-      variant="outline"
-      className={`text-xs border ${confidenceBadgeClasses(confidence)}`}
-    >
-      <Shield className="mr-1 h-2.5 w-2.5" />
-      {confidence.charAt(0).toUpperCase() + confidence.slice(1)}
-    </Badge>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex cursor-help">
+          <Badge
+            variant="outline"
+            className={`text-xs border ${confidenceBadgeClasses(confidence)}`}
+          >
+            <Shield className="mr-1 h-2.5 w-2.5" />
+            {confidence.charAt(0).toUpperCase() + confidence.slice(1)}
+          </Badge>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        How strongly this claim is backed by code evidence.
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

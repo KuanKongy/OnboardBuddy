@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 
 export interface Project {
@@ -38,12 +39,34 @@ const defaultStatus = {
   tone: "text-muted-foreground",
   bar: "bg-muted-foreground/40",
   icon: CircleDashed,
+  hint: "This project hasn't been analyzed yet.",
 };
 const statusConfig = {
   idle: defaultStatus,
-  analyzing: { label: "In Progress", progress: 45, tone: "text-primary", bar: "bg-primary", icon: Loader2 },
-  complete: { label: "Complete", progress: 100, tone: "text-emerald-400", bar: "bg-emerald-500", icon: CheckCircle2 },
-  failed: { label: "Failed", progress: 0, tone: "text-destructive", bar: "bg-destructive", icon: XCircle },
+  analyzing: {
+    label: "In Progress",
+    progress: 45,
+    tone: "text-primary",
+    bar: "bg-primary",
+    icon: Loader2,
+    hint: "The repository is being parsed and its onboarding content generated.",
+  },
+  complete: {
+    label: "Complete",
+    progress: 100,
+    tone: "text-emerald-400",
+    bar: "bg-emerald-500",
+    icon: CheckCircle2,
+    hint: "The repository has been parsed and its onboarding content generated.",
+  },
+  failed: {
+    label: "Failed",
+    progress: 0,
+    tone: "text-destructive",
+    bar: "bg-destructive",
+    icon: XCircle,
+    hint: "Analysis hit an error and did not finish.",
+  },
 };
 
 const tierColors: Record<string, string> = {
@@ -117,9 +140,16 @@ export function ProjectCard({
           <span className="text-muted-foreground">
             {project.status === "analyzing" ? `Analyzing ${status.progress}%` : status.label}
           </span>
-          <span className={status.tone}>
-            {status.label}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                className={`cursor-help underline decoration-dotted underline-offset-2 ${status.tone}`}
+              >
+                {status.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{status.hint}</TooltipContent>
+          </Tooltip>
         </div>
 
         <Progress value={status.progress} indicatorClassName={status.bar} className="mb-2.5 h-1" />

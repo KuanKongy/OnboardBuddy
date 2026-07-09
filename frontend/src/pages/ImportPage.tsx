@@ -214,9 +214,9 @@ export function ImportPage() {
     <div className="mx-auto max-w-lg">
       <Card>
         <CardContent className="p-4">
-          <h1 className="text-sm font-semibold text-foreground">Import a repository</h1>
+          <h1 className="text-lg font-semibold text-foreground">Import a repository</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Point to a GitHub repository to analyze.
+            Connect a GitHub repository so OnboardBuddy can analyze it.
           </p>
 
           {error && (
