@@ -6,6 +6,7 @@ import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useOptionalProject } from "@/contexts/ProjectContext";
 import { fetchDependencyGraph, type GraphResponse } from "@/lib/graphData";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
@@ -14,6 +15,16 @@ type EdgeFilter = "imports" | "exports";
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
+  // GraphPage renders both inside ProjectLayout (/projects/:id/dependencies,
+  // which provides ProjectProvider) and standalone at /dev/graph/:id (no
+  // provider) — useOptionalProject returns null in the latter case instead
+  // of throwing.
+  const projectCtx = useOptionalProject();
+  const project = projectCtx?.project ?? null;
+  const githubRepo =
+    project?.repo_owner && project?.repo_name && project?.branch
+      ? { owner: project.repo_owner, repo: project.repo_name, branch: project.branch }
+      : undefined;
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -185,7 +196,7 @@ export function GraphPage() {
           </div>
 
           {selectedNode && !data.clustered && (
-            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} />
+            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} githubRepo={githubRepo} />
           )}
         </>
       )}
