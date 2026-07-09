@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   BookOpen,
   GitBranch,
   LayoutDashboard,
@@ -17,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountCard } from "@/components/AccountCard";
+import { BackLink } from "@/components/BackLink";
 import { SidebarProvider, SidebarShell, SidebarToggle, useSidebar } from "@/components/SidebarShell";
 
 const projectNavItems = [
@@ -79,17 +79,12 @@ function ProjectSidebar() {
   return (
     <SidebarShell>
       <div className="px-3 py-3">
-        <Button variant="ghost" size="xs" className="mb-2 gap-1.5 text-muted-foreground" asChild>
-          <Link to="/dashboard" onClick={() => setOpen(false)}>
-            <ArrowLeft className="h-3 w-3" />
-            Back
-          </Link>
-        </Button>
+        <BackLink className="mb-2" onClick={() => setOpen(false)} />
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         ) : project ? (
           <div>
-            <h2 className="truncate text-sm font-semibold text-foreground">
+            <h2 className="truncate text-sm font-semibold text-foreground" title={project.repo_name}>
               {project.repo_name}
             </h2>
             <Badge variant="outline" className="mt-1 gap-1 text-xs">

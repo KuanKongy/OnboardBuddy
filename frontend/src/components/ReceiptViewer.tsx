@@ -76,7 +76,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
               className="flex items-center gap-2 text-[14px] font-semibold text-foreground"
             >
               <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="truncate font-mono">{receipt.filePath}</span>
+              <span className="truncate font-mono" title={receipt.filePath}>{receipt.filePath}</span>
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
               {receipt.symbolName && (

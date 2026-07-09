@@ -38,7 +38,7 @@ export function NodeInfoPanel({ node, fileAnalysis }: NodeInfoPanelProps) {
                   <div>
                     <span className="text-[12px] font-mono text-foreground">{fn.name}()</span>
                     {fn.signature && (
-                      <p className="max-w-[160px] truncate text-[11px] text-muted-foreground">
+                      <p className="max-w-[160px] truncate text-[11px] text-muted-foreground" title={fn.signature}>
                         {fn.signature}
                       </p>
                     )}

@@ -302,10 +302,16 @@ export function TeamPage() {
                     {getInitials(member.email)}
                   </AvatarFallback>
                 </Avatar>
-                <p className="w-full truncate text-xs font-medium text-foreground">
+                <p
+                  className="w-full truncate text-xs font-medium text-foreground"
+                  title={member.email.split("@")[0]}
+                >
                   {member.email.split("@")[0]}
                 </p>
-                <p className="w-full truncate text-xs capitalize text-muted-foreground">
+                <p
+                  className="w-full truncate text-xs capitalize text-muted-foreground"
+                  title={member.developer_role}
+                >
                   {member.developer_role}
                 </p>
                 <Badge
@@ -333,8 +339,13 @@ export function TeamPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
-                      <p className="truncate text-xs text-foreground">{inv.email}</p>
-                      <p className="truncate text-xs capitalize text-muted-foreground">
+                      <p className="truncate text-xs text-foreground" title={inv.email}>{inv.email}</p>
+                      <p
+                        className="truncate text-xs capitalize text-muted-foreground"
+                        title={`${inv.permission_tier}${
+                          inv.developer_role ? ` · ${inv.developer_role}` : ""
+                        }${inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}`}
+                      >
                         {inv.permission_tier}
                         {inv.developer_role ? ` · ${inv.developer_role}` : ""}
                         {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}

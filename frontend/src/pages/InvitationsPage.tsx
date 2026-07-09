@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { BackLink } from "@/components/BackLink";
 import { apiFetch } from "@/lib/api";
 
 interface Invitation {
@@ -73,14 +74,7 @@ export function InvitationsPage() {
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="xs"
-          className="text-muted-foreground"
-          onClick={() => navigate("/dashboard")}
-        >
-          &larr; Back
-        </Button>
+        <BackLink />
         <h1 className="text-lg font-semibold text-foreground">Pending Invitations</h1>
       </div>
       <p className="mb-3 text-xs text-muted-foreground">

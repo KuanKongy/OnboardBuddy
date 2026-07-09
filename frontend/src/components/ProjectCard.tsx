@@ -102,7 +102,7 @@ export function ProjectCard({
         <div className="mb-2 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h3 className="truncate text-sm font-semibold text-foreground">
+              <h3 className="truncate text-sm font-semibold text-foreground" title={project.repo_name}>
                 {project.repo_name}
               </h3>
               <Badge className={`text-[11px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
