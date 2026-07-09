@@ -232,7 +232,7 @@ export function ProjectOverviewPage() {
             <div className="mb-1.5 flex items-center justify-between text-xs">
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="flex cursor-help items-center gap-1.5 text-muted-foreground underline decoration-dotted underline-offset-2">
+                  <span tabIndex={0} className="flex cursor-help items-center gap-1.5 text-muted-foreground underline decoration-dotted underline-offset-2">
                     {isActive && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                     {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
                     {latestJob?.status === "failed" && <AlertTriangle className="h-3 w-3 text-destructive" />}

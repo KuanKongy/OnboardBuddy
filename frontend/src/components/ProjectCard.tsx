@@ -138,11 +138,12 @@ export function ProjectCard({
 
         <div className="mb-1.5 flex items-center justify-between text-xs">
           <span className="text-muted-foreground">
-            {project.status === "analyzing" ? `Analyzing ${status.progress}%` : status.label}
+            {project.status === "analyzing" ? `Analyzing ${status.progress}%` : ""}
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
               <span
+                tabIndex={0}
                 className={`cursor-help underline decoration-dotted underline-offset-2 ${status.tone}`}
               >
                 {status.label}
