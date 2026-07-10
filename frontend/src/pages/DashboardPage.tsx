@@ -110,10 +110,10 @@ function buildActivity(projects: Project[]): ActivityItem[] {
           ...base,
           text: `${p.stale_count} section${p.stale_count === 1 ? "" : "s"} need review`,
           icon: AlertTriangle,
-          tone: "text-amber-400",
+          tone: "text-amber-600 dark:text-amber-400",
         };
       if (p.status === "complete")
-        return { ...base, text: "Analysis completed", icon: CheckCircle2, tone: "text-emerald-400" };
+        return { ...base, text: "Analysis completed", icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400" };
       return { ...base, text: "Created — not analyzed yet", icon: Clock, tone: "text-muted-foreground" };
     })
     .slice(0, ACTIVITY_LIMIT);
@@ -257,7 +257,7 @@ export function DashboardPage() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-tour="stats-row">
             <StatCard icon={FolderGit2} label="Projects" value={stats.total} tone="text-foreground" />
             <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" />
-            <StatCard icon={AlertTriangle} label="Need review" value={stats.stale} tone="text-amber-400" />
+            <StatCard icon={AlertTriangle} label="Need review" value={stats.stale} tone="text-amber-600 dark:text-amber-400" />
             <StatCard icon={Mail} label="Pending invites" value={inviteCount} tone="text-foreground" />
           </div>
 

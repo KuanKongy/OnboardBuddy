@@ -143,7 +143,7 @@ export function GraphPage() {
 
       {(error || (!data && !loading)) && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
               {error || "No graph data available yet"}

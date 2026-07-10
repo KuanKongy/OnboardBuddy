@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AccountCard } from "@/components/AccountCard";
 import { BackLink } from "@/components/BackLink";
 import { SidebarProvider, SidebarShell, SidebarToggle, useSidebar } from "@/components/SidebarShell";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const projectNavItems = [
   {
@@ -128,8 +129,11 @@ function ProjectSidebar() {
       <div className="px-2">
         <Separator />
       </div>
-      <div className="px-2 py-2">
-        <AccountCard />
+      <div className="flex items-center gap-2 px-2 py-2">
+        <div className="min-w-0 flex-1">
+          <AccountCard />
+        </div>
+        <ThemeToggle />
       </div>
     </SidebarShell>
   );
