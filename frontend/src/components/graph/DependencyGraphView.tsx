@@ -81,9 +81,12 @@ export function DependencyGraphView({
           (edge.source === selectedNodeId || edge.target === selectedNodeId);
 
         let label: string | undefined;
-        if (selectedNodeId) {
-          if (edge.source === selectedNodeId) label = "IMPORTS";
-          else if (edge.target === selectedNodeId) label = "USED BY";
+        if (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId)) {
+          if (edge.kind === "imports" || edge.kind === "dependency") {
+            label = edge.source === selectedNodeId ? "IMPORTS" : "USED BY";
+          } else {
+            label = edge.kind.toUpperCase();
+          }
         }
 
         return {
