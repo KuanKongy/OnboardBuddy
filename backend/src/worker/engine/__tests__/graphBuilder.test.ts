@@ -3,7 +3,7 @@ import * as path from 'path';
 import { buildRepoIndex, filterByLanguage } from '../repoIngester';
 import { createProgram, parseSourceFile } from '../astParser';
 import { extractFileAnalysis } from '../symbolExtractor';
-import { buildDependencyGraph, annotateResolvedImports } from '../graphBuilder';
+import { buildDependencyGraph, buildClassGraph, annotateResolvedImports } from '../graphBuilder';
 import type { FileAnalysis, DependencyGraph } from '../../types/analysis';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../../fixtures/simple');
@@ -123,6 +123,124 @@ describe('graphBuilder — entry points', () => {
   // inbound edges yet, so it is currently misdetected as an entry point.
   it('jwtUtil is NOT an entry point (it has inbound imports)', () => {
     expect(graph.entryPoints).to.not.include(path.join('utils', 'jwtUtil.ts'));
+  });
+});
+
+describe('buildClassGraph — fixture repo', () => {
+  it('creates nodes for classes and interfaces only', () => {
+    const classGraph = buildClassGraph(fileAnalyses);
+    const kinds = new Set(classGraph.nodes.map((n) => n.kind));
+    expect([...kinds].every((k) => k === 'class' || k === 'interface')).to.equal(true);
+  });
+
+  it('creates a class node for AuthService with relativePath#Name id', () => {
+    const classGraph = buildClassGraph(fileAnalyses);
+    const node = classGraph.nodes.find((n) => n.label === 'AuthService');
+    expect(node).to.exist;
+    expect(node!.kind).to.equal('class');
+    expect(node!.id).to.match(/authService\.ts#AuthService$/);
+  });
+
+  it('creates interface nodes for ICredentials and ISession', () => {
+    const classGraph = buildClassGraph(fileAnalyses);
+    const labels = classGraph.nodes.map((n) => n.label);
+    expect(labels).to.include('ICredentials');
+    expect(labels).to.include('ISession');
+  });
+
+  it('class node metadata lists its method names', () => {
+    const classGraph = buildClassGraph(fileAnalyses);
+    const node = classGraph.nodes.find((n) => n.label === 'AuthService');
+    expect(node!.metadata.exportedSymbols).to.include('login');
+    expect(node!.metadata.exportedSymbols).to.include('logout');
+    expect(node!.metadata.exportedSymbols).to.include('verify');
+  });
+});
+
+describe('buildClassGraph — inheritance edges', () => {
+  const synthetic: FileAnalysis[] = [
+    {
+      filePath: '/repo/src/base.ts',
+      relativePath: 'src/base.ts',
+      symbols: [
+        { name: 'IRepository', kind: 'interface', filePath: '/repo/src/base.ts', start: { line: 1, column: 0 }, end: { line: 3, column: 0 }, exported: true, isDefault: false, properties: [{ name: 'find', type: '() => void' }] },
+        { name: 'BaseService', kind: 'class', filePath: '/repo/src/base.ts', start: { line: 5, column: 0 }, end: { line: 9, column: 0 }, exported: true, isDefault: false },
+      ],
+      imports: [],
+      exports: [],
+      hasParseErrors: false,
+      parseErrors: [],
+    },
+    {
+      filePath: '/repo/src/user.ts',
+      relativePath: 'src/user.ts',
+      symbols: [
+        {
+          name: 'UserService',
+          kind: 'class',
+          filePath: '/repo/src/user.ts',
+          start: { line: 1, column: 0 },
+          end: { line: 10, column: 0 },
+          exported: true,
+          isDefault: false,
+          extendsClass: 'BaseService',
+          implements: ['IRepository'],
+        },
+      ],
+      imports: [],
+      exports: [],
+      hasParseErrors: false,
+      parseErrors: [],
+    },
+  ];
+
+  it('creates an extends edge from UserService to BaseService', () => {
+    const classGraph = buildClassGraph(synthetic);
+    const edge = classGraph.edges.find((e) => e.kind === 'extends');
+    expect(edge).to.exist;
+    expect(edge!.source).to.equal('src/user.ts#UserService');
+    expect(edge!.target).to.equal('src/base.ts#BaseService');
+  });
+
+  it('creates an implements edge from UserService to IRepository', () => {
+    const classGraph = buildClassGraph(synthetic);
+    const edge = classGraph.edges.find((e) => e.kind === 'implements');
+    expect(edge).to.exist;
+    expect(edge!.source).to.equal('src/user.ts#UserService');
+    expect(edge!.target).to.equal('src/base.ts#IRepository');
+  });
+
+  it('increments dependentCount on the parent nodes', () => {
+    const classGraph = buildClassGraph(synthetic);
+    const base = classGraph.nodes.find((n) => n.label === 'BaseService');
+    const iface = classGraph.nodes.find((n) => n.label === 'IRepository');
+    expect(base!.metadata.dependentCount).to.equal(1);
+    expect(iface!.metadata.dependentCount).to.equal(1);
+  });
+
+  it('resolves generic parents like Base<T> to the bare name', () => {
+    const withGenerics: FileAnalysis[] = [
+      synthetic[0]!,
+      {
+        ...synthetic[1]!,
+        symbols: [{ ...synthetic[1]!.symbols[0]!, extendsClass: 'BaseService<User>', implements: [] }],
+      },
+    ];
+    const classGraph = buildClassGraph(withGenerics);
+    const edge = classGraph.edges.find((e) => e.kind === 'extends');
+    expect(edge).to.exist;
+    expect(edge!.target).to.equal('src/base.ts#BaseService');
+  });
+
+  it('produces no edge for unresolvable external parents', () => {
+    const external: FileAnalysis[] = [
+      {
+        ...synthetic[1]!,
+        symbols: [{ ...synthetic[1]!.symbols[0]!, extendsClass: 'EventEmitter', implements: [] }],
+      },
+    ];
+    const classGraph = buildClassGraph(external);
+    expect(classGraph.edges).to.have.length(0);
   });
 });
 

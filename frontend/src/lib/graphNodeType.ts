@@ -36,10 +36,16 @@ export function inferNodeType(filePath: string, exportedSymbols: string[]): Node
   return { type: "MODULE", colorClasses: "bg-slate-500/20 text-slate-700 dark:text-slate-400 border-slate-500/40", description: desc };
 }
 
+// Complexity is a heuristic measure of how coupled a module is in the dependency graph.
+// score = (importCount × 2) + dependentCount + symbolCount
+//   importCount   — how many modules this file imports (double-weighted: more deps = harder to isolate)
+//   dependentCount — how many modules import this file (high = wide blast radius on change)
+//   symbolCount   — how many symbols this file exports (surface area exposed to the rest of the codebase)
+// Thresholds (score >= 8 → High, >= 5 → Med) are arbitrary — chosen by feel, not data.
+// Consider replacing with percentile-based cutoffs derived from the actual score distribution.
 export function inferComplexity(importCount: number, dependentCount: number, symbolCount: number): string | null {
   const score = importCount * 2 + dependentCount + symbolCount;
   if (score >= 8) return "High Complexity";
   if (score >= 5) return "Med Complexity";
   return null;
 }
-
