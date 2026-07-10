@@ -1,6 +1,6 @@
 import { Star } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
-import { inferComplexity, inferNodeType } from "@/lib/graphNodeType";
+import { /* inferComplexity, */ inferNodeType } from "@/lib/graphNodeType";
 import { cn } from "@/lib/utils";
 
 export interface ModuleNodeData {
@@ -18,7 +18,9 @@ export interface ModuleNodeData {
 
 export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   const typeInfo = inferNodeType(data.filePath, data.exportedSymbols);
-  const complexity = inferComplexity(data.importCount, data.dependentCount, data.symbolCount);
+
+  // const complexity = inferComplexity(data.importCount, data.dependentCount, data.symbolCount);
+
 
   return (
     <div
@@ -50,13 +52,14 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
 
       <p className="mb-2 truncate text-xs text-muted-foreground" title={typeInfo.description}>{typeInfo.description}</p>
 
-      {data.selected && complexity && (
+      {/* {data.selected && complexity && (
         <div className="mb-2 flex flex-wrap items-center gap-1">
+          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400">
           <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-orange-500/20 text-orange-700 dark:text-orange-400">
             {complexity}
           </span>
         </div>
-      )}
+      )} */}
 
       <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
         <span>{data.exportedSymbols.length} exports</span>

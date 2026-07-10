@@ -1,8 +1,10 @@
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+
 
 type EdgeFilter = "imports" | "exports";
 
@@ -15,11 +17,9 @@ interface GraphToolbarProps {
   totalCount: number;
 }
 
-const FILTERS: { key: EdgeFilter | "callgraph" | "coverage"; label: string; active?: boolean }[] = [
+const FILTERS: { key: EdgeFilter; label: string }[] = [
   { key: "imports", label: "Imports" },
   { key: "exports", label: "Exports" },
-  { key: "callgraph", label: "Call graph" },
-  { key: "coverage", label: "Coverage overlay" },
 ];
 
 export function GraphToolbar({
@@ -43,6 +43,7 @@ export function GraphToolbar({
       </div>
 
       <div className="flex items-center gap-1">
+
         {FILTERS.map((f) => {
           const isEdgeFilter = f.key === "imports" || f.key === "exports";
           const isActive = isEdgeFilter && edgeFilter === f.key;
@@ -79,6 +80,7 @@ export function GraphToolbar({
 
           return <span key={f.key}>{button}</span>;
         })}
+        
       </div>
 
       <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">

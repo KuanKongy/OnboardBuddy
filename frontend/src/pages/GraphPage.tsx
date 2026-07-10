@@ -1,20 +1,35 @@
 import { AlertTriangle, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
+import { WorkflowGraphSection } from "@/components/graph/WorkflowGraphSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  fetchDependencyGraph,
+  fetchNodeDetail,
+  type GraphResponse,
+  type NodeDetail,
+} from "@/lib/graphData";
 import { useOptionalProject } from "@/contexts/ProjectContext";
-import { fetchDependencyGraph, type GraphResponse } from "@/lib/graphData";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
 type EdgeFilter = "imports" | "exports";
+type GraphView = "files" | "classes" | "workflows";
+
+const VIEWS: { key: GraphView; label: string }[] = [
+  { key: "files", label: "Files" },
+  { key: "classes", label: "Classes" },
+  { key: "workflows", label: "Workflows" },
+];
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
+  const [view, setView] = useState<GraphView>("files");
   // GraphPage renders both inside ProjectLayout (/projects/:id/dependencies,
   // which provides ProjectProvider) and standalone at /dev/graph/:id (no
   // provider) — useOptionalProject returns null in the latter case instead
@@ -31,6 +46,7 @@ export function GraphPage() {
   const [search, setSearch] = useState("");
   const [edgeFilter, setEdgeFilter] = useState<EdgeFilter>("imports");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [activeCluster, setActiveCluster] = useState<string | null>(null);
 
   function loadGraph(cluster?: string) {
@@ -45,6 +61,18 @@ export function GraphPage() {
   }
 
   useEffect(() => { loadGraph(); }, [id]);
+
+  // Enrich the selected node with critical-path score and connected
+  // workflows; best-effort, so a failure just leaves the panel basic.
+  useEffect(() => {
+    setSelectedNodeDetail(null);
+    if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
+    let cancelled = false;
+    fetchNodeDetail(id, selectedNodeId).then((detail) => {
+      if (!cancelled) setSelectedNodeDetail(detail);
+    });
+    return () => { cancelled = true; };
+  }, [id, selectedNodeId]);
 
   const nodes: GraphNode[] = useMemo(() => {
     if (!data) return [];
@@ -120,14 +148,14 @@ export function GraphPage() {
           <div>
             <h1 className="text-lg font-semibold text-foreground">
               Dependency map
-              {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
+              {view === "files" && activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
             </h1>
             <p className="text-xs text-muted-foreground">
               Which files and modules depend on which — a map for orienting yourself.
             </p>
           </div>
         </div>
-        {data && (
+        {view === "files" && data && (
           <Badge variant="outline" className="text-[11px]">
             {data.totalNodes} files · {data.totalEdges} edges
             {data.clustered && " (clustered)"}
@@ -135,13 +163,30 @@ export function GraphPage() {
         )}
       </div>
 
-      {loading && (
+      <div className="mb-3 flex items-center gap-1">
+        {VIEWS.map((v) => (
+          <Button
+            key={v.key}
+            size="sm"
+            variant={view === v.key ? "default" : "outline"}
+            onClick={() => setView(v.key)}
+            className="h-8 px-3 text-xs"
+          >
+            {v.label}
+          </Button>
+        ))}
+      </div>
+
+      {view === "classes" && id && <ClassGraphSection projectId={id} />}
+      {view === "workflows" && id && <WorkflowGraphSection projectId={id} />}
+
+      {view === "files" && loading && (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
         </div>
       )}
 
-      {(error || (!data && !loading)) && (
+      {view === "files" && (error || (!data && !loading)) && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
           <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="flex-1">
@@ -159,7 +204,7 @@ export function GraphPage() {
         </div>
       )}
 
-      {data && !loading && (
+      {view === "files" && data && !loading && (
         <>
           {data.clustered && (
             <p className="mb-3 text-xs text-muted-foreground">
@@ -196,7 +241,7 @@ export function GraphPage() {
           </div>
 
           {selectedNode && !data.clustered && (
-            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} githubRepo={githubRepo} />
+            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} detail={selectedNodeDetail} githubRepo={githubRepo} />
           )}
         </>
       )}

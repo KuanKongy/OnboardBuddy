@@ -15,6 +15,7 @@ import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken } from '../lib/github.js';
 import { runAnalysis } from './engine/analysisRunner.js';
+import { buildClassGraph } from './engine/graphBuilder.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
 import { extractWorkflows, persistWorkflows } from './engine/workflowExtractor.js';
@@ -159,10 +160,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
 
-      // Insert graph_nodes (one per file module)
-      for (const node of snapshot.graph.nodes) {
+      // Insert graph_nodes: one per file module, plus one per class/interface
+      // symbol (ids are `relativePath#SymbolName`, so file_path strips the
+      // symbol suffix)
+      const classGraph = buildClassGraph(snapshot.fileAnalyses);
+      for (const node of [...snapshot.graph.nodes, ...classGraph.nodes]) {
         const exportedSymbols = node.metadata.exportedSymbols;
         const nodeHash = stableHash(JSON.stringify(exportedSymbols));
+        const filePath = node.id.includes('#') ? node.id.split('#')[0]! : node.id;
         const nodeResult = await client.query<{ id: string }>(
           `INSERT INTO graph_nodes (snapshot_id, stable_key, type, name, file_path, hash, metadata)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -172,7 +177,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
             node.id,
             node.kind,
             node.label,
-            node.id,
+            filePath,
             nodeHash,
             JSON.stringify({ exportedSymbols, importCount: node.metadata.importCount, dependentCount: node.metadata.dependentCount }),
           ],
@@ -181,7 +186,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       }
 
       // Insert graph_edges
-      for (const edge of snapshot.graph.edges) {
+      for (const edge of [...snapshot.graph.edges, ...classGraph.edges]) {
         const sourceId = nodeIdMap.get(edge.source);
         const targetId = nodeIdMap.get(edge.target);
         if (!sourceId || !targetId) continue;

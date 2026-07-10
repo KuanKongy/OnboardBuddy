@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import type { NodeDetail } from "@/lib/graphData";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { FileAnalysis, GraphNode } from "@/types/graph";
 
@@ -15,6 +16,7 @@ export interface GithubRepoRef {
 interface NodeInfoPanelProps {
   node: GraphNode;
   fileAnalysis: FileAnalysis | undefined;
+  detail?: NodeDetail | null;
   githubRepo?: GithubRepoRef;
 }
 
@@ -52,6 +54,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelProps) {
+
   const functions = fileAnalysis?.symbols.filter((s) => FUNCTION_KINDS.has(s.kind)) ?? [];
   const interfaces = fileAnalysis?.symbols.filter((s) => INTERFACE_KINDS.has(s.kind)) ?? [];
   const imports = fileAnalysis?.imports ?? [];
@@ -199,6 +202,58 @@ export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelP
             </>
           )}
         </div>
+
+        {/* Column 3: Importance + connected workflows (from node detail endpoint) */}
+        {detail && (
+          <div className="flex-1 p-4">
+            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-foreground">
+              Importance
+            </h3>
+            {detail.composite_score === null ? (
+              <p className="text-[11px] text-muted-foreground">Not ranked in this snapshot</p>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-semibold text-foreground">
+                  {Math.round(detail.composite_score * 100)}
+                </span>
+                <span className="text-[10px] text-muted-foreground">/ 100 critical-path score</span>
+              </div>
+            )}
+            {detail.ranking_reasons.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {detail.ranking_reasons.map((reason) => (
+                  <li key={reason} className="flex items-start gap-1.5">
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                    <span className="text-[11px] text-muted-foreground">{reason}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <Separator className="my-3" />
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground">
+              Connected workflows
+              <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {detail.connected_workflows.length}
+              </span>
+            </h3>
+            {detail.connected_workflows.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground">Not part of an extracted workflow</p>
+            ) : (
+              <ul className="space-y-1.5">
+                {detail.connected_workflows.map((wf) => (
+                  <li key={wf.id} className="flex items-center gap-1.5">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
+                    <span className="max-w-[180px] truncate text-[12px] text-foreground">{wf.title}</span>
+                    <Badge variant="outline" className="h-4 px-1 py-0 text-[9px]">
+                      {wf.trigger_type}
+                    </Badge>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

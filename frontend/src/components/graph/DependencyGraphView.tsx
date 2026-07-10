@@ -105,9 +105,12 @@ export function DependencyGraphView({
           (edge.source === selectedNodeId || edge.target === selectedNodeId);
 
         let label: string | undefined;
-        if (selectedNodeId) {
-          if (edge.source === selectedNodeId) label = "IMPORTS";
-          else if (edge.target === selectedNodeId) label = "USED BY";
+        if (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId)) {
+          if (edge.kind === "imports" || edge.kind === "dependency") {
+            label = edge.source === selectedNodeId ? "IMPORTS" : "USED BY";
+          } else {
+            label = edge.kind.toUpperCase();
+          }
         }
 
         return {
@@ -148,6 +151,7 @@ export function DependencyGraphView({
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
       >
+
         <Background
           variant={BackgroundVariant.Dots}
           gap={20}
@@ -155,6 +159,7 @@ export function DependencyGraphView({
           color={isDark ? "oklch(0.3 0 0)" : "oklch(0.82 0 0)"}
         />
         <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
+
         <MiniMap
           pannable
           zoomable

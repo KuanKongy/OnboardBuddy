@@ -6,9 +6,9 @@ import { SidebarProvider, SidebarToggle } from "@/components/SidebarShell";
 import { ProjectLayout } from "@/components/ProjectLayout";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AccountSettingsPage } from "@/pages/AccountSettingsPage";
+import { ArchitecturePage } from "@/pages/ArchitecturePage";
 import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
 import { DashboardPage } from "@/pages/DashboardPage";
-import { EmptyStubPage } from "@/pages/EmptyStubPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
 import { GitHubOAuthCallbackPage } from "@/pages/GitHubOAuthCallbackPage";
@@ -96,7 +96,7 @@ export default function App() {
             <Route path="/projects/:id" element={<ProjectLayout />}>
               <Route index element={<ProjectOverviewPage />} />
               <Route path="onboarding" element={<OnboardingPage />} />
-              <Route path="architecture" element={<EmptyStubPage title="Architecture" />} />
+              <Route path="architecture" element={<ArchitecturePage />} />
               <Route path="dependencies" element={<GraphPage />} />
               <Route path="walkthrough" element={<WalkthroughTab />} />
               <Route path="team" element={<TeamPage />} />
