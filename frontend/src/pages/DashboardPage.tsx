@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Clock,
   FolderGit2,
+  HelpCircle,
   Loader2,
   Mail,
   Plus,
@@ -11,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { AppTour, type TourStep } from "@/components/AppTour";
 import { ProjectCard, type Project } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +22,62 @@ import { useProjects } from "@/lib/useProjects";
 
 const RECENT_LIMIT = 6;
 const ACTIVITY_LIMIT = 8;
+
+const TOUR_DISMISSED_KEY = "onboardbuddy:tour-dismissed";
+
+function readTourDismissed(): boolean {
+  try {
+    return localStorage.getItem(TOUR_DISMISSED_KEY) === "1";
+  } catch {
+    // localStorage unavailable (private browsing, disabled storage) — never
+    // auto-start in that case rather than crash or loop.
+    return true;
+  }
+}
+
+function persistTourDismissed(): void {
+  try {
+    localStorage.setItem(TOUR_DISMISSED_KEY, "1");
+  } catch {
+    // Best-effort only; nothing to fall back to.
+  }
+}
+
+function clearTourDismissed(): void {
+  try {
+    localStorage.removeItem(TOUR_DISMISSED_KEY);
+  } catch {
+    // Best-effort only.
+  }
+}
+
+const TOUR_STEPS: TourStep[] = [
+  {
+    target: "sidebar-nav",
+    title: "Get around",
+    body: "Use the sidebar to jump between your dashboard, the full project list, pending invitations, and account settings.",
+  },
+  {
+    target: "stats-row",
+    title: "Your stats at a glance",
+    body: "These counts track how many projects you have, which ones are still analyzing, and which need a review because their docs went stale.",
+  },
+  {
+    target: "projects-grid",
+    title: "Your projects",
+    body: "Each card is a repository OnboardBuddy has analyzed. Click one to open its onboarding package — README, dependency graph, and walkthrough.",
+  },
+  {
+    target: "import-repo",
+    title: "Bring in a repository",
+    body: "Connect a GitHub repo here any time to kick off a fresh analysis and generate its onboarding package.",
+  },
+  {
+    target: "recent-activity",
+    title: "What's changed recently",
+    body: "A quick feed of analysis runs and stale-doc alerts across your projects, so you know what needs attention first.",
+  },
+];
 
 /** Sort key: most recent activity first, projects never analyzed last. */
 function activityTime(p: Project): number {
@@ -52,10 +110,10 @@ function buildActivity(projects: Project[]): ActivityItem[] {
           ...base,
           text: `${p.stale_count} section${p.stale_count === 1 ? "" : "s"} need review`,
           icon: AlertTriangle,
-          tone: "text-amber-400",
+          tone: "text-amber-600 dark:text-amber-400",
         };
       if (p.status === "complete")
-        return { ...base, text: "Analysis completed", icon: CheckCircle2, tone: "text-emerald-400" };
+        return { ...base, text: "Analysis completed", icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400" };
       return { ...base, text: "Created — not analyzed yet", icon: Clock, tone: "text-muted-foreground" };
     })
     .slice(0, ACTIVITY_LIMIT);
@@ -80,7 +138,7 @@ function StatCard({
         </div>
         <div>
           <div className="text-lg font-semibold leading-none text-foreground">{value}</div>
-          <div className="mt-1 text-[11px] text-muted-foreground">{label}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{label}</div>
         </div>
       </CardContent>
     </Card>
@@ -90,12 +148,31 @@ function StatCard({
 export function DashboardPage() {
   const { projects, setProjects, loading, error } = useProjects();
   const [inviteCount, setInviteCount] = useState(0);
+  const [tourOpen, setTourOpen] = useState(false);
 
   useEffect(() => {
     apiFetch("/invitations")
       .then((data: { invitations: unknown[] }) => setInviteCount(data.invitations.length))
       .catch(() => setInviteCount(0));
   }, []);
+
+  // First-run tour: auto-start once the dashboard has finished its initial
+  // load (never spotlight loading skeletons) and the user hasn't seen it yet.
+  useEffect(() => {
+    if (loading) return;
+    if (readTourDismissed()) return;
+    setTourOpen(true);
+  }, [loading]);
+
+  function finishTour() {
+    persistTourDismissed();
+    setTourOpen(false);
+  }
+
+  function startTour() {
+    clearTourDismissed();
+    setTourOpen(true);
+  }
 
   const recentProjects = useMemo(
     () => [...projects].sort((a, b) => activityTime(b) - activityTime(a)).slice(0, RECENT_LIMIT),
@@ -117,20 +194,29 @@ export function DashboardPage() {
       <div className="mb-0.5 text-xs text-muted-foreground">Overview &gt; Dashboard</div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
+          <p className="text-xs text-muted-foreground">
+            All your connected repositories and their analysis status in one place.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="xs" onClick={startTour}>
+            <HelpCircle className="h-3.5 w-3.5" />
+            Take a tour
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/invitations">
               <Mail className="h-3.5 w-3.5" />
               Join Project
               {inviteCount > 0 && (
-                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
                   {inviteCount}
                 </span>
               )}
             </Link>
           </Button>
-          <Button size="sm" asChild>
+          <Button size="sm" data-tour="import-repo" asChild>
             <Link to="/import">
               <Plus className="h-3.5 w-3.5" />
               Add Project
@@ -168,18 +254,18 @@ export function DashboardPage() {
 
       {!loading && !error && projects.length > 0 && (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-tour="stats-row">
             <StatCard icon={FolderGit2} label="Projects" value={stats.total} tone="text-foreground" />
             <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" />
-            <StatCard icon={AlertTriangle} label="Need review" value={stats.stale} tone="text-amber-400" />
+            <StatCard icon={AlertTriangle} label="Need review" value={stats.stale} tone="text-amber-600 dark:text-amber-400" />
             <StatCard icon={Mail} label="Pending invites" value={inviteCount} tone="text-foreground" />
           </div>
 
           <div className="grid gap-5 lg:grid-cols-3">
-            <div className="lg:col-span-2">
+            <div className="lg:col-span-2" data-tour="projects-grid">
               <div className="mb-2 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-foreground">Recent projects</h2>
-                <Link to="/list" className="text-[11px] text-primary hover:underline">
+                <Link to="/list" className="text-xs text-primary hover:underline">
                   View all
                 </Link>
               </div>
@@ -196,7 +282,7 @@ export function DashboardPage() {
               </div>
             </div>
 
-            <div>
+            <div data-tour="recent-activity">
               <h2 className="mb-2 text-sm font-semibold text-foreground">Recent activity</h2>
               <Card>
                 <CardContent className="p-2">
@@ -211,10 +297,10 @@ export function DashboardPage() {
                           >
                             <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${item.tone}`} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[12px] text-foreground">{item.repo}</p>
-                              <p className="text-[11px] text-muted-foreground">{item.text}</p>
+                              <p className="truncate text-[13px] text-foreground" title={item.repo}>{item.repo}</p>
+                              <p className="text-xs text-muted-foreground">{item.text}</p>
                             </div>
-                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
                               {timeAgo(item.at)}
                             </span>
                           </Link>
@@ -228,6 +314,8 @@ export function DashboardPage() {
           </div>
         </div>
       )}
+
+      {tourOpen && <AppTour steps={TOUR_STEPS} onDone={finishTour} />}
     </div>
   );
 }

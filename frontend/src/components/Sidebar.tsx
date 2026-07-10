@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { AccountCard } from "@/components/AccountCard";
 import { SidebarShell, useSidebar } from "@/components/SidebarShell";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const navItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -23,7 +24,7 @@ export function Sidebar() {
         <span className="text-sm font-semibold text-foreground">OnboardBuddy</span>
       </div>
 
-      <nav className="flex-1 space-y-0.5 px-2 py-1">
+      <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">
         {navItems.map((item) => {
           const Icon = item.icon;
           return (
@@ -49,8 +50,11 @@ export function Sidebar() {
       <div className="px-2">
         <Separator />
       </div>
-      <div className="px-2 py-2">
-        <AccountCard />
+      <div className="flex items-center gap-2 px-2 py-2">
+        <div className="min-w-0 flex-1">
+          <AccountCard />
+        </div>
+        <ThemeToggle />
       </div>
     </SidebarShell>
   );
