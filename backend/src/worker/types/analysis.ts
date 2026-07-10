@@ -16,6 +16,106 @@ export interface RepoIndex {
   scannedAt: Date;
 }
 
+// ─── Full repository inventory (all files, not just parseable source) ────────
+
+export type FileCategory =
+  | 'source' | 'test' | 'config' | 'schema' | 'migration' | 'doc' | 'script' | 'asset' | 'other';
+
+export type TrustLevel = 'code' | 'config' | 'tests' | 'docs' | 'llm_inference';
+
+export interface RepoFileRecord {
+  relativePath: string;   // repo-local, '/' separated (stable key)
+  absolutePath: string;
+  language: string;       // 'typescript' | 'javascript' | 'json' | 'markdown' | 'yaml' | 'sql' | ...
+  category: FileCategory;
+  supported: boolean;     // parseable by a registered LanguageParser
+  trustLevel: Exclude<TrustLevel, 'llm_inference'>;
+  sizeBytes: number;
+  lineCount: number | null;
+  hash: string;           // sha256 of contents
+}
+
+export interface LanguageInventory {
+  supported: Record<string, number>;
+  unsupported: Record<string, number>;
+  evidenceOnly: Record<string, number>;
+  supportedFileCount: number;
+  unsupportedFileCount: number;
+}
+
+export interface RepoPackage {
+  root: string;                       // repo-relative dir ('' = repo root)
+  packageJsonPath: string;
+  name: string | null;
+  scripts: Record<string, string>;
+  dependencies: string[];
+  devDependencies: string[];
+  workspaces: string[];
+}
+
+export interface RepoConfigFile {
+  path: string;
+  kind: 'package_json' | 'tsconfig' | 'vite' | 'docker' | 'compose' | 'github_actions'
+    | 'env_example' | 'eslint' | 'deploy' | 'sql_migration' | 'other';
+  facts: Record<string, unknown>;
+}
+
+export interface RepoInventory {
+  packages: RepoPackage[];
+  configs: RepoConfigFile[];
+  dockerServices: Array<{ name: string; buildContext: string | null }>;
+  detectedFrameworks: string[];
+}
+
+export interface ScopeProposal {
+  pathPrefix: string;                 // '' = whole repo
+  displayName: string;
+  kind: 'whole_repo' | 'workspace_package' | 'docker_service' | 'directory' | 'manual';
+  detectedFrom: string;
+}
+
+// ─── Evidence graph (persisted as graph_nodes / graph_edges) ─────────────────
+
+export type EvidenceNodeType =
+  | 'file' | 'module' | 'function' | 'method' | 'class' | 'interface' | 'type'
+  | 'enum' | 'variable' | 'entrypoint' | 'schema' | 'test' | 'config' | 'doc' | 'external';
+
+export interface EvidenceNode {
+  stableKey: string;
+  type: EvidenceNodeType;
+  name: string;
+  filePath: string | null;     // null for external nodes
+  lineStart?: number | null;
+  lineEnd?: number | null;
+  hash?: string | null;
+  signatureHash?: string | null;
+  bodyHash?: string | null;
+  trustLevel: TrustLevel;
+  exported?: boolean;
+  snippet?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export type EvidenceEdgeType =
+  | 'imports' | 'exports' | 'calls' | 'extends' | 'implements' | 'contains'
+  | 'registers_callback' | 'handles_route' | 'touches_schema'
+  | 'reads_env' | 'queries_database' | 'writes_database'
+  | 'enqueues_job' | 'handles_job' | 'http_calls'
+  | 'tests' | 'documents' | 'depends_on' | 'references_external';
+
+export interface EvidenceEdge {
+  sourceKey: string;
+  targetKey: string;
+  type: EvidenceEdgeType;
+  confidence: 'high' | 'medium' | 'low';
+  metadata: Record<string, unknown>;
+}
+
+export interface EvidenceGraph {
+  nodes: EvidenceNode[];
+  edges: EvidenceEdge[];
+}
+
 // ─── Symbol types ─────────────────────────────────────────────────────────────
 
 export type SymbolKind =
@@ -66,6 +166,25 @@ export interface MethodInfo {
   accessibility: 'public' | 'private' | 'protected';
   static: boolean;
   isAsync: boolean;
+  lineStart?: number;
+  lineEnd?: number;
+  callsSymbols?: string[];
+  resolvedCalls?: ResolvedCall[];
+  snippet?: string;
+  signatureHash?: string;
+  bodyHash?: string;
+  isTrivial?: boolean;
+}
+
+/** A call whose target the TypeChecker resolved to a repo-local declaration. */
+export interface ResolvedCall {
+  /** Callee expression text as written, e.g. `queue.add` or `signToken`. */
+  callee: string;
+  /** Repo-relative path ('/'-separated) of the file declaring the target. */
+  targetRelativePath: string;
+  targetName: string;
+  /** Set when the target is a class member. */
+  targetParentName?: string;
 }
 
 export interface ConstructorInfo {
@@ -86,6 +205,13 @@ export interface SymbolInfo {
   exported: boolean;
   isDefault: boolean;
   jsDoc?: string;
+  // evidence identity (doc/Pipeline.md "Symbol extraction")
+  stableKey?: string;        // relative/path.ts#SymbolName
+  signatureHash?: string;
+  bodyHash?: string;
+  snippet?: string;          // capped source snippet for prompts/receipts
+  isTrivial?: boolean;       // deterministic facts-only candidate, no LLM call
+  resolvedCalls?: ResolvedCall[];
   // variables
   typeAnnotation?: string;
   initializer?: string;

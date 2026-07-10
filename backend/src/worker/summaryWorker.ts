@@ -4,7 +4,6 @@ import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query, pool } from '../lib/db.js';
 import { chatCompletion, SUMMARY_MODEL } from '../lib/openrouter.js';
-import { embedAndStore, type EmbeddingTarget } from './engine/embeddingService.js';
 import { buildContext, DEFAULT_SECTION_REVIEW_STATUS, type EvidenceBundle } from './engine/evidenceContext.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -29,6 +28,8 @@ interface SnapRow {
   file_count: number;
   symbol_count: number;
   workflow_count: number;
+  project_id: string;
+  scope_id: string;
   repo_owner: string;
   repo_name: string;
   role: string;
@@ -92,6 +93,7 @@ async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> 
   const [snapRes, nodesRes, edgesRes, workflowsRes] = await Promise.all([
     query(
       `SELECT s.commit_hash, s.branch, s.file_count, s.symbol_count, s.workflow_count,
+              s.project_id, s.scope_id,
               p.repo_owner, p.repo_name,
               COALESCE(ps.default_developer_role, 'general') AS role
        FROM analysis_snapshots s
@@ -118,13 +120,16 @@ async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> 
       [snapshotId],
     ).catch(() => empty),
     query(
-      `SELECT w.id, w.title, w.trigger_type, w.purpose, w.importance_score, w.confidence,
-              COALESCE(ws.composite_score, 0) AS composite_score,
-              COALESCE(ws.ranking_reasons, '{}'::text[]) AS ranking_reasons
+      `SELECT w.id, w.title, w.trigger_type, w.purpose, w.confidence,
+              COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
+              COALESCE(cs.score, (w.metadata->>'importance_score')::numeric, 0) AS composite_score,
+              COALESCE(cs.reasons, '{}'::text[]) AS ranking_reasons
        FROM workflows w
-       LEFT JOIN workflow_scores ws ON ws.workflow_id = w.id
+       LEFT JOIN criticality_scores cs
+         ON cs.snapshot_id = w.snapshot_id AND cs.phase = 'candidate' AND cs.view = 'candidate'
+        AND cs.target_type = 'workflow' AND cs.stable_key = w.stable_key AND cs.role = 'general'
        WHERE w.snapshot_id = $1
-       ORDER BY COALESCE(ws.composite_score, 0) DESC
+       ORDER BY 7 DESC
        LIMIT 20`,
       [snapshotId],
     ).catch(() => empty),
@@ -153,16 +158,16 @@ async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> 
   // Fetch entrypoints, side effects, and critical rankings for richer context
   const [entrypointsRes, sideEffectsRes, rankingsRes] = await Promise.all([
     query(
-      `SELECT e.kind, e.method, e.route_pattern, n.file_path, n.name
+      `SELECT e.trigger_type AS kind, e.method, e.route_path AS route_pattern, n.file_path, n.name
        FROM entrypoints e
        JOIN graph_nodes n ON n.id = e.node_id
        WHERE e.snapshot_id = $1
-       ORDER BY e.kind
+       ORDER BY e.trigger_type
        LIMIT 30`,
       [snapshotId],
     ).catch(() => empty),
     query(
-      `SELECT s.kind, s.target, n.file_path
+      `SELECT s.type AS kind, s.target, n.file_path
        FROM side_effects s
        JOIN graph_nodes n ON n.id = s.node_id
        WHERE s.snapshot_id = $1
@@ -170,11 +175,12 @@ async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> 
       [snapshotId],
     ).catch(() => empty),
     query(
-      `SELECT n.file_path, n.name, cr.composite_score, cr.ranking_reasons
-       FROM critical_rankings cr
-       JOIN graph_nodes n ON n.id = cr.target_id
-       WHERE cr.snapshot_id = $1
-       ORDER BY cr.composite_score DESC
+      `SELECT n.file_path, n.name, cs.score AS composite_score, cs.reasons AS ranking_reasons
+       FROM criticality_scores cs
+       JOIN graph_nodes n ON n.id = cs.target_node_id
+       WHERE cs.snapshot_id = $1 AND cs.phase = 'candidate' AND cs.view = 'candidate'
+         AND cs.role = 'general'
+       ORDER BY cs.score DESC
        LIMIT 40`,
       [snapshotId],
     ).catch(() => empty),
@@ -368,9 +374,12 @@ async function persistSection(params: {
     const node = nodeIndex.get(src.stable_key) ?? nodeIndex.get(src.file_path);
     await client.query(
       `INSERT INTO source_receipts
-         (section_id, node_id, node_stable_key, node_hash, file_path, symbol_name, snippet, commit_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (project_id, snapshot_id, receipt_kind, trust_level, section_id, node_id,
+          node_stable_key, node_hash, file_path, symbol_name, snippet, commit_hash)
+       VALUES ($1, $2, 'code_snippet', 'code', $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
+        snap.project_id,
+        snapshotId,
         sectionId,
         node?.id ?? null,
         src.stable_key,
@@ -420,12 +429,12 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     try {
       const pkgRes = await client.query<{ id: string }>(
         `INSERT INTO onboarding_packages
-           (snapshot_id, project_id, role, status, generated_by, analyzed_commit)
-         VALUES ($1, $2, $3, 'generating', $4, $5)
-         ON CONFLICT (project_id, role, analyzed_commit) DO UPDATE
+           (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit)
+         VALUES ($1, $2, $3, $4, 'generating', $5, $6)
+         ON CONFLICT (project_id, scope_id, role, analyzed_commit) DO UPDATE
            SET snapshot_id = EXCLUDED.snapshot_id, status = 'generating', updated_at = NOW()
          RETURNING id`,
-        [snapshotId, projectId, bundle.snap.role, triggeredBy, bundle.snap.commit_hash],
+        [snapshotId, projectId, bundle.snap.scope_id, bundle.snap.role, triggeredBy, bundle.snap.commit_hash],
       );
       packageId = pkgRes.rows[0]!.id;
 
@@ -499,39 +508,9 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
       [packageId],
     );
 
-    // Embed section content for RAG retrieval (best-effort: don't fail the job)
-    if (process.env.EMBEDDINGS_API_KEY || process.env.OPENROUTER_API_KEY) {
-      try {
-        await updateJob('running', 'Embedding sections for retrieval', 94);
-        const embeddingSections = await query(
-          `SELECT id, type, content FROM package_sections WHERE package_id = $1`,
-          [packageId],
-        );
-        if (embeddingSections.rows.length > 0) {
-          // Create semantic_summaries rows for each section, then embed
-          const targets: EmbeddingTarget[] = [];
-          for (const sec of embeddingSections.rows as Array<{ id: string; type: string; content: string }>) {
-            const summaryRes = await query(
-              `INSERT INTO semantic_summaries
-                 (snapshot_id, target_type, target_id, stable_key, summary, confidence, evidence_hash, prompt_version)
-               VALUES ($1, 'section', $2, $3, $4, 'medium', md5($4), $5)
-               ON CONFLICT (snapshot_id, target_type, target_id, evidence_hash) DO UPDATE SET summary = EXCLUDED.summary
-               RETURNING id`,
-              [snapshotId, sec.id, `section:${sec.type}`, sec.content, 'v1'],
-            );
-            const summaryId = summaryRes.rows[0]?.id;
-            if (summaryId && sec.content.length > 0) {
-              targets.push({ summaryId, targetType: 'section', targetId: sec.id, content: sec.content });
-            }
-          }
-          if (targets.length > 0) {
-            await embedAndStore(snapshotId, targets);
-          }
-        }
-      } catch (embedErr) {
-        console.warn('[summary-worker] Embedding failed (non-fatal):', embedErr instanceof Error ? embedErr.message : embedErr);
-      }
-    }
+    // NOTE: the old section-markdown embedding path (semantic_summaries +
+    // evidence_embeddings) is deleted per doc/Pipeline.md; multi-view
+    // embeddings over semantic_records replace it in the pipeline rework.
 
     // Enqueue generation for remaining roles (if this is the primary role job)
     if (!requestedRole) {
@@ -539,7 +518,7 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
       for (const nextRole of remainingRoles) {
         const roleJobResult = await query(
           `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
-           VALUES ($1, $2, $3, 'generate_onboarding', $4, 'queued', 'Waiting for worker')
+           VALUES ($1, $2, $3, 'generate_package', $4, 'queued', 'Waiting for worker')
            RETURNING id`,
           [projectId, snapshotId, triggeredBy, nextRole],
         );

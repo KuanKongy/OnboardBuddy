@@ -157,14 +157,24 @@ projectsRouter.get("/:id", requireProjectAccess(), async (req, res) => {
 projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const projectId = req.params.id;
-    const { ignored_paths, ai_enabled, default_developer_role, file_limit, loc_limit } =
+    const { ignored_paths, privacy_mode, analysis_depth, default_developer_role, file_limit, loc_limit } =
       req.body as {
         ignored_paths?: string[];
-        ai_enabled?: boolean;
+        privacy_mode?: string;
+        analysis_depth?: string;
         default_developer_role?: string;
         file_limit?: number;
         loc_limit?: number;
       };
+
+    if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
+      res.status(400).json({ error: "Invalid privacy_mode" });
+      return;
+    }
+    if (analysis_depth !== undefined && !['cheap', 'standard', 'full'].includes(analysis_depth)) {
+      res.status(400).json({ error: "Invalid analysis_depth" });
+      return;
+    }
 
     const setClauses: string[] = [];
     const values: unknown[] = [projectId];
@@ -174,9 +184,13 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
       setClauses.push(`ignored_paths = $${paramIndex++}`);
       values.push(ignored_paths);
     }
-    if (ai_enabled !== undefined) {
-      setClauses.push(`ai_enabled = $${paramIndex++}`);
-      values.push(ai_enabled);
+    if (privacy_mode !== undefined) {
+      setClauses.push(`privacy_mode = $${paramIndex++}`);
+      values.push(privacy_mode);
+    }
+    if (analysis_depth !== undefined) {
+      setClauses.push(`analysis_depth = $${paramIndex++}`);
+      values.push(analysis_depth);
     }
     if (default_developer_role !== undefined) {
       setClauses.push(`default_developer_role = $${paramIndex++}`);
@@ -232,10 +246,10 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     const userId = req.user!.id;
 
     const settingsResult = await query(
-      `SELECT ai_enabled FROM project_settings WHERE project_id = $1`,
+      `SELECT privacy_mode FROM project_settings WHERE project_id = $1`,
       [projectId],
     );
-    if (settingsResult.rows.length > 0 && settingsResult.rows[0].ai_enabled === false) {
+    if (settingsResult.rows.length > 0 && settingsResult.rows[0].privacy_mode === 'ai_disabled') {
       res.status(403).json({ error: "AI features are disabled for this project" });
       return;
     }
@@ -254,7 +268,7 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
 
     const jobResult = await query(
       `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
+       VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
        RETURNING id`,
       [projectId, snap.id, userId],
     );
@@ -351,11 +365,74 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
   }
 });
 
+projectsRouter.get("/:id/scopes", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const result = await query(
+      `SELECT id, path_prefix, display_name, kind, detected_from, created_at
+       FROM analysis_scopes WHERE project_id = $1
+       ORDER BY (path_prefix = '') DESC, path_prefix`,
+      [projectId],
+    );
+    res.json({ scopes: result.rows });
+  } catch (err) {
+    console.error("List scopes error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Preflight: builds the analysis preview (inventory, estimates, cost tier,
+// privacy summary) without mutating any snapshot. The preview lands on the
+// job's checkpoint, returned by /analysis-status.
+projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const userId = req.user!.id;
+    const { scope_id } = (req.body ?? {}) as { scope_id?: string };
+
+    if (scope_id) {
+      const scopeCheck = await query(
+        `SELECT id FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
+        [scope_id, projectId],
+      );
+      if (scopeCheck.rows.length === 0) {
+        res.status(404).json({ error: "Scope not found" });
+        return;
+      }
+    }
+
+    const jobResult = await query(
+      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step)
+       VALUES ($1, $2, $3, 'preflight', 'queued', 'Waiting for worker')
+       RETURNING id, status`,
+      [projectId, scope_id ?? null, userId],
+    );
+    const dbJobId: string = jobResult.rows[0].id;
+
+    await getAnalysisQueue().add('preflight', {
+      jobId: dbJobId,
+      projectId,
+      task: 'preflight',
+      scopeId: scope_id,
+    } satisfies AnalysisJobData, {
+      jobId: dbJobId,
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 5000 },
+    });
+
+    res.status(202).json({ preflight: { id: dbJobId, status: jobResult.rows[0].status } });
+  } catch (err) {
+    console.error("Preflight error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), async (req, res) => {
   const client = await pool.connect();
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
+    const { scope_id } = (req.body ?? {}) as { scope_id?: string };
 
     await client.query("BEGIN");
 
@@ -386,18 +463,34 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       [projectId],
     );
 
+    if (scope_id) {
+      const scopeCheck = await client.query(
+        `SELECT id FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
+        [scope_id, projectId],
+      );
+      if (scopeCheck.rows.length === 0) {
+        await client.query("ROLLBACK");
+        res.status(404).json({ error: "Scope not found" });
+        return;
+      }
+    }
+
     const jobResult = await client.query(
-      `INSERT INTO analysis_jobs (project_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, 'analyze_project', 'queued', 'Waiting for worker')
+      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step)
+       VALUES ($1, $2, $3, 'analyze_scope', 'queued', 'Waiting for worker')
        RETURNING id, status`,
-      [projectId, userId],
+      [projectId, scope_id ?? null, userId],
     );
 
     await client.query("COMMIT");
 
     const dbJobId: string = jobResult.rows[0].id;
 
-    await getAnalysisQueue().add('analyze_project', { jobId: dbJobId, projectId } satisfies AnalysisJobData, {
+    await getAnalysisQueue().add('analyze_scope', {
+      jobId: dbJobId,
+      projectId,
+      scopeId: scope_id,
+    } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },

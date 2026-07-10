@@ -93,6 +93,8 @@ export function rankCriticalFiles(
     .sort((a, b) => b.compositeScore - a.compositeScore);
 }
 
+// Writes Phase A deterministic candidate scores (criticality_scores with
+// phase='candidate', view='candidate'). Phase B semantic views land later.
 export async function persistRankings(
   snapshotId: string,
   rankings: CriticalRanking[],
@@ -105,14 +107,17 @@ export async function persistRankings(
     if (!nodeId) continue;
 
     await query(
-      `INSERT INTO critical_rankings (snapshot_id, target_type, target_id, role, composite_score, scores, ranking_reasons)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       ON CONFLICT (snapshot_id, target_type, target_id, role)
-       DO UPDATE SET composite_score = EXCLUDED.composite_score, scores = EXCLUDED.scores, ranking_reasons = EXCLUDED.ranking_reasons`,
+      `INSERT INTO criticality_scores
+         (snapshot_id, phase, view, target_type, target_node_id, stable_key, role, score, score_breakdown, reasons)
+       VALUES ($1, 'candidate', 'candidate', $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (snapshot_id, phase, view, target_type, stable_key, COALESCE(role, ''))
+       DO UPDATE SET score = EXCLUDED.score, score_breakdown = EXCLUDED.score_breakdown,
+                     reasons = EXCLUDED.reasons, target_node_id = EXCLUDED.target_node_id`,
       [
         snapshotId,
         r.targetType,
         nodeId,
+        r.nodeStableKey,
         r.role,
         r.compositeScore,
         JSON.stringify(r.scores),
