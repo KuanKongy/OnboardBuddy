@@ -154,7 +154,7 @@ export function DependencyGraphView({
           size={1}
           color={isDark ? "oklch(0.3 0 0)" : "oklch(0.82 0 0)"}
         />
-        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent" />
+        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
         <MiniMap
           pannable
           zoomable
