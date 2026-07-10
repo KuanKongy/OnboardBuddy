@@ -120,6 +120,93 @@ export function buildDependencyGraph(
   return { nodes, edges, entryPoints };
 }
 
+// ─── Class/interface graph ────────────────────────────────────────────────────
+
+export interface ClassGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/**
+ * Builds symbol-level nodes for classes and interfaces plus
+ * extends/implements edges. Node ids are `relativePath#SymbolName` so they
+ * never collide with the file-level module nodes. Parent names are resolved
+ * same-file first, then by unique match across the repo; unresolvable
+ * parents (external libraries) produce no edge.
+ */
+export function buildClassGraph(fileAnalyses: FileAnalysis[]): ClassGraph {
+  const nodeMap = new Map<string, GraphNode>();
+  const idsByName = new Map<string, string[]>();
+
+  for (const fa of fileAnalyses) {
+    for (const s of fa.symbols) {
+      if (s.kind !== 'class' && s.kind !== 'interface') continue;
+      const id = `${fa.relativePath}#${s.name}`;
+      if (nodeMap.has(id)) continue;
+
+      const memberNames =
+        s.kind === 'class'
+          ? (s.methods?.map((m) => m.name) ?? [])
+          : (s.properties?.map((p) => p.name) ?? []);
+
+      nodeMap.set(id, {
+        id,
+        label: s.name,
+        kind: s.kind,
+        filePath: fa.filePath,
+        metadata: {
+          exportedSymbols: memberNames,
+          importCount: 0,
+          dependentCount: 0,
+        },
+      });
+      idsByName.set(s.name, [...(idsByName.get(s.name) ?? []), id]);
+    }
+  }
+
+  // `Base<T>` → `Base`
+  const bareName = (name: string) => name.split('<')[0]!.trim();
+
+  function resolveParent(name: string, fromFile: string): string | null {
+    const candidates = idsByName.get(bareName(name)) ?? [];
+    if (candidates.length === 0) return null;
+    const sameFile = candidates.find((id) => id.startsWith(`${fromFile}#`));
+    if (sameFile) return sameFile;
+    return candidates.length === 1 ? candidates[0]! : null;
+  }
+
+  const edges: GraphEdge[] = [];
+  const edgeSet = new Set<string>();
+
+  function addEdge(sourceId: string, parentName: string, kind: 'extends' | 'implements', fromFile: string) {
+    const targetId = resolveParent(parentName, fromFile);
+    if (!targetId || targetId === sourceId) return;
+    const edgeId = `${sourceId}→${targetId}:${kind}`;
+    if (edgeSet.has(edgeId)) return;
+    edgeSet.add(edgeId);
+    edges.push({ id: edgeId, source: sourceId, target: targetId, kind, weight: 1 });
+
+    nodeMap.get(targetId)!.metadata.dependentCount += 1;
+    nodeMap.get(sourceId)!.metadata.importCount += 1;
+  }
+
+  for (const fa of fileAnalyses) {
+    for (const s of fa.symbols) {
+      if (s.kind !== 'class' && s.kind !== 'interface') continue;
+      const sourceId = `${fa.relativePath}#${s.name}`;
+
+      if (s.kind === 'class') {
+        if (s.extendsClass) addEdge(sourceId, s.extendsClass, 'extends', fa.relativePath);
+        for (const iface of s.implements ?? []) addEdge(sourceId, iface, 'implements', fa.relativePath);
+      } else {
+        for (const parent of s.extends ?? []) addEdge(sourceId, parent, 'extends', fa.relativePath);
+      }
+    }
+  }
+
+  return { nodes: Array.from(nodeMap.values()), edges };
+}
+
 // ─── Entry point detection ────────────────────────────────────────────────────
 
 function detectEntryPoints(nodes: GraphNode[], edges: GraphEdge[]): string[] {

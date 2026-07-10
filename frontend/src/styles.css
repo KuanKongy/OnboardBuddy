@@ -1,42 +1,117 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-@theme inline {
-  /* Cool "slate" dark palette anchored on #0A0D13 (oklch 0.159 0.014 264) for
-     the background. Surfaces step up from there on the same blue hue (~265),
-     with chroma growing toward the borders, to match the mockups. */
-  --color-background: oklch(0.159 0.014 264);
-  --color-foreground: oklch(0.93 0.008 264);
-  --color-card: oklch(0.195 0.017 265);
-  --color-card-foreground: oklch(0.93 0.008 264);
-  --color-popover: oklch(0.215 0.02 266);
-  --color-popover-foreground: oklch(0.93 0.008 264);
-  --color-primary: oklch(0.623 0.214 259);
-  --color-primary-foreground: oklch(0.985 0 0);
-  --color-secondary: oklch(0.255 0.025 266);
-  --color-secondary-foreground: oklch(0.93 0.008 264);
-  --color-muted: oklch(0.255 0.025 266);
-  --color-muted-foreground: oklch(0.6 0.02 265);
-  --color-accent: oklch(0.275 0.028 266);
-  --color-accent-foreground: oklch(0.93 0.008 264);
-  --color-destructive: oklch(0.577 0.245 27.325);
-  --color-border: oklch(0.3 0.03 266);
-  --color-input: oklch(0.3 0.03 266);
-  --color-ring: oklch(0.623 0.214 259);
-  --color-chart-1: oklch(0.623 0.214 259);
-  --color-chart-2: oklch(0.6 0.118 184);
-  --color-chart-3: oklch(0.398 0.07 227.392);
-  --color-chart-4: oklch(0.828 0.189 84.429);
-  --color-chart-5: oklch(0.769 0.188 70.08);
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Light theme (opt-in). Same cool "slate" hue family (~264-266, low chroma)
+   as the dark palette, inverted for a bright surface. */
+:root {
+  --background: oklch(0.98 0.003 265);
+  --foreground: oklch(0.2 0.015 265);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.015 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.015 265);
+  --primary: oklch(0.55 0.214 259);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.94 0.006 265);
+  --secondary-foreground: oklch(0.2 0.015 265);
+  --muted: oklch(0.94 0.006 265);
+  --muted-foreground: oklch(0.46 0.02 265);
+  --accent: oklch(0.91 0.01 265);
+  --accent-foreground: oklch(0.2 0.015 265);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.88 0.008 265);
+  --input: oklch(0.88 0.008 265);
+  --ring: oklch(0.55 0.214 259);
+  --chart-1: oklch(0.55 0.214 259);
+  --chart-2: oklch(0.6 0.118 184);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
   --radius: 0.5rem;
-  --color-sidebar: oklch(0.175 0.015 264);
-  --color-sidebar-foreground: oklch(0.93 0.008 264);
-  --color-sidebar-primary: oklch(0.623 0.214 259);
-  --color-sidebar-primary-foreground: oklch(0.985 0 0);
-  --color-sidebar-accent: oklch(0.275 0.028 266);
-  --color-sidebar-accent-foreground: oklch(0.93 0.008 264);
-  --color-sidebar-border: oklch(0.3 0.03 266);
-  --color-sidebar-ring: oklch(0.623 0.214 259);
+  --sidebar: oklch(0.96 0.005 265);
+  --sidebar-foreground: oklch(0.2 0.015 265);
+  --sidebar-primary: oklch(0.55 0.214 259);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.91 0.01 265);
+  --sidebar-accent-foreground: oklch(0.2 0.015 265);
+  --sidebar-border: oklch(0.88 0.008 265);
+  --sidebar-ring: oklch(0.55 0.214 259);
+}
+
+/* Dark theme (default). Anchored on #0A0D13 (oklch 0.159 0.014 264) for the
+   background. Surfaces step up from there on the same blue hue (~265), with
+   chroma growing toward the borders, to match the mockups. These values are
+   byte-identical to the pre-light-theme palette — dark mode must not change. */
+.dark {
+  --background: oklch(0.159 0.014 264);
+  --foreground: oklch(0.93 0.008 264);
+  --card: oklch(0.195 0.017 265);
+  --card-foreground: oklch(0.93 0.008 264);
+  --popover: oklch(0.215 0.02 266);
+  --popover-foreground: oklch(0.93 0.008 264);
+  --primary: oklch(0.623 0.214 259);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.255 0.025 266);
+  --secondary-foreground: oklch(0.93 0.008 264);
+  --muted: oklch(0.255 0.025 266);
+  --muted-foreground: oklch(0.64 0.02 265);
+  --accent: oklch(0.275 0.028 266);
+  --accent-foreground: oklch(0.93 0.008 264);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.3 0.03 266);
+  --input: oklch(0.3 0.03 266);
+  --ring: oklch(0.623 0.214 259);
+  --chart-1: oklch(0.623 0.214 259);
+  --chart-2: oklch(0.6 0.118 184);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.175 0.015 264);
+  --sidebar-foreground: oklch(0.93 0.008 264);
+  --sidebar-primary: oklch(0.623 0.214 259);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.275 0.028 266);
+  --sidebar-accent-foreground: oklch(0.93 0.008 264);
+  --sidebar-border: oklch(0.3 0.03 266);
+  --sidebar-ring: oklch(0.623 0.214 259);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius: var(--radius);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
 }
 
 @layer base {
@@ -54,6 +129,6 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-size: 13px;
+    font-size: 14px;
   }
 }

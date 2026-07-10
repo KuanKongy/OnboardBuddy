@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
 
 vi.mock("@/lib/graphData", () => {
@@ -27,8 +28,31 @@ vi.mock("@/lib/graphData", () => {
     graph: graphPayload,
     fileAnalyses: [],
   };
+  const classGraphPayload = {
+    nodes: [
+      { id: "userService.ts#UserService", label: "UserService", kind: "class", metadata: { exportedSymbols: ["list"], importCount: 1, dependentCount: 0 } },
+      { id: "types.ts#IUserService", label: "IUserService", kind: "interface", metadata: { exportedSymbols: ["list"], importCount: 0, dependentCount: 1 } },
+    ],
+    edges: [
+      { id: "c1", source: "userService.ts#UserService", target: "types.ts#IUserService", kind: "implements" },
+    ],
+    entryPoints: [],
+  };
+  const classResponse = {
+    projectId: "proj-1",
+    snapshotId: "snap-1",
+    clustered: false,
+    totalNodes: 2,
+    totalEdges: 1,
+    graph: classGraphPayload,
+    fileAnalyses: [],
+  };
   return {
     fetchDependencyGraph: vi.fn().mockResolvedValue(mockResponse),
+    fetchClassGraph: vi.fn().mockResolvedValue(classResponse),
+    fetchWorkflowsList: vi.fn().mockResolvedValue([]),
+    fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
+    fetchNodeDetail: vi.fn().mockResolvedValue(null),
     mockGraphData: graphPayload,
   };
 });
@@ -46,11 +70,13 @@ vi.mock("@/lib/supabase", () => ({
 
 function renderGraphPage() {
   return render(
-    <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
-      <Routes>
-        <Route path="/projects/:id/dependencies" element={<GraphPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
+        <Routes>
+          <Route path="/projects/:id/dependencies" element={<GraphPage />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   );
 }
 
@@ -94,5 +120,29 @@ describe("GraphPage", () => {
       expect(screen.getByText("Functions")).toBeInTheDocument();
     });
     expect(screen.getAllByText(/UserService/i).length).toBeGreaterThan(0);
+  });
+
+  it("switches to the Classes view and renders class/interface nodes", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Classes" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("UserService")).toBeInTheDocument();
+    });
+    expect(screen.getByText("IUserService")).toBeInTheDocument();
+    expect(screen.getByText(/2 \/ 2 classes/)).toBeInTheDocument();
+  });
+
+  it("switches to the Workflows view and shows the empty state when none exist", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/no workflows extracted yet/i)).toBeInTheDocument();
+    });
   });
 });

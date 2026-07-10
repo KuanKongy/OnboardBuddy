@@ -168,7 +168,7 @@ function StepCard({
       <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
         {icon}
       </div>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-primary">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-primary">
         Step {step}
       </div>
       <h3 className="mb-1 text-[13px] font-semibold text-foreground">{title}</h3>
