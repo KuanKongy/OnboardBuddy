@@ -1,142 +1,391 @@
-# OnboardBuddy Analysis and Onboarding Pipeline
+# OnboardBuddy Hybrid Semantic Pipeline
 
-This document is the implementation plan for turning a Git repository into a persistent, role-specific Codebase Onboarding Package.
+This document is the source of truth for OnboardBuddy's analysis pipeline: how a Git repository becomes a persistent, scope-aware, role-specific Codebase Onboarding Package.
 
 The core rule is:
 
 ```txt
 AST/config/git evidence is the source of truth.
-LLM summaries preserve semantic context.
-Embeddings retrieve relevant stored summaries.
-LLM package generation writes explanations from retrieved evidence.
-Receipts and hashes make the result auditable and incrementally refreshable.
+Phase A deterministic ranking decides what deserves LLM attention.
+The LLM semantic pass produces structured semantic records per symbol.
+Hierarchical synthesis builds file -> module -> service -> system understanding.
+Phase B semantic reranking produces multi-view criticality, projected per role.
+Multi-view embeddings + SQL graph expansion retrieve stored understanding.
+Generation writes cited, trust-validated onboarding content from retrieved evidence.
+Content-addressed records and hashes make everything auditable, resumable,
+cacheable, and incrementally refreshable.
 ```
 
-AST data alone is not enough. A heavily transformed AST can say that a function calls `query` and imports `enqueueAnalysisJob`, but it cannot reliably preserve the whole-system meaning of a file or module. OnboardBuddy should therefore use a two-layer model:
+This supersedes the previous pipeline spec. The key differences:
 
-1. Deterministic evidence layer: symbols, files, edges, workflows, rankings, architecture clusters, hashes, receipts.
-2. Semantic layer: generated symbol/file/module/workflow summaries with citations, embedded for retrieval.
-
-The onboarding package is generated section by section from both layers.
+1. **Code snippets ARE sent to LLMs by default** (zero-data-retention via OpenRouter). The old "no code to LLM" promise in Design.md is superseded; the privacy filter still strips secrets/env files, and three per-project privacy modes exist (`full_ai`, `facts_only_ai`, `ai_disabled`).
+2. **Semantic records replace freeform summaries.** The symbol pass produces fixed-schema structured records; a hierarchical synthesis pass builds the whole-repo picture bottom-up even without a README.
+3. **Ranking is two-phase and multi-view.** A deterministic candidate ranking gates LLM depth; a semantic reranking after synthesis produces the real Critical 25% as projections over per-view scores with per-role configurable weights.
+4. **Scopes.** Project = GitHub repo connection; Analysis Scope = whole repo or a selected directory/service/package; Onboarding Package = (scope, role, commit). Snapshots, graphs, and packages belong to a scope.
+5. **Graph RAG on Supabase.** Retrieval = multi-view pgvector seed + recursive-CTE graph expansion. The old section-markdown embedding path and unused `hybridRetrieve` are deleted.
+6. **Operational guardrails are first-class**: budgets and kill switches, model failure behavior, preflight preview, resume/idempotency, trust levels, honest unknowns, observability.
 
 ## External References
 
 - TypeScript Compiler API: https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API
 - OpenRouter quickstart and OpenAI SDK compatibility: https://openrouter.ai/docs/quickstart
+- OpenRouter zero-data-retention: https://openrouter.ai/docs/features/privacy-and-logging
 - OpenAI structured outputs: https://platform.openai.com/docs/guides/structured-outputs
 - OpenAI embeddings: https://platform.openai.com/docs/guides/embeddings
 - Supabase pgvector: https://supabase.com/docs/guides/database/extensions/pgvector
 
-## Current Repo Starting Point
+## Concepts
 
-The repo already has the first version of the analysis worker:
+| Concept | Meaning |
+| --- | --- |
+| Project | One GitHub repo connection (owner/repo/branch). Acts as the repo identity (`repo_id`) for content-addressed caching. |
+| Analysis Scope | Ingestion boundary inside a project: whole repo (`path_prefix = ''`) or a directory / workspace package / docker service. |
+| Snapshot | One analysis run of (project, scope, commit). Owns the graph, workflows, rankings, clusters, and generated artifacts for that commit. |
+| Onboarding Package | (scope, role, commit). The generated deliverable: sections + tutorials + diagrams. |
+| Semantic Record | Fixed-schema structured LLM output for a symbol/file/module/service/system/workflow/capability, content-addressed and shared across scopes/snapshots of the same repo. |
+| Receipt | Typed evidence reference (code/config/doc snippet, graph edge, workflow step, or record reference) with a trust level. |
+| Criticality Score | One (phase, view, target) score row. Rankings are projections over views, never a single stored list. |
+
+## Target Architecture
+
+```mermaid
+flowchart TD
+    ingest["Ingestion: zipball + scope boundary + privacy filter + repo inventory + docs/README + language guardrail"]
+    parse["Parser layer (TS/JS via Compiler API, pluggable interface)"]
+    graph["Deterministic Knowledge Graph: symbol-level nodes + edges (calls, imports, routes, DB, jobs, env, tests)"]
+    derive["Deterministic candidate selection: workflows, candidate rankings (fan-in/out, exposure, side effects, churn), architecture clusters"]
+    semantic["LLM Semantic Pass (tiered, depth-gated by candidate ranking, batched per file): structured semantic records per symbol"]
+    synth["Hierarchical Synthesis: file -> module -> service -> system + Capability extraction + refinement/critique pass"]
+    rerank["Semantic reranking: multi-view criticality scores; Critical 25% = projection over views"]
+    embed["Multi-view embeddings over semantic records (purpose, domain, dependency, operations)"]
+    kb[("Persistent Knowledge Base in Supabase")]
+    retrieve["Hybrid retrieval: vector seed -> SQL graph expansion -> receipts"]
+    gen["Generation: onboarding sections, request-flow tutorials + diagrams, architecture map, learning paths (validated, cited)"]
+    qa["Grounded Q&A eval endpoint + internal chat UI"]
+    incr["Incremental: file hashes + symbol AST diffs -> invalidate affected records upward"]
+
+    ingest --> parse --> graph --> derive --> semantic --> synth --> rerank --> embed --> kb
+    kb --> retrieve --> gen
+    retrieve --> qa
+    incr --> graph
+    incr --> semantic
+```
+
+## Pipeline Phases
+
+Every phase writes a `snapshot_phases` row with status, metrics, and a resume checkpoint. A failed or paused job resumes from the last incomplete phase and skips already-persisted work.
 
 ```txt
-backend/src/worker/engine/repoIngester.ts
-  Finds TypeScript/JavaScript files and filters ignored folders.
-
-backend/src/worker/engine/astParser.ts
-  Creates a TypeScript Program, parses SourceFiles, exposes TypeChecker.
-
-backend/src/worker/engine/symbolExtractor.ts
-  Extracts imports, exports, classes, interfaces, functions, variables, methods, calls.
-
-backend/src/worker/engine/graphBuilder.ts
-  Builds the current file-level import graph.
-
-backend/src/worker/engine/analysisRunner.ts
-  Runs indexing -> parsing -> extraction -> graph building.
-
-backend/src/worker/types/analysis.ts
-  Defines FileAnalysis, SymbolInfo, GraphNode, GraphEdge, AnalysisSnapshot.
+ 0. preflight          Inventory + shallow parse -> analysis preview (separate job, no snapshot mutation)
+ 1. ingest             Zipball download, scope boundary, privacy filter, inventory, docs, language guardrail
+ 2. parse              TS Program creation, per-file AST parse (scope files only)
+ 3. graph              Symbol-level evidence graph: nodes, edges, entrypoints, side effects, doc/config/schema nodes
+ 4. workflows          Call-graph workflow extraction (entrypoint -> side effects)
+ 5. candidate_ranking  Phase A deterministic scores (view='candidate'); drives depth gating
+ 6. clustering         Deterministic architecture clusters + cluster edges
+ 7. semantic_symbols   Depth-gated, batched, cached LLM symbol records          [skipped if ai_disabled]
+ 8. synthesis          file -> module -> service -> system records              [skipped if ai_disabled]
+ 9. capabilities       Business capability extraction                           [skipped if ai_disabled]
+10. refinement         Re-annotate critical symbols/files with system context   [skipped if ai_disabled]
+11. critique           Verify records against receipts; mark 'usable'           [skipped if ai_disabled]
+12. semantic_ranking   Phase B multi-view criticality scores                    [skipped if ai_disabled]
+13. embeddings         Multi-view embeddings over usable records                [skipped if ai_disabled]
+14. generation         Package sections + tutorials + diagrams per (scope, role, commit)
+15. validation         Citation/trust validation (also runs inline during generation)
+16. incremental_diff   Only on incremental runs: file/symbol diff + stale flags
 ```
 
-The implementation should extend these files instead of replacing them.
+With `ai_disabled`, the pipeline still produces deterministic outputs: graph, workflows, candidate rankings, clusters, inventory, and deterministic section content clearly labeled as AI-free.
 
-## Final Pipeline
+---
+
+# Operational Guardrails
+
+## Privacy modes
+
+Three per-project modes (`project_settings.privacy_mode`), chosen in project settings and shown in the preflight privacy summary. The mode used for a run is copied onto the snapshot.
+
+- `full_ai` (default): code snippets + deterministic facts sent to the LLM; best quality.
+- `facts_only_ai`: no code snippets leave the system — only extracted facts, signatures, and graph metadata; medium quality, clearly labeled in outputs.
+- `ai_disabled`: no LLM calls at all; deterministic-only outputs.
+
+Enforcement is mechanical, not prompt wording: prompt builders take the mode as an input, and evidence bundle assembly strips `snippet` fields in `facts_only_ai` mode before anything reaches a provider. The privacy filter always strips secret-bearing files (`.env*`, key/cert files, files matching secret patterns) during ingestion, in every mode.
+
+## Evidence trust levels
+
+Trust is a mechanical field stored on `repository_files`, `graph_nodes`, and `source_receipts`:
 
 ```txt
-1. Create analysis job
-2. Download temporary GitHub archive
-3. Apply privacy filters
-4. Build repo inventory
-5. Parse TypeScript/TSX with TypeScript Compiler API
-6. Scan configs, docs, tests, package scripts, Docker, CI
-7. Extract symbols, imports, exports, calls, side effects, entrypoints
-8. Build code evidence graph
-9. Extract candidate workflows from entrypoints to side effects
-10. Rank Critical 25% for workflows, files, symbols, modules, schemas, configs, tests
-11. Build architecture clusters and architecture map
-12. Generate cited symbol/file/module/workflow summaries
-13. Embed summaries for retrieval
-14. Generate onboarding package section by section
-15. Validate citations and confidence
-16. Store package sections, source receipts, generation context
-17. On re-analysis, compare hashes and stale only impacted summaries/sections
+code                    highest   parsed source symbols
+config/schema/migration high      configs, SQL schema, migrations   (stored as 'config')
+tests                   medium-high
+docs                    medium-low README/docs/JSDoc ("docs may be stale, code wins")
+llm_inference           lowest    must cite higher-trust evidence to be usable
 ```
 
-## Database Schema
+The citation validator enforces that claims resolve to sufficient trust. Doc-derived claims that conflict with code-derived evidence are resolved code-over-docs mechanically and flagged (`semantic_records.flags` / section `unknowns`) as `docs_conflict_with_code`.
 
-Use PostgreSQL/Supabase as the durable store. Use relational tables for things that need joins and JSONB for flexible AST/config metadata. Do not store raw ASTs or full repository source by default.
+## Receipt taxonomy
 
-Enable pgvector if embeddings are used:
+A receipt (`source_receipts.receipt_kind`) is any of:
 
-```sql
-create extension if not exists vector;
+```txt
+code_snippet       file/line range + snippet
+config_snippet     config or schema snippet
+doc_snippet        README/docs/JSDoc snippet
+graph_edge         edge evidence ("A calls B") with the detection expression
+workflow_step      step evidence from a traced workflow
+record_reference   reference to another semantic record, which itself bottoms
+                   out in code-level receipts (resolved transitively by the validator)
 ```
 
-### Project and Job Tables
+Every receipt carries `trust_level`, `commit_hash`, and enough identity (`node_stable_key`, `node_hash`, file/lines) to survive re-analysis and be checked for staleness.
 
-These support repo ownership, access, and async worker execution.
+## Cost budgets and kill switches
+
+Project-level budgets enforced by the worker per snapshot: max LLM calls, max input tokens, max files ingested, max symbols sent to LLM, max runtime. Counters live in `analysis_snapshots.budget_usage` and are surfaced in progress UI.
+
+Default budgets by depth (tunable constants, `backend/src/worker/engine/budgets.ts`; overridable per project via `project_settings.budget_overrides`):
+
+| Depth | Max files | Max symbols to LLM | Max LLM calls | Max input tokens | Max runtime |
+| --- | --- | --- | --- | --- | --- |
+| `cheap` | 1,000 | 600 | 100 | 1,000,000 | 25 min |
+| `standard` (default) | 2,500 | 2,000 | 300 | 4,000,000 | 60 min |
+| `full` | 5,000 | 10,000 | 1,500 | 20,000,000 | 4 hr |
+
+Stop behavior when a budget trips (`project_settings.budget_stop_behavior`):
+
+- `fail`: mark snapshot failed with a transparent budget report.
+- `pause` (default): checkpoint and mark snapshot/job `paused`; resumable after raising the budget.
+- `degrade`: drop remaining targets to a cheaper depth (facts-only records for what's left), record a `budget_degraded` event in `budget_usage.budget_events` and a snapshot unknown.
+
+Preflight requires explicit user confirmation when estimates exceed any of: **>2,500 files, >2,000 symbols selected for LLM, >300 LLM calls, or high cost tier.** Very large repos require a smaller scope, a raised budget, a BYO key, or a cheaper depth.
+
+## Model tiers and failure behavior
+
+Two LLM tiers plus embeddings, each a configurable model list (currently one model per tier) via OpenRouter:
+
+| Tier | Used for | Default env |
+| --- | --- | --- |
+| `cheap` | symbol-level semantic pass | `OPENROUTER_MODEL_CHEAP` (e.g. `openai/gpt-4o-mini`) |
+| `strong` | synthesis, capabilities, refinement, critique, reranking, sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (e.g. `anthropic/claude-sonnet-4.5`) |
+| `embedding` | multi-view embeddings | `EMBEDDINGS_MODEL` (default `text-embedding-3-small`, 1536 dims) |
+
+On model failure/rate-limit, behavior is configurable per tier (`project_settings.model_failure_behavior`), analogous to budget stop behavior:
+
+- `retry`: exponential backoff; retries are **per-symbol, not per-batch**.
+- `degrade`: fall back to the next model in the tier list, or from `strong` work to nothing (pause) — the cheap tier may degrade, quality-critical strong-tier work should not silently degrade.
+- `pause`: resumable checkpoint.
+- `fail`: fail the snapshot.
+
+Defaults: `{"cheap": ["retry", "degrade"], "strong": ["retry", "pause"]}`.
+
+## Analysis preview (preflight)
+
+Flow: import repo -> click Analyze -> **preview modal** -> confirm. The preflight job produces:
+
+- selected scope (+ proposed alternatives),
+- supported vs unsupported files (language guardrail output),
+- estimated symbol count and symbols selected for LLM at the chosen depth,
+- estimated LLM calls and token range, and a coarse cost tier,
+- a warning when the repo/scope is large, size-cap confirmations,
+- a privacy summary of what evidence may be sent to the LLM per the project's privacy mode.
+
+**Explicit limitation:** preflight uses inventory + shallow syntactic parse only — no TypeChecker, no call graph, no ranking — so estimates are coarse by design and preflight stays fast instead of becoming half the pipeline.
+
+Estimate formulas (constants in `budgets.ts`):
+
+```txt
+estSymbols        = count of declaration statements from shallow parse
+estSelected       = min(depthSelectionRatio(depth) * estSymbols, maxSymbolsToLlm(depth))
+                    depthSelectionRatio: cheap 0.25, standard 0.5, full 1.0
+estSymbolCalls    = ceil(estSelected / 15)                     (batching cap)
+estSynthesisCalls = ceil(estFiles / 10) + ceil(estModules) + ~5 (capabilities/system/critique)
+estCalls          = estSymbolCalls + estSynthesisCalls + sectionCount + tutorialCount
+estInputTokens    = estCalls * avgTokensPerCall (cheap ~6k, strong ~9k)
+costTier          = low (< $2) | medium ($2-$15) | high (> $15) at configured model prices
+```
+
+## Full-depth size caps
+
+`full` depth is capped unless explicitly confirmed (by preflight-estimated counts):
+
+| Scope size | Files | Est. symbols | Behavior |
+| --- | --- | --- | --- |
+| small | < 300 | < 1,500 | allowed |
+| medium | 300–1,000 | 1,500–5,000 | warning + estimate |
+| large | 1,000–2,500 | 5,000–10,000 | explicit confirmation required |
+| very large | > 2,500 | > 10,000 | require smaller scope, raised budget, or BYO key |
+
+## Honest unknowns (don't bluff)
+
+First-class stored outputs (flags/fields, not prose afterthoughts), rendered in UI and generated content:
+
+- unsupported languages/files (`analysis_snapshots.language_inventory`, `repository_files.supported`),
+- "no workflow found" (`analysis_snapshots.unknowns`),
+- low-confidence claims (claim-level confidence + section `unknowns`),
+- docs-conflict-with-code flags (`semantic_records.flags`, section `unknowns`),
+- missing test coverage (candidate ranking signal surfaced in reasons),
+- external dependencies outside the analysis scope (`external` graph nodes).
+
+## Idempotency and resume
+
+Every phase is resumable:
+
+- `snapshot_phases` rows carry per-phase status + checkpoint keyed by snapshot (scope + commit).
+- Semantic records are content-addressed; a batch whose records already exist is skipped.
+- Embeddings are keyed by (record_id, view, model); existing rows are skipped.
+- `ai_generation_runs.input_hash` makes each LLM/embedding batch skippable on retry (a cached skip is recorded as `skipped_cached`).
+- A failed job resumes from the last incomplete phase instead of restarting the pipeline.
+
+## Observability
+
+Structured per-phase metrics persisted in `snapshot_phases.metrics`: files parsed, symbols extracted, graph nodes/edges, LLM calls/tokens/estimated cost per phase and model, semantic-record cache hit rate, unsupported file counts, retrieval bundle sizes, citation validation pass/fail counts. Exposed via an internal metrics endpoint (`GET /projects/:id/snapshots/:snapshotId/metrics`) and shown in the analysis status UI alongside budget consumption.
+
+## BYO LLM keys
+
+Per-project API keys (`project_llm_keys`), encrypted with the same pattern as GitHub tokens (`backend/src/lib/encryption.ts`). Editable only by project owner/admin. Teammates may see provider name, model names, key existence, and token usage/cost — never the key value. The AI provider layer is abstract; only the OpenRouter provider is implemented for now, with the per-project key overriding the server key when present (`ai_generation_runs.key_source` records which was used). A nullable `org_id` column allows org-level keys later without migration pain.
+
+---
+
+# Database Schema
+
+The executable schema is [backend/supabase/migrations/001_initial_schema.sql](../backend/supabase/migrations/001_initial_schema.sql) (run [000_drop_all.sql](../backend/supabase/migrations/000_drop_all.sql) first on a dirty database). Users/auth, GitHub connections/installations, projects, membership, and invitations are unchanged from the previous schema and not repeated here. Everything below is the pipeline schema, verbatim from the migration.
 
 ```sql
-create table github_connections (
+create extension if not exists "pgcrypto";
+create extension if not exists "vector";
+```
+
+## Settings, keys, ranking weights
+
+```sql
+create table if not exists public.project_settings (
+  project_id uuid primary key references public.projects(id) on delete cascade,
+  ignored_paths text[] not null default array['node_modules', 'dist', '.git', '.env'],
+  -- Deprecated: superseded by privacy_mode = 'ai_disabled'. Kept during transition.
+  ai_enabled boolean not null default false,
+  default_developer_role varchar not null default 'general'
+    check (default_developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  file_limit integer not null default 5000 check (file_limit > 0),
+  loc_limit integer not null default 250000 check (loc_limit > 0),
+  analysis_depth varchar not null default 'standard'
+    check (analysis_depth in ('cheap', 'standard', 'full')),
+  privacy_mode varchar not null default 'full_ai'
+    check (privacy_mode in ('full_ai', 'facts_only_ai', 'ai_disabled')),
+  budget_overrides jsonb not null default '{}',
+  budget_stop_behavior varchar not null default 'pause'
+    check (budget_stop_behavior in ('fail', 'pause', 'degrade')),
+  model_failure_behavior jsonb not null default '{}',
+  model_tier_overrides jsonb not null default '{}'
+);
+
+create table if not exists public.project_llm_keys (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null,
-  github_user_id text not null,
-  github_username text not null,
-  encrypted_access_token text not null,
-  granted_scopes text[] not null default '{}',
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid,                                   -- forward-compat: org-level keys
+  provider varchar not null default 'openrouter',
+  api_key_encrypted text not null,
+  created_by uuid not null references public.users(id) on delete restrict,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (project_id, provider)
 );
 
-create table projects (
+create table if not exists public.ranking_weight_configs (
   id uuid primary key default gen_random_uuid(),
-  repo_owner text not null,
-  repo_name text not null,
-  repo_full_name text generated always as (repo_owner || '/' || repo_name) stored,
-  branch text not null,
-  default_branch text,
-  github_installation_id text,
-  last_analyzed_commit text,
-  status text not null default 'created',
-  ignored_paths text[] not null default '{}',
-  ai_enabled boolean not null default true,
-  created_by uuid not null,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  role varchar not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  weights jsonb not null,
+  updated_by uuid references public.users(id) on delete set null,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  unique (project_id, role)
 );
+```
 
-create table project_members (
-  project_id uuid not null references projects(id) on delete cascade,
-  user_id uuid not null,
-  permission_tier text not null check (permission_tier in ('owner', 'admin', 'developer')),
-  developer_role text check (developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
-  joined_at timestamptz not null default now(),
-  primary key (project_id, user_id)
-);
+A `ranking_weight_configs` row exists only when a project customizes a role; absence means code defaults (see "Weight configs and projections"). "Revert to default" deletes the row.
 
-create table analysis_jobs (
+## Scopes, snapshots, phases, jobs
+
+```sql
+create table if not exists public.analysis_scopes (
   id uuid primary key default gen_random_uuid(),
-  project_id uuid not null references projects(id) on delete cascade,
-  snapshot_id uuid,
-  requested_by uuid not null,
-  job_type text not null check (job_type in ('analyze_project', 'generate_onboarding', 'regenerate_section', 'embed_summaries')),
-  role text check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
-  status text not null check (status in ('queued', 'running', 'complete', 'failed')),
-  progress_pct integer not null default 0,
-  current_step text,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  path_prefix varchar not null default '',        -- '' = whole repo
+  display_name varchar not null,
+  kind varchar not null default 'whole_repo'
+    check (kind in ('whole_repo', 'workspace_package', 'docker_service', 'directory', 'manual')),
+  detected_from varchar,                          -- 'package_json_workspaces' | 'docker_compose' | ...
+  created_by uuid references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, path_prefix)
+);
+
+create table if not exists public.analysis_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  scope_id uuid not null references public.analysis_scopes(id) on delete cascade,
+  commit_hash varchar not null,
+  branch varchar not null,
+  trigger_type varchar not null default 'manual'
+    check (trigger_type in ('manual', 'initial', 'incremental', 'regeneration')),
+  status varchar not null default 'pending'
+    check (status in ('pending', 'running', 'paused', 'complete', 'failed')),
+  semantic_depth varchar not null default 'standard'
+    check (semantic_depth in ('cheap', 'standard', 'full')),
+  privacy_mode varchar not null default 'full_ai'
+    check (privacy_mode in ('full_ai', 'facts_only_ai', 'ai_disabled')),
+  file_count integer not null default 0,
+  symbol_count integer not null default 0,
+  workflow_count integer not null default 0,
+  language_inventory jsonb not null default '{}', -- language guardrail output
+  budget_usage jsonb not null default '{}',       -- live budget counters
+  unknowns jsonb not null default '[]',           -- snapshot-level honest unknowns
+  duration_ms integer,
+  warnings jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  unique (scope_id, commit_hash)
+);
+
+create table if not exists public.snapshot_phases (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  phase varchar not null check (phase in (
+    'preflight', 'ingest', 'parse', 'graph', 'workflows', 'candidate_ranking',
+    'clustering', 'semantic_symbols', 'synthesis', 'capabilities', 'refinement',
+    'critique', 'semantic_ranking', 'embeddings', 'generation', 'validation',
+    'incremental_diff'
+  )),
+  status varchar not null default 'pending'
+    check (status in ('pending', 'running', 'complete', 'failed', 'paused', 'skipped')),
+  started_at timestamptz,
+  finished_at timestamptz,
+  error_message text,
+  metrics jsonb not null default '{}',            -- per-phase observability counters
+  checkpoint jsonb not null default '{}',         -- resume cursor
+  unique (snapshot_id, phase)
+);
+
+create table if not exists public.analysis_jobs (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  scope_id uuid references public.analysis_scopes(id) on delete set null,
+  snapshot_id uuid references public.analysis_snapshots(id) on delete set null,
+  requested_by uuid not null references public.users(id) on delete restrict,
+  job_type varchar not null
+    check (job_type in (
+      'analyze_project', 'generate_onboarding', 'regenerate_section', 'embed_summaries',
+      'preflight', 'analyze_scope', 'generate_package', 'incremental_update'
+    )),
+  role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  status varchar not null default 'queued'
+    check (status in ('queued', 'running', 'paused', 'complete', 'failed')),
+  progress_pct integer not null default 0 check (progress_pct between 0 and 100),
+  current_step varchar,
+  checkpoint jsonb not null default '{}',
+  step_log jsonb not null default '[]',
   error_message text,
   created_at timestamptz not null default now(),
   started_at timestamptz,
@@ -144,549 +393,583 @@ create table analysis_jobs (
 );
 ```
 
-### Snapshot and File Tables
+The first four `job_type` values are legacy and removed once Phase 10 (API/frontend) lands; new code uses `preflight`, `analyze_scope`, `generate_package`, `regenerate_section`, `incremental_update`.
 
-`analysis_snapshots` records a commit-level analysis. `repository_files` stores per-file identity and hashes for incremental re-analysis.
+## Files and the evidence graph
 
 ```sql
-create table analysis_snapshots (
+create table if not exists public.repository_files (
   id uuid primary key default gen_random_uuid(),
-  project_id uuid not null references projects(id) on delete cascade,
-  commit_hash text not null,
-  branch text not null,
-  trigger_type text not null check (trigger_type in ('manual', 'initial', 'incremental', 'regeneration')),
-  status text not null check (status in ('running', 'complete', 'failed')),
-  file_count integer not null default 0,
-  symbol_count integer not null default 0,
-  workflow_count integer not null default 0,
-  duration_ms integer,
-  errors jsonb not null default '[]',
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,                    -- repo-local path
+  file_path varchar not null,
+  language varchar not null,
+  category varchar not null default 'other'
+    check (category in ('source', 'test', 'config', 'schema', 'migration', 'doc', 'script', 'asset', 'other')),
+  supported boolean not null default true,        -- language guardrail output
+  trust_level varchar not null default 'code'
+    check (trust_level in ('code', 'config', 'tests', 'docs')),
+  size_bytes integer not null,
+  line_count integer,
+  hash varchar not null,
+  metadata jsonb not null default '{}',           -- extension, package, pathSegments, churn {...}
+  unique (snapshot_id, stable_key)
+);
+
+create table if not exists public.graph_nodes (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,
+  type varchar not null check (type in (
+    'file', 'module', 'function', 'method', 'class', 'interface', 'type',
+    'enum', 'variable', 'entrypoint', 'schema', 'test', 'config', 'doc', 'external'
+  )),
+  name varchar not null,
+  file_path varchar,                              -- null for 'external' nodes
+  line_start integer,
+  line_end integer,
+  hash varchar,                                   -- combined identity hash; null for 'external'
+  signature_hash varchar,
+  body_hash varchar,
+  trust_level varchar not null default 'code'
+    check (trust_level in ('code', 'config', 'tests', 'docs', 'llm_inference')),
+  exported boolean not null default false,
+  snippet text,                                   -- capped; stripped in facts_only_ai bundles
+  metadata jsonb not null default '{}'::jsonb     -- signature, params, returnType, behaviorSignals, ...
+);
+-- unique index (snapshot_id, stable_key)
+
+create table if not exists public.graph_edges (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  source_node_id uuid not null references public.graph_nodes(id) on delete cascade,
+  target_node_id uuid not null references public.graph_nodes(id) on delete cascade,
+  type varchar not null check (type in (
+    'imports', 'exports', 'calls', 'extends', 'implements', 'contains',
+    'registers_callback', 'handles_route', 'touches_schema',
+    'reads_env', 'queries_database', 'writes_database',
+    'enqueues_job', 'handles_job', 'http_calls',
+    'tests', 'documents', 'depends_on', 'references_external'
+  )),
+  confidence varchar not null default 'high' check (confidence in ('high', 'medium', 'low')),
+  metadata jsonb not null default '{}'::jsonb     -- detectedFrom, expression
+);
+-- unique index (snapshot_id, source_node_id, target_node_id, type)
+```
+
+`external` nodes represent anything imported/called across the scope boundary (other packages in the repo outside the scope, or third-party modules). `doc` nodes carry README/docs/JSDoc evidence with `trust_level = 'docs'`.
+
+## Entrypoints, side effects, workflows
+
+```sql
+create table if not exists public.entrypoints (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  node_id uuid not null references public.graph_nodes(id) on delete cascade,
+  trigger_type varchar not null check (trigger_type in (
+    'http_route', 'ui_route', 'event_listener', 'worker_job',
+    'scheduled_job', 'serverless_handler', 'cli', 'package_export'
+  )),
+  method varchar,
+  route_path varchar,
+  runtime varchar,
+  role_relevance jsonb not null default '{}',
+  confidence varchar not null default 'high' check (confidence in ('high', 'medium', 'low')),
+  metadata jsonb not null default '{}',
   created_at timestamptz not null default now()
 );
 
-create table repository_files (
+create table if not exists public.side_effects (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  stable_key text not null,
-  file_path text not null,
-  language text not null,
-  category text not null,
-  size_bytes integer not null,
-  line_count integer,
-  hash text not null,
-  metadata jsonb not null default '{}',
-  unique (snapshot_id, stable_key)
-);
-```
-
-Example `repository_files.metadata`:
-
-```json
-{
-  "extension": ".tsx",
-  "isTest": false,
-  "isConfig": false,
-  "package": "frontend",
-  "pathSegments": ["frontend", "src", "pages"]
-}
-```
-
-### Code Evidence Graph
-
-The graph stores files, symbols, configs, schemas, tests, and relationships. It is used by architecture views, workflow extraction, ranking, stale detection, and LLM grounding.
-
-```sql
-create table graph_nodes (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  stable_key text not null,
-  type text not null check (
-    type in (
-      'file', 'module', 'function', 'method', 'class', 'interface', 'type',
-      'enum', 'variable', 'entrypoint', 'schema', 'test', 'config', 'doc'
-    )
-  ),
-  name text not null,
-  file_path text,
-  line_start integer,
-  line_end integer,
-  hash text,
-  metadata jsonb not null default '{}',
-  unique (snapshot_id, stable_key)
-);
-
-create table graph_edges (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  source_node_id uuid not null references graph_nodes(id) on delete cascade,
-  target_node_id uuid not null references graph_nodes(id) on delete cascade,
-  type text not null check (
-    type in (
-      'imports', 'exports', 'calls', 'extends', 'implements',
-      'registers_callback', 'handles_route', 'touches_schema',
-      'reads_env', 'queries_database', 'writes_database',
-      'enqueues_job', 'handles_job', 'http_calls',
-      'tests', 'documents', 'contains', 'depends_on'
-    )
-  ),
-  confidence text not null default 'high' check (confidence in ('high', 'medium', 'low')),
-  metadata jsonb not null default '{}',
-  unique (snapshot_id, source_node_id, target_node_id, type)
-);
-```
-
-Example `graph_nodes.metadata` for a route:
-
-```json
-{
-  "signature": "(req: Request, res: Response) => Promise<void>",
-  "params": ["req", "res"],
-  "returnType": "Promise<void>",
-  "exported": false,
-  "behaviorSignals": ["http_route", "database_write", "queue_enqueue"],
-  "purposeSignals": ["project_import", "analysis_start"],
-  "signatureHash": "sha256:...",
-  "bodyHash": "sha256:..."
-}
-```
-
-Example edge:
-
-```json
-{
-  "type": "enqueues_job",
-  "metadata": {
-    "queueName": "analysis",
-    "detectedFrom": "CallExpression",
-    "expression": "analysisQueue.add(...)"
-  }
-}
-```
-
-### Entrypoints and Side Effects
-
-These tables make workflow extraction queryable instead of hiding all detection details in JSON.
-
-```sql
-create table entrypoints (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  node_id uuid not null references graph_nodes(id) on delete cascade,
-  trigger_type text not null check (
-    trigger_type in (
-      'http_route', 'ui_route', 'event_listener', 'worker_job',
-      'scheduled_job', 'serverless_handler', 'cli', 'package_export'
-    )
-  ),
-  method text,
-  route_path text,
-  runtime text,
-  role_relevance jsonb not null default '{}',
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
-  metadata jsonb not null default '{}'
-);
-
-create table side_effects (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  node_id uuid not null references graph_nodes(id) on delete cascade,
-  type text not null check (
-    type in (
-      'database_read', 'database_write', 'http_request', 'queue_enqueue',
-      'queue_consume', 'filesystem_read', 'filesystem_write',
-      'auth_check', 'env_read', 'response_output', 'external_integration'
-    )
-  ),
-  target text,
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  node_id uuid not null references public.graph_nodes(id) on delete cascade,
+  type varchar not null check (type in (
+    'database_read', 'database_write', 'http_request', 'queue_enqueue',
+    'queue_consume', 'filesystem_read', 'filesystem_write',
+    'auth_check', 'env_read', 'response_output', 'external_integration'
+  )),
+  target varchar,
+  confidence varchar not null default 'medium' check (confidence in ('high', 'medium', 'low')),
   evidence text not null,
-  metadata jsonb not null default '{}'
-);
-```
-
-### Workflow Tables
-
-A workflow is not every path. It is a selected candidate path that starts from an entrypoint and reaches meaningful side effects or outputs.
-
-```sql
-create table workflows (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  stable_key text not null,
-  title text not null,
-  trigger_type text not null,
-  purpose text not null,
-  entrypoint_id uuid references entrypoints(id),
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
   metadata jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.workflows (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,
+  title varchar not null,
+  trigger_type varchar not null,
+  purpose varchar not null,
+  entrypoint_id uuid references public.entrypoints(id) on delete set null,
+  confidence varchar not null default 'low' check (confidence in ('high', 'medium', 'low')),
+  metadata jsonb not null default '{}'::jsonb,
   unique (snapshot_id, stable_key)
 );
 
-create table workflow_steps (
+create table if not exists public.workflow_steps (
   id uuid primary key default gen_random_uuid(),
-  workflow_id uuid not null references workflows(id) on delete cascade,
+  workflow_id uuid not null references public.workflows(id) on delete cascade,
   step_order integer not null,
-  node_id uuid not null references graph_nodes(id) on delete cascade,
-  file_path text,
-  symbol_name text,
+  node_id uuid references public.graph_nodes(id) on delete set null,
+  file_path varchar not null,
+  symbol_name varchar,
   line_start integer,
   line_end integer,
-  step_kind text not null,
+  step_kind varchar check (step_kind in (
+    'trigger', 'auth_guard', 'validation', 'data_read', 'data_write',
+    'async_work', 'side_effect', 'transform', 'response'
+  )),
   deterministic_description text,
-  role_relevance jsonb not null default '{}',
+  role_relevance jsonb not null default '{}'::jsonb,
   metadata jsonb not null default '{}',
   unique (workflow_id, step_order)
 );
-
-create table workflow_scores (
-  workflow_id uuid primary key references workflows(id) on delete cascade,
-  entrypoint_exposure numeric not null,
-  downstream_impact numeric not null,
-  structural_centrality numeric not null,
-  external_side_effects numeric not null,
-  documentation_gap numeric not null,
-  test_coverage_signal numeric not null,
-  git_churn_recency numeric not null,
-  composite_score numeric not null,
-  ranking_reasons text[] not null default '{}',
-  metadata jsonb not null default '{}'
-);
 ```
 
-### Critical 25% Rankings For Everything
-
-Critical 25% is not only workflows. Store a unified ranking table for every target type.
+## Criticality scores (two-phase, multi-view)
 
 ```sql
-create table critical_rankings (
+create table if not exists public.criticality_scores (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  role text not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
-  target_type text not null check (
-    target_type in ('workflow', 'file', 'symbol', 'module', 'schema', 'config', 'test')
-  ),
-  target_id uuid not null,
-  stable_key text not null,
-  composite_score numeric not null,
-  percentile numeric not null,
-  is_critical_25 boolean not null,
-  ranking_reasons text[] not null default '{}',
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  phase varchar not null check (phase in ('candidate', 'semantic')),
+  view varchar not null check (view in (
+    'candidate',
+    'critical_for_runtime', 'critical_for_business', 'critical_for_onboarding',
+    'critical_for_role', 'critical_for_change_risk', 'critical_for_architecture',
+    'critical_for_workflow'
+  )),
+  target_type varchar not null check (target_type in (
+    'symbol', 'file', 'module', 'workflow', 'schema', 'config', 'test', 'cluster', 'capability'
+  )),
+  target_node_id uuid references public.graph_nodes(id) on delete cascade,
+  target_id uuid,                                 -- workflow/cluster/capability id when not a node
+  stable_key varchar not null,
+  role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  score numeric(7, 5) not null default 0,
   score_breakdown jsonb not null default '{}',
-  metadata jsonb not null default '{}',
-  unique (snapshot_id, role, target_type, target_id)
+  reasons text[] not null default '{}',
+  receipt_ids uuid[] not null default '{}',
+  created_at timestamptz not null default now()
 );
+-- unique index (snapshot_id, phase, view, target_type, stable_key, coalesce(role, ''))
 ```
 
-Example row:
+`role` is set only for `critical_for_role` rows (one row per role). Raw view scores are never overwritten — re-weighting a role's projection is instant and needs no re-analysis.
 
-```json
-{
-  "role": "backend",
-  "targetType": "file",
-  "stableKey": "backend/src/api/routes/projects.ts",
-  "compositeScore": 0.91,
-  "isCritical25": true,
-  "rankingReasons": [
-    "Contains public API route entrypoints",
-    "Creates persistent project records",
-    "Enqueues analysis jobs"
-  ],
-  "scoreBreakdown": {
-    "criticalWorkflowParticipation": 0.95,
-    "fanIn": 0.64,
-    "sideEffects": 0.9,
-    "publicApiExposure": 0.85,
-    "churn": 0.25,
-    "documentationGap": 0.7,
-    "testCoverage": 0.4
-  }
-}
-```
-
-### Architecture Map Tables
-
-The architecture map should be built from graph clustering first. The LLM only labels and explains it.
+## Architecture map
 
 ```sql
-create table architecture_clusters (
+create table if not exists public.architecture_clusters (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  stable_key text not null,
-  label text not null,
-  kind text not null check (
-    kind in (
-      'frontend_ui', 'frontend_state', 'api_layer', 'auth_layer',
-      'database_layer', 'worker_layer', 'analysis_engine',
-      'integration_layer', 'devops_layer', 'test_layer', 'shared_module'
-    )
-  ),
-  critical_score numeric not null default 0,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,
+  label varchar not null,
+  kind varchar not null check (kind in (
+    'frontend_ui', 'frontend_state', 'api_layer', 'auth_layer',
+    'database_layer', 'worker_layer', 'analysis_engine',
+    'integration_layer', 'devops_layer', 'test_layer', 'shared_module', 'other'
+  )),
+  critical_score numeric(7, 5) not null default 0,
   deterministic_summary text,
   metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
   unique (snapshot_id, stable_key)
 );
 
-create table architecture_cluster_members (
-  cluster_id uuid not null references architecture_clusters(id) on delete cascade,
-  node_id uuid not null references graph_nodes(id) on delete cascade,
-  membership_reason text not null,
+create table if not exists public.architecture_cluster_members (
+  cluster_id uuid not null references public.architecture_clusters(id) on delete cascade,
+  node_id uuid not null references public.graph_nodes(id) on delete cascade,
+  membership_reason text not null default '',
   primary key (cluster_id, node_id)
 );
 
-create table architecture_edges (
+create table if not exists public.architecture_edges (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  source_cluster_id uuid not null references architecture_clusters(id) on delete cascade,
-  target_cluster_id uuid not null references architecture_clusters(id) on delete cascade,
-  type text not null check (
-    type in ('imports', 'calls', 'sends_request', 'enqueues_job', 'reads_writes_data', 'uses_config', 'tests')
-  ),
-  weight numeric not null default 1,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  source_cluster_id uuid not null references public.architecture_clusters(id) on delete cascade,
+  target_cluster_id uuid not null references public.architecture_clusters(id) on delete cascade,
+  type varchar not null check (type in (
+    'imports', 'calls', 'sends_request', 'enqueues_job', 'reads_writes_data', 'uses_config', 'tests'
+  )),
+  weight numeric(7, 3) not null default 1,
   evidence_edge_ids uuid[] not null default '{}',
-  metadata jsonb not null default '{}'
-);
-```
-
-### Semantic Summary and Embedding Tables
-
-These preserve context. The summary is generated once per snapshot target and reused by onboarding sections. The embedding is for retrieval.
-
-```sql
-create table semantic_summaries (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  target_type text not null check (
-    target_type in ('symbol', 'file', 'module', 'workflow', 'architecture_cluster', 'schema', 'config', 'test')
-  ),
-  target_id uuid not null,
-  stable_key text not null,
-  summary text not null,
-  facts jsonb not null default '[]',
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
-  receipt_ids uuid[] not null default '{}',
-  evidence_hash text not null,
-  model text,
-  prompt_version text not null,
-  created_at timestamptz not null default now(),
-  unique (snapshot_id, target_type, target_id, evidence_hash)
-);
-
-create table evidence_embeddings (
-  id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  summary_id uuid not null references semantic_summaries(id) on delete cascade,
-  target_type text not null,
-  target_id uuid not null,
-  content text not null,
-  embedding vector(1536),
-  provider text not null,
-  model text not null,
   metadata jsonb not null default '{}',
   created_at timestamptz not null default now()
 );
 ```
 
-Use 1536 dimensions if using `text-embedding-3-small`. If a different model is configured, create a separate embedding table or use a matching vector dimension.
-
-### Onboarding Generation Tables
-
-These tables record section-by-section generation and the exact context used.
+## Semantic records and capabilities
 
 ```sql
-create table onboarding_packages (
+create table if not exists public.semantic_records (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  project_id uuid not null references projects(id) on delete cascade,
-  role text not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
-  status text not null check (status in ('generating', 'draft', 'approved', 'stale', 'failed')),
-  generated_by uuid not null,
-  analyzed_commit text not null,
+  project_id uuid not null references public.projects(id) on delete cascade,  -- acts as repo_id
+  stable_key varchar not null,
+  record_level varchar not null check (record_level in (
+    'symbol', 'file', 'module', 'service', 'system', 'workflow', 'capability', 'cluster'
+  )),
+  semantic_depth varchar not null check (semantic_depth in ('cheap', 'standard', 'full')),
+  evidence_hash text not null,
+  prompt_version text not null,
+  model_family text not null,                     -- exact model stored in `model`
+  record jsonb not null,                          -- fixed-schema structured record
+  summary text not null,                          -- rendered display summary
+  confidence varchar not null default 'medium' check (confidence in ('high', 'medium', 'low')),
+  facts_only boolean not null default false,      -- trivial symbol: no LLM call
+  status varchar not null default 'pending'
+    check (status in ('pending', 'usable', 'rejected', 'superseded')),
+  flags jsonb not null default '[]',              -- honest-unknown / conflict flags
+  child_record_ids uuid[] not null default '{}',  -- hierarchy links (synthesis inputs)
+  receipt_ids uuid[] not null default '{}',
+  model text,
+  token_usage jsonb not null default '{}',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  unique (project_id, role, analyzed_commit)
+  unique (project_id, stable_key, evidence_hash, prompt_version, semantic_depth, model_family)
 );
 
-create table ai_generation_runs (
+create table if not exists public.snapshot_semantic_records (
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  record_id uuid not null references public.semantic_records(id) on delete cascade,
+  node_id uuid references public.graph_nodes(id) on delete set null,
+  stable_key varchar not null,
+  record_level varchar not null,
+  primary key (snapshot_id, record_id)
+);
+
+create table if not exists public.capabilities (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  package_id uuid references onboarding_packages(id) on delete cascade,
-  target_type text not null check (target_type in ('summary', 'section', 'walkthrough_step')),
-  target_id uuid,
-  section_type text,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  stable_key varchar not null,
+  name varchar not null,
+  description text not null default '',
+  record_id uuid references public.semantic_records(id) on delete set null,
+  confidence varchar not null default 'medium' check (confidence in ('high', 'medium', 'low')),
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  unique (snapshot_id, stable_key)
+);
+
+create table if not exists public.capability_members (
+  capability_id uuid not null references public.capabilities(id) on delete cascade,
+  member_type varchar not null check (member_type in ('workflow', 'cluster', 'node')),
+  member_id uuid not null,
+  stable_key varchar not null default '',
+  membership_reason text not null default '',
+  primary key (capability_id, member_type, member_id)
+);
+```
+
+Records are **not** snapshot-scoped. `snapshot_semantic_records` maps which record is active for which target in a snapshot; that is what retrieval joins through. The canonical content-address key is:
+
+```txt
+project_id + stable_key + evidence_hash + prompt_version + semantic_depth + model_family
+```
+
+## Embeddings
+
+```sql
+create table if not exists public.embeddings (
+  id uuid primary key default gen_random_uuid(),
+  record_id uuid not null references public.semantic_records(id) on delete cascade,
+  view_type varchar not null check (view_type in ('purpose', 'domain', 'dependency', 'operations')),
+  content text not null,                          -- deterministic rendering of record fields
+  embedding vector(1536),
   provider text not null,
   model text not null,
+  created_at timestamptz not null default now(),
+  unique (record_id, view_type, model)
+);
+-- HNSW index: using hnsw (embedding vector_cosine_ops)
+```
+
+## Packages, sections, tutorials, receipts, audit, staleness
+
+```sql
+create table if not exists public.onboarding_packages (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  scope_id uuid not null references public.analysis_scopes(id) on delete cascade,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  role varchar not null check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  status varchar not null default 'generating'
+    check (status in ('generating', 'draft', 'approved', 'stale', 'failed')),
+  generated_by uuid not null references public.users(id) on delete restrict,
+  analyzed_commit varchar not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, scope_id, role, analyzed_commit)
+);
+
+create table if not exists public.ai_generation_runs (
+  id uuid primary key default gen_random_uuid(),
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  package_id uuid references public.onboarding_packages(id) on delete cascade,
+  target_type varchar not null,                   -- symbol_record | file_record | module_record |
+                                                  -- service_record | system_record | capability_record |
+                                                  -- workflow_record | refinement | critique | rerank |
+                                                  -- section | tutorial | qa_answer | embedding_batch
+  target_id uuid,
+  section_type varchar,
+  provider text not null,
+  model text not null,
+  model_tier varchar check (model_tier in ('cheap', 'strong', 'embedding')),
+  key_source varchar not null default 'server' check (key_source in ('server', 'project')),
   prompt_version text not null,
   input_hash text not null,
   output_hash text,
   token_usage jsonb not null default '{}',
+  estimated_cost_usd numeric(10, 6),
   latency_ms integer,
-  status text not null check (status in ('running', 'complete', 'failed')),
+  status varchar not null check (status in ('running', 'complete', 'failed', 'skipped_cached')),
   error_message text,
   created_at timestamptz not null default now(),
   finished_at timestamptz
 );
 
-create table package_sections (
+create table if not exists public.package_sections (
   id uuid primary key default gen_random_uuid(),
-  package_id uuid not null references onboarding_packages(id) on delete cascade,
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  generation_run_id uuid references ai_generation_runs(id),
-  type text not null check (
-    type in (
-      'start_here', 'architecture', 'entry_points', 'critical_25',
+  package_id uuid not null references public.onboarding_packages(id) on delete cascade,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  generation_run_id uuid references public.ai_generation_runs(id) on delete set null,
+  type varchar not null
+    check (type in (
+      'start_here', 'architecture', 'entry_points', 'critical_25', 'capability_map',
       'role_path', 'workflow_guide', 'data_schema', 'safety_rails',
       'dependency_graph', 'doc_health'
-    )
-  ),
-  title text not null,
-  content text not null,
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
-  review_status text not null check (review_status in ('draft', 'approved', 'edited', 'stale', 'regenerate_requested')),
-  analyzed_commit text not null,
-  role text check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
-  generation_context jsonb not null default '{}',
+    )),
+  title varchar not null,
+  content text not null default '',
+  diagrams jsonb not null default '[]',           -- [{"kind": "architecture", "mermaid": "..."}]
+  confidence varchar not null default 'low' check (confidence in ('high', 'medium', 'low')),
+  review_status varchar not null default 'draft'
+    check (review_status in ('draft', 'approved', 'edited', 'stale', 'regenerate_requested')),
+  analyzed_commit varchar not null,
+  role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  unknowns jsonb not null default '[]',           -- first-class honest unknowns
+  generation_context jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
   reviewed_at timestamptz,
-  reviewed_by uuid
+  reviewed_by uuid references public.users(id) on delete set null
 );
 
-create table source_receipts (
+create table if not exists public.tutorials (
   id uuid primary key default gen_random_uuid(),
-  section_id uuid references package_sections(id) on delete cascade,
-  summary_id uuid references semantic_summaries(id) on delete set null,
-  node_id uuid references graph_nodes(id) on delete set null,
-  workflow_id uuid references workflows(id) on delete set null,
-  node_stable_key text,
-  node_hash text,
-  file_path text,
-  symbol_name text,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  package_id uuid references public.onboarding_packages(id) on delete cascade,
+  workflow_id uuid references public.workflows(id) on delete set null,
+  generation_run_id uuid references public.ai_generation_runs(id) on delete set null,
+  stable_key varchar not null,
+  title varchar not null,
+  summary text not null default '',
+  diagram_kind varchar not null default 'sequence' check (diagram_kind in ('sequence', 'dataflow')),
+  diagram_mermaid text,
+  status varchar not null default 'draft'
+    check (status in ('draft', 'approved', 'stale', 'failed')),
+  confidence varchar not null default 'medium' check (confidence in ('high', 'medium', 'low')),
+  unknowns jsonb not null default '[]',
+  generation_context jsonb not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+-- unique index (package_id, stable_key) where package_id is not null
+
+create table if not exists public.tutorial_steps (
+  id uuid primary key default gen_random_uuid(),
+  tutorial_id uuid not null references public.tutorials(id) on delete cascade,
+  step_order integer not null,
+  node_id uuid references public.graph_nodes(id) on delete set null,
+  file_path varchar not null,
+  symbol_name varchar,
   line_start integer,
   line_end integer,
   snippet text,
+  explanation text not null default '',
+  receipt_ids uuid[] not null default '{}',
+  metadata jsonb not null default '{}',
+  unique (tutorial_id, step_order)
+);
+
+create table if not exists public.source_receipts (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  snapshot_id uuid references public.analysis_snapshots(id) on delete set null,
+  receipt_kind varchar not null default 'code_snippet' check (receipt_kind in (
+    'code_snippet', 'config_snippet', 'doc_snippet',
+    'graph_edge', 'workflow_step', 'record_reference'
+  )),
+  trust_level varchar not null default 'code'
+    check (trust_level in ('code', 'config', 'tests', 'docs', 'llm_inference')),
+  section_id uuid references public.package_sections(id) on delete cascade,
+  record_id uuid references public.semantic_records(id) on delete cascade,
+  tutorial_step_id uuid references public.tutorial_steps(id) on delete cascade,
+  node_id uuid references public.graph_nodes(id) on delete set null,
+  edge_id uuid references public.graph_edges(id) on delete set null,
+  workflow_id uuid references public.workflows(id) on delete set null,
+  referenced_record_id uuid references public.semantic_records(id) on delete set null,
+  node_stable_key varchar,
+  node_hash varchar,
+  file_path varchar,
+  symbol_name varchar,
+  line_start integer,
+  line_end integer,
+  snippet text,
+  detection_expression text,                      -- for graph_edge receipts
   claim text,
-  commit_hash text not null,
-  confidence text not null check (confidence in ('high', 'medium', 'low')),
+  commit_hash varchar not null,
+  confidence varchar not null default 'high' check (confidence in ('high', 'medium', 'low')),
   metadata jsonb not null default '{}'
 );
 
-create table stale_flags (
+create table if not exists public.stale_flags (
   id uuid primary key default gen_random_uuid(),
-  snapshot_id uuid not null references analysis_snapshots(id) on delete cascade,
-  package_id uuid references onboarding_packages(id) on delete cascade,
-  section_id uuid references package_sections(id) on delete cascade,
-  summary_id uuid references semantic_summaries(id) on delete cascade,
-  target_type text not null,
-  target_stable_key text not null,
+  snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
+  target_type varchar not null check (target_type in (
+    'graph_node', 'semantic_record', 'workflow', 'capability',
+    'package', 'package_section', 'tutorial', 'embedding'
+  )),
+  target_id uuid,
+  target_stable_key varchar not null,
   reason text not null,
-  old_hash text,
-  new_hash text,
+  old_hash varchar,
+  new_hash varchar,
+  package_id uuid references public.onboarding_packages(id) on delete cascade,
+  section_id uuid references public.package_sections(id) on delete cascade,
+  record_id uuid references public.semantic_records(id) on delete cascade,
+  changed_files text[] not null default '{}',
   created_at timestamptz not null default now(),
   resolved_at timestamptz
 );
 ```
 
-## Implementation Files To Add
+Receipts are project-scoped (snapshot reference is `set null`) because content-addressed semantic records outlive snapshots; a receipt attached to a record must not disappear when an old snapshot is deleted.
 
-Keep existing worker files and add these:
+## Graph neighborhood SQL function
 
-```txt
-backend/src/worker/engine/configScanner.ts
-backend/src/worker/engine/privacyFilter.ts
-backend/src/worker/engine/hashUtils.ts
-backend/src/worker/engine/stableKeys.ts
-backend/src/worker/engine/behaviorSignals.ts
-backend/src/worker/engine/entrypointDetector.ts
-backend/src/worker/engine/sideEffectDetector.ts
-backend/src/worker/engine/evidenceGraphBuilder.ts
-backend/src/worker/engine/workflowExtractor.ts
-backend/src/worker/engine/workflowRanker.ts
-backend/src/worker/engine/criticalRanker.ts
-backend/src/worker/engine/architectureClusterer.ts
-backend/src/worker/engine/semanticSummaryService.ts
-backend/src/worker/engine/embeddingService.ts
-backend/src/worker/engine/evidenceBundleBuilder.ts
-backend/src/worker/engine/aiGenerationService.ts
-backend/src/worker/engine/sectionValidator.ts
-backend/src/worker/engine/persistAnalysis.ts
-backend/src/worker/engine/incrementalAnalyzer.ts
+Graph RAG expansion in plain SQL — recursive CTE with hop and fan-out caps, both edge directions, optional edge-type filter:
+
+```sql
+create or replace function public.graph_neighborhood(
+  p_snapshot_id uuid,
+  p_seed_node_ids uuid[],
+  p_max_hops integer default 2,
+  p_edge_types text[] default null,
+  p_max_fanout integer default 25,
+  p_max_nodes integer default 200
+)
+returns table (node_id uuid, hop integer, via_edge_id uuid, via_edge_type text, direction text)
+language sql
+stable
+as $$
+  with recursive frontier as (
+    select seed.node_id, 0 as hop,
+           null::uuid as via_edge_id, null::text as via_edge_type, null::text as direction
+    from unnest(p_seed_node_ids) as seed(node_id)
+    union
+    select nbr.node_id, f.hop + 1, nbr.edge_id, nbr.edge_type, nbr.direction
+    from frontier f
+    join lateral (
+      (
+        select e.target_node_id as node_id, e.id as edge_id, e.type::text as edge_type, 'out'::text as direction
+        from public.graph_edges e
+        where e.snapshot_id = p_snapshot_id
+          and e.source_node_id = f.node_id
+          and (p_edge_types is null or e.type = any (p_edge_types))
+        limit p_max_fanout
+      )
+      union all
+      (
+        select e.source_node_id as node_id, e.id as edge_id, e.type::text as edge_type, 'in'::text as direction
+        from public.graph_edges e
+        where e.snapshot_id = p_snapshot_id
+          and e.target_node_id = f.node_id
+          and (p_edge_types is null or e.type = any (p_edge_types))
+        limit p_max_fanout
+      )
+    ) nbr on true
+    where f.hop < p_max_hops
+  )
+  select distinct on (f.node_id) f.node_id, f.hop, f.via_edge_id, f.via_edge_type, f.direction
+  from frontier f
+  order by f.node_id, f.hop
+  limit p_max_nodes;
+$$;
 ```
 
-## Step 1: Repository Inventory
+---
 
-Extend `repoIngester.ts`.
+# Deterministic Layer
 
-Required functions:
+## Parser interface
 
-```ts
-export async function buildRepoIndex(rootPath: string): Promise<RepoIndex>;
-export function applyPrivacyFilters(index: RepoIndex, ignoredPaths: string[]): RepoIndex;
-export async function detectRepoInventory(rootPath: string): Promise<RepoInventory>;
-```
-
-`RepoInventory`:
+Languages: TypeScript + JavaScript via the TS Compiler API with `allowJs: true`, behind a parser interface so future languages plug in without touching the pipeline:
 
 ```ts
-export interface RepoInventory {
-  packages: Array<{
-    root: string;
-    packageJsonPath: string;
-    name: string | null;
-    scripts: Record<string, string>;
-    dependencies: string[];
-    devDependencies: string[];
-  }>;
-  configs: Array<{
-    path: string;
-    kind: 'tsconfig' | 'vite' | 'docker' | 'compose' | 'github_actions' | 'env_example' | 'eslint';
-    facts: Record<string, unknown>;
-  }>;
-  detectedFrameworks: string[];
+export interface LanguageParser {
+  id: string;                                   // 'typescript'
+  supportedExtensions: string[];                // ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']
+  supports(filePath: string): boolean;
+  createContext(files: RepoFileEntry[], rootPath: string): Promise<ParserContext>; // TS Program
+  parseFile(ctx: ParserContext, filePath: string): ParsedFile;
+  extractSymbols(ctx: ParserContext, parsed: ParsedFile): ExtractedSymbol[];
 }
 ```
 
-Example output:
+The TS implementation keeps `program.getTypeChecker()` available for cross-file call resolution. Raw ASTs are never stored — only extracted evidence.
+
+## Language inventory and guardrail
+
+During ingestion, every file gets a language + supported flag. The inventory is persisted on the snapshot:
 
 ```json
 {
-  "detectedFrameworks": ["react", "vite", "express", "bullmq", "supabase"],
-  "packages": [
-    {
-      "root": "frontend",
-      "name": "@onboardbuddy/frontend",
-      "scripts": { "dev": "vite", "build": "tsc && vite build" },
-      "dependencies": ["@vitejs/plugin-react", "react", "reactflow"]
-    }
-  ],
-  "configs": [
-    { "path": "docker-compose.yml", "kind": "compose", "facts": { "services": ["frontend", "backend-api", "backend-worker"] } }
-  ]
+  "supported": { "typescript": 118, "javascript": 12 },
+  "unsupported": { "go": 42, "python": 7 },
+  "evidenceOnly": { "json": 20, "markdown": 9, "yaml": 6 },
+  "supportedFileCount": 130,
+  "unsupportedFileCount": 49
 }
 ```
 
-## Step 2: AST Parsing
+Hard guardrail: if `supportedFileCount === 0`, the snapshot **fails transparently** (`status = 'failed'`, unknown `{"kind": "unsupported_only_repo"}`) with the inventory as the report — the pipeline never hallucinates analysis of languages it cannot parse. Partially supported repos proceed and surface unsupported files as first-class unknowns. `evidenceOnly` files (configs, docs, schemas) are not "unsupported" — they feed the config scanner and docs ingestion but produce no symbols.
 
-Keep the current TypeScript Compiler API flow in `astParser.ts`:
+## Scope proposal
 
-```ts
-const program = createProgram(tsFiles, repoPath);
-const parsed = parseSourceFile(program, entry.absolutePath);
+Deterministic proposal from repo inventory; the user confirms or overrides (manual path entry allowed, never the only way):
+
+```txt
+1. Always: whole repo ('' prefix, kind 'whole_repo').
+2. package.json workspaces (and pnpm-workspace.yaml)  -> kind 'workspace_package'
+3. docker-compose services with build contexts        -> kind 'docker_service'
+4. Conventional top dirs when they contain a package.json or >= 10 source files:
+   apps/*, packages/*, services/*, frontend, backend, server, client, api, worker
+                                                       -> kind 'directory'
+5. Deploy configs pointing at subdirectories (vercel.json, netlify.toml, Procfile)
 ```
 
-The TypeScript `Program` is important because it lets future extraction use cross-file type information through `program.getTypeChecker()`.
+Proposals are upserted into `analysis_scopes` with `detected_from`; duplicates by `path_prefix` are merged.
 
-Do not store raw ASTs. Extract stable evidence from them.
+## Scope-bounded ingestion
 
-## Step 3: Symbol and Behavior Extraction
+The zipball flow is unchanged (GitHub archive download, no clone). Scope rules:
 
-Extend `symbolExtractor.ts` so every symbol gets a stable identity and hashes.
+1. Only files under `path_prefix` are parsed and become `file` nodes / `repository_files` rows.
+2. The privacy filter and ignored paths apply first, in every privacy mode.
+3. Imports resolving outside the scope become `external` nodes (`stable_key = 'external:<specifier-or-repo-path>'`) with `references_external` / `imports` edges — graphs stay honest without exploding.
+4. Repo-level inventory (workspaces, docker services, root configs) is always read for scope proposal and framework detection, even when the scope is a subdirectory.
+5. Stable keys stay repo-local (full repo-relative paths) in every scope, so overlapping scopes share semantic records.
 
-Required fields:
+## Symbol extraction
+
+`symbolExtractor.ts` (upgraded) — every symbol gets a stable identity, hashes, and a capped snippet:
 
 ```ts
 export interface ExtractedSymbol {
-  stableKey: string;
+  stableKey: string;          // 'backend/src/api/routes/projects.ts#createProject'
   name: string;
-  kind: SymbolKind;
+  kind: SymbolKind;           // function | method | class | interface | type | enum | variable
   filePath: string;
   lineStart: number;
   lineEnd: number;
@@ -694,1331 +977,610 @@ export interface ExtractedSymbol {
   signature?: string;
   params?: ParameterInfo[];
   returnType?: string;
-  callsSymbols: string[];
+  jsdoc?: string;             // ingested as docs-trust evidence
+  callsSymbols: string[];     // TypeChecker-resolved where possible
   importsUsed: string[];
   behaviorSignals: string[];
   purposeSignals: string[];
-  signatureHash: string;
-  bodyHash: string;
-  snippet: string;
+  signatureHash: string;      // sha256 of normalized signature
+  bodyHash: string;           // sha256 of normalized body text
+  snippet: string;            // capped ~2k tokens; oversized bodies -> signature + selected slices
+  isTrivial: boolean;         // see trivial classification
 }
 ```
 
-Stable key format:
+Stable key formats (repo-local — the project id disambiguates across repos):
 
 ```txt
 relative/path.ts#SymbolName
 relative/path.ts#ClassName.methodName
 relative/path.ts#HTTP GET /api/projects
 relative/path.ts#default
+relative/path.ts                      (file)
+doc:README.md#section-slug            (doc nodes)
+config:docker-compose.yml             (config nodes)
+schema:migrations/001_initial.sql#projects   (schema nodes)
+external:express                      (external nodes)
 ```
 
-Example:
+Call resolution uses the TypeChecker (`checker.getResolvedSignature` / symbol resolution on call expressions); unresolved calls keep the callee text with `confidence: 'medium'` edges.
+
+## Entrypoint detection
+
+Same rule families as before, now emitting symbol-level nodes:
+
+```txt
+Express:    router|app.get/post/put/delete/patch(...)      -> http_route
+React:      route config entries, pages dirs, App/main.tsx -> ui_route
+Worker:     new Worker(...), queue.process(...)            -> worker_job
+Scheduled:  cron.schedule(...), setInterval at module top  -> scheduled_job
+CLI:        package.json bin, #!/usr/bin/env node          -> cli
+Serverless: exported handler conventions                   -> serverless_handler
+Package:    package.json main/exports                      -> package_export
+```
+
+## Side effect detection
+
+Per-symbol AST scan (unchanged rule families):
+
+```txt
+database_read/write:  query('select|insert|update|delete ...'), supabase.from(...).*, prisma.*
+queue_enqueue:        queue.add(...)
+queue_consume:        new Worker(...)
+http_request:         fetch(...), axios(...), octokit.*
+auth_check:           jwt.verify(...), jose.jwtVerify(...), requireProjectAccess(...)
+response_output:      res.json/send(...), Response.json(...)
+env_read:             process.env.*
+filesystem_*:         fs.*, fs/promises.*
+```
+
+Each detection stores the `evidence` expression text — this is what `graph_edge` receipts show.
+
+## Config/schema/migration scanner
+
+`configScanner.ts` walks non-source evidence files and emits `config` / `schema` nodes (`trust_level = 'config'`): tsconfig, vite, docker/compose, GitHub Actions, env examples, SQL migrations (parsed for `create table` -> one `schema` node per table), package scripts. `touches_schema` edges connect symbols whose detected queries mention a schema node's table name.
+
+## Docs ingestion
+
+READMEs, `doc/**`, and JSDoc blocks become `doc` nodes (`trust_level = 'docs'`), split per heading section with capped snippets, and `documents` edges to files/symbols they reference (path mentions, code-fence imports, JSDoc attachment). Doc evidence feeds synthesis prompts with explicit "docs may be stale, code wins" framing and is never allowed to be the sole support for a code-behavior claim.
+
+## Churn signals
+
+GitHub API commit stats (`GET /repos/:owner/:repo/commits?path=...` aggregated per directory + `stats/contributors`) — no clone needed, fits the zipball flow. Cached per snapshot in `repository_files.metadata.churn`:
+
+```json
+{ "commitCount90d": 14, "lastTouchedAt": "2026-06-21T10:02:00Z", "distinctAuthors": 3 }
+```
+
+Fetched with a small request budget (one page per top-level dir + per top-N candidate files); missing churn degrades to 0-weight, never blocks analysis.
+
+## Preflight endpoint
+
+`POST /projects/:id/preflight` `{ scopeId?, commit?, depth? }` runs a `preflight` job (inventory + shallow syntactic parse only) and returns the analysis preview described under "Analysis preview (preflight)". No snapshot rows are mutated; results are stored on the job's `step_log` for the modal.
+
+---
+
+# Workflows, Candidate Ranking, Clusters
+
+## Workflow extraction (call-graph, replaces import-BFS)
+
+```txt
+1. Start from every entrypoint node.
+2. Traverse outgoing calls, handles_route, registers_callback, enqueues_job,
+   handles_job, touches_schema edges (maxDepth 8).
+3. Stop a path when it reaches a meaningful side effect or response output.
+4. Keep paths with >= 1 side effect or output.
+5. Collapse noisy helpers (trivial symbols, logging, pure formatting).
+6. Classify purpose from entrypoint + side-effect types + purpose signals.
+7. Convert into ordered workflow_steps with step kinds and deterministic descriptions.
+8. If no workflows are found, record the snapshot unknown {"kind": "no_workflows_found"} —
+   never invent one.
+```
+
+Cross-boundary steps (calls into `external` nodes) terminate the trace with a step noting the external dependency — an honest unknown, not a guess.
+
+## Phase A: deterministic candidate ranking
+
+Cheap, auditable, runs **before** any LLM call. Writes `criticality_scores` rows with `phase = 'candidate'`, `view = 'candidate'` for symbols, files, workflows, modules, schemas, configs, tests. Its jobs: decide what deserves semantic analysis (depth gating), seed workflow/tutorial selection, and give `ai_disabled` projects a useful ranking.
+
+Signals and default weights (constants; breakdown stored in `score_breakdown`, human reasons in `reasons`):
+
+| Signal | Weight |
+| --- | --- |
+| workflow participation | 0.20 |
+| fan-in/fan-out centrality | 0.15 |
+| exported/public surface | 0.15 |
+| side effects (DB/API/job/env) | 0.15 |
+| entrypoint participation | 0.10 |
+| route/schema ownership | 0.10 |
+| test coverage proximity | 0.05 |
+| config/deployment relevance | 0.05 |
+| churn (GitHub API stats) | 0.05 |
+
+Every signal is normalized to [0, 1] within the snapshot before weighting. Ranking reasons are always stored ("Handles POST /api/projects", "Called by 14 symbols", "Writes projects table") — scores are never presented without reasons.
+
+## Depth gating (candidate ranking -> semantic pass)
+
+Which symbols get LLM semantic records, by `semantic_depth`:
+
+```txt
+cheap:     symbols that are (exported AND on the public surface) OR route/controller
+           handlers OR entrypoint handlers, ordered by candidate score,
+           capped at the cheap budget (<= 600 symbols). Target ~ top 25%.
+standard:  cheap set + all workflow participants + major internal services
+           (fan-in >= 5 or cluster-central), capped at <= 2,000 symbols.
+full:      every symbol including trivial ones, capped at <= 10,000 symbols.
+```
+
+Everything not selected still gets a **facts-only record** (deterministic fields, `facts_only = true`, no LLM call), so retrieval always has something honest to return.
+
+## Architecture clustering (deterministic)
+
+`architectureClusterer.ts` fills the previously-empty `architecture_*` tables:
+
+```txt
+1. Path-based grouping (frontend/src/pages -> Frontend Pages, backend/src/api/routes -> API...).
+2. Framework-based kind assignment (React -> frontend_ui, Express -> api_layer,
+   Supabase/pg -> database_layer, BullMQ -> worker_layer, Docker/CI -> devops_layer).
+3. Collapse node edges into weighted cluster edges; attach workflow crossings.
+4. critical_score = aggregate of member candidate scores.
+5. deterministic_summary from member facts (no LLM).
+```
+
+The LLM later labels/explains clusters (cluster-level semantic records); it never invents clusters.
+
+---
+
+# LLM Infrastructure
+
+## Provider abstraction
+
+```ts
+export interface AiProvider {
+  id: string;                                       // 'openrouter'
+  complete(req: CompletionRequest): Promise<CompletionResult>;
+  completeStructured<T>(req: StructuredRequest<T>): Promise<T>;   // JSON-schema strict
+  embed(inputs: string[], model: string): Promise<number[][]>;
+}
+```
+
+Only `OpenRouterProvider` exists for now (OpenAI SDK with `baseURL: https://openrouter.ai/api/v1`). Structured outputs use `response_format: { type: 'json_schema', strict: true }`; if the configured model rejects strict schemas, fall back to JSON-only prompting + server-side schema validation + one retry, then apply the tier's failure behavior.
+
+Key resolution per call: project key (`project_llm_keys`, decrypted) if present, else server key. `ai_generation_runs.key_source` records which.
+
+## Budget enforcement
+
+A `BudgetEnforcer` wraps every provider call: increments `budget_usage` counters (calls, input/output tokens, estimated cost, runtime), checks limits **before** dispatching each batch, and triggers the configured stop behavior when a limit trips. Runtime is checked between batches. Kill switch: setting the job status to `paused`/`failed` from the API is honored at the next batch boundary.
+
+## Checkpointing and resume
+
+Each LLM phase iterates a deterministic, ordered target list. The checkpoint stores the ordinal position + batch identity. On resume: recompute the target list (deterministic), skip targets whose records/embeddings already exist (content-address lookup), continue from the checkpoint. `ai_generation_runs.input_hash` = sha256 of the full request payload; a run with an existing `complete` row for the same hash is recorded as `skipped_cached`.
+
+## Auditing
+
+Every LLM/embedding call writes an `ai_generation_runs` row (provider, model, tier, key source, prompt version, input/output hashes, token usage, estimated cost, latency, status). This is the raw data for the observability metrics and the cost UI.
+
+---
+
+# Semantic Pass
+
+## Semantic record schema (fixed, structured outputs)
+
+The symbol pass produces this JSON — never freeform prose:
 
 ```json
 {
-  "stableKey": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-  "name": "runAnalysis",
-  "kind": "function",
-  "filePath": "backend/src/worker/engine/analysisRunner.ts",
-  "lineStart": 12,
-  "lineEnd": 58,
-  "signature": "(opts: RunAnalysisOptions) => Promise<AnalysisSnapshot>",
-  "callsSymbols": [
-    "buildRepoIndex",
-    "filterByLanguage",
-    "createProgram",
-    "parseSourceFile",
-    "extractFileAnalysis",
-    "annotateResolvedImports",
-    "buildDependencyGraph"
+  "purpose": "1-2 sentences: what this symbol is for.",
+  "behavior": "Step-level description of what it does, in order.",
+  "responsibilities": ["..."],
+  "business_concepts": ["project import", "analysis job"],
+  "side_effects": [
+    { "kind": "database_write", "description": "...", "mergedWithDeterministic": true }
   ],
-  "behaviorSignals": ["analysis_orchestration", "ast_parse", "graph_build"],
-  "purposeSignals": ["repository_analysis"],
-  "signatureHash": "sha256:...",
-  "bodyHash": "sha256:..."
-}
-```
-
-## Step 4: Entrypoint Detection
-
-Create `entrypointDetector.ts`.
-
-Function:
-
-```ts
-export function detectEntrypoints(ctx: {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-  inventory: RepoInventory;
-}): EntrypointCandidate[];
-```
-
-Rules:
-
-```txt
-Express:
-  router.get/post/put/delete/patch(...)
-  app.get/post/put/delete/patch(...)
-
-React:
-  route config entries
-  page components under src/pages
-  App.tsx and main.tsx
-
-Worker:
-  new Worker(...)
-  queue.process(...)
-  exported job handler functions
-
-CLI/package:
-  package.json bin/main/exports
-
-Serverless:
-  exported handler functions
-```
-
-Example candidate:
-
-```json
-{
-  "stableKey": "backend/src/api/routes/projects.ts#POST /api/projects",
-  "triggerType": "http_route",
-  "method": "POST",
-  "routePath": "/api/projects",
-  "nodeStableKey": "backend/src/api/routes/projects.ts#projectRouter",
+  "inputs_outputs": {
+    "inputs": [{ "name": "opts", "type": "RunAnalysisOptions", "meaning": "..." }],
+    "outputs": [{ "type": "Promise<AnalysisSnapshot>", "meaning": "..." }]
+  },
+  "dependencies_narrative": "Why it calls what it calls.",
+  "design_patterns": ["orchestrator"],
+  "risks_invariants": ["Must run after ingestion; assumes files exist on disk."],
   "confidence": "high",
-  "roleRelevance": {
-    "backend": 0.95,
-    "frontend": 0.25,
-    "devops": 0.2,
-    "qa": 0.65,
-    "general": 0.7
-  }
-}
-```
-
-## Step 5: Side Effect Detection
-
-Create `sideEffectDetector.ts`.
-
-Function:
-
-```ts
-export function detectSideEffects(symbol: ExtractedSymbol): SideEffectCandidate[];
-```
-
-Rules:
-
-```txt
-database_read:
-  query("select ...")
-  supabase.from(...).select(...)
-  prisma.model.findMany(...)
-
-database_write:
-  query("insert/update/delete ...")
-  supabase.from(...).insert/update/delete(...)
-  prisma.model.create/update/delete(...)
-
-queue_enqueue:
-  queue.add(...)
-  analysisQueue.add(...)
-
-queue_consume:
-  new Worker(...)
-
-http_request:
-  fetch(...)
-  axios(...)
-  octokit.*
-
-auth_check:
-  jwt.verify(...)
-  jose.jwtVerify(...)
-  requireProjectAccess(...)
-
-response_output:
-  res.json(...)
-  res.send(...)
-  return Response.json(...)
-
-env_read:
-  process.env.*
-```
-
-Example:
-
-```json
-{
-  "nodeStableKey": "backend/src/api/routes/projects.ts#createProject",
-  "type": "database_write",
-  "target": "projects",
-  "confidence": "medium",
-  "evidence": "CallExpression query(...) includes INSERT INTO projects"
-}
-```
-
-## Step 6: Evidence Graph
-
-Replace the current file-only graph with a graph containing both files and symbols.
-
-Create `evidenceGraphBuilder.ts`.
-
-Function:
-
-```ts
-export function buildEvidenceGraph(ctx: {
-  fileAnalyses: FileAnalysis[];
-  inventory: RepoInventory;
-  entrypoints: EntrypointCandidate[];
-  sideEffects: SideEffectCandidate[];
-}): EvidenceGraph;
-```
-
-Graph construction:
-
-```txt
-1. Create file nodes for every repository file.
-2. Create symbol nodes for every extracted symbol.
-3. Add contains edges from file -> symbol.
-4. Add imports edges from file -> file.
-5. Resolve imported names to symbols when possible.
-6. Add calls edges from symbol -> symbol when resolved.
-7. Add extends/implements edges for classes/interfaces.
-8. Add handles_route edges from entrypoint -> handler symbol.
-9. Add side-effect edges from symbol -> schema/config/external target.
-10. Add tests edges from test files -> tested files/symbols when detectable.
-```
-
-Example graph node:
-
-```json
-{
-  "stableKey": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-  "type": "function",
-  "name": "runAnalysis",
-  "filePath": "backend/src/worker/engine/analysisRunner.ts",
-  "lineStart": 12,
-  "lineEnd": 58,
-  "hash": "sha256:...",
-  "metadata": {
-    "signature": "(opts: RunAnalysisOptions) => Promise<AnalysisSnapshot>",
-    "behaviorSignals": ["analysis_orchestration", "ast_parse", "graph_build"]
-  }
-}
-```
-
-Example graph edge:
-
-```json
-{
-  "source": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-  "target": "backend/src/worker/engine/astParser.ts#createProgram",
-  "type": "calls",
-  "confidence": "high",
-  "metadata": {
-    "detectedFrom": "CallExpression",
-    "expression": "createProgram(tsFiles, opts.repoPath)"
-  }
-}
-```
-
-## Step 7: Workflow Extraction
-
-Create `workflowExtractor.ts`.
-
-Function:
-
-```ts
-export function extractWorkflows(ctx: {
-  graph: EvidenceGraph;
-  entrypoints: EntrypointCandidate[];
-  sideEffects: SideEffectCandidate[];
-}): WorkflowCandidate[];
-```
-
-Algorithm:
-
-```txt
-1. Start from every entrypoint.
-2. Traverse outgoing calls, imports, handles_route, registers_callback, touches_schema edges.
-3. Stop when the path reaches a meaningful side effect or response output.
-4. Keep paths with at least one side effect or output.
-5. Collapse noisy helpers.
-6. Classify the workflow purpose.
-7. Convert the path into onboarding-level steps.
-```
-
-DFS shape:
-
-```ts
-function traceFromEntrypoint(entry: EntrypointCandidate, graph: EvidenceGraph) {
-  return dfs({
-    startNodeId: entry.nodeId,
-    maxDepth: 8,
-    followEdges: [
-      'handles_route',
-      'calls',
-      'registers_callback',
-      'touches_schema',
-      'enqueues_job',
-      'handles_job'
-    ],
-    stopWhen: node => hasSideEffect(node) || isResponseOutput(node)
-  });
-}
-```
-
-Example workflow:
-
-```json
-{
-  "stableKey": "workflow:backend:create-project-and-queue-analysis",
-  "title": "Create project and queue repository analysis",
-  "triggerType": "http_route",
-  "purpose": "project_import",
-  "confidence": "high",
-  "steps": [
-    {
-      "order": 1,
-      "kind": "trigger",
-      "nodeStableKey": "backend/src/api/routes/projects.ts#POST /api/projects"
-    },
-    {
-      "order": 2,
-      "kind": "auth_guard",
-      "nodeStableKey": "backend/src/api/middleware/project-access.ts#requireProjectAccess"
-    },
-    {
-      "order": 3,
-      "kind": "data_write",
-      "nodeStableKey": "backend/src/api/routes/projects.ts#createProject"
-    },
-    {
-      "order": 4,
-      "kind": "async_work",
-      "nodeStableKey": "backend/src/lib/queue.ts#enqueueAnalysisJob"
-    }
-  ],
-  "sideEffects": ["database_write", "queue_enqueue"]
-}
-```
-
-## Step 8: Critical 25% Ranking
-
-Create `criticalRanker.ts`.
-
-Critical 25% applies to:
-
-```txt
-workflows
-files
-symbols
-modules
-schemas
-configs
-tests
-```
-
-The worker should score all targets for each role:
-
-```ts
-export function rankCriticalTargets(ctx: {
-  snapshotId: string;
-  role: DeveloperRole;
-  graph: EvidenceGraph;
-  workflows: WorkflowCandidate[];
-  architectureClusters: ArchitectureCluster[];
-  inventory: RepoInventory;
-  gitSignals: GitSignals;
-  testSignals: TestSignals;
-  docSignals: DocSignals;
-}): CriticalRanking[];
-```
-
-Workflow score:
-
-```txt
-25% entrypoint exposure
-20% downstream impact
-20% structural centrality
-15% external side effects
-10% documentation gap
-5% test coverage signal
-5% git churn recency
-```
-
-File score:
-
-```txt
-25% participates in critical workflows
-20% dependency fan-in/fan-out
-15% contains important side effects
-15% public/API exposure
-10% documentation gap
-10% git churn recency
-5% test coverage signal
-```
-
-Symbol score:
-
-```txt
-25% participates in critical workflows
-20% call graph centrality
-20% side-effect importance
-15% public/API exposure
-10% dependency fan-in/fan-out
-5% git churn recency
-5% test coverage signal
-```
-
-Module score:
-
-```txt
-30% aggregate critical score of contained files/symbols
-25% critical workflow crossings
-20% responsibility importance, such as API/auth/data/worker
-15% dependency centrality
-10% documentation gap
-```
-
-Config score:
-
-```txt
-35% runtime/build/deploy relevance
-25% referenced by scripts or containers
-20% role relevance
-10% churn
-10% documentation gap
-```
-
-Test score:
-
-```txt
-40% covers critical workflows/symbols
-20% fixture importance
-20% integration/e2e signal
-10% churn
-10% role relevance
-```
-
-Critical selection:
-
-```ts
-function markCritical25(rankings: CriticalRanking[]): CriticalRanking[] {
-  const grouped = groupBy(rankings, r => `${r.role}:${r.targetType}`);
-
-  return Object.values(grouped).flatMap(group => {
-    const sorted = [...group].sort((a, b) => b.compositeScore - a.compositeScore);
-    const cutoff = Math.ceil(sorted.length * 0.25);
-
-    return sorted.map((item, index) => ({
-      ...item,
-      percentile: 1 - index / sorted.length,
-      isCritical25: index < cutoff
-    }));
-  });
-}
-```
-
-## Step 9: Architecture Map
-
-Create `architectureClusterer.ts`.
-
-The architecture map should be deterministic first.
-
-Function:
-
-```ts
-export function buildArchitectureMap(ctx: {
-  graph: EvidenceGraph;
-  inventory: RepoInventory;
-  workflows: WorkflowCandidate[];
-  criticalRankings: CriticalRanking[];
-}): ArchitectureMap;
-```
-
-Cluster rules:
-
-```txt
-Path-based grouping:
-  frontend/src/pages -> Frontend Pages
-  frontend/src/components -> Frontend Components
-  frontend/src/lib -> Frontend Client Libraries
-  backend/src/api/routes -> Backend API Routes
-  backend/src/api/middleware -> Backend Middleware
-  backend/src/lib -> Backend Shared Libraries
-  backend/src/worker/engine -> Analysis Engine
-  backend/src/worker -> Worker Runtime
-
-Framework-based grouping:
-  React/Vite -> frontend_ui
-  Express routers -> api_layer
-  Supabase/pg queries -> database_layer
-  BullMQ -> worker_layer
-  Docker/GitHub Actions/env -> devops_layer
-
-Graph-based grouping:
-  Collapse file/symbol edges into cluster edges.
-  Increase edge weight when many file/symbol edges cross the same clusters.
-  Attach workflow crossings to cluster edges.
-```
-
-Example architecture map:
-
-```json
-{
-  "clusters": [
-    {
-      "stableKey": "cluster:backend-analysis-engine",
-      "label": "Analysis Engine",
-      "kind": "analysis_engine",
-      "files": [
-        "backend/src/worker/engine/astParser.ts",
-        "backend/src/worker/engine/symbolExtractor.ts",
-        "backend/src/worker/engine/graphBuilder.ts",
-        "backend/src/worker/engine/analysisRunner.ts"
-      ],
-      "deterministicSummary": "Parses repositories, extracts symbols, and builds graph evidence.",
-      "criticalScore": 0.94
-    },
-    {
-      "stableKey": "cluster:backend-api",
-      "label": "Backend API",
-      "kind": "api_layer",
-      "files": [
-        "backend/src/api/app.ts",
-        "backend/src/api/routes/projects.ts",
-        "backend/src/api/routes/graph.ts"
-      ],
-      "deterministicSummary": "Exposes authenticated project, graph, GitHub, and onboarding endpoints.",
-      "criticalScore": 0.89
-    }
-  ],
-  "edges": [
-    {
-      "source": "cluster:backend-api",
-      "target": "cluster:worker-runtime",
-      "type": "enqueues_job",
-      "weight": 0.8,
-      "evidence": ["analysisQueue.add(...)"]
-    }
+  "claims": [
+    { "claim": "...", "receiptIds": ["r1"], "confidence": "high" }
   ]
 }
 ```
 
-Then generate an architecture explanation from this map plus semantic summaries. The LLM should not invent clusters.
-
-## Step 10: Semantic Summaries
-
-Create `semanticSummaryService.ts`.
-
-Summaries preserve meaning. They are generated before onboarding package sections and reused.
-
-Generation order:
+Level-specific additions:
 
 ```txt
-1. Symbol summaries from AST facts and snippets.
-2. File summaries from file facts plus symbol summaries.
-3. Module summaries from file summaries and cluster facts.
-4. Workflow summaries from workflow steps and side effects.
-5. Architecture cluster summaries from cluster members and module summaries.
+file:     key_symbols[], file_role (route file / service / util / config glue)
+module:   key_files[], internal_structure, boundary_contracts
+service:  responsibilities across modules, runtime shape (api/worker/frontend)
+system:   what the product does, main capabilities, architecture narrative,
+          how a request flows end to end   <- the "whole picture without a README"
+workflow: step_narrative[], failure_modes[]
+capability: user_value, involved_workflows[], involved_modules[]
+cluster:  label_explanation, boundary_rationale
 ```
 
-Summary generation input for one symbol:
+Evidence hash: `evidence_hash = sha256(canonical JSON of the deterministic input bundle)` — symbol body/signature hashes, callers/callees stable keys + hashes, detected side effects, and (for synthesis levels) child record ids + their evidence hashes. Unchanged evidence -> cache hit -> no LLM call.
 
-```json
-{
-  "task": "summarize_symbol",
-  "snapshot": {
-    "commit": "abc123",
-    "repo": "team15/OnboardBuddy"
-  },
-  "target": {
-    "stableKey": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-    "kind": "function",
-    "name": "runAnalysis",
-    "filePath": "backend/src/worker/engine/analysisRunner.ts",
-    "lineStart": 12,
-    "lineEnd": 58
-  },
-  "deterministicFacts": {
-    "signature": "(opts: RunAnalysisOptions) => Promise<AnalysisSnapshot>",
-    "calls": [
-      "buildRepoIndex",
-      "createProgram",
-      "parseSourceFile",
-      "extractFileAnalysis",
-      "buildDependencyGraph"
-    ],
-    "behaviorSignals": ["analysis_orchestration", "ast_parse", "graph_build"],
-    "sideEffects": []
-  },
-  "receipts": [
-    {
-      "receiptId": "r_symbol_1",
-      "filePath": "backend/src/worker/engine/analysisRunner.ts",
-      "lineStart": 12,
-      "lineEnd": 58,
-      "snippet": "export async function runAnalysis(opts: RunAnalysisOptions): Promise<AnalysisSnapshot> { ... }"
-    }
-  ],
-  "outputRules": {
-    "useOnlyProvidedEvidence": true,
-    "citeEachFact": true,
-    "doNotGuessBusinessIntent": true
-  }
-}
-```
+## Trivial symbol classification (deterministic, no LLM)
 
-Expected summary output:
+A symbol is trivial when **all** hold: body <= 3 statements; no detected side effects; no branching; and it matches one of: constant/literal initializer, simple type alias (no mapped/conditional types), pass-through helper (single delegated call), dumb React wrapper (single JSX return, no hooks), getter/setter. Trivial symbols get facts-only records — except at `full` depth, where everything selected gets an LLM record.
 
-```json
-{
-  "summary": "Runs one repository analysis snapshot by indexing files, creating a TypeScript program, parsing each TypeScript file, extracting symbols/imports, annotating resolved imports, and building the dependency graph.",
-  "facts": [
-    {
-      "claim": "Indexes repository files before parsing.",
-      "receiptId": "r_symbol_1",
-      "confidence": "high"
-    },
-    {
-      "claim": "Creates one TypeScript program for cross-file analysis.",
-      "receiptId": "r_symbol_1",
-      "confidence": "high"
-    },
-    {
-      "claim": "Builds the dependency graph after import resolution.",
-      "receiptId": "r_symbol_1",
-      "confidence": "high"
-    }
-  ],
-  "confidence": "high"
-}
-```
+## Batching
 
-File summary input should include all symbol summaries for that file:
-
-```json
-{
-  "task": "summarize_file",
-  "target": {
-    "stableKey": "backend/src/worker/engine/analysisRunner.ts",
-    "filePath": "backend/src/worker/engine/analysisRunner.ts"
-  },
-  "fileFacts": {
-    "imports": [
-      "./repoIngester.js",
-      "./astParser.js",
-      "./symbolExtractor.js",
-      "./graphBuilder.js"
-    ],
-    "exports": ["runAnalysis"],
-    "behaviorSignals": ["analysis_orchestration"]
-  },
-  "symbolSummaries": [
-    {
-      "stableKey": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-      "summary": "Runs one repository analysis snapshot by indexing files, parsing TypeScript, extracting symbols, and building the dependency graph.",
-      "receiptIds": ["r_symbol_1"]
-    }
-  ]
-}
-```
-
-Expected file summary:
-
-```json
-{
-  "summary": "This file orchestrates a complete analysis pass. It connects repo indexing, TypeScript program creation, per-file AST extraction, import resolution, and graph construction into one worker-level operation.",
-  "facts": [
-    {
-      "claim": "The file is the worker orchestration point for analysis.",
-      "receiptId": "r_symbol_1",
-      "confidence": "high"
-    }
-  ],
-  "confidence": "high"
-}
-```
-
-## Step 11: Embeddings and Retrieval
-
-Embeddings are needed to preserve and retrieve context, not to prove facts.
-
-Embed:
+Per-file symbol grouping with hard limits — never naive one-call-per-file:
 
 ```txt
-symbol summaries
-file summaries
-module summaries
-workflow summaries
-architecture cluster summaries
-schema/config/test summaries
+<= 15 symbols per call
+<= ~2k tokens per symbol snippet
+<= ~12k input tokens per request
+Files exceeding limits are split into multiple symbol-group calls.
+Oversized functions send signature + selected body slices + deterministic facts.
+Failed symbols are retried individually, not the whole file.
 ```
 
-Do not embed:
+## Cache policy (canonical, applies everywhere)
+
+Lookup key: `project_id + stable_key + evidence_hash + prompt_version + semantic_depth + model_family` (exact model in metadata).
+
+- Records are shared across scopes of the same repo — overlapping scopes (whole repo vs `backend/`) never re-pay LLM cost for shared symbols; only synthesis levels above the scope boundary differ.
+- Prompt version or model family change = cache miss. Old records are kept for audit (`status = 'superseded'`), never silently reused.
+- Depths coexist; higher depth never blindly overwrites lower. Lookup order for `standard` needs: `full` -> `standard` (-> `cheap` only where explicitly allowed); for `full` needs: `full` only. A higher-depth record substitutes for lower-depth needs, never the reverse.
+- Depth upgrades (cheap -> standard -> full) fill only the missing records; cheap records are kept for audit/cost comparison.
+
+## Prompts (versioned; all use structured outputs)
+
+All prompts share output rules: *use only provided evidence; cite receipt ids per claim; do not guess business intent beyond the evidence; docs receipts may be stale — code receipts win; say "unknown" rather than invent.*
+
+**`symbol-record-v1`** (cheap tier) — input: deterministic facts (signature, params, callers/callees, detected side effects, behavior signals, env/config touched) + snippet (privacy-mode permitting) + JSDoc/doc receipts. Output: the symbol record schema above. Batched.
+
+**`file-synthesis-v1`** (strong tier) — input: file facts (imports/exports, category) + all child symbol records (summaries + purposes) + doc receipts for the file. Output: file record.
+
+**`module-synthesis-v1`** (strong tier) — input: cluster/directory facts + child file records + cross-module edges. Output: module record.
+
+**`service-synthesis-v1`** (strong tier) — input: module records + runtime facts (entrypoints, deploy configs). Output: service record.
+
+**`system-synthesis-v1`** (strong tier) — input: service records + capability candidates + top workflows + architecture map. Output: the system record — the whole-repo picture; must work when no README exists.
+
+**`capability-extraction-v1`** (strong tier) — input: workflows + module records + business_concepts aggregation. Output: capability list with members and evidence links; stored as `capabilities` rows + capability records.
+
+**`refinement-v1`** (strong tier) — re-annotates the top-N critical symbols/files with system context (why this matters to the product), producing new record versions (new prompt_version, same evidence).
+
+**`critique-v1`** (strong tier) — verifies each record's claims against its receipts; output per record: `verdict: usable | rejected`, per-claim pass/fail, missing-evidence notes. Records must be `usable` before retrieval/generation may use them; rejected records are regenerated once with the critique attached, then kept `rejected` if they fail again (honest unknown).
+
+**`workflow-record-v1`** (strong tier) — narrative record per selected workflow from its steps + participating symbol records.
+
+## Phase B: semantic reranking
+
+After synthesis, the strong model + deterministic aggregation produce multi-view scores (`phase = 'semantic'`), one row per (view, target):
 
 ```txt
-raw AST
-full source files
-secret-bearing files
-temporary archive contents
+critical_for_runtime       what breaks the app when wrong (side effects, load-bearing paths)
+critical_for_business      business/domain importance (capability ownership)
+critical_for_onboarding    what a newcomer must understand first
+critical_for_role          per role: backend/frontend/devops/qa/general (one row each)
+critical_for_change_risk   operational risk, invariants, migration/config sensitivity
+critical_for_architecture  boundary importance, coupling points
+critical_for_workflow      workflow criticality
 ```
 
-Create `embeddingService.ts`.
+Method (`rerank-v1`): batched LLM scoring of the candidate top slice per view with reasons + evidence citations, blended 50/50 with deterministic per-view features, normalized within the snapshot. This catches low-degree but vital code (auth helpers, migrations, retry handlers, config loaders) that Phase A under-ranks.
 
-Interface:
+## Weight configs and projections
 
-```ts
-export interface EmbeddingProvider {
-  embed(input: string): Promise<number[]>;
-}
-```
+A role's ranking = weighted sum over view scores using `ranking_weight_configs` (or code defaults). Default weights:
 
-Example OpenAI-compatible implementation:
+| View | backend | frontend | devops | qa | general |
+| --- | --- | --- | --- | --- | --- |
+| critical_for_runtime | 0.20 | 0.10 | 0.20 | 0.10 | 0.15 |
+| critical_for_business | 0.10 | 0.15 | 0.05 | 0.10 | 0.20 |
+| critical_for_onboarding | 0.15 | 0.20 | 0.10 | 0.15 | 0.25 |
+| critical_for_role | 0.25 | 0.25 | 0.25 | 0.25 | 0.10 |
+| critical_for_change_risk | 0.10 | 0.05 | 0.20 | 0.20 | 0.10 |
+| critical_for_architecture | 0.10 | 0.15 | 0.15 | 0.05 | 0.15 |
+| critical_for_workflow | 0.10 | 0.10 | 0.05 | 0.15 | 0.05 |
 
-```ts
-import OpenAI from 'openai';
+"Critical 25%" = top 25% of targets per target_type by the role projection. Tutorial selection, learning paths, and Q&A priorities are also projections. A project admin can adjust weights per role in settings (with per-role revert-to-default); since raw view scores are stored, re-weighting is instant.
 
-const embeddingsClient = new OpenAI({
-  apiKey: process.env.EMBEDDINGS_API_KEY,
-  baseURL: process.env.EMBEDDINGS_BASE_URL
-});
+---
 
-export async function embedSummary(content: string): Promise<number[]> {
-  const result = await embeddingsClient.embeddings.create({
-    model: process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small',
-    input: content
-  });
+# Multi-view Embeddings
 
-  return result.data[0].embedding;
-}
-```
-
-Retrieval should be hybrid:
+One row per (usable record, view, model), pgvector 1536 (`text-embedding-3-small`), HNSW index. Embedding text is rendered **deterministically** from record fields — never freeform:
 
 ```txt
-1. Deterministic SQL retrieval:
-   critical rankings, graph neighbors, workflow steps, architecture clusters.
-
-2. Semantic vector retrieval:
-   find summaries related to the section objective.
-
-3. Graph expansion:
-   add directly connected receipts, tests, schemas, configs.
-
-4. Final bundle assembly:
-   deduplicate by stable_key, cap size, attach receipts.
+purpose view:     name, kind, purpose, behavior, responsibilities
+domain view:      business_concepts, capability names, purpose
+dependency view:  dependencies_narrative, caller/callee names, imports
+operations view:  side_effects, risks_invariants, env/config touched, failure modes
 ```
 
-Example vector search query:
+Example renderer (purpose view):
+
+```txt
+{kind} {name} in {filePath}.
+Purpose: {purpose}
+Behavior: {behavior}
+Responsibilities: {responsibilities joined}
+```
+
+Facts-only records get purpose/dependency/operations views rendered from deterministic facts. Query-time view selection is by intent: "what does X do" -> purpose; "what handles payments" -> domain; "what calls/uses X" -> dependency; "what breaks if X fails" -> operations; section generation declares its views (see each section spec).
+
+---
+
+# Retrieval (Graph RAG)
+
+One retrieval service powers section generation, tutorials, regeneration, and Q&A:
+
+```txt
+1. Embed the query (or section objective) once per relevant view.
+2. pgvector top-k per view (k ~ 8), filtered to the snapshot via
+   snapshot_semantic_records, records status = 'usable' (or facts_only).
+3. Map hits to graph nodes (stable_key join).
+4. graph_neighborhood(snapshot, seeds, max_hops 1-2, edge_types by intent).
+5. Join: semantic records for expanded nodes, workflows touching them,
+   receipts, criticality reasons.
+6. Dedupe by stable_key (best score wins), score = vector similarity
+   + criticality projection boost, cap bundle size (~40 records / ~15 receipts).
+7. Assemble the evidence bundle (privacy mode enforced mechanically here).
+```
+
+Vector seed SQL:
 
 ```sql
-select
-  ee.summary_id,
-  ee.target_type,
-  ee.target_id,
-  ss.summary,
-  1 - (ee.embedding <=> $1::vector) as similarity
-from evidence_embeddings ee
-join semantic_summaries ss on ss.id = ee.summary_id
-where ee.snapshot_id = $2
-order by ee.embedding <=> $1::vector
-limit 12;
+select ssr.stable_key, sr.id as record_id, sr.summary, sr.record_level,
+       e.view_type, 1 - (e.embedding <=> $1::vector) as similarity
+from public.embeddings e
+join public.semantic_records sr on sr.id = e.record_id
+join public.snapshot_semantic_records ssr
+  on ssr.record_id = sr.id and ssr.snapshot_id = $2
+where e.view_type = any($3)
+  and sr.status = 'usable'
+order by e.embedding <=> $1::vector
+limit $4;
 ```
 
-## Step 12: Evidence Bundles
-
-Create `evidenceBundleBuilder.ts`.
-
-An evidence bundle is the exact compact JSON payload passed to the LLM for one summary or one onboarding section.
-
-Important:
-
-```txt
-Do not pass full repo.
-Do not pass raw AST.
-Do not pass every file.
-Do not rely only on embeddings.
-Pass ranked targets, graph facts, summaries, selected snippets, and receipt IDs.
-```
-
-Bundle type:
+The evidence bundle type (extended from v1):
 
 ```ts
 export interface EvidenceBundle {
-  bundleVersion: string;
+  bundleVersion: '2.0';
   task: string;
   sectionType?: PackageSectionType;
   role?: DeveloperRole;
-  repo: {
-    owner: string;
-    name: string;
-    branch: string;
-    commit: string;
-  };
-  deterministicContext: Record<string, unknown>;
+  privacyMode: 'full_ai' | 'facts_only_ai';
+  repo: { owner: string; name: string; branch: string; commit: string };
+  scope: { id: string; pathPrefix: string; displayName: string };
+  deterministicContext: Record<string, unknown>;   // rankings, graph facts, inventory
   semanticContext: Array<{
-    summaryId: string;
-    targetType: string;
-    stableKey: string;
-    summary: string;
-    confidence: 'high' | 'medium' | 'low';
-    receiptIds: string[];
+    recordId: string; recordLevel: string; stableKey: string;
+    summary: string; record: unknown;              // structured record fields
+    confidence: 'high' | 'medium' | 'low'; receiptIds: string[];
   }>;
   receipts: Array<{
-    receiptId: string;
-    nodeStableKey?: string;
-    filePath: string;
-    symbolName?: string;
-    lineStart?: number;
-    lineEnd?: number;
-    snippet?: string;
+    receiptId: string; receiptKind: ReceiptKind; trustLevel: TrustLevel;
+    nodeStableKey?: string; filePath?: string; symbolName?: string;
+    lineStart?: number; lineEnd?: number;
+    snippet?: string;                              // stripped in facts_only_ai
+    detectionExpression?: string;                  // graph_edge receipts
+    referencedRecordId?: string;                   // record_reference receipts
   }>;
+  unknowns: Array<{ kind: string; detail?: string }>;
   outputRules: {
-    useOnlyProvidedEvidence: boolean;
-    citeEverySubstantiveClaim: boolean;
-    markUnsupportedClaimsLowConfidence: boolean;
+    useOnlyProvidedEvidence: true;
+    citeEverySubstantiveClaim: true;
+    codeReceiptsWinOverDocs: true;
+    stateUnknownsExplicitly: true;
   };
 }
 ```
 
-## Step 13: OpenRouter Calls
+---
 
-Create `aiGenerationService.ts`.
+# Generation
 
-OpenRouter supports the OpenAI SDK by pointing `baseURL` at `https://openrouter.ai/api/v1`.
+Sections are generated one at a time per (scope, role, commit) — each with its own deterministic query, semantic retrieval, bundle, strong-tier LLM call, inline validation, and stored `generation_context`. Never one giant call.
 
-```ts
-import OpenAI from 'openai';
+Common output schema (structured): `title`, `contentMarkdown`, `confidence`, `claims[] {claim, receiptIds, confidence}`, `usedReceiptIds[]`, `unknowns[]`, optional `diagrams[] {kind, mermaid}`.
 
-const openrouter = new OpenAI({
-  baseURL: process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1',
-  apiKey: process.env.OPENROUTER_API_KEY,
-  defaultHeaders: {
-    'HTTP-Referer': process.env.APP_PUBLIC_URL ?? 'http://localhost:5173',
-    'X-OpenRouter-Title': 'OnboardBuddy'
-  }
-});
+| Section | Deterministic retrieval | Semantic retrieval (views) | Notes |
+| --- | --- | --- | --- |
+| `start_here` | inventory, top clusters, top role-projected files/modules, scripts, entrypoints | system + service records; "repo purpose, main subsystems, first files for ROLE" (purpose, domain) | 3-6 paragraphs + read-first list |
+| `architecture` | clusters, cluster edges, workflow crossings | cluster + module records (purpose, dependency) | embeds architecture Mermaid diagram from cluster edges |
+| `entry_points` | entrypoints by role relevance + criticality, handler symbols, connected workflows | entrypoint symbol records (purpose) | routes/jobs/CLI and why each matters |
+| `critical_25` | role projection top 25% per target_type with reasons + breakdowns | records for those targets; "why these matter for ROLE" (purpose, domain) | explain by category with ranking reasons, never dump scores |
+| `capability_map` | capabilities + members + workflows | capability + system records (domain) | business context: what the product does and where |
+| `role_path` | role projection + capabilities + tutorials | onboarding-view ordering rationale (purpose, domain) | ordered learning path with reasons |
+| `workflow_guide` | workflow + steps + entrypoint + side effects + ranking reasons | workflow + participant records (purpose, operations) | one subsection per selected workflow |
+| `data_schema` | schema nodes, DB side effects, migrations, workflows touching tables | schema-adjacent records (operations, dependency) | source-of-truth objects and who reads/writes them |
+| `safety_rails` | scripts, tests, CI, Docker, env examples, risky side effects | operations-view records; risks_invariants (operations) | commands, tests to trust, risky areas |
+| `dependency_graph` | graph slice for the UI view | dependency-view records for hover summaries (dependency) | mostly deterministic |
+| `doc_health` | stale_flags, changed files/symbols, affected artifacts, docs-conflict flags | none | deterministic content, LLM phrasing optional |
+
+Diagram-bearing sections (`architecture`, `data_schema`, `workflow_guide`) get Mermaid diagrams **derived from deterministic data** (cluster edges, schema references, workflow steps); the LLM may caption them but does not invent nodes/edges. The frontend Diagrams tab aggregates section + tutorial diagrams.
+
+## Request-flow tutorials
+
+Generated from symbol-level workflow traces — traced real examples, not prose essays:
+
+```txt
+1. Select workflows: top critical_for_workflow x role projection (default 3-5 per package).
+2. For each workflow step: fetch node snippet + symbol record + step evidence.
+3. tutorial-v1 (strong tier): per-step explanation (what happens, why it matters,
+   what to look at) citing the step receipt; plus title + summary.
+4. Generate a Mermaid sequence diagram (dataflow for data-heavy workflows)
+   deterministically from the trace: participants = files/services, arrows = steps.
+5. Persist tutorials + tutorial_steps (snippet, file/lines, explanation, receipts).
+6. Validate citations like sections.
 ```
 
-Use a structured output model when available. If a configured model does not support strict JSON schema through OpenRouter, fall back to JSON-only prompting plus server-side validation and retry.
+Each step = code snippet + explanation + file/line receipt. Tutorials are shown in the tutorials UI and linked from `workflow_guide` sections.
 
-Generic section generation:
+## Symbol doc format (UI standard)
 
-```ts
-export async function generatePackageSection(bundle: EvidenceBundle) {
-  const completion = await openrouter.chat.completions.create({
-    model: process.env.OPENROUTER_MODEL ?? 'openai/gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content: [
-          'You generate codebase onboarding documentation.',
-          'Use only the provided evidence bundle.',
-          'Every substantive claim must cite one or more receipt IDs.',
-          'If evidence is weak or indirect, set confidence to medium or low.',
-          'Do not mention files, functions, dependencies, or behavior not present in the bundle.'
-        ].join(' ')
-      },
-      {
-        role: 'user',
-        content: JSON.stringify(bundle)
-      }
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: 'onboarding_section',
-        strict: true,
-        schema: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['title', 'contentMarkdown', 'confidence', 'claims', 'usedReceiptIds'],
-          properties: {
-            title: { type: 'string' },
-            contentMarkdown: { type: 'string' },
-            confidence: { enum: ['high', 'medium', 'low'] },
-            claims: {
-              type: 'array',
-              items: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['claim', 'receiptIds', 'confidence'],
-                properties: {
-                  claim: { type: 'string' },
-                  receiptIds: {
-                    type: 'array',
-                    items: { type: 'string' }
-                  },
-                  confidence: { enum: ['high', 'medium', 'low'] }
-                }
-              }
-            },
-            usedReceiptIds: {
-              type: 'array',
-              items: { type: 'string' }
-            }
-          }
-        }
-      }
-    }
-  });
+Every symbol shown in the UI follows one format, assembled from the record + graph:
 
-  return JSON.parse(completion.choices[0].message.content ?? '{}');
-}
+```txt
+1. One-line summary            (record.purpose, first sentence)
+2. Params/types                (deterministic signature)
+3. Returns                     (deterministic)
+4. Real example usage          (call-site snippet pulled from the graph's callers)
+5. Receipts                    (file/line links)
 ```
 
-Expected result:
+## Citation validation (in-pipeline, trust-aware)
+
+Runs inline during generation (retry once with stricter prompt on failure) and as the `validation` phase:
+
+```txt
+1. Every used receipt id exists in the bundle.
+2. Every cited receipt belongs to the same snapshot/commit lineage.
+3. Claims naming files/symbols must cite receipts from those files/symbols.
+4. Uncited claims are rejected or downgraded to low confidence + listed in unknowns.
+5. Trust: claims about code behavior need >= 'tests' trust; docs-only support
+   downgrades to medium and flags docs_conflict_with_code when code disagrees.
+6. record_reference receipts resolve transitively to code-level receipts;
+   unresolvable chains fail validation.
+7. Section confidence = min reasonable confidence of major claims.
+8. Everything starts as draft.
+```
+
+## Regeneration
+
+`regenerate_section` job: rebuild that section's bundle against the same snapshot (or a newer one when regenerating from stale), regenerate, revalidate, replace content, keep the old `generation_run` for audit. Actually implemented in this rework, not just an API stub.
+
+---
+
+# Q&A Evaluation Endpoint (dev tool, not a product feature)
+
+`POST /projects/:id/ask`:
+
+```json
+{ "question": "...", "scope_id": "optional", "role": "optional", "snapshot_id": "optional" }
+```
+
+Defaults: whole-repo scope, `general` role, latest complete snapshot — answers never mix unrelated scopes/packages. Flow: intent -> view selection -> retrieval (same service) -> `qa-v1` grounded answer:
 
 ```json
 {
-  "title": "Create Project and Queue Analysis",
-  "contentMarkdown": "This workflow starts in the project API route, where the backend accepts a project creation request and persists the project record. It then enqueues analysis work for the worker process. [r1]\n\nFor backend onboarding, this matters because it connects the authenticated API layer to the asynchronous analysis pipeline. [r1, r2]",
+  "answerMarkdown": "...",
+  "claims": [{ "claim": "...", "receiptIds": ["r1"], "confidence": "high" }],
+  "receipts": [{ "receiptId": "r1", "filePath": "...", "lineStart": 10, "lineEnd": 30, "snippet": "..." }],
   "confidence": "high",
-  "claims": [
-    {
-      "claim": "The workflow starts in the project API route.",
-      "receiptIds": ["r1"],
-      "confidence": "high"
-    },
-    {
-      "claim": "The workflow enqueues analysis work for the worker process.",
-      "receiptIds": ["r2"],
-      "confidence": "high"
-    }
-  ],
-  "usedReceiptIds": ["r1", "r2"]
+  "unknowns": [{ "kind": "out_of_scope_dependency", "detail": "payment provider SDK not in scope" }]
 }
 ```
 
-## Step 14: Section-by-Section Package Generation
+Answers are validated with the same citation validator. A minimal internal chat page (dev-only flag) renders this for manual quality evaluation. Q&A runs are audited in `ai_generation_runs` (`target_type = 'qa_answer'`) but not persisted as content.
 
-Do not generate the whole onboarding package in one LLM call.
+---
 
-Each package section gets its own deterministic query, semantic retrieval query, bundle, LLM call, validation, and stored generation context.
+# Incremental Updates
 
-### Section: Start Here
-
-Purpose:
+`incrementalAnalyzer.ts`, triggered by `incremental_update` jobs (new commit on an analyzed scope):
 
 ```txt
-Give a new developer the fastest accurate overview of what the repo is, how it is structured, and what to inspect first.
+ 1. Download new zipball for the target commit; new snapshot row (trigger 'incremental').
+ 2. Recompute repository_files hashes; diff against the previous snapshot of the scope.
+ 3. Re-parse changed files only; copy nodes/edges of unchanged files forward.
+ 4. Recompute symbol signature_hash/body_hash; symbol-level AST diff by stable_key.
+ 5. Changed symbols -> their semantic records' evidence hashes no longer match
+    -> new records needed (content-address lookup misses).
+ 6. Staleness propagates upward (symbol -> file -> module -> service -> system)
+    ONLY when the child evidence hash actually changes the parent's evidence hash.
+ 7. Re-run workflows/rankings/clusters on the affected subgraph; unchanged
+    subgraphs keep prior results (copied forward).
+ 8. Insert stale_flags for affected records, sections, tutorials, packages;
+    mark sections/packages 'stale'.
+ 9. Partial regeneration: re-summarize only invalidated targets, re-embed only
+    new records, regenerate only stale sections/tutorials when requested.
+10. Unchanged symbols are NEVER re-summarized (content-address guarantees it).
 ```
 
-Deterministic retrieval:
+---
+
+# Implementation Files
+
+Keep and extend existing engine files; add the rest:
 
 ```txt
-repo inventory
-top architecture clusters
-top critical modules/files by role
-package scripts
-main entrypoints
+backend/src/worker/engine/
+  parserInterface.ts        LanguageParser + TS implementation glue
+  repoIngester.ts           (extend) scope-bounded ingestion, inventory, language guardrail
+  privacyFilter.ts          secret stripping, ignored paths
+  hashUtils.ts              sha256 helpers, canonical JSON hashing
+  stableKeys.ts             stable key construction for all node kinds
+  astParser.ts              (keep) TS Program creation
+  symbolExtractor.ts        (extend) hashes, snippets, TypeChecker call resolution, trivial classification
+  behaviorSignals.ts        behavior/purpose signal detection
+  entrypointDetector.ts     (extend) symbol-level
+  sideEffectDetector.ts     (extend) symbol-level, evidence expressions
+  configScanner.ts          config/schema/migration nodes
+  docsIngester.ts           README/docs/JSDoc -> doc nodes
+  churnService.ts           GitHub API commit stats, cached
+  evidenceGraphBuilder.ts   symbol-level graph persistence with trust levels
+  workflowExtractor.ts      (rewrite) call-graph traversal
+  candidateRanker.ts        Phase A scores + depth gating
+  architectureClusterer.ts  deterministic clusters
+  preflightService.ts       analysis preview estimates
+  budgets.ts                depth budgets, size caps, cost tiers (constants)
+
+backend/src/worker/ai/
+  aiProvider.ts             AiProvider interface
+  openRouterProvider.ts     OpenRouter implementation
+  budgetEnforcer.ts         counters + stop behavior
+  promptBuilders.ts         per prompt version, privacy-mode aware
+  semanticRecordService.ts  symbol pass: gating, batching, caching
+  synthesisService.ts       file/module/service/system + refinement + critique
+  capabilityExtractor.ts    capability pass
+  semanticReranker.ts       Phase B multi-view scores
+  embeddingService.ts       (retarget) multi-view embeddings
+  retrievalService.ts       vector seed + graph expansion + bundle assembly
+  sectionGenerator.ts       section-by-section generation
+  tutorialGenerator.ts      traces -> steps -> diagrams
+  citationValidator.ts      trust-aware validation (replaces sectionValidator.ts)
+  qaService.ts              grounded /ask
+
+backend/src/worker/
+  incrementalAnalyzer.ts    diff + invalidation + partial regeneration
+  phaseRunner.ts            snapshot_phases orchestration, checkpoints, resume
 ```
 
-Semantic retrieval prompt:
+Deleted: the old section-markdown embedding path and the unused `hybridRetrieve`.
+
+# Build Order
 
 ```txt
-"high-level repository purpose, main subsystems, first files to read for ROLE"
+Phase 1  (done with this spec): migration 001 — full schema above.
+Phase 2  Deterministic layer: parser interface, scope ingestion, guardrails,
+         symbol extraction, graph persistence, docs/config ingestion, preflight.
+Phase 3  Workflows (call-graph), Phase A candidate ranker, clusters.
+Phase 4  LLM infra: provider, structured outputs, auditing, budgets,
+         checkpoint/resume, BYO keys, privacy-mode bundles.
+Phase 5  Semantic pass: symbol records, synthesis, capabilities,
+         refinement/critique, Phase B reranking.
+Phase 6  Embeddings + retrieval; delete old RAG.
+Phase 7  Generation: sections, tutorials + diagrams, validation, regeneration.
+Phase 8  Q&A eval endpoint + internal chat page.
+Phase 9  Incremental analyzer.
+Phase 10 API + frontend adaptation.
+Phase 11 Tests + end-to-end verification; update Design.md/BACKEND.md/TESTING.md.
 ```
 
-Bundle example:
+# What Gets Sent To The LLM
 
-```json
-{
-  "task": "generate_onboarding_section",
-  "sectionType": "start_here",
-  "role": "backend",
-  "deterministicContext": {
-    "frameworks": ["React", "Express", "BullMQ", "Supabase"],
-    "topClusters": ["Backend API", "Analysis Worker", "Analysis Engine"],
-    "topCriticalFiles": [
-      "backend/src/api/app.ts",
-      "backend/src/worker/engine/analysisRunner.ts"
-    ],
-    "scripts": {
-      "dev": "concurrently -n api,worker ...",
-      "build": "tsc -p tsconfig.json"
-    }
-  },
-  "semanticContext": [
-    {
-      "targetType": "architecture_cluster",
-      "stableKey": "cluster:analysis-engine",
-      "summary": "Parses repositories, extracts code evidence, and builds the dependency graph.",
-      "receiptIds": ["r10", "r11"]
-    }
-  ],
-  "receipts": [
-    {
-      "receiptId": "r10",
-      "filePath": "backend/src/worker/engine/analysisRunner.ts",
-      "lineStart": 1,
-      "lineEnd": 58
-    }
-  ]
-}
-```
+Send (subject to privacy mode): selected deterministic facts, ranked targets with reasons, semantic records, capped snippets, receipt ids, strict output rules.
 
-Expected output:
-
-```txt
-Markdown overview with 3 to 6 paragraphs, a short "read first" list, and citations.
-```
-
-### Section: Architecture
-
-Purpose:
-
-```txt
-Explain the architecture map from deterministic clusters.
-```
-
-Deterministic retrieval:
-
-```txt
-architecture_clusters
-architecture_edges
-critical module rankings
-workflow crossings between clusters
-```
-
-Semantic retrieval prompt:
-
-```txt
-"architecture responsibilities and subsystem relationships for ROLE"
-```
-
-Expected output:
-
-```json
-{
-  "title": "Architecture Map",
-  "contentMarkdown": "The repo is split into a React frontend, an Express API, and a worker-side analysis engine. The Backend API cluster exposes project and graph endpoints, while the Analysis Worker runs repository parsing and evidence graph construction. [r_arch_1, r_arch_2]",
-  "confidence": "high",
-  "claims": [
-    {
-      "claim": "The backend API and worker analysis engine are separate architecture clusters.",
-      "receiptIds": ["r_arch_1", "r_arch_2"],
-      "confidence": "high"
-    }
-  ],
-  "usedReceiptIds": ["r_arch_1", "r_arch_2"]
-}
-```
-
-### Section: Entry Points
-
-Deterministic retrieval:
-
-```txt
-entrypoints ordered by role relevance and critical score
-handler symbols
-connected workflows
-route/config evidence
-```
-
-Expected content:
-
-```txt
-List of API routes, UI routes, worker jobs, CLI/server entries, and why they matter.
-```
-
-### Section: Critical 25%
-
-Deterministic retrieval:
-
-```txt
-critical_rankings where is_critical_25 = true
-grouped by target_type: workflow, file, symbol, module, schema, config, test
-score breakdowns
-ranking reasons
-```
-
-Semantic retrieval prompt:
-
-```txt
-"why these critical files, modules, symbols, workflows matter for ROLE onboarding"
-```
-
-Bundle example:
-
-```json
-{
-  "sectionType": "critical_25",
-  "role": "backend",
-  "deterministicContext": {
-    "criticalWorkflows": [
-      {
-        "stableKey": "workflow:project-import-analysis",
-        "title": "Create project and queue repository analysis",
-        "score": 0.92,
-        "rankingReasons": [
-          "Public backend entrypoint",
-          "Writes project data",
-          "Enqueues analysis job"
-        ]
-      }
-    ],
-    "criticalFiles": [
-      {
-        "stableKey": "backend/src/worker/engine/analysisRunner.ts",
-        "score": 0.91,
-        "rankingReasons": [
-          "Coordinates AST parsing and graph building",
-          "Participates in core analysis workflow"
-        ]
-      }
-    ],
-    "criticalSymbols": [
-      {
-        "stableKey": "backend/src/worker/engine/analysisRunner.ts#runAnalysis",
-        "score": 0.93
-      }
-    ],
-    "criticalModules": [
-      {
-        "stableKey": "cluster:analysis-engine",
-        "score": 0.94
-      }
-    ]
-  }
-}
-```
-
-Expected output:
-
-```txt
-Explain the Critical 25% by category, with ranking reasons. Do not simply dump scores.
-```
-
-### Section: Workflow Guide
-
-Generate one section per selected workflow or one combined section with multiple workflow subsections.
-
-Deterministic retrieval:
-
-```txt
-workflow row
-workflow_steps
-entrypoint
-side effects
-connected files/symbols
-critical ranking reasons
-```
-
-Semantic retrieval prompt:
-
-```txt
-"workflow lifecycle explanation and role-specific context for WORKFLOW_TITLE"
-```
-
-Expected output:
-
-```txt
-Step-by-step explanation:
-1. Trigger
-2. Guard/validation
-3. Core logic
-4. Data/schema/API interaction
-5. Output/side effect
-```
-
-### Section: Data Schema
-
-Deterministic retrieval:
-
-```txt
-schema nodes
-database query side effects
-ORM/schema files
-migrations if present
-workflows touching schema nodes
-```
-
-Expected content:
-
-```txt
-Explain the source-of-truth data objects and which workflows read/write them.
-```
-
-### Section: Safety Rails
-
-Deterministic retrieval:
-
-```txt
-package scripts
-test files
-CI configs
-Docker files
-env examples
-dangerous side effects
-```
-
-Expected content:
-
-```txt
-Commands to run, tests to trust, env/config notes, and risky areas to review carefully.
-```
-
-### Section: Documentation Health
-
-Deterministic retrieval:
-
-```txt
-stale_flags
-changed files/symbols
-affected workflows
-affected summaries
-affected package sections
-```
-
-Expected content:
-
-```txt
-Which onboarding sections may be stale and why.
-```
-
-## Step 15: Validation
-
-Create `sectionValidator.ts`.
-
-Validation rules:
-
-```txt
-1. Every used receipt ID must exist in the bundle.
-2. Every cited receipt must belong to the same snapshot/commit.
-3. Claims mentioning files must cite receipts from those files.
-4. Claims mentioning functions/classes must cite matching node receipts.
-5. Claims with no citation are rejected or downgraded to low confidence.
-6. Section confidence is the minimum reasonable confidence of major claims.
-7. Generated content starts as draft.
-```
-
-Function:
-
-```ts
-export function validateSectionOutput(ctx: {
-  output: GeneratedSectionOutput;
-  bundle: EvidenceBundle;
-}): ValidatedSection;
-```
-
-Example validation failure:
-
-```json
-{
-  "valid": false,
-  "errors": [
-    "Claim mentions Prisma but no provided receipt or summary mentions Prisma.",
-    "Receipt r99 does not exist in evidence bundle."
-  ],
-  "action": "retry_with_stricter_prompt"
-}
-```
-
-## Step 16: Incremental Re-analysis
-
-Create `incrementalAnalyzer.ts`.
-
-Algorithm:
-
-```txt
-1. Download new snapshot for target commit.
-2. Recompute repository_files.hash.
-3. Re-parse changed files.
-4. Recompute graph node body/signature hashes.
-5. Compare stable_key + hash with previous snapshot.
-6. Mark changed nodes.
-7. Find graph edges connected to changed nodes.
-8. Find workflows containing changed nodes.
-9. Find critical rankings referencing changed targets.
-10. Find semantic summaries whose evidence_hash changed.
-11. Find package sections whose generation_context references changed summaries, nodes, workflows, clusters, or rankings.
-12. Insert stale_flags.
-13. Regenerate only stale summaries/sections when requested.
-```
-
-Generation context stored on `package_sections`:
-
-```json
-{
-  "bundleVersion": "1.0",
-  "promptVersion": "section-critical-25-v1",
-  "snapshotId": "snapshot_1",
-  "commit": "abc123",
-  "targetStableKeys": [
-    "backend/src/worker/engine/analysisRunner.ts",
-    "backend/src/worker/engine/analysisRunner.ts#runAnalysis"
-  ],
-  "workflowIds": ["wf_1"],
-  "summaryIds": ["sum_1", "sum_2"],
-  "receiptIds": ["r1", "r2"],
-  "evidenceHashes": {
-    "backend/src/worker/engine/analysisRunner.ts#runAnalysis": "sha256:..."
-  }
-}
-```
-
-## Minimal Build Order
-
-Implement in this order:
-
-```txt
-1. Add database migration for snapshot, graph, workflow, ranking, architecture, summary, embedding, generation tables.
-2. Add hashUtils.ts and stableKeys.ts.
-3. Extend symbolExtractor.ts with stableKey, bodyHash, signatureHash, behaviorSignals, snippets.
-4. Add configScanner.ts and privacyFilter.ts.
-5. Replace file-only graph with evidenceGraphBuilder.ts.
-6. Add entrypointDetector.ts.
-7. Add sideEffectDetector.ts.
-8. Add workflowExtractor.ts.
-9. Add criticalRanker.ts for workflows/files/symbols/modules/configs/tests.
-10. Add architectureClusterer.ts.
-11. Add persistAnalysis.ts.
-12. Add semanticSummaryService.ts using OpenRouter.
-13. Add embeddingService.ts and evidence_embeddings writes.
-14. Add evidenceBundleBuilder.ts.
-15. Add aiGenerationService.ts for section-by-section generation.
-16. Add sectionValidator.ts.
-17. Generate only one role and two sections first: start_here and critical_25.
-18. Add workflow_guide, architecture, entry_points, safety_rails, data_schema.
-19. Add incrementalAnalyzer.ts and stale_flags.
-```
-
-## What Gets Sent To The LLM
-
-Send:
-
-```txt
-selected deterministic facts
-ranked targets and ranking reasons
-semantic summaries
-selected snippets
-receipt IDs
-strict output rules
-```
-
-Do not send:
-
-```txt
-raw full repository
-raw AST
-all files
-secrets
-uncapped graph dumps
-unvalidated user-supplied claims
-```
-
-This is the important balance:
+Never send: raw full repository, raw ASTs, all files, secret-bearing files, uncapped graph dumps, unvalidated user-supplied claims.
 
 ```txt
 AST/config/git graph decides what is true.
-LLM summaries preserve meaning.
-Embeddings retrieve relevant meaning.
-Section generation explains the selected evidence.
-Receipts prove where each explanation came from.
+Structured semantic records preserve meaning, hierarchically.
+Multi-view embeddings + graph expansion retrieve relevant meaning.
+Section generation explains the selected evidence, per scope, role, and commit.
+Receipts with trust levels prove where every explanation came from.
 ```
-
