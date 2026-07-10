@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { isGraphHintDismissed } from "@/components/graph/GraphFirstVisitHint";
 
 // Mirrors the color mapping in lib/graphNodeType.ts (inferNodeType). Kept as
 // a static list here rather than importing that module's logic, since these
@@ -14,12 +15,14 @@ const NODE_KINDS: { label: string; swatchClass: string }[] = [
   { label: "Middleware", swatchClass: "bg-amber-500/20 border-amber-500/40" },
   { label: "Data", swatchClass: "bg-orange-500/20 border-orange-500/40" },
   { label: "Env/config", swatchClass: "bg-yellow-500/20 border-yellow-500/40" },
-  { label: "Entry", swatchClass: "bg-primary/20 border-primary/40" },
+  { label: "Index/main", swatchClass: "bg-primary/20 border-primary/40" },
   { label: "Module", swatchClass: "bg-slate-500/20 border-slate-500/40" },
 ];
 
 export function GraphLegend() {
-  const [expanded, setExpanded] = useState(true);
+  // Start collapsed on a user's first visit so the legend doesn't fight the
+  // first-visit hint (and the Controls/MiniMap) for canvas space.
+  const [expanded, setExpanded] = useState(() => isGraphHintDismissed());
 
   if (!expanded) {
     return (

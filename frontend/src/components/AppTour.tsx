@@ -106,12 +106,38 @@ export function AppTour({ steps, onDone }: AppTourProps) {
       if (e.key === "Escape") {
         e.preventDefault();
         onDone();
-      } else if (e.key === "ArrowRight" || e.key === "Enter") {
+      } else if (e.key === "Enter") {
+        // Let a focused button (Back / Skip tour) handle its own Enter press;
+        // only advance when Enter isn't activating a control.
+        if (e.target instanceof HTMLElement && e.target.closest("button")) return;
+        e.preventDefault();
+        handleNext();
+      } else if (e.key === "ArrowRight") {
         e.preventDefault();
         handleNext();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
         handleBack();
+      } else if (e.key === "Tab") {
+        // Minimal focus containment so aria-modal is honest: keep Tab cycling
+        // within the tour card instead of escaping into the dimmed page.
+        const card = cardRef.current;
+        if (!card) return;
+        const focusables = card.querySelectorAll<HTMLElement>("button, [tabindex]:not([tabindex='-1'])");
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (!first || !last) return;
+        const active = document.activeElement;
+        if (!card.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && (active === first || active === card)) {
+          e.preventDefault();
+          last.focus();
+        }
       }
     }
     document.addEventListener("keydown", onKeyDown);
