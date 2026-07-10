@@ -9,7 +9,7 @@ import {
   Settings,
   Users,
 } from "lucide-react";
-import { Link, NavLink, Outlet, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -76,6 +76,7 @@ function ProjectSidebar() {
   const { project, loading } = useProject();
   const { id } = useParams<{ id: string }>();
   const { setOpen } = useSidebar();
+  const { pathname } = useLocation();
 
   return (
     <SidebarShell>
@@ -101,20 +102,25 @@ function ProjectSidebar() {
       <nav className="flex-1 space-y-0.5 px-2 py-2">
         {projectNavItems.map((item) => {
           const Icon = item.icon;
+          const to = `/projects/${id}/${item.to}`;
+          // Radix TooltipTrigger's Slot string-joins className, which would
+          // stringify NavLink's function form — compute the active state here
+          // and pass a plain string instead.
+          const isActive = item.end
+            ? pathname.replace(/\/$/, "") === to.replace(/\/$/, "")
+            : pathname.startsWith(to);
           return (
             <Tooltip key={item.to}>
               <TooltipTrigger asChild>
                 <NavLink
-                  to={`/projects/${id}/${item.to}`}
+                  to={to}
                   end={item.end}
                   onClick={() => setOpen(false)}
-                  className={({ isActive }) =>
-                    `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
-                      isActive
-                        ? "bg-accent text-accent-foreground"
-                        : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                    }`
-                  }
+                  className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                    isActive
+                      ? "bg-accent text-accent-foreground"
+                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  }`}
                 >
                   <Icon className="h-3.5 w-3.5" />
                   {item.label}
