@@ -54,7 +54,7 @@ const statusConfig = {
   complete: {
     label: "Complete",
     progress: 100,
-    tone: "text-emerald-600 dark:text-emerald-400",
+    tone: "text-emerald-700 dark:text-emerald-400",
     bar: "bg-emerald-500",
     icon: CheckCircle2,
     hint: "The repository has been parsed and its onboarding content generated.",
@@ -70,7 +70,7 @@ const statusConfig = {
 };
 
 const tierColors: Record<string, string> = {
-  owner: "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30",
+  owner: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
   admin: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
   contributor: "bg-muted text-muted-foreground border-border",
   developer: "bg-muted text-muted-foreground border-border",
@@ -158,7 +158,7 @@ export function ProjectCard({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 text-xs">
             <span className="text-muted-foreground">
-              STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-600 dark:text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
+              STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-700 dark:text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
             </span>
           </div>
           <Button variant="outline" size="xs" onClick={() => navigate(`/projects/${project.id}`)}>
