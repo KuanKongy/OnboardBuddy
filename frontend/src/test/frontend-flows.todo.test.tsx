@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { GraphPage } from "@/pages/GraphPage";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("@/lib/supabase", () => ({
   supabase: {
@@ -100,11 +101,15 @@ describe("frontend feature flows", () => {
 
   it("Graph Viewer switches between architecture, dependency, and workflow tabs", async () => {
     render(
-      <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
-        <Routes>
-          <Route path="/projects/:id/dependencies" element={<GraphPage />} />
-        </Routes>
-      </MemoryRouter>,
+      // GraphPage contains Radix tooltips (toolbar/legend), which need a
+      // provider when rendered outside App.tsx — same as GraphPage.test.tsx.
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/projects/proj-1/dependencies"]}>
+          <Routes>
+            <Route path="/projects/:id/dependencies" element={<GraphPage />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
     );
 
     await waitFor(() => {

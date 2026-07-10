@@ -7,7 +7,7 @@ const GITHUB_API = "https://api.github.com";
 
 export interface Installation {
   id: number;
-  account: { login: string; type?: string };
+  account: { id?: number; login: string; type?: string };
   app_id: number;
 }
 

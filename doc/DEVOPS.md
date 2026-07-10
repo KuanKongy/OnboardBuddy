@@ -513,8 +513,8 @@ The full authentication flow using Supabase + GitHub OAuth:
    installation through GitHub's user-scoped installations endpoint before
    linking it.
 6. The frontend calls **`GET /api/github/installations`**. The backend uses the
-   stored GitHub App user access token and GitHub's user-scoped endpoint, so only
-   installations accessible to that user are returned.
+   stored GitHub App user access token and only returns installations owned by
+   that connected GitHub account.
 7. The user **selects a repository and branch** in the UI.
 8. The frontend calls **`POST /api/projects`** to create a project record in the
    database (owner, repo name, branch).

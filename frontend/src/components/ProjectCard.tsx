@@ -18,6 +18,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 
 export interface Project {
@@ -38,17 +39,39 @@ const defaultStatus = {
   tone: "text-muted-foreground",
   bar: "bg-muted-foreground/40",
   icon: CircleDashed,
+  hint: "This project hasn't been analyzed yet.",
 };
 const statusConfig = {
   idle: defaultStatus,
-  analyzing: { label: "In Progress", progress: 45, tone: "text-primary", bar: "bg-primary", icon: Loader2 },
-  complete: { label: "Complete", progress: 100, tone: "text-emerald-400", bar: "bg-emerald-500", icon: CheckCircle2 },
-  failed: { label: "Failed", progress: 0, tone: "text-destructive", bar: "bg-destructive", icon: XCircle },
+  analyzing: {
+    label: "In Progress",
+    progress: 45,
+    tone: "text-primary",
+    bar: "bg-primary",
+    icon: Loader2,
+    hint: "The repository is being parsed and its onboarding content generated.",
+  },
+  complete: {
+    label: "Complete",
+    progress: 100,
+    tone: "text-emerald-700 dark:text-emerald-400",
+    bar: "bg-emerald-500",
+    icon: CheckCircle2,
+    hint: "The repository has been parsed and its onboarding content generated.",
+  },
+  failed: {
+    label: "Failed",
+    progress: 0,
+    tone: "text-destructive",
+    bar: "bg-destructive",
+    icon: XCircle,
+    hint: "Analysis hit an error and did not finish.",
+  },
 };
 
 const tierColors: Record<string, string> = {
-  owner: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  admin: "bg-blue-500/15 text-blue-400 border-blue-500/30",
+  owner: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  admin: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
   contributor: "bg-muted text-muted-foreground border-border",
   developer: "bg-muted text-muted-foreground border-border",
 };
@@ -79,14 +102,14 @@ export function ProjectCard({
         <div className="mb-2 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h3 className="truncate text-sm font-semibold text-foreground">
+              <h3 className="truncate text-sm font-semibold text-foreground" title={project.repo_name}>
                 {project.repo_name}
               </h3>
-              <Badge className={`text-[10px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
+              <Badge className={`text-[11px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
                 {project.permission_tier.toUpperCase()}
               </Badge>
             </div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
               <GitBranch className="h-3 w-3" />
               {project.branch}
             </div>
@@ -113,21 +136,29 @@ export function ProjectCard({
           </div>
         </div>
 
-        <div className="mb-1.5 flex items-center justify-between text-[11px]">
+        <div className="mb-1.5 flex items-center justify-between text-xs">
           <span className="text-muted-foreground">
-            {project.status === "analyzing" ? `Analyzing ${status.progress}%` : status.label}
+            {project.status === "analyzing" ? `Analyzing ${status.progress}%` : ""}
           </span>
-          <span className={status.tone}>
-            {status.label}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                className={`cursor-help underline decoration-dotted underline-offset-2 ${status.tone}`}
+              >
+                {status.label}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top">{status.hint}</TooltipContent>
+          </Tooltip>
         </div>
 
         <Progress value={status.progress} indicatorClassName={status.bar} className="mb-2.5 h-1" />
 
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 text-[11px]">
+          <div className="flex items-center gap-3 text-xs">
             <span className="text-muted-foreground">
-              STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
+              STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-700 dark:text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
             </span>
           </div>
           <Button variant="outline" size="xs" onClick={() => navigate(`/projects/${project.id}`)}>
