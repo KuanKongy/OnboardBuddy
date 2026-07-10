@@ -1,6 +1,6 @@
 import { Star } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
-import { inferComplexity, inferNodeType, mockCoverage } from "@/lib/graphNodeType";
+import { inferComplexity, inferNodeType } from "@/lib/graphNodeType";
 import { cn } from "@/lib/utils";
 
 export interface ModuleNodeData {
@@ -19,7 +19,6 @@ export interface ModuleNodeData {
 export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   const typeInfo = inferNodeType(data.filePath, data.exportedSymbols);
   const complexity = inferComplexity(data.importCount, data.dependentCount, data.symbolCount);
-  const coverage = mockCoverage(data.filePath);
 
   return (
     <div
@@ -41,7 +40,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         {data.selected && <Star className="h-3 w-3 flex-shrink-0 fill-primary text-primary" />}
         <span
           className={cn(
-            "shrink-0 rounded border px-1 py-0.5 text-[9px] font-bold uppercase tracking-wide",
+            "shrink-0 rounded border px-1 py-0.5 text-[11px] font-bold uppercase tracking-wide",
             typeInfo.colorClasses,
           )}
         >
@@ -51,15 +50,10 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
 
       <p className="mb-2 truncate text-xs text-muted-foreground" title={typeInfo.description}>{typeInfo.description}</p>
 
-      {data.selected && (
+      {data.selected && complexity && (
         <div className="mb-2 flex flex-wrap items-center gap-1">
-          {complexity && (
-            <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-orange-500/20 text-orange-400">
-              {complexity}
-            </span>
-          )}
-          <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-green-500/20 text-green-400">
-            {coverage}% Cov
+          <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-orange-500/20 text-orange-700 dark:text-orange-400">
+            {complexity}
           </span>
         </div>
       )}
