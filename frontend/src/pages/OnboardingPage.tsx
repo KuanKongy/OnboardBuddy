@@ -16,7 +16,7 @@ import {
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
 import { apiFetch } from "@/lib/api";
@@ -39,11 +39,7 @@ import type {
   SectionId,
   SourceReceipt,
 } from "@/types/onboarding";
-import {
-  MOCK_ONBOARDING_PACKAGES,
-  ROLES,
-  SECTION_NAV_ORDER,
-} from "@/lib/mockOnboardingData";
+import { ROLES, SECTION_NAV_ORDER } from "@/lib/mockOnboardingData";
 import { ReceiptViewer } from "@/components/ReceiptViewer";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -171,8 +167,9 @@ function SectionView({
   const [expanded, setExpanded] = useState<boolean[]>(() => initialBlockExpansion(section));
 
   // Local expansion state is per-section only — reset whenever the user
-  // switches sections (no persistence needed).
-  useEffect(() => {
+  // switches sections (no persistence needed). Layout effect so a section
+  // with a different block count never paints against the old array.
+  useLayoutEffect(() => {
     setExpanded(initialBlockExpansion(section));
   }, [section.id]);
 
@@ -273,7 +270,7 @@ function SectionView({
                 isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
               }`}
             >
-              <div className="overflow-hidden">
+              <div className="overflow-hidden" inert={!isOpen}>
                 <div className="prose prose-sm prose-invert mb-3 max-w-none text-[13px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
                   <ReactMarkdown>{block.body}</ReactMarkdown>
                 </div>

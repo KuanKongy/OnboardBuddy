@@ -4,6 +4,10 @@ import { Card } from "@/components/ui/card";
 
 const HINT_DISMISSED_KEY = "onboardbuddy:graph-hint-dismissed";
 
+export function isGraphHintDismissed(): boolean {
+  return readHintDismissed();
+}
+
 function readHintDismissed(): boolean {
   try {
     return localStorage.getItem(HINT_DISMISSED_KEY) === "1";
@@ -34,8 +38,8 @@ export function GraphFirstVisitHint() {
         This is a map of how files in this project depend on each other.
       </p>
       <p className="text-muted-foreground">
-        Click a node to inspect its symbols and dependencies. Start from an
-        entry point (marked ▶) to follow the app's flow.
+        Click a node to see its file details and open it on GitHub. Start from
+        an entry point (marked ▶) to follow the app's flow.
       </p>
       <div className="flex justify-end pt-1">
         <Button
