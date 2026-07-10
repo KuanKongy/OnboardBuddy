@@ -1,9 +1,12 @@
 import { expect } from 'chai';
 import * as path from 'path';
-import { buildRepoIndex, filterByLanguage } from '../../src/worker/engine/repoIngester';
+import { buildRepoIndex, filterByLanguage, scanRepositoryFiles, detectRepoInventory } from '../../src/worker/engine/repoIngester';
 import { createProgram, parseSourceFile } from '../../src/worker/engine/astParser';
 import { extractFileAnalysis } from '../../src/worker/engine/symbolExtractor';
-import { buildDependencyGraph, annotateResolvedImports } from '../../src/worker/engine/graphBuilder';
+import { annotateResolvedImports } from '../../src/worker/engine/graphBuilder';
+import { scanConfigNodes } from '../../src/worker/engine/configScanner';
+import { ingestDocs } from '../../src/worker/engine/docsIngester';
+import { buildEvidenceGraph } from '../../src/worker/engine/evidenceGraphBuilder';
 import { detectEntrypoints } from '../../src/worker/engine/entrypointDetector';
 import { detectSideEffects } from '../../src/worker/engine/sideEffectDetector';
 import { extractWorkflows } from '../../src/worker/engine/workflowExtractor';
@@ -67,11 +70,17 @@ describe("analysis pipeline", () => {
     }
   });
 
-  it("Workflow extraction discovers entrypoint-to-side-effect paths", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
+  it("Workflow extraction discovers entrypoint-to-side-effect paths", async () => {
+    const records = await scanRepositoryFiles(FIXTURE_DIR);
+    const inventory = await detectRepoInventory(FIXTURE_DIR, records);
     const entrypoints = detectEntrypoints(fileAnalyses);
     const sideEffects = detectSideEffects(fileAnalyses);
-    const workflows = extractWorkflows(fileAnalyses, graph, entrypoints, sideEffects);
+    const configNodes = scanConfigNodes(records, inventory);
+    const docs = ingestDocs(records, new Set(records.map((r) => r.relativePath)));
+    const evidence = buildEvidenceGraph({
+      fileAnalyses, fileRecords: records, entrypoints, sideEffects, configNodes, docs, rootPath: FIXTURE_DIR,
+    });
+    const workflows = extractWorkflows({ graph: evidence, entrypoints, sideEffects });
 
     expect(workflows.length).to.be.greaterThan(0);
     for (const wf of workflows) {

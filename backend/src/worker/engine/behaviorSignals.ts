@@ -36,6 +36,9 @@ export function deriveBehaviorSignals(symbol: SymbolInfo): string[] {
     ...(symbol.callsSymbols ?? []),
     ...(symbol.methods?.flatMap((m) => m.callsSymbols ?? []) ?? []),
     symbol.initializer ?? '',
+    // Argument-shaped patterns (e.g. `.query('INSERT`) only occur in source
+    // text, never in callee names.
+    symbol.snippet ?? '',
   ].join(' ');
   if (!haystack.trim()) return [];
 

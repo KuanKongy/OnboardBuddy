@@ -17,7 +17,13 @@ import { runAnalysis } from './engine/analysisRunner.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
 import { extractWorkflows, persistWorkflows } from './engine/workflowExtractor.js';
-import { rankCriticalFiles, persistRankings } from './engine/criticalRanker.js';
+import {
+  rankCandidates,
+  persistCandidateRankings,
+  gateSymbolsForDepth,
+} from './engine/candidateRanker.js';
+import { fetchChurnSignals, persistChurn, type ChurnStats } from './engine/churnService.js';
+import { clusterArchitecture, persistArchitecture } from './engine/architectureClusterer.js';
 import { scanConfigNodes } from './engine/configScanner.js';
 import { ingestDocs } from './engine/docsIngester.js';
 import {
@@ -28,7 +34,6 @@ import {
 import { runPreflight } from './engine/preflightService.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
-import { glob } from 'glob';
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +67,7 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
 }
 
 /** Downloads and extracts the repo zipball; returns the extracted repo root. */
-async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string): Promise<{ repoRoot: string; commitHash: string }> {
+async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
   if (!project.github_installation_id) {
     throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
   }
@@ -76,7 +81,7 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   await downloadZipball(token, project.repo_owner, project.repo_name, project.branch, zipPath);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
-  return { repoRoot: path.join(extractDir, entries[0]!), commitHash };
+  return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
 }
 
 /** Resolves the job's scope (path prefix); defaults to the whole-repo scope. */
@@ -205,7 +210,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   try {
     // 2. Download + extract zipball at the branch head commit
     await updateStep('Downloading repository', 15);
-    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir);
+    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir);
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded
@@ -284,11 +289,6 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const fileCount = snapshot.fileRecords.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
-    const workflowFiles = await glob('**/*.{yml,yaml}', {
-      cwd: path.join(repoRoot, '.github', 'workflows'),
-      absolute: false,
-    }).catch(() => []);
-
     let snapshotId = '';
     let nodeIdMap = new Map<string, string>();
     const client = await pool.connect();
@@ -311,7 +311,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
                unknowns = EXCLUDED.unknowns,
                warnings = EXCLUDED.warnings
          RETURNING id`,
-        [projectId, scope.scopeId, commitHash, branch, fileCount, symbolCount, workflowFiles.length,
+        [projectId, scope.scopeId, commitHash, branch, fileCount, symbolCount, 0 /* set after extraction */,
          analysis_depth, privacy_mode,
          JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns), JSON.stringify(snapshot.errors)],
       );
@@ -322,6 +322,8 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       await client.query(`DELETE FROM entrypoints WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM side_effects WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM criticality_scores WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM architecture_edges WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM architecture_clusters WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM repository_files WHERE snapshot_id = $1`, [snapshotId]);
@@ -354,14 +356,18 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       configNodes: configNodes.length,
     });
 
-    // 9. Entrypoints, side effects, workflows, candidate rankings
-    await updateStep('Persisting entrypoints and side effects', 85);
-    await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
+    // 9. Entrypoints, side effects, workflows (call-graph traversal)
+    await updateStep('Persisting entrypoints and side effects', 82);
+    const entrypointIdMap = await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
     await persistSideEffects(snapshotId, sideEffects, nodeIdMap);
 
-    await updateStep('Extracting workflows', 90);
-    const workflows = extractWorkflows(snapshot.fileAnalyses, snapshot.graph, entrypoints, sideEffects);
-    await persistWorkflows(snapshotId, workflows, nodeIdMap);
+    await updateStep('Extracting workflows', 86);
+    const workflows = extractWorkflows({ graph: evidence, entrypoints, sideEffects });
+    const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
+    await query(
+      `UPDATE analysis_snapshots SET workflow_count = $2 WHERE id = $1`,
+      [snapshotId, workflows.length],
+    );
     await markPhase(snapshotId, 'workflows', 'complete', { workflows: workflows.length });
     if (workflows.length === 0) {
       await query(
@@ -370,14 +376,63 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       );
     }
 
-    await updateStep('Ranking critical files', 93);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(snapshot.fileAnalyses, snapshot.graph, entrypointKeys, sideEffectKeys);
-    await persistRankings(snapshotId, rankings, nodeIdMap);
-    await markPhase(snapshotId, 'candidate_ranking', 'complete', { rankedTargets: rankings.length });
+    // 10. Churn (GitHub API, degrades to 0-weight on any failure), then
+    //     Phase A candidate ranking + depth gating
+    await updateStep('Fetching churn signals', 89);
+    let churn = new Map<string, ChurnStats>();
+    try {
+      // Preliminary churn-free ranking picks the top files worth a per-file
+      // churn request; dirs give everything else a coarse fallback signal.
+      const preliminary = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows });
+      const topFiles = preliminary
+        .filter((r) => r.targetType === 'file')
+        .slice(0, 20)
+        .map((r) => r.stableKey);
+      const topLevelDirs = [...new Set(
+        snapshot.fileRecords
+          .filter((r) => r.relativePath.includes('/'))
+          .map((r) => r.relativePath.split('/')[0]!),
+      )].slice(0, 10);
+      churn = await fetchChurnSignals({
+        token,
+        owner: project.repo_owner,
+        repo: project.repo_name,
+        branch,
+        topLevelDirs,
+        topFiles,
+      });
+      await persistChurn(snapshotId, churn, new Set(snapshot.fileRecords.map((r) => r.relativePath)));
+    } catch (err) {
+      console.warn(`[worker] churn fetch failed (project=${projectId}):`, err instanceof Error ? err.message : err);
+    }
 
-    // 10. Mark job complete
+    await updateStep('Ranking candidates', 93);
+    const rankings = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows, churn });
+    const rankedTargets = await persistCandidateRankings(snapshotId, rankings, nodeIdMap, workflowIdMap);
+    const gating = gateSymbolsForDepth(analysis_depth, rankings, { graph: evidence, entrypoints, workflows });
+    await markPhase(snapshotId, 'candidate_ranking', 'complete', {
+      rankedTargets,
+      churnPathsFetched: churn.size,
+      depth: analysis_depth,
+      symbolsSelectedForLlm: gating.selected.length,
+      symbolsFactsOnly: gating.factsOnly.length,
+    });
+
+    // 11. Deterministic architecture clustering
+    await updateStep('Clustering architecture', 96);
+    const architecture = clusterArchitecture({
+      graph: evidence,
+      inventory: snapshot.inventory,
+      workflows,
+      rankings,
+    });
+    await persistArchitecture(snapshotId, architecture, nodeIdMap);
+    await markPhase(snapshotId, 'clustering', 'complete', {
+      clusters: architecture.clusters.length,
+      clusterEdges: architecture.edges.length,
+    });
+
+    // 12. Mark job complete
     await query(
       `UPDATE analysis_jobs
        SET status = 'complete', snapshot_id = $1, scope_id = $4, current_step = 'Complete', progress_pct = 100, finished_at = NOW(),
