@@ -32,5 +32,25 @@ export default [
         }
       ]
     }
+  },
+  {
+    files: [
+      "**/*.test.{ts,tsx}",
+      "**/*.spec.{ts,tsx}",
+      "**/__tests__/**/*.{ts,tsx}",
+      "**/test/**/*.{ts,tsx}"
+    ],
+    rules: {
+      "@typescript-eslint/no-unused-expressions": "off"
+    }
+  },
+  {
+    files: [
+      "**/fixtures/**/*.{ts,tsx}"
+    ],
+    rules: {
+      "@typescript-eslint/no-unused-expressions": "off",
+      "@typescript-eslint/no-unused-vars": "off"
+    }
   }
 ];

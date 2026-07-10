@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { supabaseAdmin } from "../../lib/supabase.js";
 import { query } from "../../lib/db.js";
-import { encrypt } from "../../lib/encryption.js";
 import { requireAuth } from "../middleware/auth.js";
 
 export const authRouter = Router();
@@ -116,46 +115,6 @@ authRouter.get("/me", requireAuth, async (req, res) => {
     });
   } catch (err) {
     console.error("Get profile error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-authRouter.post("/github/save-token", requireAuth, async (req, res) => {
-  try {
-    const userId = req.user!.id;
-    const { github_user_id, github_username, access_token, scopes } = req.body as {
-      github_user_id: number;
-      github_username: string;
-      access_token: string;
-      scopes: string[];
-    };
-
-    if (!github_user_id || !github_username || !access_token) {
-      res.status(400).json({ error: "github_user_id, github_username, and access_token are required" });
-      return;
-    }
-
-    // Ensure public.users row exists (handles users created before trigger)
-    await query(
-      `INSERT INTO public.users (id, email)
-       VALUES ($1, COALESCE((SELECT email FROM auth.users WHERE id = $1), ''))
-       ON CONFLICT (id) DO NOTHING`,
-      [userId],
-    );
-
-    const encryptedToken = encrypt(access_token);
-
-    await query(
-      `INSERT INTO github_connections (user_id, github_user_id, github_username, access_token_encrypted, scopes)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (user_id, github_user_id)
-       DO UPDATE SET github_username = $3, access_token_encrypted = $4, scopes = $5`,
-      [userId, github_user_id, github_username, encryptedToken, scopes ?? []],
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Save GitHub token error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

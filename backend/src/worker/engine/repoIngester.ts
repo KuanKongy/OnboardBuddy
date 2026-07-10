@@ -5,7 +5,7 @@ import { simpleGit } from 'simple-git';
 import type { FileEntry, RepoIndex, SupportedLanguage } from '../types/analysis.js';
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx']);
-const JS_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs']);
+const _JS_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs']);
 
 const IGNORE_PATTERNS = [
   '**/node_modules/**',

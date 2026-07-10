@@ -55,12 +55,12 @@ describe('graphBuilder — nodes', () => {
   // SKIP: blocked on resolveSpecifier not mapping NodeNext ESM '.js' specifiers
   // back to their '.ts' source, so import edges/dependents are not resolved.
   // Re-enable once graphBuilder resolves '.js' → '.ts'.
-  it.skip('jwtUtil dependentCount = 2 (imported by index + authService)', () => {
+  it('jwtUtil dependentCount = 2 (imported by index + authService)', () => {
     const node = graph.nodes.find((n) => n.id === path.join('utils', 'jwtUtil.ts'));
     expect(node!.metadata.dependentCount).to.equal(2);
   });
 
-  it.skip('authService dependentCount = 1 (imported by index)', () => {
+  it('authService dependentCount = 1 (imported by index)', () => {
     const node = graph.nodes.find((n) => n.id === path.join('services', 'authService.ts'));
     expect(node!.metadata.dependentCount).to.equal(1);
   });
@@ -73,7 +73,7 @@ describe('graphBuilder — nodes', () => {
 
 describe('graphBuilder — edges', () => {
   // SKIP (graphBuilder '.js' → '.ts' resolution): no edges are produced yet.
-  it.skip('creates an imports edge from index → authService', () => {
+  it('creates an imports edge from index → authService', () => {
     const edge = graph.edges.find(
       (e) =>
         e.source === 'index.ts' &&
@@ -83,7 +83,7 @@ describe('graphBuilder — edges', () => {
     expect(edge!.kind).to.equal('imports');
   });
 
-  it.skip('creates an imports edge from index → jwtUtil', () => {
+  it('creates an imports edge from index → jwtUtil', () => {
     const edge = graph.edges.find(
       (e) =>
         e.source === 'index.ts' &&
@@ -92,7 +92,7 @@ describe('graphBuilder — edges', () => {
     expect(edge).to.exist;
   });
 
-  it.skip('creates an imports edge from authService → jwtUtil', () => {
+  it('creates an imports edge from authService → jwtUtil', () => {
     const edge = graph.edges.find(
       (e) =>
         e.source === path.join('services', 'authService.ts') &&
@@ -121,24 +121,24 @@ describe('graphBuilder — entry points', () => {
 
   // SKIP (graphBuilder '.js' → '.ts' resolution): jwtUtil has no resolved
   // inbound edges yet, so it is currently misdetected as an entry point.
-  it.skip('jwtUtil is NOT an entry point (it has inbound imports)', () => {
+  it('jwtUtil is NOT an entry point (it has inbound imports)', () => {
     expect(graph.entryPoints).to.not.include(path.join('utils', 'jwtUtil.ts'));
   });
 });
 
 describe('annotateResolvedImports', () => {
   // SKIP (graphBuilder '.js' → '.ts' resolution): resolvedPath is left undefined.
-  it.skip('resolves ../utils/jwtUtil specifier in authService to absolute path', () => {
+  it('resolves ../utils/jwtUtil specifier in authService to absolute path', () => {
     const authAnalysis = fileAnalyses.find((fa) =>
       fa.relativePath.includes('authService'),
     )!;
-    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil');
+    const imp = authAnalysis.imports.find((i) => i.toSpecifier === '../utils/jwtUtil.js');
     expect(imp!.resolvedPath).to.include('jwtUtil.ts');
   });
 
-  it.skip('resolves ./services/authService specifier in index to absolute path', () => {
+  it('resolves ./services/authService specifier in index to absolute path', () => {
     const indexAnalysis = fileAnalyses.find((fa) => fa.relativePath === 'index.ts')!;
-    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './services/authService');
+    const imp = indexAnalysis.imports.find((i) => i.toSpecifier === './services/authService.js');
     expect(imp!.resolvedPath).to.include('authService.ts');
   });
 });

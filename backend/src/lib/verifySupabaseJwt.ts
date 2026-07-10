@@ -7,6 +7,14 @@ function normalizeSupabaseUrl(url: string): string {
 const supabaseUrl = normalizeSupabaseUrl(process.env.SUPABASE_URL ?? "");
 
 let jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+let testVerifier: ((token: string) => Promise<{ id: string; email: string }>) | null = null;
+
+/** @internal Used by tests to bypass remote JWKS verification. */
+export function __setAuthVerifierForTests(
+  fn: ((token: string) => Promise<{ id: string; email: string }>) | null,
+): void {
+  testVerifier = fn;
+}
 
 function getJwks() {
   if (!jwks) {
@@ -23,6 +31,10 @@ function getJwks() {
 export async function verifySupabaseAccessToken(
   token: string,
 ): Promise<{ id: string; email: string }> {
+  if (testVerifier) {
+    return testVerifier(token);
+  }
+
   const { payload } = await jwtVerify(token, getJwks(), {
     issuer: `${supabaseUrl}/auth/v1`,
     audience: "authenticated",

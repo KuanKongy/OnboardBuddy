@@ -3,7 +3,7 @@ import * as path from 'path';
 import { buildRepoIndex, filterByLanguage } from '../repoIngester';
 import { createProgram, parseSourceFile } from '../astParser';
 import { extractFileAnalysis } from '../symbolExtractor';
-import type { FileAnalysis, SymbolInfo } from '../../types/analysis';
+import type { FileAnalysis } from '../../types/analysis';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../../fixtures/simple');
 const JWT_UTIL = path.join(FIXTURE_DIR, 'utils', 'jwtUtil.ts');

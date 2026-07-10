@@ -46,7 +46,7 @@ const EMAIL_PATTERNS = [
   /transporter\.send/,
 ];
 
-const CACHE_PATTERNS = [
+const _CACHE_PATTERNS = [
   /\.set\s*\(/,
   /cache\./,
   /redis\./,
