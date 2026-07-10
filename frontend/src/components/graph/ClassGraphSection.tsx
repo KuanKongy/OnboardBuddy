@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
-import { NodeDetailPanel } from "@/components/graph/NodeDetailPanel";
+import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -141,10 +141,9 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
 
       {selectedNode && (
         <div className="mt-3">
-          <NodeDetailPanel
+          <NodeInfoPanel
             node={selectedNode}
             fileAnalysis={undefined}
-            onClose={() => setSelectedNodeId(null)}
           />
         </div>
       )}

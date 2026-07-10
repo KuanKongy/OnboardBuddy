@@ -53,7 +53,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelProps) {
+export function NodeInfoPanel({ node, fileAnalysis, detail, githubRepo }: NodeInfoPanelProps) {
 
   const functions = fileAnalysis?.symbols.filter((s) => FUNCTION_KINDS.has(s.kind)) ?? [];
   const interfaces = fileAnalysis?.symbols.filter((s) => INTERFACE_KINDS.has(s.kind)) ?? [];
