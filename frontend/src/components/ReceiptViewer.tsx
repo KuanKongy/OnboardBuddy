@@ -14,11 +14,11 @@ import type { SourceReceipt } from "@/types/onboarding";
 function confidenceBadgeClasses(c: string) {
   switch (c) {
     case "high":
-      return "bg-emerald-500/10 text-emerald-400 border-emerald-500/30";
+      return "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
     case "medium":
-      return "bg-amber-500/10 text-amber-400 border-amber-500/30";
+      return "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30";
     default:
-      return "bg-red-500/10 text-red-400 border-red-500/30";
+      return "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30";
   }
 }
 
@@ -106,7 +106,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             {receipt.staleness === "stale" ? (
               <Badge
                 variant="outline"
-                className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-400"
+                className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-600 dark:text-amber-400"
               >
                 <AlertTriangle className="mr-1 h-2.5 w-2.5" />
                 Stale — source has changed
@@ -114,7 +114,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             ) : (
               <Badge
                 variant="outline"
-                className="border-emerald-500/30 bg-emerald-500/5 text-xs text-emerald-400"
+                className="border-emerald-500/30 bg-emerald-500/5 text-xs text-emerald-600 dark:text-emerald-400"
               >
                 <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
                 Current

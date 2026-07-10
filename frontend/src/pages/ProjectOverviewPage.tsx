@@ -190,7 +190,7 @@ export function ProjectOverviewPage() {
         <Card className="transition-colors hover:border-primary/40">
           <CardContent className="p-3">
             <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-blue-500/10">
-              <Play className="h-3.5 w-3.5 text-blue-400" />
+              <Play className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
             </div>
             <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">Walk through key workflows</p>
@@ -203,7 +203,7 @@ export function ProjectOverviewPage() {
         <Card className="transition-colors hover:border-primary/40">
           <CardContent className="p-3">
             <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10">
-              <User className="h-3.5 w-3.5 text-amber-400" />
+              <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
             </div>
             <h3 className="text-[13px] font-medium text-foreground">Your role</h3>
             <p className="mt-0.5 text-xs capitalize text-muted-foreground">{project.developer_role}</p>
@@ -234,7 +234,7 @@ export function ProjectOverviewPage() {
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="flex cursor-help items-center gap-1.5 text-muted-foreground underline decoration-dotted underline-offset-2">
                     {isActive && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-                    {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-400" />}
+                    {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />}
                     {latestJob?.status === "failed" && <AlertTriangle className="h-3 w-3 text-destructive" />}
                     {isActive
                       ? latestJob.current_step ?? "Processing..."

@@ -14,6 +14,7 @@ import "reactflow/dist/style.css";
 import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
 import { GraphLegend } from "@/components/graph/GraphLegend";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
+import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import type { PositionedNode } from "@/lib/graphLayout";
 import type { GraphEdge } from "@/types/graph";
 
@@ -54,6 +55,7 @@ export function DependencyGraphView({
   onSelectNode,
   edgeFilter,
 }: DependencyGraphViewProps) {
+  const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
 
   const neighborIds = useMemo(() => {
@@ -115,17 +117,17 @@ export function DependencyGraphView({
           animated: isActive,
           label,
           labelStyle: { fill: "#6b7280", fontSize: 9, fontWeight: 700 },
-          labelBgStyle: { fill: "oklch(0.17 0 0)", fillOpacity: 0.95 },
+          labelBgStyle: { fill: isDark ? "oklch(0.17 0 0)" : "oklch(0.96 0 0)", fillOpacity: 0.95 },
           labelBgPadding: [4, 3] as [number, number],
           labelBgBorderRadius: 3,
           style: {
             opacity: neighborIds === null || isActive ? 1 : 0.1,
             strokeWidth: isActive ? 2 : 1,
-            stroke: isActive ? "oklch(0.623 0.214 259)" : "oklch(0.4 0 0)",
+            stroke: isActive ? "oklch(0.623 0.214 259)" : isDark ? "oklch(0.4 0 0)" : "oklch(0.75 0 0)",
           },
         };
       }),
-    [visibleEdges, neighborIds, selectedNodeId],
+    [visibleEdges, neighborIds, selectedNodeId, isDark],
   );
 
   return (
@@ -140,14 +142,19 @@ export function DependencyGraphView({
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="oklch(0.3 0 0)" />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1}
+          color={isDark ? "oklch(0.3 0 0)" : "oklch(0.82 0 0)"}
+        />
         <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent" />
         <MiniMap
           pannable
           zoomable
           className="!bg-card !border-border"
-          nodeColor="oklch(0.28 0 0)"
-          maskColor="oklch(0.17 0 0 / 0.7)"
+          nodeColor={isDark ? "oklch(0.28 0 0)" : "oklch(0.85 0 0)"}
+          maskColor={isDark ? "oklch(0.17 0 0 / 0.7)" : "oklch(0.95 0 0 / 0.7)"}
         />
         <Panel position="top-left">
           <GraphLegend />
