@@ -57,7 +57,12 @@ export function ProjectListPage() {
       </div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Project list</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-foreground">Project list</h1>
+          <p className="text-xs text-muted-foreground">
+            Every project you have access to, in one searchable list.
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" asChild>
             <Link to="/invitations">
@@ -90,7 +95,7 @@ export function ProjectListPage() {
               key={f.value}
               type="button"
               onClick={() => setFilter(f.value)}
-              className={`shrink-0 rounded px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              className={`shrink-0 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 filter === f.value
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:text-foreground"
@@ -157,7 +162,7 @@ export function ProjectListPage() {
               <p className="text-[13px] font-medium text-foreground">
                 Add New Repository
               </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 Import from GitHub
               </p>
             </Link>

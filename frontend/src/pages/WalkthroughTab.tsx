@@ -247,8 +247,11 @@ export function WalkthroughTab() {
                   >
                     <Zap className="mt-0.5 h-3 w-3 shrink-0" />
                     <div className="min-w-0">
-                      <p className="truncate font-medium">{wf.title}</p>
-                      <p className="mt-0.5 truncate text-[11px] opacity-60">
+                      <p className="truncate font-medium" title={wf.title}>{wf.title}</p>
+                      <p
+                        className="mt-0.5 truncate text-xs opacity-60"
+                        title={`${wf.trigger_type} · ${wf.step_count} steps`}
+                      >
                         {wf.trigger_type} · {wf.step_count} steps
                       </p>
                     </div>
@@ -288,7 +291,7 @@ export function WalkthroughTab() {
 
                   {/* Step navigation */}
                   <div className="flex items-center justify-between">
-                    <Badge variant="outline" className="text-[11px]">
+                    <Badge variant="outline" className="text-xs">
                       Step {currentStep + 1} of {steps.length}
                     </Badge>
                     <div className="flex items-center gap-1">
@@ -317,8 +320,8 @@ export function WalkthroughTab() {
                     <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
                       <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-mono text-foreground">{step.file_path}</p>
-                        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <p className="truncate text-[13px] font-mono text-foreground" title={step.file_path}>{step.file_path}</p>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
                           {step.symbol_name && (
                             <span className="flex items-center gap-1">
                               <Code2 className="h-3 w-3" />
@@ -331,7 +334,7 @@ export function WalkthroughTab() {
                             </span>
                           )}
                           {step.step_kind && (
-                            <Badge variant="secondary" className="text-[10px]">{step.step_kind}</Badge>
+                            <Badge variant="secondary" className="text-[11px]">{step.step_kind}</Badge>
                           )}
                         </div>
                       </div>

@@ -87,3 +87,11 @@ export function useProject() {
   if (!ctx) throw new Error("useProject must be used within ProjectProvider");
   return ctx;
 }
+
+/**
+ * Like useProject, but returns null instead of throwing when rendered
+ * outside a ProjectProvider (e.g. the /dev/graph/:id standalone route).
+ */
+export function useOptionalProject() {
+  return useContext(ProjectContext) ?? null;
+}

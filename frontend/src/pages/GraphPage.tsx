@@ -6,6 +6,7 @@ import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useOptionalProject } from "@/contexts/ProjectContext";
 import { fetchDependencyGraph, type GraphResponse } from "@/lib/graphData";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
@@ -14,6 +15,16 @@ type EdgeFilter = "imports" | "exports";
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
+  // GraphPage renders both inside ProjectLayout (/projects/:id/dependencies,
+  // which provides ProjectProvider) and standalone at /dev/graph/:id (no
+  // provider) — useOptionalProject returns null in the latter case instead
+  // of throwing.
+  const projectCtx = useOptionalProject();
+  const project = projectCtx?.project ?? null;
+  const githubRepo =
+    project?.repo_owner && project?.repo_name && project?.branch
+      ? { owner: project.repo_owner, repo: project.repo_name, branch: project.branch }
+      : undefined;
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -94,7 +105,7 @@ export function GraphPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex items-start justify-between">
         <div className="flex items-center gap-2">
           {activeCluster && (
             <Button
@@ -106,13 +117,18 @@ export function GraphPage() {
               All clusters
             </Button>
           )}
-          <h1 className="text-lg font-semibold text-foreground">
-            Dependency map
-            {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
-          </h1>
+          <div>
+            <h1 className="text-lg font-semibold text-foreground">
+              Dependency map
+              {activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
+            </h1>
+            <p className="text-xs text-muted-foreground">
+              Which files and modules depend on which — a map for orienting yourself.
+            </p>
+          </div>
         </div>
         {data && (
-          <Badge variant="outline" className="text-[10px]">
+          <Badge variant="outline" className="text-[11px]">
             {data.totalNodes} files · {data.totalEdges} edges
             {data.clustered && " (clustered)"}
           </Badge>
@@ -127,7 +143,7 @@ export function GraphPage() {
 
       {(error || (!data && !loading)) && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
               {error || "No graph data available yet"}
@@ -180,7 +196,7 @@ export function GraphPage() {
           </div>
 
           {selectedNode && !data.clustered && (
-            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} />
+            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} githubRepo={githubRepo} />
           )}
         </>
       )}
