@@ -139,11 +139,14 @@ const TRIGGER_TYPE_BY_KIND: Record<DetectedEntrypoint['kind'], string> = {
   export: 'package_export',
 };
 
+/** Returns each persisted entrypoint's row id (workflows reference it). */
 export async function persistEntrypoints(
   snapshotId: string,
   entrypoints: DetectedEntrypoint[],
   nodeIdMap: Map<string, string>,
-): Promise<void> {
+): Promise<Map<DetectedEntrypoint, string>> {
+  const idMap = new Map<DetectedEntrypoint, string>();
+
   for (const ep of entrypoints) {
     // Prefer the symbol-level node; fall back to the file node.
     const nodeId =
@@ -151,10 +154,10 @@ export async function persistEntrypoints(
       nodeIdMap.get(ep.nodeStableKey);
     if (!nodeId) continue;
 
-    await query(
+    const result = await query(
       `INSERT INTO entrypoints (snapshot_id, node_id, trigger_type, method, route_path, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT DO NOTHING`,
+       RETURNING id`,
       [
         snapshotId,
         nodeId,
@@ -164,5 +167,8 @@ export async function persistEntrypoints(
         JSON.stringify({ symbolName: ep.symbolName }),
       ],
     );
+    if (result.rows.length > 0) idMap.set(ep, result.rows[0].id as string);
   }
+
+  return idMap;
 }

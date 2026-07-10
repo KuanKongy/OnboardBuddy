@@ -64,9 +64,10 @@ export function detectSideEffects(fileAnalyses: FileAnalysis[]): DetectedSideEff
     const relativePath = fa.relativePath;
 
     for (const sym of fa.symbols) {
-      if (!sym.callsSymbols) continue;
-
-      const callsStr = sym.callsSymbols.join(' ');
+      // callsSymbols holds callee names only; the snippet carries argument
+      // text (SQL strings, queue names), which several patterns match on.
+      const callsStr = [...(sym.callsSymbols ?? []), sym.snippet ?? ''].join(' ');
+      if (!callsStr.trim()) continue;
 
       for (const pattern of DB_WRITE_PATTERNS) {
         const match = callsStr.match(pattern);

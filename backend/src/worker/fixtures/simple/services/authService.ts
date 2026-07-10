@@ -15,6 +15,9 @@ export interface ISession {
  */
 export class AuthService {
   async login(credentials: ICredentials): Promise<ISession> {
+    if (!credentials.email || !credentials.password) {
+      throw new Error('Missing credentials');
+    }
     const payload: TokenPayload = { userId: 'user-123', role: 'user' };
     const token = signToken(payload);
     return { token, userId: payload.userId };
