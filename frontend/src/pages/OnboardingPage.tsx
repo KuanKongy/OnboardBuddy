@@ -155,6 +155,12 @@ function MarkReviewedButton({
   );
 }
 
+// Blocks after the first render collapsed by default; the first block is the
+// lead concept for the section and always starts expanded.
+function initialBlockExpansion(section: OnboardingSection): boolean[] {
+  return section.blocks.map((_, i) => i === 0);
+}
+
 function SectionView({
   section,
   onReceiptClick,
@@ -162,6 +168,14 @@ function SectionView({
   section: OnboardingSection;
   onReceiptClick: (r: SourceReceipt) => void;
 }) {
+  const [expanded, setExpanded] = useState<boolean[]>(() => initialBlockExpansion(section));
+
+  // Local expansion state is per-section only — reset whenever the user
+  // switches sections (no persistence needed).
+  useEffect(() => {
+    setExpanded(initialBlockExpansion(section));
+  }, [section.id]);
+
   if (section.status === "missing") {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -171,6 +185,22 @@ function SectionView({
           This section hasn't been generated yet. Generate the full package or regenerate this section individually.
         </p>
       </div>
+    );
+  }
+
+  // Only sections with more than one block get collapse chrome — a single
+  // block has nothing secondary to hide.
+  const hasSecondaryBlocks = section.blocks.length > 1;
+  const secondaryExpanded = expanded.slice(1);
+  const allSecondaryExpanded = secondaryExpanded.length > 0 && secondaryExpanded.every(Boolean);
+
+  function toggleBlock(bi: number) {
+    setExpanded((prev) => prev.map((v, i) => (i === bi ? !v : v)));
+  }
+
+  function toggleAll() {
+    setExpanded(
+      allSecondaryExpanded ? initialBlockExpansion(section) : section.blocks.map(() => true),
     );
   }
 
@@ -193,25 +223,73 @@ function SectionView({
             {section.reviewedAt && ` · ${section.reviewedAt}`}
           </span>
         )}
+        {hasSecondaryBlocks && (
+          <Button
+            size="xs"
+            variant="ghost"
+            className="ml-auto text-xs text-muted-foreground hover:text-foreground"
+            onClick={toggleAll}
+          >
+            {allSecondaryExpanded ? "Collapse all" : "Expand all"}
+          </Button>
+        )}
       </div>
 
       {/* content blocks */}
-      {section.blocks.map((block, bi) => (
-        <div key={bi}>
-          <h3 className="mb-1.5 text-[13px] font-semibold text-foreground">{block.title}</h3>
-          <div className="prose prose-sm prose-invert mb-3 max-w-none text-[13px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
-            <ReactMarkdown>{block.body}</ReactMarkdown>
-          </div>
-          {block.receipts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {block.receipts.map((r, ri) => (
-                <ReceiptChip key={ri} receipt={r} onClick={onReceiptClick} />
-              ))}
+      {section.blocks.map((block, bi) => {
+        const isLead = bi === 0;
+        const canCollapse = hasSecondaryBlocks && !isLead;
+        const isOpen = isLead || expanded[bi];
+
+        return (
+          <div key={bi}>
+            {canCollapse ? (
+              <button
+                type="button"
+                onClick={() => toggleBlock(bi)}
+                aria-expanded={isOpen}
+                className="mb-1.5 flex w-full items-center gap-2 rounded px-1 py-1 text-left transition-colors hover:bg-accent/40 -mx-1"
+              >
+                <ChevronDown
+                  className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ${
+                    isOpen ? "" : "-rotate-90"
+                  }`}
+                />
+                <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">
+                  {block.title}
+                </h3>
+                {block.receipts.length > 0 && (
+                  <span className="shrink-0 text-[11px] text-muted-foreground/60">
+                    {block.receipts.length} source ref{block.receipts.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </button>
+            ) : (
+              <h3 className="mb-1.5 text-[13px] font-semibold text-foreground">{block.title}</h3>
+            )}
+
+            <div
+              className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${
+                isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+              }`}
+            >
+              <div className="overflow-hidden">
+                <div className="prose prose-sm prose-invert mb-3 max-w-none text-[13px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
+                  <ReactMarkdown>{block.body}</ReactMarkdown>
+                </div>
+                {block.receipts.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {block.receipts.map((r, ri) => (
+                      <ReceiptChip key={ri} receipt={r} onClick={onReceiptClick} />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-          {bi < section.blocks.length - 1 && <Separator className="mt-5" />}
-        </div>
-      ))}
+            {bi < section.blocks.length - 1 && <Separator className="mt-5" />}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -273,6 +351,13 @@ export function OnboardingPage() {
   const sections = isMissing ? [] : pkg.sections;
   const activeSection = sections.find((s) => s.id === activeSectionId);
 
+  // Lightweight prioritization cue: the first section in reading order that's
+  // actually generated gets a "Start here" nudge — no reordering, no scores.
+  const startHereSectionId = SECTION_NAV_ORDER.find((navId) => {
+    const s = sections.find((sec) => sec.id === navId);
+    return s && s.status !== "missing";
+  });
+
   async function handleGenerate() {
     if (!id) return;
     setGenerating(true);
@@ -306,11 +391,12 @@ export function OnboardingPage() {
           </p>
         </div>
         <nav className="flex-1 space-y-0.5 px-2">
-          {SECTION_NAV_ORDER.map((id) => {
+          {SECTION_NAV_ORDER.map((id, idx) => {
             const section = sections.find((s) => s.id === id);
             const label = section?.label ?? id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
             const status = section?.status ?? "missing";
             const isActive = activeSectionId === id;
+            const isStartHere = id === startHereSectionId;
 
             return (
               <button
@@ -324,7 +410,18 @@ export function OnboardingPage() {
                 }`}
               >
                 <SectionStatusDot status={status} />
-                <span className="truncate" title={label}>{label}</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/50">
+                  {idx + 1}.
+                </span>
+                <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
+                {isStartHere && (
+                  <Badge
+                    variant="outline"
+                    className="shrink-0 border-primary/30 bg-primary/5 px-1 py-0 text-[11px] font-normal text-primary"
+                  >
+                    Start here
+                  </Badge>
+                )}
               </button>
             );
           })}
@@ -354,7 +451,7 @@ export function OnboardingPage() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {SECTION_NAV_ORDER.map((id) => {
+              {SECTION_NAV_ORDER.map((id, idx) => {
                 const section = sections.find((s) => s.id === id);
                 const label = section?.label ?? id;
                 return (
@@ -363,7 +460,7 @@ export function OnboardingPage() {
                     disabled={isMissing}
                     onSelect={() => setActiveSectionId(id)}
                   >
-                    {label}
+                    {idx + 1}. {label}
                   </DropdownMenuItem>
                 );
               })}
