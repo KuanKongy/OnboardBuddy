@@ -126,8 +126,6 @@ create table if not exists public.project_invitations (
 create table if not exists public.project_settings (
   project_id uuid primary key references public.projects(id) on delete cascade,
   ignored_paths text[] not null default array['node_modules', 'dist', '.git', '.env'],
-  -- Deprecated: superseded by privacy_mode = 'ai_disabled'. Kept during transition.
-  ai_enabled boolean not null default false,
   default_developer_role varchar not null default 'general'
     check (default_developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   file_limit integer not null default 5000 check (file_limit > 0),
@@ -277,8 +275,7 @@ create table if not exists public.analysis_jobs (
   requested_by uuid not null references public.users(id) on delete restrict,
   job_type varchar not null
     check (job_type in (
-      'analyze_project', 'generate_onboarding', 'regenerate_section', 'embed_summaries',
-      'preflight', 'analyze_scope', 'generate_package', 'incremental_update'
+      'preflight', 'analyze_scope', 'generate_package', 'regenerate_section', 'incremental_update'
     )),
   role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   status varchar not null default 'queued'
@@ -429,6 +426,7 @@ create table if not exists public.workflow_steps (
     'async_work', 'side_effect', 'transform', 'response'
   )),
   deterministic_description text,
+  explanation text,
   role_relevance jsonb not null default '{}'::jsonb,
   metadata jsonb not null default '{}',
   unique (workflow_id, step_order)

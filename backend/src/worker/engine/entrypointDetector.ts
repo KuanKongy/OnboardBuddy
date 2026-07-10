@@ -2,12 +2,15 @@ import type { FileAnalysis } from '../types/analysis.js';
 import { query } from '../../lib/db.js';
 
 export interface DetectedEntrypoint {
+  /** File-level key (relative path) — used by workflow traversal. */
   nodeStableKey: string;
   kind: 'http_route' | 'cli_command' | 'event_handler' | 'cron_job' | 'message_consumer' | 'export';
   method?: string;
   routePattern?: string;
   filePath: string;
   symbolName?: string;
+  /** Symbol-level key (`path#Symbol`) when the handler symbol is known. */
+  symbolStableKey?: string;
 }
 
 const ROUTE_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'all', 'use']);
@@ -49,6 +52,7 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
               method: methodMatch[1]!.toUpperCase(),
               filePath: relativePath,
               symbolName: sym.name,
+              symbolStableKey: `${relativePath}#${sym.name}`,
             });
             foundEntrypoint = true;
           }
@@ -66,6 +70,7 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
             kind: 'http_route',
             filePath: relativePath,
             symbolName: rs.name,
+            symbolStableKey: `${relativePath}#${rs.name}`,
           });
         }
         foundEntrypoint = true;
@@ -89,6 +94,7 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
             kind: 'cli_command',
             filePath: relativePath,
             symbolName: sym.name,
+            symbolStableKey: `${relativePath}#${sym.name}`,
           });
           break;
         }
@@ -104,6 +110,7 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
             kind: 'event_handler',
             filePath: relativePath,
             symbolName: sym.name,
+            symbolStableKey: `${relativePath}#${sym.name}`,
           });
         }
       }
@@ -122,23 +129,36 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
   return entrypoints;
 }
 
+// Maps detector kinds onto the entrypoints.trigger_type enum
+const TRIGGER_TYPE_BY_KIND: Record<DetectedEntrypoint['kind'], string> = {
+  http_route: 'http_route',
+  cli_command: 'cli',
+  event_handler: 'event_listener',
+  cron_job: 'scheduled_job',
+  message_consumer: 'worker_job',
+  export: 'package_export',
+};
+
 export async function persistEntrypoints(
   snapshotId: string,
   entrypoints: DetectedEntrypoint[],
   nodeIdMap: Map<string, string>,
 ): Promise<void> {
   for (const ep of entrypoints) {
-    const nodeId = nodeIdMap.get(ep.nodeStableKey);
+    // Prefer the symbol-level node; fall back to the file node.
+    const nodeId =
+      (ep.symbolStableKey ? nodeIdMap.get(ep.symbolStableKey) : undefined) ??
+      nodeIdMap.get(ep.nodeStableKey);
     if (!nodeId) continue;
 
     await query(
-      `INSERT INTO entrypoints (snapshot_id, node_id, kind, method, route_pattern, metadata)
+      `INSERT INTO entrypoints (snapshot_id, node_id, trigger_type, method, route_path, metadata)
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT DO NOTHING`,
       [
         snapshotId,
         nodeId,
-        ep.kind,
+        TRIGGER_TYPE_BY_KIND[ep.kind],
         ep.method ?? null,
         ep.routePattern ?? null,
         JSON.stringify({ symbolName: ep.symbolName }),

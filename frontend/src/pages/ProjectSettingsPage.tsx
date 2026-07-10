@@ -49,7 +49,7 @@ export function ProjectSettingsPage() {
     if (project?.settings) {
       setIgnoredPaths(project.settings.ignored_paths.join("\n"));
       setDefaultRole(project.settings.default_developer_role);
-      setAiEnabled(project.settings.ai_enabled);
+      setAiEnabled(project.settings.privacy_mode !== "ai_disabled");
       setFileLimit(project.settings.file_limit);
       setLocLimit(project.settings.loc_limit);
     }
@@ -65,7 +65,7 @@ export function ProjectSettingsPage() {
         body: JSON.stringify({
           ignored_paths: ignoredPaths.split("\n").map((p) => p.trim()).filter(Boolean),
           default_developer_role: defaultRole,
-          ai_enabled: aiEnabled,
+          privacy_mode: aiEnabled ? "full_ai" : "ai_disabled",
           file_limit: fileLimit,
           loc_limit: locLimit,
         }),

@@ -263,8 +263,6 @@ create extension if not exists "vector";
 create table if not exists public.project_settings (
   project_id uuid primary key references public.projects(id) on delete cascade,
   ignored_paths text[] not null default array['node_modules', 'dist', '.git', '.env'],
-  -- Deprecated: superseded by privacy_mode = 'ai_disabled'. Kept during transition.
-  ai_enabled boolean not null default false,
   default_developer_role varchar not null default 'general'
     check (default_developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   file_limit integer not null default 5000 check (file_limit > 0),
@@ -376,8 +374,7 @@ create table if not exists public.analysis_jobs (
   requested_by uuid not null references public.users(id) on delete restrict,
   job_type varchar not null
     check (job_type in (
-      'analyze_project', 'generate_onboarding', 'regenerate_section', 'embed_summaries',
-      'preflight', 'analyze_scope', 'generate_package', 'incremental_update'
+      'preflight', 'analyze_scope', 'generate_package', 'regenerate_section', 'incremental_update'
     )),
   role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   status varchar not null default 'queued'
@@ -393,7 +390,7 @@ create table if not exists public.analysis_jobs (
 );
 ```
 
-The first four `job_type` values are legacy and removed once Phase 10 (API/frontend) lands; new code uses `preflight`, `analyze_scope`, `generate_package`, `regenerate_section`, `incremental_update`.
+The legacy job types (`analyze_project`, `generate_onboarding`, `embed_summaries`) and the legacy `ai_enabled` boolean are removed; AI on/off is expressed only through `privacy_mode`, and the pre-rework analysis path runs as `analyze_scope` on the whole-repo scope until Phase 2 makes scopes selectable.
 
 ## Files and the evidence graph
 
@@ -522,6 +519,7 @@ create table if not exists public.workflow_steps (
     'async_work', 'side_effect', 'transform', 'response'
   )),
   deterministic_description text,
+  explanation text,                     -- LLM-enriched step explanation (walkthrough UI)
   role_relevance jsonb not null default '{}'::jsonb,
   metadata jsonb not null default '{}',
   unique (workflow_id, step_order)
@@ -1128,6 +1126,8 @@ Everything not selected still gets a **facts-only record** (deterministic fields
 ```
 
 The LLM later labels/explains clusters (cluster-level semantic records); it never invents clusters.
+
+**Interim UI baseline (pre-rework).** The current frontend Architecture tab, class graph, and workflow graph views are served by transitional endpoints (`GET /projects/:id/graph/architecture`, `/graph/classes`, `/graph/workflows/:workflowId`) that return the raw file-level module graph and let the frontend derive component groupings client-side. These are stopgaps on the old file-level graph: Phase 3 replaces the grouping with server-side deterministic `architecture_*` clustering, and Phase 10 rebuilds the Architecture Map and Dependency Graph UI on cluster data with criticality reasons, receipts, and drill-down to symbol-level views. Do not extend the client-side grouping further.
 
 ---
 

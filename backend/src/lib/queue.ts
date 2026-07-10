@@ -44,6 +44,10 @@ export function getSummaryQueue(): Queue {
 export interface AnalysisJobData {
   jobId: string;
   projectId: string;
+  /** 'analyze' (default) runs the full pipeline; 'preflight' only builds the analysis preview. */
+  task?: 'analyze' | 'preflight';
+  /** analysis_scopes.id — omitted = whole-repo scope. */
+  scopeId?: string;
 }
 
 export interface SummaryJobData {

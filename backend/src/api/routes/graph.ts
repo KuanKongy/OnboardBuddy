@@ -461,9 +461,10 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         [node.id],
       ),
       query(
-        `SELECT composite_score, scores, ranking_reasons
-         FROM critical_rankings
-         WHERE snapshot_id = $1 AND target_id = $2 AND role = 'general'
+        `SELECT score AS composite_score, score_breakdown AS scores, reasons AS ranking_reasons
+         FROM criticality_scores
+         WHERE snapshot_id = $1 AND target_node_id = $2
+           AND phase = 'candidate' AND view = 'candidate' AND role = 'general'
          LIMIT 1`,
         [snapshotId, node.id],
       ),

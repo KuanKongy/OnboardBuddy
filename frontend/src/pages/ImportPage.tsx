@@ -196,8 +196,8 @@ export function ImportPage() {
 
       // Persist privacy choices. Only send ignored_paths when the user added
       // some, so we don't overwrite the backend's sensible default ignore list.
-      const settings: { ai_enabled: boolean; ignored_paths?: string[] } = {
-        ai_enabled: true,
+      const settings: { privacy_mode: string; ignored_paths?: string[] } = {
+        privacy_mode: "full_ai",
       };
       if (ignoredPaths.length > 0) settings.ignored_paths = ignoredPaths;
       await apiFetch(`/projects/${project.id}/settings`, {

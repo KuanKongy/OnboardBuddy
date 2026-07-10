@@ -1,0 +1,5 @@
+{
+  "name": "@fixture/mixed",
+  "scripts": { "dev": "node src/app.js", "build": "tsc" },
+  "dependencies": { "express": "^4.18.0" }
+}

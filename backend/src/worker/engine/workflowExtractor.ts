@@ -120,15 +120,18 @@ export async function persistWorkflows(
   nodeIdMap: Map<string, string>,
 ): Promise<void> {
   for (const wf of workflows) {
+    // importance_score lives in metadata: real ranking is criticality_scores
+    // rows (phase='candidate'), this is only the extractor's raw ordering hint
     const wfResult = await query(
-      `INSERT INTO workflows (snapshot_id, title, trigger_type, purpose, importance_score, confidence, stable_key, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO workflows (snapshot_id, title, trigger_type, purpose, confidence, stable_key, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (snapshot_id, stable_key) DO UPDATE
          SET title = EXCLUDED.title, trigger_type = EXCLUDED.trigger_type,
-             purpose = EXCLUDED.purpose, importance_score = EXCLUDED.importance_score,
-             confidence = EXCLUDED.confidence
+             purpose = EXCLUDED.purpose, confidence = EXCLUDED.confidence,
+             metadata = EXCLUDED.metadata
        RETURNING id`,
-      [snapshotId, wf.title, wf.triggerType, wf.purpose, wf.importanceScore, wf.confidence, wf.stableKey, '{}'],
+      [snapshotId, wf.title, wf.triggerType, wf.purpose, wf.confidence, wf.stableKey,
+       JSON.stringify({ importance_score: wf.importanceScore })],
     );
 
     if (wfResult.rows.length === 0) continue;
