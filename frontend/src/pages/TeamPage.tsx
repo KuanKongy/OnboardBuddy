@@ -204,7 +204,7 @@ export function TeamPage() {
         <div>
           <h1 className="text-lg font-semibold text-foreground">Team</h1>
           <p className="text-xs text-muted-foreground">
-            {project.repo_name}
+            Who has access to {project.repo_name} and their permissions
             {!loading && ` · ${members.length} member${members.length !== 1 ? "s" : ""}`}
           </p>
         </div>
@@ -298,19 +298,25 @@ export function TeamPage() {
                   </Button>
                 )}
                 <Avatar className="mb-1.5 h-8 w-8">
-                  <AvatarFallback className={`${getAvatarColor(member.email)} text-[11px] font-medium text-white`}>
+                  <AvatarFallback className={`${getAvatarColor(member.email)} text-xs font-medium text-white`}>
                     {getInitials(member.email)}
                   </AvatarFallback>
                 </Avatar>
-                <p className="w-full truncate text-xs font-medium text-foreground">
+                <p
+                  className="w-full truncate text-xs font-medium text-foreground"
+                  title={member.email.split("@")[0]}
+                >
                   {member.email.split("@")[0]}
                 </p>
-                <p className="w-full truncate text-[11px] capitalize text-muted-foreground">
+                <p
+                  className="w-full truncate text-xs capitalize text-muted-foreground"
+                  title={member.developer_role}
+                >
                   {member.developer_role}
                 </p>
                 <Badge
                   variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
-                  className="mt-1.5 text-[10px] capitalize"
+                  className="mt-1.5 text-[11px] capitalize"
                 >
                   {member.permission_tier}
                 </Badge>
@@ -333,8 +339,13 @@ export function TeamPage() {
                   <div className="flex min-w-0 items-center gap-2">
                     <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
-                      <p className="truncate text-xs text-foreground">{inv.email}</p>
-                      <p className="truncate text-[11px] capitalize text-muted-foreground">
+                      <p className="truncate text-xs text-foreground" title={inv.email}>{inv.email}</p>
+                      <p
+                        className="truncate text-xs capitalize text-muted-foreground"
+                        title={`${inv.permission_tier}${
+                          inv.developer_role ? ` · ${inv.developer_role}` : ""
+                        }${inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}`}
+                      >
                         {inv.permission_tier}
                         {inv.developer_role ? ` · ${inv.developer_role}` : ""}
                         {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}
@@ -379,7 +390,7 @@ export function TeamPage() {
                   </SelectContent>
                 </Select>
                 {!isOwner && (
-                  <p className="text-[10px] text-muted-foreground">Only the owner can change tiers.</p>
+                  <p className="text-[11px] text-muted-foreground">Only the owner can change tiers.</p>
                 )}
               </div>
               <div className="space-y-1">

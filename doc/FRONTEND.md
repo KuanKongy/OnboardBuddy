@@ -42,7 +42,6 @@ frontend/src/
 │   └── ProjectContext.tsx  # Current project data + membership
 ├── lib/
 │   ├── api.ts             # apiFetch wrapper with auth headers
-│   ├── saveGithubToken.ts # Saves GitHub OAuth token to backend
 │   ├── supabase.ts        # Supabase client instance
 │   └── utils.ts           # cn() utility for class merging
 ├── pages/
@@ -66,7 +65,7 @@ frontend/src/
 
 1. User signs in via email/password or GitHub OAuth (Supabase Auth)
 2. `AuthContext` manages `user` and `session` state via `supabase.auth.onAuthStateChange`
-3. On GitHub OAuth, `AuthCallbackPage` waits for `SIGNED_IN` event, saves GitHub token to backend via `POST /auth/github/save-token`
+3. On GitHub login, `AuthCallbackPage` waits for `SIGNED_IN` event and redirects to the dashboard
 4. `ProtectedRoute` guards all authenticated routes, redirecting to `/login` if unauthenticated
 5. `apiFetch` attaches `Bearer <access_token>` to all API requests, auto-refreshes session on 401
 
@@ -163,7 +162,7 @@ Font: Inter (system font stack fallback).
 - `user`: current Supabase user object
 - `session`: current Supabase session
 - `loading`: initial auth state loading
-- `signIn(email, password)`, `signUp(email, password)`, `signOut()`, `signInWithGithub()`
+- `signIn(email, password)`, `signUp(email, password)`, `signOut()`, `signInWithGithub()`, `connectGithub()`, `disconnectGithub()`
 
 ### ProjectContext
 - `project`: full project data including settings and membership tier

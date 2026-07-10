@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { BackLink } from "@/components/BackLink";
 import { apiFetch } from "@/lib/api";
 
 interface Invitation {
@@ -73,16 +74,12 @@ export function InvitationsPage() {
   return (
     <div>
       <div className="mb-3 flex items-center gap-2">
-        <Button
-          variant="ghost"
-          size="xs"
-          className="text-muted-foreground"
-          onClick={() => navigate("/dashboard")}
-        >
-          &larr; Back
-        </Button>
+        <BackLink />
         <h1 className="text-lg font-semibold text-foreground">Pending Invitations</h1>
       </div>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Project invitations from teammates, waiting for you to accept.
+      </p>
 
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -102,7 +99,7 @@ export function InvitationsPage() {
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr]">
           {/* Left panel */}
           <div className="space-y-2">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               Active Invitations ({invitations.length})
             </p>
             {invitations.map((inv) => (
@@ -122,17 +119,17 @@ export function InvitationsPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-[13px] font-medium text-foreground">{inv.repo_name}</p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         Invited by {inv.invited_by_email || "a team member"}
                       </p>
                     </div>
-                    <Badge variant="secondary" className="text-[10px] capitalize">
+                    <Badge variant="secondary" className="text-[11px] capitalize">
                       {inv.permission_tier}
                     </Badge>
                   </div>
                   <div className="mt-1.5 flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[10px]">Pending</Badge>
-                    <Badge variant="outline" className="text-[10px] capitalize">
+                    <Badge variant="outline" className="text-[11px]">Pending</Badge>
+                    <Badge variant="outline" className="text-[11px] capitalize">
                       {inv.developer_role
                         ? `${inv.developer_role} role`
                         : "Role not selected"}
@@ -146,7 +143,7 @@ export function InvitationsPage() {
               <CardContent className="flex flex-col items-center p-3 text-center">
                 <Plus className="mb-0.5 h-4 w-4 text-muted-foreground" />
                 <p className="text-xs text-muted-foreground">Looking for more?</p>
-                <p className="text-[11px] text-muted-foreground">Sync with your org</p>
+                <p className="text-xs text-muted-foreground">Sync with your org</p>
               </CardContent>
             </Card>
           </div>
@@ -164,13 +161,13 @@ export function InvitationsPage() {
 
                 <div className="mt-3 flex gap-3">
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
-                    <p className="text-[10px] text-muted-foreground">Permission</p>
+                    <p className="text-[11px] text-muted-foreground">Permission</p>
                     <p className="text-xs font-medium capitalize text-foreground">
                       {selected.permission_tier}
                     </p>
                   </div>
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
-                    <p className="text-[10px] text-muted-foreground">Organization</p>
+                    <p className="text-[11px] text-muted-foreground">Organization</p>
                     <p className="text-xs font-medium text-foreground">{selected.repo_owner}</p>
                   </div>
                 </div>
@@ -187,7 +184,7 @@ export function InvitationsPage() {
                           <span className="text-xs font-medium capitalize text-foreground">
                             {role?.label ?? selected.developer_role}
                           </span>
-                          <span className="text-[11px] text-muted-foreground">
+                          <span className="text-xs text-muted-foreground">
                             {role?.tech ?? "Assigned by inviter"}
                           </span>
                         </div>
@@ -210,7 +207,7 @@ export function InvitationsPage() {
                           }`}
                         >
                           <span className="text-xs font-medium text-foreground">{role.label}</span>
-                          <span className="text-[11px] text-muted-foreground">{role.tech}</span>
+                          <span className="text-xs text-muted-foreground">{role.tech}</span>
                         </button>
                       ))}
                     </div>

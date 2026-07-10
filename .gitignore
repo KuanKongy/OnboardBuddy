@@ -12,6 +12,10 @@ coverage/
 backend/tmp/
 backend/.supabase/
 frontend/.vite/
+frontend/playwright-report/
+frontend/test-results/
+
+.cursor/
 
 # Throwaway UI preview harness (see frontend-ui-preview-harness memory)
 frontend/preview.html

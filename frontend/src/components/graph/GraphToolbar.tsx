@@ -1,6 +1,11 @@
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
+
+
 type EdgeFilter = "imports" | "exports";
 
 interface GraphToolbarProps {
@@ -38,20 +43,47 @@ export function GraphToolbar({
       </div>
 
       <div className="flex items-center gap-1">
-        {FILTERS.map((f) => (
-          <Button
-            key={f.key}
-            size="sm"
-            variant={edgeFilter === f.key ? "default" : "outline"}
-            onClick={() => onEdgeFilterChange(f.key)}
-            className="h-8 px-3 text-xs"
-          >
-            {f.label}
-          </Button>
-        ))}
+
+        {FILTERS.map((f) => {
+          const isEdgeFilter = f.key === "imports" || f.key === "exports";
+          const isActive = isEdgeFilter && edgeFilter === f.key;
+          const isDisabled = !isEdgeFilter;
+
+          const button = (
+            <Button
+              size="sm"
+              variant={isActive ? "default" : "outline"}
+              disabled={isDisabled}
+              onClick={() => isEdgeFilter && onEdgeFilterChange(f.key as EdgeFilter)}
+              className={cn(
+                "h-8 px-3 text-xs",
+                isDisabled && "cursor-not-allowed opacity-40",
+              )}
+              title={isDisabled && f.key !== "coverage" ? "Coming soon" : undefined}
+            >
+              {f.label}
+            </Button>
+          );
+
+          if (f.key === "coverage") {
+            return (
+              <Tooltip key={f.key}>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help">{button}</span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Once enabled, highlights files with low or missing test coverage. Coming soon.
+                </TooltipContent>
+              </Tooltip>
+            );
+          }
+
+          return <span key={f.key}>{button}</span>;
+        })}
+        
       </div>
 
-      <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">
+      <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">
         {matchCount} / {totalCount} modules
       </span>
     </div>
