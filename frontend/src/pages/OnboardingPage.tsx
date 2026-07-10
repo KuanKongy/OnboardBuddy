@@ -60,25 +60,25 @@ function statusLabel(s: PackageStatus) {
 
 function confidenceColor(c: ConfidenceLevel) {
   return c === "high"
-    ? "text-emerald-600 dark:text-emerald-400"
+    ? "text-emerald-700 dark:text-emerald-400"
     : c === "medium"
-      ? "text-amber-600 dark:text-amber-400"
+      ? "text-amber-700 dark:text-amber-400"
       : "text-red-600 dark:text-red-400";
 }
 
 function confidenceBg(c: ConfidenceLevel) {
   return c === "high"
-    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30"
+    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30"
     : c === "medium"
-      ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30"
+      ? "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30"
       : "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30";
 }
 
 // ── sub-components ────────────────────────────────────────────────────────────
 
 function SectionStatusDot({ status }: { status: OnboardingSection["status"] }) {
-  if (status === "complete") return <Circle className="h-2 w-2 fill-emerald-600 text-emerald-600 dark:fill-emerald-400 dark:text-emerald-400" />;
-  if (status === "stale")    return <AlertTriangle className="h-2.5 w-2.5 text-amber-600 dark:text-amber-400" />;
+  if (status === "complete") return <Circle className="h-2 w-2 fill-emerald-600 text-emerald-700 dark:fill-emerald-400 dark:text-emerald-400" />;
+  if (status === "stale")    return <AlertTriangle className="h-2.5 w-2.5 text-amber-700 dark:text-amber-400" />;
   return <X className="h-2.5 w-2.5 text-muted-foreground/60" />;
 }
 
@@ -115,7 +115,7 @@ function ReceiptChip({
       </span>
       <span className="text-muted-foreground/60">{receipt.ageLabel}</span>
       {receipt.staleness === "stale" && (
-        <AlertTriangle className="h-2.5 w-2.5 text-amber-600 dark:text-amber-400" />
+        <AlertTriangle className="h-2.5 w-2.5 text-amber-700 dark:text-amber-400" />
       )}
     </button>
   );
@@ -213,7 +213,7 @@ function SectionView({
           {section.confidence.charAt(0).toUpperCase() + section.confidence.slice(1)} confidence
         </Badge>
         {section.status === "stale" && (
-          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-600 dark:text-amber-400">
+          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-700 dark:text-amber-400">
             <AlertTriangle className="mr-1 h-2.5 w-2.5" />
             Stale
           </Badge>
@@ -595,7 +595,7 @@ export function OnboardingPage() {
               {/* stale section regen (owner/admin) */}
               {activeSection.status === "stale" && canManage && (
                 <div className="mb-4 flex items-center justify-between rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
-                  <div className="flex items-center gap-2 text-xs text-amber-600 dark:text-amber-400">
+                  <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400">
                     <AlertTriangle className="h-3.5 w-3.5" />
                     This section is stale — source files have changed since it was generated.
                   </div>

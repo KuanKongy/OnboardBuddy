@@ -123,7 +123,13 @@ export function DependencyGraphView({
           style: {
             opacity: neighborIds === null || isActive ? 1 : 0.1,
             strokeWidth: isActive ? 2 : 1,
-            stroke: isActive ? "oklch(0.623 0.214 259)" : isDark ? "oklch(0.4 0 0)" : "oklch(0.75 0 0)",
+            stroke: isActive
+              ? isDark
+                ? "oklch(0.623 0.214 259)"
+                : "oklch(0.55 0.214 259)"
+              : isDark
+                ? "oklch(0.4 0 0)"
+                : "oklch(0.75 0 0)",
           },
         };
       }),
