@@ -22,8 +22,19 @@ function resolveSpecifier(
   const resolved = path.resolve(rootPath, fromDir, specifier);
   const relResolved = path.relative(rootPath, resolved);
 
-  // try exact match, then with extensions
-  const candidates = [
+  const candidates: string[] = [];
+
+  // Handle NodeNext ESM .js/.jsx specifiers -> .ts/.tsx source files
+  if (relResolved.endsWith('.js')) {
+    const base = relResolved.slice(0, -3);
+    candidates.push(`${base}.ts`, `${base}.tsx`);
+  } else if (relResolved.endsWith('.jsx')) {
+    const base = relResolved.slice(0, -4);
+    candidates.push(`${base}.tsx`, `${base}.jsx`);
+  }
+
+  // Standard resolution: exact, then with extensions
+  candidates.push(
     relResolved,
     `${relResolved}.ts`,
     `${relResolved}.tsx`,
@@ -31,7 +42,7 @@ function resolveSpecifier(
     `${relResolved}/index.tsx`,
     `${relResolved}.js`,
     `${relResolved}/index.js`,
-  ];
+  );
 
   for (const c of candidates) {
     if (allRelativePaths.has(c)) return c;

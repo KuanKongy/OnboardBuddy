@@ -6,7 +6,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { saveGithubTokenFromSession } from "../lib/saveGithubToken";
 import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
 
@@ -19,6 +18,7 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   signInWithGithub: () => Promise<void>;
   connectGithub: () => Promise<void>;
+  disconnectGithub: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -37,18 +37,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, s) => {
+    } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
       setLoading(false);
-
-      if (event === "SIGNED_IN" && s) {
-        try {
-          await saveGithubTokenFromSession(s);
-        } catch (err) {
-          console.error("Failed to save GitHub token:", err);
-        }
-      }
     });
 
     return () => subscription.unsubscribe();
@@ -68,6 +60,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signOut() {
+    try {
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch {
+      // best-effort server-side session invalidation
+    }
+    sessionStorage.removeItem("onboardbuddy.github.after_oauth");
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   }
@@ -88,9 +86,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.location.href = authorization_url;
   }
 
+  async function disconnectGithub() {
+    await apiFetch("/github/connection", { method: "DELETE" });
+  }
+
   return (
     <AuthContext.Provider
-      value={{ user, session, loading, signIn, signUp, signOut, signInWithGithub, connectGithub }}
+      value={{ user, session, loading, signIn, signUp, signOut, signInWithGithub, connectGithub, disconnectGithub }}
     >
       {children}
     </AuthContext.Provider>

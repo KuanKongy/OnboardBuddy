@@ -69,7 +69,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   if (projectResult.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
 
   const { user_id, repo_owner, repo_name, branch, github_installation_id,
-          ignored_paths, file_limit, loc_limit, ai_enabled } = projectResult.rows[0] as {
+          ignored_paths, file_limit, loc_limit: _loc_limit, ai_enabled } = projectResult.rows[0] as {
     user_id: string;
     repo_owner: string;
     repo_name: string;

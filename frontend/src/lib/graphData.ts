@@ -1,6 +1,5 @@
 import { apiFetch } from "@/lib/api";
 import { mockGraphData } from "@/lib/mockGraphData";
-import type { AnalysisSnapshot } from "@/types/graph";
 
 export interface GraphResponse {
   projectId: string;

@@ -1,6 +1,7 @@
 import { query } from "./db.js";
 import { decrypt, encrypt } from "./encryption.js";
 import {
+  getInstallationToken,
   listUserInstallations,
   refreshGitHubAppUserToken,
   type GitHubAppUserToken,
@@ -14,7 +15,15 @@ export class GitHubReconnectRequiredError extends Error {
   }
 }
 
+export class GitHubInstallationAccessError extends Error {
+  constructor(message = "You do not have access to this GitHub installation") {
+    super(message);
+    this.name = "GitHubInstallationAccessError";
+  }
+}
+
 export interface GithubConnection {
+  githubUserId: number;
   githubUsername: string;
   accessToken: string;
   accessTokenExpiresAt: Date | null;
@@ -46,6 +55,7 @@ export async function getUserGithubConnection(
   };
 
   return {
+    githubUserId: Number(row.github_user_id),
     githubUsername: row.github_username,
     accessToken: decrypt(row.access_token_encrypted),
     accessTokenExpiresAt: toDate(row.access_token_expires_at),
@@ -55,7 +65,7 @@ export async function getUserGithubConnection(
 }
 
 /**
- * Lists GitHub App installations accessible to the connected GitHub user.
+ * Lists GitHub App installations owned by the connected GitHub account.
  * This requires a GitHub App user access token. Repo access still uses
  * installation tokens after the user selects an installation.
  */
@@ -70,13 +80,28 @@ export async function listInstallationsForUser(
   try {
     const accessToken = await getValidGithubAppUserAccessToken(userId, connection);
     const installations = await listUserInstallations(accessToken);
-    return { installations };
+    return {
+      installations: installations.filter((installation) =>
+        belongsToConnectedGitHubAccount(installation, connection),
+      ),
+    };
   } catch (err) {
     if (err instanceof Error && err.message.includes("authorized to a GitHub App")) {
       throw new GitHubReconnectRequiredError();
     }
     throw err;
   }
+}
+
+function belongsToConnectedGitHubAccount(
+  installation: Installation,
+  connection: GithubConnection,
+): boolean {
+  if (typeof installation.account.id === "number") {
+    return installation.account.id === connection.githubUserId;
+  }
+
+  return installation.account.login.toLowerCase() === connection.githubUsername.toLowerCase();
 }
 
 /**
@@ -88,6 +113,16 @@ export async function userCanAccessInstallation(
 ): Promise<boolean> {
   const { installations } = await listInstallationsForUser(userId);
   return installations.some((inst) => inst.id === installationId);
+}
+
+export async function getInstallationTokenForUser(
+  userId: string,
+  installationId: number,
+): Promise<string> {
+  if (!(await userCanAccessInstallation(userId, installationId))) {
+    throw new GitHubInstallationAccessError();
+  }
+  return getInstallationToken(installationId);
 }
 
 export async function linkInstallationToUser(
@@ -111,6 +146,32 @@ export async function linkInstallationToUser(
       installation.app_id,
     ],
   );
+}
+
+export async function assertGithubAccountCanBeLinked(
+  userId: string,
+  githubUserId: number,
+  githubUsername: string,
+): Promise<void> {
+  const existing = await getUserGithubConnection(userId);
+  if (existing && existing.githubUserId !== githubUserId) {
+    throw new Error(
+      `This OnboardBuddy account is already linked to GitHub user @${existing.githubUsername}. ` +
+        "Authorize the GitHub App with that same account.",
+    );
+  }
+
+  const conflict = await query(
+    `SELECT user_id FROM github_connections
+     WHERE github_user_id = $1 AND user_id <> $2
+     LIMIT 1`,
+    [githubUserId, userId],
+  );
+  if (conflict.rows.length > 0) {
+    throw new Error(
+      `GitHub user @${githubUsername} is already linked to another OnboardBuddy account.`,
+    );
+  }
 }
 
 export async function saveGithubConnection(
@@ -154,7 +215,17 @@ async function getValidGithubAppUserAccessToken(
     throw new GitHubReconnectRequiredError();
   }
 
-  const refreshed = await refreshGitHubAppUserToken(connection.refreshToken);
+  let refreshed;
+  try {
+    refreshed = await refreshGitHubAppUserToken(connection.refreshToken);
+  } catch {
+    const freshConnection = await getUserGithubConnection(userId);
+    if (freshConnection && !tokenExpiresSoon(freshConnection.accessTokenExpiresAt)) {
+      return freshConnection.accessToken;
+    }
+    throw new GitHubReconnectRequiredError();
+  }
+
   const nextRefreshToken = refreshed.refreshToken ?? connection.refreshToken;
   const nextRefreshTokenExpiresAt = refreshed.refreshTokenExpiresAt ?? connection.refreshTokenExpiresAt;
 
@@ -164,14 +235,13 @@ async function getValidGithubAppUserAccessToken(
          access_token_expires_at = $3,
          refresh_token_encrypted = $4,
          refresh_token_expires_at = $5
-     WHERE user_id = $1 AND github_username = $6`,
+     WHERE user_id = $1`,
     [
       userId,
       encrypt(refreshed.accessToken),
       refreshed.expiresAt,
       nextRefreshToken ? encrypt(nextRefreshToken) : null,
       nextRefreshTokenExpiresAt,
-      connection.githubUsername,
     ],
   );
 

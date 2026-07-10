@@ -1,12 +1,18 @@
-import { Github, LogOut } from "lucide-react";
+import { Github, LogOut, Unplug } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { BackLink } from "@/components/BackLink";
 
 export function AccountSettingsPage() {
-  const { user, signOut, connectGithub } = useAuth();
+  const { user, signOut, connectGithub, disconnectGithub } = useAuth();
+
+  const [appConnected, setAppConnected] = useState(false);
+  const [appUsername, setAppUsername] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const fullName =
@@ -23,6 +29,28 @@ export function AccountSettingsPage() {
   const githubIdentity = user?.identities?.find(
     (id) => id.provider === "github",
   );
+
+  useEffect(() => {
+    apiFetch("/auth/me")
+      .then((data: { user: { github_connected: boolean; github_username: string | null } }) => {
+        setAppConnected(data.user.github_connected);
+        setAppUsername(data.user.github_username);
+      })
+      .catch(() => {});
+  }, []);
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    try {
+      await disconnectGithub();
+      setAppConnected(false);
+      setAppUsername(null);
+    } catch {
+      // swallow
+    } finally {
+      setDisconnecting(false);
+    }
+  }
 
   return (
     <div className="max-w-xl">
@@ -56,26 +84,55 @@ export function AccountSettingsPage() {
 
       <Card className="mb-3">
         <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">GitHub Connection</h2>
+          <h2 className="mb-2 text-xs font-medium text-foreground">GitHub Login</h2>
           {githubIdentity ? (
+            <div className="flex items-center gap-2 text-xs">
+              <Github className="h-3.5 w-3.5 text-foreground" />
+              <span className="font-medium text-foreground">
+                Signed in as{" "}
+                {(githubIdentity.identity_data as Record<string, string>)?.user_name ?? "GitHub User"}
+              </span>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground">Signed in with email/password</span>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <h2 className="mb-2 text-xs font-medium text-foreground">GitHub App (Repo Import)</h2>
+          {appConnected ? (
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 text-xs">
                 <Github className="h-3.5 w-3.5 text-foreground" />
-                <span className="text-xs font-medium text-foreground">
-                  Connected as{" "}
-                  {(githubIdentity.identity_data as Record<string, string>)
-                    ?.user_name ?? "GitHub User"}
+                <span className="font-medium text-foreground">
+                  Connected as @{appUsername}
                 </span>
               </div>
+              <div className="flex gap-1">
+                <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                  Re-authorize
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={handleDisconnect}
+                  disabled={disconnecting}
+                >
+                  <Unplug className="h-3 w-3" />
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">Not connected — required for repo import</span>
               <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                <Github className="h-3 w-3" />
                 Authorize GitHub App
               </Button>
             </div>
-          ) : (
-            <Button variant="outline" size="xs" onClick={() => connectGithub()}>
-              <Github className="h-3 w-3" />
-              Authorize GitHub App
-            </Button>
           )}
         </CardContent>
       </Card>
