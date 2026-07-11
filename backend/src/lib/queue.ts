@@ -56,4 +56,6 @@ export interface SummaryJobData {
   projectId: string;
   triggeredBy: string;
   role?: string;
+  /** Set for regenerate_section jobs: regenerate only this section type. */
+  sectionType?: string;
 }

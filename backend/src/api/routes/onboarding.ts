@@ -1,8 +1,76 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
+import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 
 export const onboardingRouter = Router({ mergeParams: true });
+
+/**
+ * Regenerate one section (doc/Pipeline.md "Regeneration"): rebuilds the
+ * section's bundle against the same snapshot, regenerates, revalidates,
+ * and replaces the content; old generation runs stay for audit.
+ */
+onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = String(req.params.id);
+    const { sectionId } = req.params;
+    const userId = req.user!.id;
+
+    const sectionResult = await query(
+      `SELECT ps.type, ps.snapshot_id, ps.role, op.project_id
+       FROM package_sections ps
+       JOIN onboarding_packages op ON op.id = ps.package_id
+       WHERE ps.id = $1 AND op.project_id = $2`,
+      [sectionId, projectId],
+    );
+    const section = sectionResult.rows[0] as
+      | { type: string; snapshot_id: string; role: string | null }
+      | undefined;
+    if (!section) {
+      res.status(404).json({ error: "Section not found" });
+      return;
+    }
+
+    const settingsResult = await query(
+      `SELECT privacy_mode FROM project_settings WHERE project_id = $1`,
+      [projectId],
+    );
+    if (settingsResult.rows[0]?.privacy_mode === "ai_disabled") {
+      res.status(403).json({ error: "AI features are disabled for this project" });
+      return;
+    }
+
+    await query(
+      `UPDATE package_sections SET review_status = 'regenerate_requested' WHERE id = $1`,
+      [sectionId],
+    );
+    const jobId = ((await query(
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
+       VALUES ($1, $2, $3, 'regenerate_section', $4, 'queued', 'Waiting for worker')
+       RETURNING id`,
+      [projectId, section.snapshot_id, userId, section.role ?? "general"],
+    )).rows[0] as { id: string }).id;
+
+    await getSummaryQueue().add("regenerate_section", {
+      jobId,
+      snapshotId: section.snapshot_id,
+      projectId,
+      triggeredBy: userId,
+      role: section.role ?? "general",
+      sectionType: section.type,
+    } satisfies SummaryJobData, {
+      attempts: 2,
+      backoff: { type: "fixed", delay: 3000 },
+      removeOnComplete: { count: 10 },
+      removeOnFail: { count: 10 },
+    });
+
+    res.status(202).json({ job: { id: jobId, status: "queued", section_type: section.type } });
+  } catch (err) {
+    console.error("Regenerate section error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
