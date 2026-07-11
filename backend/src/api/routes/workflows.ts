@@ -22,13 +22,16 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
 
     const wfResult = await query(
       `SELECT w.id, w.title, w.trigger_type, w.purpose,
-              w.importance_score, w.confidence,
-              COALESCE(ws.composite_score, 0) AS composite_score,
+              COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
+              w.confidence,
+              COALESCE(cs.score, (w.metadata->>'importance_score')::numeric, 0) AS composite_score,
               (SELECT COUNT(*)::int FROM workflow_steps s WHERE s.workflow_id = w.id) AS step_count
        FROM workflows w
-       LEFT JOIN workflow_scores ws ON ws.workflow_id = w.id
+       LEFT JOIN criticality_scores cs
+         ON cs.snapshot_id = w.snapshot_id AND cs.phase = 'candidate' AND cs.view = 'candidate'
+        AND cs.target_type = 'workflow' AND cs.stable_key = w.stable_key AND cs.role = 'general'
        WHERE w.snapshot_id = $1
-       ORDER BY COALESCE(ws.composite_score, w.importance_score) DESC`,
+       ORDER BY 7 DESC`,
       [snapshotId],
     );
 
@@ -44,7 +47,9 @@ workflowsRouter.get("/:workflowId/walkthrough", requireProjectAccess(), async (r
     const { workflowId } = req.params;
 
     const wfResult = await query(
-      `SELECT w.id, w.title, w.trigger_type, w.purpose, w.importance_score, w.confidence
+      `SELECT w.id, w.title, w.trigger_type, w.purpose,
+              COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
+              w.confidence
        FROM workflows w WHERE w.id = $1`,
       [workflowId],
     );

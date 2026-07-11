@@ -206,6 +206,14 @@ plan ($10/month) for unlimited commands.
 6. Go back to **Supabase → Authentication → Providers → GitHub** and paste the
    same Client ID and Client Secret there.
 
+> **Troubleshooting — sign-up fails with "Error getting user profile from external provider":**
+> Supabase exchanged the OAuth code but couldn't read the GitHub profile/email.
+> Check that the Client ID pasted into Supabase belongs to this **OAuth App**
+> (not the GitHub App below — GitHub App client IDs start with `Iv1.`). A GitHub
+> App token can't read user emails unless the App has **Account permissions →
+> Email addresses: Read-only**. Also re-check the Client Secret for typos or
+> rotation. See Bug #37 in [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md).
+
 ### GitHub App (for repo import)
 
 1. Go to [github.com/settings/apps](https://github.com/settings/apps) → **New GitHub App**.

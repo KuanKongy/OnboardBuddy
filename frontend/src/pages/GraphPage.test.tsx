@@ -53,7 +53,6 @@ vi.mock("@/lib/graphData", () => {
     fetchWorkflowsList: vi.fn().mockResolvedValue([]),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
-    mockGraphData: graphPayload,
   };
 });
 
@@ -110,39 +109,30 @@ describe("GraphPage", () => {
     expect(screen.queryByText("strings")).not.toBeInTheDocument();
   });
 
-  it("opens the info panel with functions and imports when a node is clicked", async () => {
+  it("opens the symbol-doc info panel when a node is clicked", async () => {
     renderGraphPage();
     await waitFor(() => expect(screen.getByText("userService")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("userService"));
 
+    // The panel header carries copy/open actions; detail is mocked null so
+    // the doc body shows its loading state.
     await waitFor(() => {
-      expect(screen.getByText("Functions")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Copy path" })).toBeInTheDocument();
     });
-    expect(screen.getAllByText(/UserService/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/loading details/i)).toBeInTheDocument();
   });
 
   it("switches to the Classes view and renders class/interface nodes", async () => {
     renderGraphPage();
     await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: "Classes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Classes & interfaces" }));
 
     await waitFor(() => {
       expect(screen.getByText("UserService")).toBeInTheDocument();
     });
     expect(screen.getByText("IUserService")).toBeInTheDocument();
     expect(screen.getByText(/2 \/ 2 classes/)).toBeInTheDocument();
-  });
-
-  it("switches to the Workflows view and shows the empty state when none exist", async () => {
-    renderGraphPage();
-    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/no workflows extracted yet/i)).toBeInTheDocument();
-    });
   });
 });

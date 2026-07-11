@@ -5,7 +5,6 @@ import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
-import { WorkflowGraphSection } from "@/components/graph/WorkflowGraphSection";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,12 +18,11 @@ import { layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
 type EdgeFilter = "imports" | "exports";
-type GraphView = "files" | "classes" | "workflows";
+type GraphView = "files" | "classes";
 
 const VIEWS: { key: GraphView; label: string }[] = [
   { key: "files", label: "Files" },
-  { key: "classes", label: "Classes" },
-  { key: "workflows", label: "Workflows" },
+  { key: "classes", label: "Classes & interfaces" },
 ];
 
 export function GraphPage() {
@@ -62,8 +60,8 @@ export function GraphPage() {
 
   useEffect(() => { loadGraph(); }, [id]);
 
-  // Enrich the selected node with critical-path score and connected
-  // workflows; best-effort, so a failure just leaves the panel basic.
+  // Enrich the selected node with the symbol doc, critical-path score and
+  // connected workflows; best-effort, so a failure just leaves the panel basic.
   useEffect(() => {
     setSelectedNodeDetail(null);
     if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
@@ -130,10 +128,11 @@ export function GraphPage() {
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  const showPanel = view === "files" && selectedNode && !data?.clustered;
 
   return (
-    <div>
-      <div className="mb-3 flex items-start justify-between">
+    <div style={{ "--graph-chrome": "230px" } as React.CSSProperties}>
+      <div className="page-header">
         <div className="flex items-center gap-2">
           {activeCluster && (
             <Button
@@ -146,39 +145,39 @@ export function GraphPage() {
             </Button>
           )}
           <div>
-            <h1 className="text-lg font-semibold text-foreground">
-              Dependency map
+            <h1 className="page-title">
+              Dependencies
               {view === "files" && activeCluster && <span className="ml-2 text-sm font-normal text-muted-foreground">/ {activeCluster}</span>}
             </h1>
-            <p className="text-xs text-muted-foreground">
-              Which files and modules depend on which — a map for orienting yourself.
+            <p className="page-subtitle">
+              Which files depend on which — follow the arrows to see how changes ripple.
             </p>
           </div>
         </div>
-        {view === "files" && data && (
-          <Badge variant="outline" className="text-[11px]">
-            {data.totalNodes} files · {data.totalEdges} edges
-            {data.clustered && " (clustered)"}
-          </Badge>
-        )}
-      </div>
-
-      <div className="mb-3 flex items-center gap-1">
-        {VIEWS.map((v) => (
-          <Button
-            key={v.key}
-            size="sm"
-            variant={view === v.key ? "default" : "outline"}
-            onClick={() => setView(v.key)}
-            className="h-8 px-3 text-xs"
-          >
-            {v.label}
-          </Button>
-        ))}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
+            {VIEWS.map((v) => (
+              <button
+                key={v.key}
+                onClick={() => setView(v.key)}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  view === v.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+          {view === "files" && data && (
+            <Badge variant="outline" className="text-[11px] tabular-nums">
+              {data.totalNodes} files · {data.totalEdges} edges
+              {data.clustered && " (grouped)"}
+            </Badge>
+          )}
+        </div>
       </div>
 
       {view === "classes" && id && <ClassGraphSection projectId={id} />}
-      {view === "workflows" && id && <WorkflowGraphSection projectId={id} />}
 
       {view === "files" && loading && (
         <div className="flex items-center justify-center py-20">
@@ -187,8 +186,8 @@ export function GraphPage() {
       )}
 
       {view === "files" && (error || (!data && !loading)) && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
               {error || "No graph data available yet"}
@@ -207,8 +206,8 @@ export function GraphPage() {
       {view === "files" && data && !loading && (
         <>
           {data.clustered && (
-            <p className="mb-3 text-xs text-muted-foreground">
-              Large codebase ({data.totalNodes} files) — showing directory clusters. Click a cluster to drill in.
+            <p className="mb-2 text-xs text-muted-foreground">
+              Large codebase ({data.totalNodes} files) — showing directory groups. Click a group to drill in.
             </p>
           )}
 
@@ -221,28 +220,32 @@ export function GraphPage() {
             totalCount={nodes.length}
           />
 
-          <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
-            <DependencyGraphView
-              nodes={positionedNodes}
-              edges={visibleEdges}
-              entryPoints={data.graph.entryPoints}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={(nodeId) => {
-                if (data.clustered && nodeId?.startsWith("cluster:")) {
-                  const dir = nodeId.replace("cluster:", "");
-                  setActiveCluster(dir);
-                  loadGraph(dir);
-                } else {
-                  setSelectedNodeId(nodeId);
-                }
-              }}
-              edgeFilter={edgeFilter}
-            />
-          </div>
+          <div className={showPanel ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
+            <div className="graph-canvas">
+              <DependencyGraphView
+                nodes={positionedNodes}
+                edges={visibleEdges}
+                entryPoints={data.graph.entryPoints}
+                selectedNodeId={selectedNodeId}
+                onSelectNode={(nodeId) => {
+                  if (data.clustered && nodeId?.startsWith("cluster:")) {
+                    const dir = nodeId.replace("cluster:", "");
+                    setActiveCluster(dir);
+                    loadGraph(dir);
+                  } else {
+                    setSelectedNodeId(nodeId);
+                  }
+                }}
+                edgeFilter={edgeFilter}
+              />
+            </div>
 
-          {selectedNode && !data.clustered && (
-            <NodeInfoPanel node={selectedNode} fileAnalysis={undefined} detail={selectedNodeDetail} githubRepo={githubRepo} />
-          )}
+            {showPanel && (
+              <aside className="graph-canvas overflow-y-auto !bg-card">
+                <NodeInfoPanel node={selectedNode} detail={selectedNodeDetail} githubRepo={githubRepo} />
+              </aside>
+            )}
+          </div>
         </>
       )}
     </div>

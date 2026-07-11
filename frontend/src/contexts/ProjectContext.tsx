@@ -21,7 +21,8 @@ export interface ProjectData {
   developer_role: string;
   settings: {
     ignored_paths: string[];
-    ai_enabled: boolean;
+    privacy_mode: "full_ai" | "facts_only_ai" | "ai_disabled";
+    analysis_depth: "cheap" | "standard" | "full";
     default_developer_role: string;
     file_limit: number;
     loc_limit: number;

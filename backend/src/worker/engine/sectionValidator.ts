@@ -116,10 +116,10 @@ export async function createStaleFlags(
     const changedFiles = reasons.map((r) => r.replace(/^(File removed|File modified): /, '').replace(/ \(hash changed\)$/, ''));
 
     await query(
-      `INSERT INTO stale_flags (snapshot_id, target_type, target_id, reason, changed_files, section_id)
-       VALUES ($1, 'package_section', $2, $3, $4, $2)
+      `INSERT INTO stale_flags (snapshot_id, target_type, target_id, target_stable_key, reason, changed_files, section_id)
+       VALUES ($1, 'package_section', $2, $3, $4, $5, $2)
        ON CONFLICT DO NOTHING`,
-      [snapshotId, sectionId, reasons.join('; '), changedFiles],
+      [snapshotId, sectionId, `section:${sectionId}`, reasons.join('; '), changedFiles],
     );
 
     await query(

@@ -60,9 +60,9 @@ describe('graphBuilder — nodes', () => {
     expect(node!.metadata.dependentCount).to.equal(2);
   });
 
-  it('authService dependentCount = 1 (imported by index)', () => {
+  it('authService dependentCount = 2 (imported by index + authRoutes)', () => {
     const node = graph.nodes.find((n) => n.id === path.join('services', 'authService.ts'));
-    expect(node!.metadata.dependentCount).to.equal(1);
+    expect(node!.metadata.dependentCount).to.equal(2);
   });
 
   it('index.ts dependentCount = 0 (nobody imports it)', () => {

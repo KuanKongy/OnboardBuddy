@@ -4,6 +4,8 @@ export interface EvidenceSnapRow {
   file_count: number;
   symbol_count: number;
   workflow_count: number;
+  project_id: string;
+  scope_id: string;
   repo_owner: string;
   repo_name: string;
   role: string;

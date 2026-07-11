@@ -23,6 +23,8 @@ frontend/src/preview.tsx
 frontend/hybrid.html
 frontend/src/hybrid/
 
+doc/Feedback.md
+doc/PLAN.md
 doc/Team*.md
 doc/Design.md
 backend/github-app.pem
