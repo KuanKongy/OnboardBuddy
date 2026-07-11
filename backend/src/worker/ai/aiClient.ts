@@ -131,6 +131,11 @@ export class AiClient {
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
+  /** The embedding-tier model this client would use (embeddings table key). */
+  get embeddingModel(): string {
+    return this.tierConfig.models.embedding[0]!;
+  }
+
   /** Text or structured completion, depending on whether `schema` is set. */
   async call<T = unknown>(req: AiRequest): Promise<AiResponse<T>> {
     assertAiAllowed(this.options.privacyMode);
