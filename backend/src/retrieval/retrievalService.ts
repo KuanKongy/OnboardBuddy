@@ -233,7 +233,8 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
                 line_start, line_end, snippet, detection_expression, referenced_record_id
          FROM source_receipts
          WHERE id = ANY($1)
-         ORDER BY array_position(ARRAY['code','config','tests','docs','llm_inference'], trust_level)
+         ORDER BY array_position(ARRAY['code','config','tests','docs','llm_inference'], trust_level),
+                  (snippet IS NULL) -- within a trust level, receipts with real snippets first
          LIMIT $2`,
         [receiptIds, maxReceipts],
       )).rows as Array<{

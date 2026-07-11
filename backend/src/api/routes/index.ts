@@ -9,6 +9,8 @@ import { graphRouter } from "./graph.js";
 import { onboardingRouter } from "./onboarding.js";
 import { workflowsRouter } from "./workflows.js";
 import { llmKeysRouter } from "./llmKeys.js";
+import { askRouter } from "./ask.js";
+import { internalChatRouter } from "./internalChat.js";
 import { requireAuth } from "../middleware/auth.js";
 
 export const apiRouter = Router();
@@ -23,3 +25,5 @@ apiRouter.use("/projects/:id/graph", requireAuth, graphRouter);
 apiRouter.use("/projects/:id/onboarding", requireAuth, onboardingRouter);
 apiRouter.use("/projects/:id/workflows", requireAuth, workflowsRouter);
 apiRouter.use("/projects/:id/llm-key", requireAuth, llmKeysRouter);
+apiRouter.use("/projects/:id/ask", requireAuth, askRouter);
+apiRouter.use("/internal/chat", internalChatRouter);
