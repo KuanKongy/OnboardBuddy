@@ -7,7 +7,9 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "flex flex-col gap-6 rounded-xl border bg-card py-6 text-card-foreground shadow-sm",
+        // Padding lives on CardContent/CardHeader — the app's standard is
+        // `<Card><CardContent className="p-3">`, so the shell adds none.
+        "flex flex-col gap-4 rounded-xl border bg-card text-card-foreground shadow-sm",
         className
       )}
       {...props}

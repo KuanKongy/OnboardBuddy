@@ -48,6 +48,8 @@ export interface AnalysisJobData {
   task?: 'analyze' | 'preflight';
   /** analysis_scopes.id — omitted = whole-repo scope. */
   scopeId?: string;
+  /** Exact commit SHA to analyze — omitted = branch head. */
+  commit?: string;
 }
 
 export interface SummaryJobData {

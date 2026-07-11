@@ -89,6 +89,73 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
   }
 });
 
+/**
+ * Package cards (doc/PLAN.md "Onboarding package = (scope, role, commit)"):
+ * every package with scope, role, status, commit, staleness and confidence
+ * rollups — the data behind the card grid and its filters.
+ */
+onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const rows = (await query(
+      `SELECT op.id, op.role, op.status, op.analyzed_commit, op.created_at, op.updated_at,
+              sc.display_name AS scope_name, sc.path_prefix, sc.kind AS scope_kind,
+              s.semantic_depth, s.privacy_mode,
+              (SELECT count(*)::int FROM package_sections ps WHERE ps.package_id = op.id) AS section_count,
+              (SELECT count(*)::int FROM package_sections ps
+                WHERE ps.package_id = op.id AND ps.review_status = 'stale') AS stale_sections,
+              (SELECT count(*)::int FROM package_sections ps
+                WHERE ps.package_id = op.id AND ps.review_status = 'approved') AS approved_sections,
+              (SELECT count(*)::int FROM package_sections ps
+                WHERE ps.package_id = op.id AND ps.confidence = 'low') AS low_confidence_sections,
+              (SELECT count(*)::int FROM tutorials t WHERE t.package_id = op.id) AS tutorial_count,
+              (op.analyzed_commit = (
+                SELECT s2.commit_hash FROM analysis_snapshots s2
+                WHERE s2.scope_id = op.scope_id AND s2.status = 'complete'
+                ORDER BY s2.created_at DESC LIMIT 1
+              )) AS is_latest_commit
+       FROM onboarding_packages op
+       JOIN analysis_scopes sc ON sc.id = op.scope_id
+       JOIN analysis_snapshots s ON s.id = op.snapshot_id
+       WHERE op.project_id = $1
+       ORDER BY op.updated_at DESC`,
+      [projectId],
+    )).rows;
+    res.json({ packages: rows });
+  } catch (err) {
+    console.error("Packages list error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Unresolved staleness for the project (incremental runs write stale_flags):
+ * what went stale, why, and which files changed — the honest "your docs are
+ * outdated" signal.
+ */
+onboardingRouter.get("/staleness", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const rows = (await query(
+      `SELECT sf.id, sf.target_type, sf.target_stable_key, sf.reason,
+              sf.changed_files, sf.created_at, sf.section_id, sf.package_id,
+              ps.type AS section_type, ps.role AS section_role
+       FROM stale_flags sf
+       JOIN analysis_snapshots s ON s.id = sf.snapshot_id
+       LEFT JOIN package_sections ps ON ps.id = sf.section_id
+       WHERE s.project_id = $1 AND sf.resolved_at IS NULL
+         AND sf.target_type IN ('package', 'package_section', 'tutorial')
+       ORDER BY sf.created_at DESC
+       LIMIT 100`,
+      [projectId],
+    )).rows;
+    res.json({ staleFlags: rows });
+  } catch (err) {
+    console.error("Staleness error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -121,7 +188,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     const sectionsResult = await query(
       `SELECT ps.id, ps.type, ps.title, ps.content, ps.confidence,
               ps.review_status, ps.analyzed_commit, ps.reviewed_at, ps.reviewed_by,
-              ps.generation_context
+              ps.generation_context, ps.diagrams, ps.unknowns
        FROM package_sections ps
        WHERE ps.package_id = $1
        ORDER BY ps.created_at ASC`,
@@ -139,6 +206,8 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
       reviewed_at: string | null;
       reviewed_by: string | null;
       generation_context: Record<string, unknown>;
+      diagrams: Array<{ kind: string; mermaid: string }>;
+      unknowns: Array<{ kind: string; detail?: string | null }>;
     };
 
     const sections = await Promise.all(
@@ -179,6 +248,9 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             confidence: sec.confidence,
             reviewedBy: sec.reviewed_by,
             reviewedAt: sec.reviewed_at,
+            diagrams: sec.diagrams ?? [],
+            unknowns: sec.unknowns ?? [],
+            analyzedCommit: sec.analyzed_commit,
             blocks: [
               {
                 title: sec.title,

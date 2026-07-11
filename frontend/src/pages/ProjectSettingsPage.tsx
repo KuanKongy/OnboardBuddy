@@ -24,6 +24,21 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch } from "@/lib/api";
 
+const PRIVACY_MODES = [
+  { key: "full_ai", label: "Full AI", hint: "Code snippets + facts go to the LLM — best quality." },
+  { key: "facts_only_ai", label: "Facts-only AI", hint: "No code leaves the system — only extracted facts and structure." },
+  { key: "ai_disabled", label: "AI disabled", hint: "No LLM calls at all; deterministic outputs only." },
+];
+
+const WEIGHT_VIEWS = ["runtime", "business", "onboarding", "change_risk", "architecture", "workflow"] as const;
+
+interface RoleWeights {
+  role: string;
+  weights: Record<string, number>;
+  defaults: Record<string, number>;
+  customized: boolean;
+}
+
 export function ProjectSettingsPage() {
   const { project, refetch } = useProject();
   const { id } = useParams<{ id: string }>();
@@ -31,9 +46,13 @@ export function ProjectSettingsPage() {
 
   const [ignoredPaths, setIgnoredPaths] = useState("");
   const [defaultRole, setDefaultRole] = useState("general");
-  const [aiEnabled, setAiEnabled] = useState(false);
+  const [privacyMode, setPrivacyMode] = useState("full_ai");
+  const [analysisDepth, setAnalysisDepth] = useState("standard");
   const [fileLimit, setFileLimit] = useState(5000);
   const [locLimit, setLocLimit] = useState(250000);
+  const [budgetCalls, setBudgetCalls] = useState<string>("");
+  const [budgetTokens, setBudgetTokens] = useState<string>("");
+  const [stopBehavior, setStopBehavior] = useState("pause");
   const [saving, setSaving] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -42,6 +61,16 @@ export function ProjectSettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState("");
 
+  // BYO LLM key
+  const [keyInfo, setKeyInfo] = useState<{ exists: boolean; created_by?: string | null; updated_at?: string } | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [keySaving, setKeySaving] = useState(false);
+
+  // Ranking weights
+  const [weightRoles, setWeightRoles] = useState<RoleWeights[] | null>(null);
+  const [weightRole, setWeightRole] = useState("backend");
+  const [weightsSaving, setWeightsSaving] = useState(false);
+
   const canEdit =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
 
@@ -49,25 +78,42 @@ export function ProjectSettingsPage() {
     if (project?.settings) {
       setIgnoredPaths(project.settings.ignored_paths.join("\n"));
       setDefaultRole(project.settings.default_developer_role);
-      setAiEnabled(project.settings.privacy_mode !== "ai_disabled");
+      setPrivacyMode(project.settings.privacy_mode ?? "full_ai");
+      setAnalysisDepth((project.settings as { analysis_depth?: string }).analysis_depth ?? "standard");
       setFileLimit(project.settings.file_limit);
       setLocLimit(project.settings.loc_limit);
+      const budgets = (project.settings as { budget_overrides?: Record<string, number> }).budget_overrides ?? {};
+      setBudgetCalls(budgets.max_llm_calls ? String(budgets.max_llm_calls) : "");
+      setBudgetTokens(budgets.max_input_tokens ? String(budgets.max_input_tokens) : "");
+      setStopBehavior((project.settings as { budget_stop_behavior?: string }).budget_stop_behavior ?? "pause");
     }
   }, [project]);
+
+  useEffect(() => {
+    if (!id) return;
+    apiFetch(`/projects/${id}/llm-key`).then((data) => setKeyInfo(data.key)).catch(() => {});
+    apiFetch(`/projects/${id}/ranking-weights`).then((data) => setWeightRoles(data.roles)).catch(() => {});
+  }, [id]);
 
   async function handleSave() {
     setSaving(true);
     setSaved(false);
     setError("");
     try {
+      const budget_overrides: Record<string, number> = {};
+      if (budgetCalls && Number(budgetCalls) > 0) budget_overrides.max_llm_calls = Number(budgetCalls);
+      if (budgetTokens && Number(budgetTokens) > 0) budget_overrides.max_input_tokens = Number(budgetTokens);
       await apiFetch(`/projects/${id}/settings`, {
         method: "PUT",
         body: JSON.stringify({
           ignored_paths: ignoredPaths.split("\n").map((p) => p.trim()).filter(Boolean),
           default_developer_role: defaultRole,
-          privacy_mode: aiEnabled ? "full_ai" : "ai_disabled",
+          privacy_mode: privacyMode,
+          analysis_depth: analysisDepth,
           file_limit: fileLimit,
           loc_limit: locLimit,
+          budget_overrides,
+          budget_stop_behavior: stopBehavior,
         }),
       });
       setSaved(true);
@@ -77,6 +123,75 @@ export function ProjectSettingsPage() {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleSaveKey() {
+    if (!keyInput.trim()) return;
+    setKeySaving(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/llm-key`, {
+        method: "PUT",
+        body: JSON.stringify({ api_key: keyInput.trim() }),
+      });
+      setKeyInput("");
+      const data = await apiFetch(`/projects/${id}/llm-key`);
+      setKeyInfo(data.key);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save key");
+    } finally {
+      setKeySaving(false);
+    }
+  }
+
+  async function handleRemoveKey() {
+    setKeySaving(true);
+    try {
+      await apiFetch(`/projects/${id}/llm-key`, { method: "DELETE" });
+      setKeyInfo({ exists: false });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to remove key");
+    } finally {
+      setKeySaving(false);
+    }
+  }
+
+  const activeWeights = weightRoles?.find((r) => r.role === weightRole) ?? null;
+
+  function setWeight(view: string, value: number) {
+    setWeightRoles((prev) =>
+      prev?.map((r) => (r.role === weightRole ? { ...r, weights: { ...r.weights, [view]: value } } : r)) ?? null,
+    );
+  }
+
+  async function handleSaveWeights() {
+    if (!activeWeights) return;
+    setWeightsSaving(true);
+    try {
+      await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, {
+        method: "PUT",
+        body: JSON.stringify({ weights: activeWeights.weights }),
+      });
+      const data = await apiFetch(`/projects/${id}/ranking-weights`);
+      setWeightRoles(data.roles);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to save weights");
+    } finally {
+      setWeightsSaving(false);
+    }
+  }
+
+  async function handleRevertWeights() {
+    setWeightsSaving(true);
+    try {
+      await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, { method: "DELETE" });
+      const data = await apiFetch(`/projects/${id}/ranking-weights`);
+      setWeightRoles(data.roles);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to revert weights");
+    } finally {
+      setWeightsSaving(false);
     }
   }
 
@@ -107,12 +222,12 @@ export function ProjectSettingsPage() {
   if (!project) return null;
 
   return (
-    <div className="max-w-xl">
-      <div className="mb-3 flex items-start justify-between">
+    <div className="max-w-5xl">
+      <div className="page-header">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">Project Settings</h1>
-          <p className="text-xs text-muted-foreground">
-            Analysis and privacy settings for this project.
+          <h1 className="page-title">Project settings</h1>
+          <p className="page-subtitle">
+            Analysis, privacy, budgets, and ranking configuration for this project.
           </p>
         </div>
         <Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>
@@ -124,7 +239,7 @@ export function ProjectSettingsPage() {
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
         <Card>
           <CardContent className="p-3">
             <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
@@ -179,44 +294,199 @@ export function ProjectSettingsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card data-tour="settings-privacy">
           <CardContent className="p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-2">
-                <Sparkles className="mt-0.5 h-3.5 w-3.5 text-primary" />
-                <div>
-                  <p className="text-xs font-medium text-foreground">Cloud-assisted AI</p>
-                  <p className="text-xs text-muted-foreground">
-                    Sends only selected code snippets to generate explanations.
-                    Graph and ranking run locally either way.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={aiEnabled}
-                aria-label="Cloud-assisted AI"
-                disabled={!canEdit}
-                onClick={() => setAiEnabled((v) => !v)}
-                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
-                  aiEnabled ? "bg-primary" : "bg-input"
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${
-                    aiEnabled ? "translate-x-4" : "translate-x-0.5"
+            <div className="mb-2 flex items-center gap-2">
+              <Sparkles className="h-3.5 w-3.5 text-primary" />
+              <h3 className="text-xs font-medium text-foreground">AI &amp; privacy</h3>
+            </div>
+            <div className="space-y-1.5" role="radiogroup" aria-label="Privacy mode">
+              {PRIVACY_MODES.map((mode) => (
+                <button
+                  key={mode.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={privacyMode === mode.key}
+                  disabled={!canEdit}
+                  onClick={() => setPrivacyMode(mode.key)}
+                  className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${
+                    privacyMode === mode.key
+                      ? "border-primary/50 bg-primary/5"
+                      : "border-border hover:border-muted-foreground/40"
                   }`}
-                />
-              </button>
+                >
+                  <span
+                    className={`mt-0.5 h-3 w-3 shrink-0 rounded-full border-2 ${
+                      privacyMode === mode.key ? "border-primary bg-primary" : "border-muted-foreground/40"
+                    }`}
+                  />
+                  <span>
+                    <span className="block text-xs font-medium text-foreground">{mode.label}</span>
+                    <span className="block text-[11px] text-muted-foreground">{mode.hint}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Analysis depth</Label>
+                <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
+                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
+                    <SelectItem value="standard">Standard — balanced</SelectItem>
+                    <SelectItem value="full">Full — every eligible symbol</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
               <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
-                Read-only access · secrets filtered · no full repository stored.
-                The browser never receives full repository source.
+                Read-only access · secrets filtered · no full repository stored. The mode used for a
+                run is stamped on that analysis, so older results keep the promise they were made under.
               </p>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-3">
+            <h3 className="mb-2 text-xs font-medium text-foreground">Analysis budget</h3>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs">Max LLM calls</Label>
+                <Input
+                  type="number"
+                  value={budgetCalls}
+                  onChange={(e) => setBudgetCalls(e.target.value)}
+                  placeholder="depth default"
+                  disabled={!canEdit}
+                  className="h-8 text-[13px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Max input tokens</Label>
+                <Input
+                  type="number"
+                  value={budgetTokens}
+                  onChange={(e) => setBudgetTokens(e.target.value)}
+                  placeholder="depth default"
+                  disabled={!canEdit}
+                  className="h-8 text-[13px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">When exceeded</Label>
+                <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
+                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pause">Pause — resume later</SelectItem>
+                    <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
+                    <SelectItem value="fail">Fail the run</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Empty fields use the depth's built-in limits. Live spend shows in the analysis status.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-3">
+            <h3 className="mb-1 text-xs font-medium text-foreground">Project LLM API key</h3>
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
+              shown again, and usage is visible to the whole team.
+            </p>
+            {keyInfo?.exists ? (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
+                <p className="text-xs text-success">
+                  Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""} — all AI calls use it.
+                </p>
+                {canEdit && (
+                  <Button variant="outline" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
+                    Remove
+                  </Button>
+                )}
+              </div>
+            ) : canEdit ? (
+              <div className="flex gap-2">
+                <Input
+                  type="password"
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  placeholder="sk-or-…"
+                  className="h-8 flex-1 text-[13px]"
+                  autoComplete="off"
+                />
+                <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
+                  {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save key"}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No project key — the server key is used.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-medium text-foreground">Ranking weights</h3>
+              {activeWeights?.customized && (
+                <Badge variant="outline" className="text-[10px]">customized</Badge>
+              )}
+            </div>
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              How much each signal counts toward "critical for this role". Changes apply instantly —
+              scores are re-projected, never re-analyzed.
+            </p>
+            <Select value={weightRole} onValueChange={setWeightRole}>
+              <SelectTrigger className="mb-3 h-8 w-[180px] text-[13px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {(weightRoles ?? []).map((r) => (
+                  <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {activeWeights && (
+              <div className="space-y-2">
+                {WEIGHT_VIEWS.map((view) => (
+                  <div key={view} className="flex items-center gap-3">
+                    <span className="w-28 shrink-0 text-[11.5px] capitalize text-muted-foreground">
+                      {view.replace(/_/g, " ")}
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={activeWeights.weights[view] ?? 0}
+                      onChange={(e) => setWeight(view, Number(e.target.value))}
+                      disabled={!canEdit}
+                      className="h-1.5 flex-1 accent-[var(--primary)]"
+                      aria-label={`${view} weight`}
+                    />
+                    <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-foreground">
+                      {(activeWeights.weights[view] ?? 0).toFixed(2)}
+                    </span>
+                  </div>
+                ))}
+                {canEdit && (
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
+                      Revert to defaults
+                    </Button>
+                    <Button size="xs" onClick={handleSaveWeights} disabled={weightsSaving}>
+                      {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
 

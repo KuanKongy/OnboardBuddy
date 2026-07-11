@@ -11,6 +11,26 @@ export interface GraphResponse {
   fileAnalyses: unknown[];
 }
 
+export interface SymbolDoc {
+  summary: string | null;
+  summaryConfidence: string | null;
+  factsOnly: boolean | null;
+  signature: string | null;
+  params: Array<{ name?: string; type?: string }>;
+  returns: string | null;
+  exampleUsage: { caller: string; filePath: string; lineStart: number | null; snippet: string } | null;
+  receipts: Array<{
+    id: string;
+    receipt_kind: string;
+    trust_level: string;
+    file_path: string | null;
+    symbol_name: string | null;
+    line_start: number | null;
+    line_end: number | null;
+    snippet: string | null;
+  }>;
+}
+
 export interface NodeDetail {
   id: string;
   stable_key: string;
@@ -22,6 +42,8 @@ export interface NodeDetail {
   composite_score: number | null;
   ranking_reasons: string[];
   connected_workflows: Array<{ id: string; title: string; trigger_type: string }>;
+  /** Standard symbol doc (doc/Pipeline.md "Symbol doc format"). */
+  doc?: SymbolDoc;
 }
 
 export interface WorkflowSummary {
