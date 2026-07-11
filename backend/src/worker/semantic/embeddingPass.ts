@@ -6,6 +6,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import type { SemanticRecordBody, RecordLevel } from './recordTypes.js';
 import { viewsForRecord, renderView, kindForRecord, type ViewType, type ViewRenderContext } from './embeddingViews.js';
@@ -97,23 +98,35 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
 
   let embedded = 0;
   let batches = 0;
+  const embedBatches: Array<typeof pending> = [];
   for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
-    const batch = pending.slice(i, i + EMBED_BATCH_SIZE);
+    embedBatches.push(pending.slice(i, i + EMBED_BATCH_SIZE));
+  }
+  await mapLimit(embedBatches, 3, async (batch) => {
     const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
     batches += 1;
+    // One multi-row insert per batch — per-vector inserts were hundreds of
+    // sequential round trips to the remote DB.
+    const rowsSql: string[] = [];
+    const values: unknown[] = [];
     for (let j = 0; j < batch.length; j++) {
       const item = batch[j]!;
       const vector = vectors[j];
       if (!vector) continue;
-      await query(
-        `INSERT INTO embeddings (record_id, view_type, content, embedding, provider, model)
-         VALUES ($1, $2, $3, $4::vector, $5, $6)
-         ON CONFLICT (record_id, view_type, model) DO NOTHING`,
-        [item.recordId, item.view, item.content, `[${vector.join(',')}]`, EMBEDDINGS_PROVIDER, model],
-      );
+      const base = values.length;
+      rowsSql.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}::vector, $${base + 5}, $${base + 6})`);
+      values.push(item.recordId, item.view, item.content, `[${vector.join(',')}]`, EMBEDDINGS_PROVIDER, model);
       embedded += 1;
     }
-  }
+    if (rowsSql.length > 0) {
+      await query(
+        `INSERT INTO embeddings (record_id, view_type, content, embedding, provider, model)
+         VALUES ${rowsSql.join(', ')}
+         ON CONFLICT (record_id, view_type, model) DO NOTHING`,
+        values,
+      );
+    }
+  });
 
   return { embedded, skippedExisting, records: rows.length, batches };
 }

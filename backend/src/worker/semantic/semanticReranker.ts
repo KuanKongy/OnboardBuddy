@@ -9,6 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import type { CandidateRanking, CandidateSignal } from '../engine/candidateRanker.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES } from './recordTypes.js';
@@ -203,11 +204,15 @@ export async function runSemanticReranking(
   const targets = selectRerankTargets(ctx, symbolRecords, synthesis, capabilityMemberKeys);
   if (targets.length === 0) return { targets: 0, rowsWritten: 0, llmCalls: 0 };
 
-  // LLM scores per batch
+  // LLM scores per batch (concurrent — provider pressure is bounded by the
+  // AiClient semaphore)
   let llmCalls = 0;
   const llmByKey = new Map<string, LlmTargetScores>();
+  const rerankBatches: RerankTarget[][] = [];
   for (let i = 0; i < targets.length; i += TARGETS_PER_RERANK_CALL) {
-    const batch = targets.slice(i, i + TARGETS_PER_RERANK_CALL);
+    rerankBatches.push(targets.slice(i, i + TARGETS_PER_RERANK_CALL));
+  }
+  await mapLimit(rerankBatches, 6, async (batch) => {
     const prompt = [
       'Score each target 0-100 per criticality view: runtime (what breaks the app when wrong), business (domain importance), onboarding (what a newcomer must understand first), change_risk (operational risk / invariants), architecture (boundary and coupling importance), workflow (workflow criticality), and per-role relevance (backend/frontend/devops/qa/general). Give 1-3 short reasons per target. Judge from the summaries and deterministic signals; do not invent facts.',
       OUTPUT_RULES,
@@ -229,7 +234,7 @@ export async function runSemanticReranking(
     });
     llmCalls += 1;
     for (const t of response.value?.targets ?? []) llmByKey.set(t.stable_key, t);
-  }
+  });
 
   // Blend 50/50, then normalize per view within the snapshot.
   type Blended = {

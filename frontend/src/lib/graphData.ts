@@ -1,5 +1,4 @@
 import { apiFetch } from "@/lib/api";
-import { mockGraphData } from "@/lib/mockGraphData";
 
 export interface GraphResponse {
   projectId: string;
@@ -82,9 +81,7 @@ export async function fetchDependencyGraph(
   try {
     return (await apiFetch(url)) as GraphResponse;
   } catch {
-    if (import.meta.env.DEV) {
-      return { ...mockGraphData, projectId, snapshotId: "", clustered: false, totalNodes: 0, totalEdges: 0 } as unknown as GraphResponse;
-    }
+    // No mock fallback: a failed load shows the honest empty/error state.
     throw new Error("Failed to load dependency graph data");
   }
 }

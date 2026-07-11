@@ -90,6 +90,76 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
 });
 
 /**
+ * On-demand per-role generation: builds the onboarding package for one role
+ * against the latest analyzed snapshot, without re-analyzing the repo.
+ * Any member can generate their own role's package — that's the product's
+ * core loop for a newly joined developer; budgets cap the spend.
+ */
+onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = String(req.params.id);
+    const userId = req.user!.id;
+    const { role } = (req.body ?? {}) as { role?: string };
+    if (!role || !["backend", "frontend", "devops", "qa", "general"].includes(role)) {
+      res.status(400).json({ error: "role must be one of backend/frontend/devops/qa/general" });
+      return;
+    }
+
+    const snapshot = (await query(
+      `SELECT id, privacy_mode FROM analysis_snapshots
+       WHERE project_id = $1 AND status = 'complete'
+       ORDER BY created_at DESC LIMIT 1`,
+      [projectId],
+    )).rows[0] as { id: string; privacy_mode: string } | undefined;
+    if (!snapshot) {
+      res.status(404).json({ error: "No completed analysis — run an analysis first" });
+      return;
+    }
+    if (snapshot.privacy_mode === "ai_disabled") {
+      res.status(403).json({ error: "AI features are disabled for this project" });
+      return;
+    }
+
+    const active = await query(
+      `SELECT id FROM analysis_jobs
+       WHERE project_id = $1 AND job_type = 'generate_package' AND role = $2
+         AND status IN ('queued', 'running')
+       LIMIT 1`,
+      [projectId, role],
+    );
+    if (active.rows.length > 0) {
+      res.status(409).json({ error: "Generation for this role is already in progress" });
+      return;
+    }
+
+    const jobId = ((await query(
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
+       VALUES ($1, $2, $3, 'generate_package', $4, 'queued', 'Waiting for worker')
+       RETURNING id`,
+      [projectId, snapshot.id, userId, role],
+    )).rows[0] as { id: string }).id;
+
+    await getSummaryQueue().add(`generate_summary_${role}`, {
+      jobId,
+      snapshotId: snapshot.id,
+      projectId,
+      triggeredBy: userId,
+      role,
+    } satisfies SummaryJobData, {
+      attempts: 2,
+      backoff: { type: "fixed", delay: 3000 },
+      removeOnComplete: { count: 10 },
+      removeOnFail: { count: 10 },
+    });
+
+    res.status(202).json({ job: { id: jobId, status: "queued", role } });
+  } catch (err) {
+    console.error("On-demand generate error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
  * Package cards (doc/PLAN.md "Onboarding package = (scope, role, commit)"):
  * every package with scope, role, status, commit, staleness and confidence
  * rollups — the data behind the card grid and its filters.

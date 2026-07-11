@@ -8,6 +8,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { mapLimit } from '../../lib/parallel.js';
 import type { AiClient } from '../ai/aiClient.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import type { ProjectedTarget } from './roleProjection.js';
@@ -81,7 +82,7 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
   const result: TutorialResult = { tutorials: 0, steps: 0, failed: 0 };
   const workflows = await selectWorkflows(params);
 
-  for (const workflow of workflows) {
+  await mapLimit(workflows, 4, async (workflow) => {
     const steps = (await query(
       `SELECT ws.id, ws.step_order, ws.node_id, ws.file_path, ws.symbol_name, ws.line_start,
               ws.line_end, ws.step_kind, ws.deterministic_description,
@@ -94,7 +95,7 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
        WHERE ws.workflow_id = $1 ORDER BY ws.step_order`,
       [workflow.id, params.snapshotId],
     )).rows as StepRow[];
-    if (steps.length === 0) continue;
+    if (steps.length === 0) return;
 
     try {
       await generateOneTutorial(params, workflow, steps);
@@ -105,7 +106,7 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
       result.failed += 1;
       console.warn(`[tutorialGenerator] failed for ${workflow.stable_key}:`, err instanceof Error ? err.message : err);
     }
-  }
+  });
   return result;
 }
 

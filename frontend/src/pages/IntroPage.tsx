@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { Link, Navigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -24,10 +25,8 @@ export function IntroPage() {
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
-              OB
-            </div>
-            <span className="text-sm font-semibold text-foreground">OnboardBuddy</span>
+            <LogoMark className="h-7 w-7" />
+            <LogoWordmark />
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" asChild>

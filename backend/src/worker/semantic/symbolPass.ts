@@ -7,6 +7,7 @@
  */
 
 import { BudgetExceededError } from '../ai/budgetEnforcer.js';
+import { mapLimit } from '../../lib/parallel.js';
 import { MAX_SYMBOLS_PER_CALL, MAX_SNIPPET_CHARS, MAX_REQUEST_INPUT_TOKENS, CHARS_PER_TOKEN } from '../engine/budgets.js';
 import type { EvidenceNode } from '../types/analysis.js';
 import type { SemanticContext } from './context.js';
@@ -68,28 +69,35 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
     result.factsOnlyRecords += 1;
   }
 
-  // LLM targets: resolve cache hits, then batch the misses per file.
+  // LLM targets: resolve cache hits (parallel — one round trip each against
+  // remote Postgres), then batch the misses per file.
   const misses: SymbolTarget[] = [];
-  for (const key of llmKeys) {
+  const lookups = await mapLimit(llmKeys, 12, async (key) => {
     const node = nodesByKey.get(key);
-    if (!node) continue;
+    if (!node) return null;
     const evidenceHash = evidenceHashForSymbol(node, ctx.graph, ctx.sideEffects);
     const cacheKey: RecordCacheKey = {
       projectId: ctx.projectId, stableKey: key, level: 'symbol', evidenceHash,
       promptVersion: PROMPT_VERSIONS.symbol, depth: ctx.depth, modelFamily: ctx.modelFamily.cheap,
     };
-    const cached = await lookupRecord(cacheKey);
-    if (cached) {
-      await mapToSnapshot(ctx.snapshotId, cached, ctx.nodeIdMap.get(key) ?? null);
-      result.records.set(key, cached);
+    return { key, node, evidenceHash, cacheKey, cached: await lookupRecord(cacheKey) };
+  });
+  for (const hit of lookups) {
+    if (!hit) continue;
+    if (hit.cached) {
+      await mapToSnapshot(ctx.snapshotId, hit.cached, ctx.nodeIdMap.get(hit.key) ?? null);
+      result.records.set(hit.key, hit.cached);
       result.cacheHits += 1;
     } else {
-      misses.push({ node, evidenceHash, cacheKey });
+      misses.push({ node: hit.node, evidenceHash: hit.evidenceHash, cacheKey: hit.cacheKey });
     }
   }
 
   try {
-    for (const batch of planBatches(misses.map((m) => m.node))) {
+    // Batches run concurrently — the AiClient semaphore bounds provider
+    // pressure; this loop was the single biggest wall-clock cost when serial.
+    const batches = planBatches(misses.map((m) => m.node));
+    await mapLimit(batches, 6, async (batch) => {
       const targets = batch.map((n) => misses.find((m) => m.node.stableKey === n.stableKey)!);
       // A whole-batch failure falls through to per-symbol retries (spec:
       // "failed symbols are retried individually, not the whole file").
@@ -118,7 +126,7 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
         result.records.set(key, record);
         if (!record.factsOnly) result.llmRecords += 1;
       }
-    }
+    });
   } catch (err) {
     if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
       // Budget degrade: remaining targets drop to facts-only records.

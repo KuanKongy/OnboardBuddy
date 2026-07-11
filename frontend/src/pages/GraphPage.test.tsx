@@ -53,7 +53,6 @@ vi.mock("@/lib/graphData", () => {
     fetchWorkflowsList: vi.fn().mockResolvedValue([]),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
-    mockGraphData: graphPayload,
   };
 });
 

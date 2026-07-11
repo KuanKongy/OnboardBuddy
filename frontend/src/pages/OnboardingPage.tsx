@@ -209,7 +209,7 @@ function SectionView({
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
-                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[13.5px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13.5px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
+                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[13.5px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13.5px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
                   <ReactMarkdown>{block.body}</ReactMarkdown>
                 </div>
                 {block.receipts.length > 0 && (
@@ -361,6 +361,32 @@ export function OnboardingPage() {
     setGenerating(project?.status === "analyzing");
   }, [project?.status]);
 
+  // Sections persist one by one while the package is generating — poll so
+  // they appear as they land instead of only after the whole run finishes.
+  useEffect(() => {
+    if (!id || view !== "reader") return;
+    if (pkg?.status !== "generating" && !generating) return;
+    const timer = window.setInterval(() => {
+      fetchOnboardingPackage(id, selectedRole)
+        .then((data) => {
+          if (!data) return;
+          setPkg(data);
+          if (data.status !== "generating" && data.status !== "missing") loadCards();
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [id, view, selectedRole, pkg?.status, generating]);
+
+  // Card grid: keep statuses fresh while anything is still generating.
+  useEffect(() => {
+    if (view !== "cards") return;
+    const busy = project?.status === "analyzing" || (cards ?? []).some((c) => c.status === "generating");
+    if (!busy) return;
+    const timer = window.setInterval(loadCards, 8000);
+    return () => window.clearInterval(timer);
+  }, [view, project?.status, cards]);
+
   const canManage = project?.permission_tier === "owner" || project?.permission_tier === "admin";
   const isMissing = !pkg || pkg.status === "missing";
   const sections = isMissing ? [] : pkg.sections;
@@ -373,6 +399,31 @@ export function OnboardingPage() {
     try {
       await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
       refetch();
+    } catch {
+      setGenerating(false);
+    }
+  }
+
+  // On-demand per-role generation: reuses the latest analysis snapshot, so
+  // only this role's package is paid for — no repo re-analysis, no fan-out.
+  async function handleGenerateRole() {
+    if (!id) return;
+    setGenerating(true);
+    try {
+      await apiFetch(`/projects/${id}/onboarding/generate`, {
+        method: "POST",
+        body: JSON.stringify({ role: selectedRole }),
+      });
+      const started = Date.now();
+      const poll = window.setInterval(async () => {
+        const data = await fetchOnboardingPackage(id, selectedRole);
+        if ((data && data.status !== "missing") || Date.now() - started > 300_000) {
+          window.clearInterval(poll);
+          setGenerating(false);
+          if (data) setPkg(data);
+          loadCards();
+        }
+      }, 5000);
     } catch {
       setGenerating(false);
     }
@@ -585,6 +636,13 @@ export function OnboardingPage() {
         </div>
       </div>
 
+      {!isMissing && pkg.status === "generating" && (
+        <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Generating — sections appear here as each one finishes ({sections.length}/11 so far).
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
         <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block">
@@ -630,14 +688,13 @@ export function OnboardingPage() {
                   No package for {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
                 </h2>
                 <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                  Generate a package to get role-specific entry points, critical files, workflows, and safety notes.
+                  Generate this role's package from the latest analysis — role-specific entry
+                  points, critical files, workflows, and safety notes. Other roles are unaffected.
                 </p>
-                {canManage && (
-                  <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerate} disabled={generating}>
-                    {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {generating ? "Generating…" : "Generate package"}
-                  </Button>
-                )}
+                <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerateRole} disabled={generating}>
+                  {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {generating ? "Generating…" : `Generate for ${ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}`}
+                </Button>
               </div>
             ) : activeSection ? (
               <>

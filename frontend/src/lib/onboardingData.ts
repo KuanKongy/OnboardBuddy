@@ -1,5 +1,4 @@
 import { apiFetch } from "@/lib/api";
-import { MOCK_ONBOARDING_PACKAGES } from "@/lib/mockOnboardingData";
 import type { OnboardingPackage, PackageCard, SectionId } from "@/types/onboarding";
 
 /** Reading order for the eleven section types. */
@@ -35,10 +34,7 @@ export async function fetchOnboardingPackage(
     );
     return (data.package ?? data) as OnboardingPackage;
   } catch {
-    if (import.meta.env.DEV) {
-      const mock = MOCK_ONBOARDING_PACKAGES[role];
-      return mock ? { ...mock, projectId } : null;
-    }
+    // No mock fallback: a failed load shows the honest missing state.
     return null;
   }
 }

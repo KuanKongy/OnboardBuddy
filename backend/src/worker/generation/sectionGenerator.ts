@@ -11,7 +11,7 @@ import { query } from '../../lib/db.js';
 import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
 import type { DeveloperRole } from '../semantic/projections.js';
-import { SECTION_SPECS, type SectionType, type SectionDeps } from './sectionSpecs.js';
+import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
 
 export const SECTION_PROMPT_VERSION = 'section-v2';
@@ -173,7 +173,7 @@ async function persistSection(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9, $10, $11, $12)
      RETURNING id`,
     [params.packageId, params.snapshotId, runId, params.sectionType,
-     output.title || params.sectionType, output.contentMarkdown ?? '',
+     SECTION_TITLES[params.sectionType] ?? output.title ?? params.sectionType, output.contentMarkdown ?? '',
      JSON.stringify(diagrams), validation.confidence, params.commitHash, params.role,
      JSON.stringify(validation.unknowns), JSON.stringify(generationContext)],
   )).rows[0] as { id: string };

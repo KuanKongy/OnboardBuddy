@@ -7,12 +7,14 @@
  */
 
 import { query } from '../../lib/db.js';
+import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES, schemaForLevel, renderSummary, type SemanticRecordBody } from './recordTypes.js';
 import { lookupRecord, insertRecord, mapToSnapshot, attachReceipts, type StoredRecord } from './recordStore.js';
 import type { SynthesisResult } from './synthesisPass.js';
 
-const TOP_N_REFINED = 10;
+/** Refinement is polish, not substance — spend more of it only at full depth. */
+const TOP_N_REFINED_BY_DEPTH: Record<string, number> = { cheap: 0, standard: 5, full: 10 };
 
 export interface RefinementResult {
   refined: number;
@@ -28,10 +30,11 @@ export async function runRefinementPass(
   const system = synthesis.systemRecord;
   if (!system) return result; // no system context to refine against
 
+  const topN = TOP_N_REFINED_BY_DEPTH[ctx.depth] ?? 5;
   // Top-N candidate-ranked symbol/file targets that got a real LLM record.
   const targets: Array<{ stableKey: string; record: StoredRecord }> = [];
   for (const ranking of ctx.rankings) {
-    if (targets.length >= TOP_N_REFINED) break;
+    if (targets.length >= topN) break;
     const record = ranking.targetType === 'symbol'
       ? symbolRecords.get(ranking.stableKey)
       : ranking.targetType === 'file' ? synthesis.fileRecords.get(ranking.stableKey) : undefined;
@@ -46,7 +49,7 @@ export async function runRefinementPass(
     system.record.main_capabilities?.length ? `Capabilities: ${system.record.main_capabilities.join(', ')}` : null,
   ].filter(Boolean).join('\n');
 
-  for (const target of targets) {
+  await mapLimit(targets, 5, async (target) => {
     const cacheKey = {
       projectId: ctx.projectId,
       stableKey: target.stableKey,
@@ -60,7 +63,7 @@ export async function runRefinementPass(
     if (cached) {
       await mapToSnapshot(ctx.snapshotId, cached, ctx.nodeIdMap.get(target.stableKey) ?? null);
       result.cacheHits += 1;
-      continue;
+      return;
     }
 
     const prompt = [
@@ -78,7 +81,7 @@ export async function runRefinementPass(
       schema: schemaForLevel(target.record.recordLevel),
       user: prompt,
     });
-    if (!response.value) continue;
+    if (!response.value) return;
 
     const refined = await insertRecord({
       key: cacheKey,
@@ -110,6 +113,6 @@ export async function runRefinementPass(
     if (target.record.recordLevel === 'symbol') symbolRecords.set(target.stableKey, refined);
     else synthesis.fileRecords.set(target.stableKey, refined);
     result.refined += 1;
-  }
+  });
   return result;
 }

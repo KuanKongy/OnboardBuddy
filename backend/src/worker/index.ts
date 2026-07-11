@@ -339,6 +339,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       client.release();
     }
 
+    // Link the job to its snapshot as soon as it exists — the overview's
+    // unified run panel reads phase rows by the job's snapshot_id live.
+    await query(`UPDATE analysis_jobs SET snapshot_id = $2 WHERE id = $1`, [jobId, snapshotId]);
+
     await markPhase(snapshotId, 'ingest', 'complete', {
       files: fileCount,
       supportedFiles: snapshot.languageInventory.supportedFileCount,
