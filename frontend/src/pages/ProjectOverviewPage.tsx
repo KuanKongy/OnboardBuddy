@@ -21,6 +21,8 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
+import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { PhaseMetricsPanel } from "@/components/PhaseMetricsPanel";
 
 const rolesList = [
   { key: "backend", label: "Backend" },
@@ -57,6 +59,7 @@ interface AnalysisJob {
 interface AnalysisStatus {
   jobs: AnalysisJob[];
   latestSnapshot: {
+    id: string;
     file_count: number;
     symbol_count: number;
     workflow_count: number;
@@ -68,7 +71,7 @@ interface AnalysisStatus {
 export function ProjectOverviewPage() {
   const { project, refetch } = useProject();
   const { id } = useParams<{ id: string }>();
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasActiveRef = useRef(false);
@@ -112,28 +115,23 @@ export function ProjectOverviewPage() {
   const snap = analysisStatus?.latestSnapshot;
   const isActive = latestJob?.status === "queued" || latestJob?.status === "running";
 
-  async function handleReanalyze() {
-    setAnalyzing(true);
-    try {
-      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
-      refetch();
-      wasActiveRef.current = true;
-      if (!pollRef.current) {
-        pollRef.current = setInterval(async () => {
-          try {
-            const data = await apiFetch(`/projects/${id}/analysis-status`) as AnalysisStatus;
-            setAnalysisStatus(data);
-            const job = data.jobs[0];
-            if (job?.status !== "queued" && job?.status !== "running") {
-              wasActiveRef.current = false;
-              if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-              refetch();
-            }
-          } catch { /* ignore */ }
-        }, 5000);
-      }
-    } catch { /* ignore */ } finally {
-      setAnalyzing(false);
+  // Called when the AnalyzeDialog has accepted a job: resume status polling.
+  function handleAnalysisStarted() {
+    refetch();
+    wasActiveRef.current = true;
+    if (!pollRef.current) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const data = await apiFetch(`/projects/${id}/analysis-status`) as AnalysisStatus;
+          setAnalysisStatus(data);
+          const job = data.jobs[0];
+          if (job?.status !== "queued" && job?.status !== "running") {
+            wasActiveRef.current = false;
+            if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+            refetch();
+          }
+        } catch { /* ignore */ }
+      }, 5000);
     }
   }
 
@@ -163,11 +161,12 @@ export function ProjectOverviewPage() {
           <Button
             variant="outline"
             size="xs"
-            onClick={handleReanalyze}
-            disabled={analyzing || project.status === "analyzing"}
+            onClick={() => setAnalyzeOpen(true)}
+            disabled={isActive || project.status === "analyzing"}
+            data-tour="analyze-button"
           >
-            <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
-            Re-scan
+            <RefreshCw className="h-3 w-3" />
+            Analyze…
           </Button>
         )}
       </div>
@@ -221,7 +220,7 @@ export function ProjectOverviewPage() {
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-[13px] font-medium text-foreground">Analysis status</h3>
               {latestJob?.status === "failed" && canManage && (
-                <Button variant="outline" size="xs" onClick={handleReanalyze} disabled={analyzing}>
+                <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
                   <RotateCcw className="mr-1 h-3 w-3" />
                   Retry
                 </Button>
@@ -291,6 +290,13 @@ export function ProjectOverviewPage() {
                 <p className="text-xs text-muted-foreground">Workflows</p>
               </div>
             </div>
+
+            {/* Per-phase pipeline metrics + budget spend */}
+            {snap?.id && (
+              <div className="mt-3">
+                <PhaseMetricsPanel projectId={id!} snapshotId={snap.id} />
+              </div>
+            )}
 
             {/* Step history timeline for latest job */}
             {latestJob?.step_log && latestJob.step_log.length > 0 && (
@@ -380,6 +386,15 @@ export function ProjectOverviewPage() {
       </div>
 
       <Separator />
+
+      {id && (
+        <AnalyzeDialog
+          projectId={id}
+          open={analyzeOpen}
+          onOpenChange={setAnalyzeOpen}
+          onStarted={handleAnalysisStarted}
+        />
+      )}
     </div>
   );
 }

@@ -1,91 +1,153 @@
-import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-import { ArchitectureMapView } from "@/components/graph/ArchitectureMapView";
-import { COMPONENT_TYPE_COLORS } from "@/components/graph/ArchitectureNode";
-import { ComponentInfoPanel } from "@/components/graph/ComponentInfoPanel";
+import ReactFlow, {
+  Background,
+  BackgroundVariant,
+  Controls,
+  MiniMap,
+  ReactFlowProvider,
+  type Edge,
+  type Node,
+} from "reactflow";
+import "reactflow/dist/style.css";
+import { ClusterNode, type ClusterNodeData } from "@/components/graph/ClusterNode";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fetchArchitectureSource } from "@/lib/architectureData";
-import { COMPONENT_TYPE_LABELS, deriveArchitectureGraph } from "@/lib/architectureGraph";
-import type { GraphResponse } from "@/lib/graphData";
-import type { ArchitectureComponentType } from "@/types/graph";
-import { cn } from "@/lib/utils";
+import {
+  CLUSTER_KIND_LABELS,
+  CLUSTER_KIND_PALETTE,
+  fetchArchitecture,
+  type ArchitectureResponse,
+} from "@/lib/architectureData";
+import { layoutGraph } from "@/lib/graphLayout";
+import { useIsDarkMode } from "@/hooks/useIsDarkMode";
+
+const nodeTypes = { cluster: ClusterNode };
 
 export function ArchitecturePage() {
   const { id } = useParams<{ id: string }>();
-  const [data, setData] = useState<GraphResponse | null>(null);
+  const isDark = useIsDarkMode();
+  const [data, setData] = useState<ArchitectureResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [selectedComponentId, setSelectedComponentId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  function loadArchitecture() {
+  function load() {
     if (!id) return;
     setLoading(true);
     setError("");
-    setSelectedComponentId(null);
-    fetchArchitectureSource(id)
+    setSelectedId(null);
+    fetchArchitecture(id)
       .then(setData)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadArchitecture(); }, [id]);
+  useEffect(() => { load(); }, [id]);
 
-  const architecture = useMemo(() => {
-    if (!data) return null;
-    return deriveArchitectureGraph(
-      data.graph.nodes.map((n) => ({
-        id: n.id,
-        label: n.label,
-        kind: n.kind,
-        metadata: {
-          exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
-          importCount: (n.metadata?.importCount as number) ?? 0,
-          dependentCount: (n.metadata?.dependentCount as number) ?? 0,
-        },
-      })),
-      data.graph.edges,
-      data.graph.entryPoints,
-    );
-  }, [data]);
-
-  const visibleComponents = useMemo(() => {
-    if (!architecture) return [];
-    const query = search.trim().toLowerCase();
-    if (!query) return architecture.components;
-    return architecture.components.filter(
+  const visibleClusters = useMemo(() => {
+    if (!data) return [];
+    const q = search.trim().toLowerCase();
+    if (!q) return data.clusters;
+    return data.clusters.filter(
       (c) =>
-        c.label.toLowerCase().includes(query) ||
-        c.directory.toLowerCase().includes(query) ||
-        c.files.some((f) => f.toLowerCase().includes(query)) ||
-        c.exportedSymbols.some((s) => s.toLowerCase().includes(query)),
+        c.label.toLowerCase().includes(q) ||
+        c.summary.toLowerCase().includes(q) ||
+        c.members.some((m) => m.name.toLowerCase().includes(q) || (m.filePath ?? "").toLowerCase().includes(q)),
     );
-  }, [architecture, search]);
+  }, [data, search]);
 
   const visibleEdges = useMemo(() => {
-    if (!architecture) return [];
-    const visibleIds = new Set(visibleComponents.map((c) => c.id));
-    return architecture.edges.filter((e) => visibleIds.has(e.source) && visibleIds.has(e.target));
-  }, [architecture, visibleComponents]);
+    const ids = new Set(visibleClusters.map((c) => c.id));
+    return (data?.edges ?? []).filter((e) => ids.has(e.source) && ids.has(e.target));
+  }, [data, visibleClusters]);
 
-  const presentTypes = useMemo(() => {
-    const types = new Set<ArchitectureComponentType>();
-    for (const c of architecture?.components ?? []) types.add(c.type);
-    return Array.from(types);
-  }, [architecture]);
+  const neighborIds = useMemo(() => {
+    if (!selectedId) return null;
+    const n = new Set([selectedId]);
+    for (const e of visibleEdges) {
+      if (e.source === selectedId) n.add(e.target);
+      if (e.target === selectedId) n.add(e.source);
+    }
+    return n;
+  }, [visibleEdges, selectedId]);
 
-  const selectedComponent = architecture?.components.find((c) => c.id === selectedComponentId);
+  const positioned = useMemo(
+    () =>
+      layoutGraph(
+        visibleClusters.map((c) => ({ id: c.id, label: c.label, kind: c.kind, metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 } })),
+        visibleEdges,
+        { direction: "LR", nodeWidth: 240, nodeHeight: 118, ranksep: 110, nodesep: 36 },
+      ),
+    [visibleClusters, visibleEdges],
+  );
+
+  const flowNodes: Node<ClusterNodeData>[] = useMemo(() => {
+    const byId = new Map(visibleClusters.map((c) => [c.id, c]));
+    return positioned.map((p) => {
+      const c = byId.get(p.id)!;
+      return {
+        id: p.id,
+        type: "cluster",
+        position: { x: p.x, y: p.y },
+        data: {
+          label: c.label,
+          kind: c.kind,
+          memberCount: c.members.length,
+          criticalScore: c.criticalScore,
+          summary: c.summary,
+          selected: p.id === selectedId,
+          dimmed: neighborIds !== null && !neighborIds.has(p.id),
+        },
+      };
+    });
+  }, [positioned, visibleClusters, selectedId, neighborIds]);
+
+  const flowEdges: Edge[] = useMemo(
+    () =>
+      visibleEdges.map((e) => {
+        const active = selectedId !== null && (e.source === selectedId || e.target === selectedId);
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          animated: active,
+          label: active ? e.kind.replace(/_/g, " ") : undefined,
+          labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 600 },
+          labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },
+          labelBgPadding: [4, 3] as [number, number],
+          labelBgBorderRadius: 3,
+          style: {
+            opacity: neighborIds === null || active ? 0.9 : 0.12,
+            strokeWidth: Math.min(4, 1 + e.weight / 4),
+            stroke: active ? "var(--primary)" : "var(--border)",
+          },
+        };
+      }),
+    [visibleEdges, selectedId, neighborIds],
+  );
+
+  const presentKinds = useMemo(
+    () => [...new Set((data?.clusters ?? []).map((c) => c.kind))],
+    [data],
+  );
+  const selected = data?.clusters.find((c) => c.id === selectedId) ?? null;
 
   return (
-    <div>
-      <div className="mb-3 flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-foreground">Architecture map</h1>
-        {architecture && (
-          <Badge variant="outline" className="text-[10px]">
-            {architecture.components.length} components · {data?.totalNodes ?? 0} files
+    <div style={{ "--graph-chrome": "190px" } as React.CSSProperties}>
+      <div className="page-header" data-tour="architecture-header">
+        <div>
+          <h1 className="page-title">Architecture</h1>
+          <p className="page-subtitle">
+            How the codebase is organized into layers — click a component to see what it does and what it talks to.
+          </p>
+        </div>
+        {data && (
+          <Badge variant="outline" className="text-[11px] tabular-nums">
+            {data.clusters.length} components · {data.edges.length} connections
           </Badge>
         )}
       </div>
@@ -97,72 +159,137 @@ export function ArchitecturePage() {
       )}
 
       {(error || (!data && !loading)) && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+        <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
           <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">
-              {error || "No architecture data available yet"}
-            </p>
+            <p className="text-sm font-medium text-foreground">{error || "No architecture data available yet"}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              The architecture map is generated from the first successful analysis. Run an analysis
-              first, or retry if analysis has completed.
+              The architecture map comes from analysis. Run an analysis first, or retry if one just finished.
             </p>
           </div>
-          <Button variant="outline" size="xs" onClick={loadArchitecture}>
+          <Button variant="outline" size="xs" onClick={load}>
             <RefreshCw className="mr-1 h-3 w-3" />
             Retry
           </Button>
         </div>
       )}
 
-      {architecture && !loading && (
+      {data && !loading && (
         <>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <div className="relative min-w-[160px] flex-1">
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="relative w-64">
               <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search components, directories or symbols..."
+                placeholder="Search components or files…"
                 className="h-8 pl-8 text-xs"
               />
             </div>
-            <span className="ml-1 whitespace-nowrap text-[11px] text-muted-foreground">
-              {visibleComponents.length} / {architecture.components.length} components
-            </span>
-          </div>
-
-          <div className="mb-3 flex flex-wrap items-center gap-1.5">
-            {presentTypes.map((type) => (
-              <span
-                key={type}
-                className={cn(
-                  "rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide",
-                  COMPONENT_TYPE_COLORS[type],
-                )}
-              >
-                {COMPONENT_TYPE_LABELS[type]}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {presentKinds.map((kind) => {
+                const palette = CLUSTER_KIND_PALETTE[kind] ?? "shared";
+                return (
+                  <span key={kind} className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <span className="h-2 w-2 rounded-full" style={{ background: `var(--node-${palette})` }} />
+                    {CLUSTER_KIND_LABELS[kind] ?? kind}
+                  </span>
+                );
+              })}
+            </div>
+            {search && (
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {visibleClusters.length} / {data.clusters.length}
               </span>
-            ))}
+            )}
           </div>
 
-          <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
-            <ArchitectureMapView
-              components={visibleComponents}
-              edges={visibleEdges}
-              entryComponentIds={architecture.entryComponentIds}
-              selectedComponentId={selectedComponentId}
-              onSelectComponent={setSelectedComponentId}
-            />
-          </div>
+          <div className={selected ? "grid gap-3 lg:grid-cols-[1fr_320px]" : ""}>
+            <div className="graph-canvas">
+              <ReactFlowProvider>
+                <ReactFlow
+                  nodes={flowNodes}
+                  edges={flowEdges}
+                  nodeTypes={nodeTypes}
+                  onNodeClick={(_, node) => setSelectedId(node.id)}
+                  onPaneClick={() => setSelectedId(null)}
+                  fitView
+                  fitViewOptions={{ padding: 0.15 }}
+                  minZoom={0.2}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
+                  <Controls className="!border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
+                  <MiniMap
+                    pannable
+                    zoomable
+                    className="!border-border !bg-card"
+                    nodeColor={isDark ? "oklch(0.3 0.02 264)" : "oklch(0.85 0.008 265)"}
+                    maskColor={isDark ? "oklch(0.17 0.015 264 / 0.7)" : "oklch(0.95 0.005 265 / 0.7)"}
+                  />
+                </ReactFlow>
+              </ReactFlowProvider>
+            </div>
 
-          {selectedComponent && (
-            <ComponentInfoPanel
-              component={selectedComponent}
-              components={architecture.components}
-              edges={architecture.edges}
-            />
-          )}
+            {selected && (
+              <aside className="graph-canvas overflow-y-auto !bg-card p-4">
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h2 className="truncate text-sm font-semibold text-foreground">{selected.label}</h2>
+                    <span
+                      className="mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      style={{
+                        color: `var(--node-${CLUSTER_KIND_PALETTE[selected.kind] ?? "shared"})`,
+                        background: `color-mix(in oklab, var(--node-${CLUSTER_KIND_PALETTE[selected.kind] ?? "shared"}) 14%, transparent)`,
+                      }}
+                    >
+                      {CLUSTER_KIND_LABELS[selected.kind] ?? selected.kind}
+                    </span>
+                  </div>
+                  <Button variant="ghost" size="xs" onClick={() => setSelectedId(null)} aria-label="Close details">
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+
+                {selected.summary && (
+                  <div className="mb-3">
+                    <p className="text-[13px] leading-relaxed text-muted-foreground">{selected.summary}</p>
+                    <p className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-muted-foreground/70">
+                      {selected.summarySource === "semantic" ? (
+                        <>
+                          <Sparkles className="h-2.5 w-2.5" /> AI summary ({selected.confidence} confidence)
+                        </>
+                      ) : (
+                        "Derived from code structure — no AI involved"
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                <p className="section-label mb-1.5">Criticality</p>
+                <div className="mb-3 flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.round(selected.criticalScore * 100))}%` }} />
+                  </div>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                    {(selected.criticalScore * 100).toFixed(0)}%
+                  </span>
+                </div>
+
+                <p className="section-label mb-1.5">Files ({selected.members.length})</p>
+                <ul className="space-y-0.5">
+                  {selected.members.slice(0, 30).map((m) => (
+                    <li key={m.key} className="truncate font-mono text-[11.5px] text-muted-foreground" title={m.filePath ?? m.key}>
+                      {m.filePath ?? m.key}
+                    </li>
+                  ))}
+                  {selected.members.length > 30 && (
+                    <li className="text-[11px] text-muted-foreground/70">+ {selected.members.length - 30} more</li>
+                  )}
+                </ul>
+              </aside>
+            )}
+          </div>
         </>
       )}
     </div>

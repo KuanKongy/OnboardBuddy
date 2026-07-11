@@ -81,8 +81,12 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
   return projectResult.rows[0] as ProjectRow;
 }
 
-/** Downloads and extracts the repo zipball; returns the extracted repo root. */
-async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
+/**
+ * Downloads and extracts the repo zipball; returns the extracted repo root.
+ * `requestedCommit` pins the analysis to an exact SHA (the GitHub zipball
+ * API accepts any ref); omitted = branch head.
+ */
+async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
   if (!project.github_installation_id) {
     throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
   }
@@ -92,8 +96,9 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   const extractDir = path.join(tmpDir, 'extracted');
   fs.mkdirSync(extractDir);
 
-  const commitHash = (await getCommitSha(token, project.repo_owner, project.repo_name, project.branch)).trim();
-  await downloadZipball(token, project.repo_owner, project.repo_name, project.branch, zipPath);
+  const commitHash = requestedCommit
+    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, project.branch)).trim();
+  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? project.branch, zipPath);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
@@ -203,9 +208,9 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-${projectId}-`));
 
   try {
-    // 2. Download + extract zipball at the branch head commit
+    // 2. Download + extract zipball at the requested commit (default: branch head)
     await updateStep('Downloading repository', 15);
-    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir);
+    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit);
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded

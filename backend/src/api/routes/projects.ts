@@ -478,6 +478,99 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
   }
 });
 
+// Snapshot list for scope/commit selection: which (scope, commit) pairs have
+// been analyzed, newest first.
+projectsRouter.get("/:id/snapshots", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const result = await query(
+      `SELECT s.id, s.commit_hash, s.branch, s.status, s.trigger_type, s.semantic_depth,
+              s.privacy_mode, s.file_count, s.symbol_count, s.workflow_count, s.created_at,
+              sc.id AS scope_id, sc.display_name AS scope_name, sc.path_prefix
+       FROM analysis_snapshots s
+       JOIN analysis_scopes sc ON sc.id = s.scope_id
+       WHERE s.project_id = $1
+       ORDER BY s.created_at DESC
+       LIMIT 30`,
+      [projectId],
+    );
+    res.json({ snapshots: result.rows });
+  } catch (err) {
+    console.error("List snapshots error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Per-role ranking weights (doc/PLAN.md "Configurable weights"): effective
+// weights per role (project override or default), editable with a
+// revert-to-default. Re-weighting is a projection — no re-analysis needed.
+projectsRouter.get("/:id/ranking-weights", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const { DEFAULT_ROLE_WEIGHTS, SEMANTIC_VIEWS } = await import('../../worker/semantic/projections.js');
+    const overrides = (await query(
+      `SELECT role, weights FROM ranking_weight_configs WHERE project_id = $1`,
+      [projectId],
+    )).rows as Array<{ role: string; weights: Record<string, number> }>;
+    const overrideByRole = new Map(overrides.map((o) => [o.role, o.weights]));
+    const roles = Object.entries(DEFAULT_ROLE_WEIGHTS).map(([role, defaults]) => ({
+      role,
+      defaults,
+      weights: { ...defaults, ...(overrideByRole.get(role) ?? {}) },
+      customized: overrideByRole.has(role),
+    }));
+    res.json({ views: SEMANTIC_VIEWS, roles });
+  } catch (err) {
+    console.error("Ranking weights GET error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.put("/:id/ranking-weights/:role", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const role = req.params.role as string;
+    const { DEFAULT_ROLE_WEIGHTS, SEMANTIC_VIEWS } = await import('../../worker/semantic/projections.js');
+    if (!(role in DEFAULT_ROLE_WEIGHTS)) {
+      res.status(400).json({ error: "Unknown role" });
+      return;
+    }
+    const { weights } = (req.body ?? {}) as { weights?: Record<string, number> };
+    const valid = weights && typeof weights === 'object' && !Array.isArray(weights) &&
+      Object.entries(weights).every(([k, v]) =>
+        (SEMANTIC_VIEWS as string[]).includes(k) && typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1);
+    if (!valid) {
+      res.status(400).json({ error: `weights must map ${SEMANTIC_VIEWS.join('/')} to numbers in [0, 1]` });
+      return;
+    }
+    const result = await query(
+      `INSERT INTO ranking_weight_configs (project_id, role, weights, updated_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (project_id, role) DO UPDATE
+         SET weights = EXCLUDED.weights, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+       RETURNING role, weights`,
+      [projectId, role, JSON.stringify(weights), req.user!.id],
+    );
+    res.json({ config: result.rows[0] });
+  } catch (err) {
+    console.error("Ranking weights PUT error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.delete("/:id/ranking-weights/:role", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    await query(
+      `DELETE FROM ranking_weight_configs WHERE project_id = $1 AND role = $2`,
+      [req.params.id, req.params.role],
+    );
+    res.json({ reverted: true });
+  } catch (err) {
+    console.error("Ranking weights DELETE error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 projectsRouter.get("/:id/scopes", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -545,7 +638,11 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { scope_id } = (req.body ?? {}) as { scope_id?: string };
+    const { scope_id, commit } = (req.body ?? {}) as { scope_id?: string; commit?: string };
+    if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
+      res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
+      return;
+    }
 
     await client.query("BEGIN");
 
@@ -616,6 +713,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       jobId: dbJobId,
       projectId,
       scopeId: scope_id,
+      commit,
     } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,

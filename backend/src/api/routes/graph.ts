@@ -4,7 +4,7 @@ import { requireProjectAccess } from "../middleware/project-access.js";
 
 export const graphRouter = Router({ mergeParams: true });
 
-const MAX_GRAPH_NODES = 20;
+const MAX_GRAPH_NODES = 60;
 
 async function latestCompleteSnapshotId(projectId: string | string[] | undefined): Promise<string | null> {
   const result = await query(
@@ -187,9 +187,9 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
   }
 });
 
-// Full uncapped file-level graph for the latest snapshot. The frontend
-// derives the high-level architecture map (component grouping + aggregated
-// edges) from this, so no clustering or node cap is applied here.
+// Architecture map from the server-side deterministic clustering
+// (architecture_clusters/-edges, Phase 3), enriched with the semantic module
+// record summary where one exists. Replaces the old client-side grouping.
 graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -200,65 +200,75 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       return;
     }
 
-    const [nodesResult, edgesResult] = await Promise.all([
+    const [clustersResult, edgesResult, membersResult, recordsResult] = await Promise.all([
       query(
-        `SELECT id, stable_key, type, name, file_path, metadata
-         FROM graph_nodes WHERE snapshot_id = $1 AND type = 'module'`,
+        `SELECT id, stable_key, label, kind, critical_score, deterministic_summary, metadata
+         FROM architecture_clusters WHERE snapshot_id = $1
+         ORDER BY critical_score DESC`,
         [snapshotId],
       ),
       query(
-        `SELECT e.id, e.source_node_id, e.target_node_id, e.type
-         FROM graph_edges e
-         WHERE e.snapshot_id = $1 AND e.type NOT IN ('extends', 'implements')`,
+        `SELECT e.id, sc.stable_key AS source_key, tc.stable_key AS target_key, e.type, e.weight
+         FROM architecture_edges e
+         JOIN architecture_clusters sc ON sc.id = e.source_cluster_id
+         JOIN architecture_clusters tc ON tc.id = e.target_cluster_id
+         WHERE e.snapshot_id = $1`,
+        [snapshotId],
+      ),
+      query(
+        `SELECT c.stable_key AS cluster_key, gn.stable_key AS member_key, gn.name, gn.file_path
+         FROM architecture_cluster_members m
+         JOIN architecture_clusters c ON c.id = m.cluster_id
+         JOIN graph_nodes gn ON gn.id = m.node_id
+         WHERE c.snapshot_id = $1`,
+        [snapshotId],
+      ),
+      query(
+        `SELECT ssr.stable_key, sr.summary, sr.confidence
+         FROM snapshot_semantic_records ssr
+         JOIN semantic_records sr ON sr.id = ssr.record_id
+         WHERE ssr.snapshot_id = $1 AND ssr.record_level = 'module'`,
         [snapshotId],
       ),
     ]);
 
-    type NodeRow = { id: string; stable_key: string; type: string; name: string; file_path: string; metadata: Record<string, unknown> };
-    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; type: string };
+    const membersByCluster = new Map<string, Array<{ key: string; name: string; filePath: string | null }>>();
+    for (const m of membersResult.rows as Array<{ cluster_key: string; member_key: string; name: string; file_path: string | null }>) {
+      if (!membersByCluster.has(m.cluster_key)) membersByCluster.set(m.cluster_key, []);
+      membersByCluster.get(m.cluster_key)!.push({ key: m.member_key, name: m.name, filePath: m.file_path });
+    }
+    const recordByCluster = new Map(
+      (recordsResult.rows as Array<{ stable_key: string; summary: string; confidence: string }>)
+        .map((r) => [r.stable_key, r]),
+    );
 
-    const allNodes = nodesResult.rows as NodeRow[];
-    const allEdges = edgesResult.rows as EdgeRow[];
-
-    const nodeIdToKey = new Map<string, string>();
-    for (const n of allNodes) nodeIdToKey.set(n.id, n.stable_key);
-
-    const nodes = allNodes.map((n) => ({
-      id: n.stable_key,
-      label: n.name,
-      kind: n.type,
-      metadata: {
-        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
-        importCount: (n.metadata?.importCount as number) ?? 0,
-        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
-      },
+    const clusters = (clustersResult.rows as Array<{
+      id: string; stable_key: string; label: string; kind: string;
+      critical_score: string | number; deterministic_summary: string | null;
+      metadata: Record<string, unknown>;
+    }>).map((c) => ({
+      id: c.stable_key,
+      label: c.label,
+      kind: c.kind,
+      criticalScore: Number(c.critical_score),
+      summary: recordByCluster.get(c.stable_key)?.summary ?? c.deterministic_summary ?? "",
+      summarySource: recordByCluster.has(c.stable_key) ? "semantic" : "deterministic",
+      confidence: recordByCluster.get(c.stable_key)?.confidence ?? null,
+      members: membersByCluster.get(c.stable_key) ?? [],
+      metadata: c.metadata,
     }));
 
-    const edges = allEdges
-      .map((e) => ({
-        id: e.id,
-        source: nodeIdToKey.get(e.source_node_id) ?? '',
-        target: nodeIdToKey.get(e.target_node_id) ?? '',
-        kind: e.type,
-      }))
-      .filter((e) => e.source && e.target);
+    const edges = (edgesResult.rows as Array<{
+      id: string; source_key: string; target_key: string; type: string; weight: string | number;
+    }>).map((e) => ({
+      id: e.id,
+      source: e.source_key,
+      target: e.target_key,
+      kind: e.type,
+      weight: Number(e.weight),
+    }));
 
-    const entryPointSet = new Set<string>();
-    for (const n of allNodes) {
-      if (n.type === 'entrypoint' || n.file_path.includes('index.')) {
-        entryPointSet.add(n.stable_key);
-      }
-    }
-
-    res.json({
-      projectId,
-      snapshotId,
-      clustered: false,
-      totalNodes: allNodes.length,
-      totalEdges: allEdges.length,
-      graph: { nodes, edges, entryPoints: Array.from(entryPointSet) },
-      fileAnalyses: [],
-    });
+    res.json({ projectId, snapshotId, clusters, edges });
   } catch (err) {
     console.error("Graph architecture error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -452,7 +462,8 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
     }
     const node = result.rows[0] as { id: string } & Record<string, unknown>;
 
-    const [workflowsResult, rankingResult] = await Promise.all([
+    const nodeRow = node as unknown as { id: string; stable_key: string; metadata: Record<string, unknown> };
+    const [workflowsResult, rankingResult, recordResult, callerResult, receiptsResult] = await Promise.all([
       query(
         `SELECT DISTINCT w.id, w.title, w.trigger_type
          FROM workflow_steps ws
@@ -468,18 +479,70 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
          LIMIT 1`,
         [snapshotId, node.id],
       ),
+      // Active semantic record for the symbol doc format's one-line summary.
+      query(
+        `SELECT sr.summary, sr.confidence, sr.facts_only, sr.record
+         FROM snapshot_semantic_records ssr
+         JOIN semantic_records sr ON sr.id = ssr.record_id
+         WHERE ssr.snapshot_id = $1 AND ssr.stable_key = $2 AND ssr.record_level = 'symbol'
+         LIMIT 1`,
+        [snapshotId, nodeRow.stable_key],
+      ),
+      // Real example usage: a call-site snippet from one of the callers.
+      query(
+        `SELECT gn.stable_key, gn.name, gn.file_path, gn.line_start, gn.snippet
+         FROM graph_edges e
+         JOIN graph_nodes gn ON gn.id = e.source_node_id
+         WHERE e.snapshot_id = $1 AND e.target_node_id = $2 AND e.type = 'calls'
+           AND gn.snippet IS NOT NULL
+         ORDER BY length(gn.snippet) ASC
+         LIMIT 1`,
+        [snapshotId, node.id],
+      ),
+      // Receipts attached to the symbol's active record (file/line links).
+      query(
+        `SELECT r.id, r.receipt_kind, r.trust_level, r.file_path, r.symbol_name,
+                r.line_start, r.line_end, r.snippet
+         FROM source_receipts r
+         JOIN snapshot_semantic_records ssr ON ssr.record_id = r.record_id
+         WHERE ssr.snapshot_id = $1 AND ssr.stable_key = $2 AND ssr.record_level = 'symbol'
+         ORDER BY array_position(ARRAY['code','config','tests','docs','llm_inference'], r.trust_level)
+         LIMIT 6`,
+        [snapshotId, nodeRow.stable_key],
+      ),
     ]);
 
     const ranking = rankingResult.rows[0] as
       | { composite_score: string | number; scores: Record<string, number>; ranking_reasons: string[] }
       | undefined;
+    const record = recordResult.rows[0] as
+      | { summary: string; confidence: string; facts_only: boolean; record: Record<string, unknown> }
+      | undefined;
+    const caller = callerResult.rows[0] as
+      | { stable_key: string; name: string; file_path: string; line_start: number | null; snippet: string }
+      | undefined;
 
+    // Symbol doc format (doc/Pipeline.md "Symbol doc format"): one-line
+    // summary + deterministic signature/params/returns + example call site.
+    const meta = nodeRow.metadata ?? {};
     res.json({
       node: {
         ...node,
         connected_workflows: workflowsResult.rows,
         composite_score: ranking ? Number(ranking.composite_score) : null,
         ranking_reasons: ranking?.ranking_reasons ?? [],
+        doc: {
+          summary: record ? record.summary.split(/(?<=[.!?])\s/)[0] : null,
+          summaryConfidence: record?.confidence ?? null,
+          factsOnly: record?.facts_only ?? null,
+          signature: (meta.signature as string) ?? null,
+          params: (meta.params as unknown[]) ?? [],
+          returns: (meta.returnType as string) ?? null,
+          exampleUsage: caller
+            ? { caller: caller.name, filePath: caller.file_path, lineStart: caller.line_start, snippet: caller.snippet }
+            : null,
+          receipts: receiptsResult.rows,
+        },
       },
     });
   } catch (err) {

@@ -1,6 +1,8 @@
 import {
   BookOpen,
+  Boxes,
   GitBranch,
+  HelpCircle,
   LayoutDashboard,
   Loader2,
   Map,
@@ -8,8 +10,11 @@ import {
   Route,
   Settings,
   Users,
+  Zap,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
+import { AppTour, type TourStep } from "@/components/AppTour";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,11 +55,25 @@ const projectNavItems = [
     description: "Which files and modules depend on which — a map for orienting yourself.",
   },
   {
+    to: "workflows",
+    label: "Workflows",
+    icon: Zap,
+    end: false,
+    description: "Traced request flows from entry point to side effects.",
+  },
+  {
+    to: "capabilities",
+    label: "Capabilities",
+    icon: Boxes,
+    end: false,
+    description: "What the product does in business terms, and which code delivers it.",
+  },
+  {
     to: "walkthrough",
-    label: "Walkthrough",
+    label: "Tutorials",
     icon: Route,
     end: false,
-    description: "A guided step-by-step tour through a real code path.",
+    description: "Step-by-step code walkthroughs of real flows, with snippets and explanations.",
   },
   {
     to: "team",
@@ -72,7 +91,71 @@ const projectNavItems = [
   },
 ];
 
-function ProjectSidebar() {
+const PROJECT_TOUR_DISMISSED_KEY = "onboardbuddy:project-tour-dismissed";
+
+function readProjectTourDismissed(): boolean {
+  try {
+    return localStorage.getItem(PROJECT_TOUR_DISMISSED_KEY) === "1";
+  } catch {
+    // localStorage unavailable — never auto-run so it can't loop every visit.
+    return true;
+  }
+}
+
+/**
+ * First-timer walkthrough of a project: what each tab is for and where the
+ * important controls live. Anchors on the sidebar nav, so every step is
+ * available regardless of which tab currently has data.
+ */
+const PROJECT_TOUR_STEPS: TourStep[] = [
+  {
+    target: "nav-overview",
+    title: "Start at the overview",
+    body: "Analysis status, live pipeline metrics, and what changed. The Analyze… button here lets you pick a scope and preview cost before anything runs.",
+  },
+  {
+    target: "nav-onboarding",
+    title: "Your onboarding",
+    body: "Generated reading paths, one package per scope, role, and commit. Every claim carries receipts — click one to see the code it's based on.",
+  },
+  {
+    target: "nav-architecture",
+    title: "Architecture map",
+    body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is.",
+  },
+  {
+    target: "nav-dependencies",
+    title: "Dependency graph",
+    body: "Which files depend on which. Select a node to get the standard symbol doc: summary, signature, and a real usage example from a call site.",
+  },
+  {
+    target: "nav-workflows",
+    title: "Traced workflows",
+    body: "Real request flows traced from entry points to side effects — the fastest way to see how a feature actually executes.",
+  },
+  {
+    target: "nav-capabilities",
+    title: "Capability map",
+    body: "What the product does in business terms, connected to the workflows and components that deliver it.",
+  },
+  {
+    target: "nav-walkthrough",
+    title: "Tutorials",
+    body: "Step-by-step walkthroughs of real flows: the actual code at each step with an explanation. No slides, no invented examples.",
+  },
+  {
+    target: "nav-team",
+    title: "Team",
+    body: "Who has access and their roles. Onboarding content is tailored per role.",
+  },
+  {
+    target: "nav-settings",
+    title: "Settings",
+    body: "Privacy mode (what, if anything, is sent to AI), analysis depth, budgets, your own API key, and per-role ranking weights.",
+  },
+];
+
+function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
   const { project, loading } = useProject();
   const { id } = useParams<{ id: string }>();
   const { setOpen } = useSidebar();
@@ -116,6 +199,7 @@ function ProjectSidebar() {
                   to={to}
                   end={item.end}
                   onClick={() => setOpen(false)}
+                  data-tour={`nav-${item.to || "overview"}`}
                   className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
                     isActive
                       ? "bg-accent text-accent-foreground"
@@ -135,6 +219,15 @@ function ProjectSidebar() {
       <div className="px-2">
         <Separator />
       </div>
+      <div className="px-2 pt-1.5">
+        <button
+          onClick={onStartTour}
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          Take a tour
+        </button>
+      </div>
       <div className="flex items-center gap-2 px-2 py-2">
         <div className="min-w-0 flex-1">
           <AccountCard />
@@ -147,11 +240,27 @@ function ProjectSidebar() {
 
 function ProjectLayoutContent() {
   const { loading, error } = useProject();
+  const [tourOpen, setTourOpen] = useState(false);
+
+  // First visit to any project: walk through what each tab is for. Waits for
+  // the project to load so the tour never spotlights a spinner.
+  useEffect(() => {
+    if (loading || error) return;
+    if (readProjectTourDismissed()) return;
+    setTourOpen(true);
+  }, [loading, error]);
+
+  function dismissTour() {
+    setTourOpen(false);
+    try {
+      localStorage.setItem(PROJECT_TOUR_DISMISSED_KEY, "1");
+    } catch { /* storage unavailable */ }
+  }
 
   if (error) {
     return (
       <div className="flex h-screen">
-        <ProjectSidebar />
+        <ProjectSidebar onStartTour={() => setTourOpen(true)} />
         <main className="flex flex-1 items-center justify-center bg-background p-4">
           <div className="text-center">
             <p className="text-sm text-destructive">{error}</p>
@@ -166,7 +275,7 @@ function ProjectLayoutContent() {
 
   return (
     <div className="flex h-screen">
-      <ProjectSidebar />
+      <ProjectSidebar onStartTour={() => setTourOpen(true)} />
       <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
         <div className="mb-2 lg:hidden">
           <SidebarToggle />
@@ -179,6 +288,7 @@ function ProjectLayoutContent() {
           <Outlet />
         )}
       </main>
+      {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={dismissTour} />}
     </div>
   );
 }

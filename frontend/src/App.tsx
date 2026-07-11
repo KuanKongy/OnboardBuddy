@@ -23,6 +23,8 @@ import { ProjectSettingsPage } from "@/pages/ProjectSettingsPage";
 import { SignupPage } from "@/pages/SignupPage";
 import { TeamPage } from "@/pages/TeamPage";
 import { WalkthroughTab } from "@/pages/WalkthroughTab";
+import { WorkflowsPage } from "@/pages/WorkflowsPage";
+import { CapabilitiesPage } from "@/pages/CapabilitiesPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
@@ -98,6 +100,8 @@ export default function App() {
               <Route path="onboarding" element={<OnboardingPage />} />
               <Route path="architecture" element={<ArchitecturePage />} />
               <Route path="dependencies" element={<GraphPage />} />
+              <Route path="workflows" element={<WorkflowsPage />} />
+              <Route path="capabilities" element={<CapabilitiesPage />} />
               <Route path="walkthrough" element={<WalkthroughTab />} />
               <Route path="team" element={<TeamPage />} />
               <Route path="settings" element={<ProjectSettingsPage />} />

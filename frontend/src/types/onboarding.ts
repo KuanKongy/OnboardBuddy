@@ -4,9 +4,12 @@ export type SectionStatus = "complete" | "stale" | "missing";
 
 export type SectionId =
   | "start-here"
+  | "architecture"
   | "entry-points"
   | "critical-25"
+  | "capability-map"
   | "workflows"
+  | "role-path"
   | "data-schema"
   | "safety-rails"
   | "dependency-graph"
@@ -32,6 +35,12 @@ export interface ContentBlock {
   receipts: SourceReceipt[];
 }
 
+export interface SectionUnknown {
+  kind: string;
+  detail?: string | null;
+  claim?: string;
+}
+
 export interface OnboardingSection {
   id: SectionId;
   sectionId?: string;
@@ -43,6 +52,11 @@ export interface OnboardingSection {
   reviewedBy?: string;
   reviewedAt?: string;
   blocks: ContentBlock[];
+  /** Deterministic Mermaid diagrams embedded in this section. */
+  diagrams?: Array<{ kind: string; mermaid: string }>;
+  /** Honest unknowns: gaps the generator refused to invent content for. */
+  unknowns?: SectionUnknown[];
+  analyzedCommit?: string;
 }
 
 export interface OnboardingPackage {
@@ -52,4 +66,25 @@ export interface OnboardingPackage {
   generatedAt: string;
   reviewedBy?: string;
   sections: OnboardingSection[];
+}
+
+/** One onboarding package card: (scope, role, commit) with status rollups. */
+export interface PackageCard {
+  id: string;
+  role: string;
+  status: PackageStatus;
+  analyzed_commit: string;
+  created_at: string;
+  updated_at: string;
+  scope_name: string;
+  path_prefix: string;
+  scope_kind: string;
+  semantic_depth: string;
+  privacy_mode: string;
+  section_count: number;
+  stale_sections: number;
+  approved_sections: number;
+  low_confidence_sections: number;
+  tutorial_count: number;
+  is_latest_commit: boolean;
 }
