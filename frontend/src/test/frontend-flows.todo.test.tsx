@@ -116,7 +116,7 @@ describe("frontend feature flows", () => {
       expect(screen.getByText("index")).toBeInTheDocument();
     });
     expect(screen.getByText("auth")).toBeInTheDocument();
-    expect(screen.getByText("2 / 2 modules")).toBeInTheDocument();
+    expect(screen.getByText("2 / 2 files")).toBeInTheDocument();
   });
 
   it("Documentation Health clears stale sections after review", async () => {

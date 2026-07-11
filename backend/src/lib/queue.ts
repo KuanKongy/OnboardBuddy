@@ -50,6 +50,12 @@ export interface AnalysisJobData {
   scopeId?: string;
   /** Exact commit SHA to analyze — omitted = branch head. */
   commit?: string;
+  /** Branch to analyze — omitted = the project's default branch. */
+  branch?: string;
+  /** Per-run depth override — omitted = project_settings.analysis_depth. */
+  depth?: 'cheap' | 'standard' | 'full';
+  /** Role for the auto-generated package — omitted = project default role. */
+  role?: string;
 }
 
 export interface SummaryJobData {

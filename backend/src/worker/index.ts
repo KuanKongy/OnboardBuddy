@@ -84,9 +84,10 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
 /**
  * Downloads and extracts the repo zipball; returns the extracted repo root.
  * `requestedCommit` pins the analysis to an exact SHA (the GitHub zipball
- * API accepts any ref); omitted = branch head.
+ * API accepts any ref); omitted = head of `requestedBranch` (per-run choice),
+ * falling back to the project's default branch.
  */
-async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
+async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string, requestedBranch?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
   if (!project.github_installation_id) {
     throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
   }
@@ -96,9 +97,10 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   const extractDir = path.join(tmpDir, 'extracted');
   fs.mkdirSync(extractDir);
 
+  const branch = requestedBranch ?? project.branch;
   const commitHash = requestedCommit
-    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, project.branch)).trim();
-  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? project.branch, zipPath);
+    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, branch)).trim();
+  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
@@ -145,13 +147,13 @@ async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
     const scope = scopeId ? await resolveScope(projectId, scopeId) : { scopeId: null, pathPrefix: '' };
 
     await update('Downloading repository', 30);
-    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir);
+    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
 
     await update('Building analysis preview', 70);
     const preview = await runPreflight(repoRoot, {
       pathPrefix: scope.pathPrefix,
       ignoredPaths: project.ignored_paths ?? undefined,
-      depth: project.analysis_depth,
+      depth: job.data.depth ?? project.analysis_depth,
       privacyMode: project.privacy_mode,
     });
 
@@ -192,15 +194,16 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       [step, pct, jobId, JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
 
-  // 1. Look up project + settings + scope
+  // 1. Look up project + settings + scope. Branch and depth are per-run
+  //    choices (job.data) falling back to project defaults.
   await updateStep('Loading project', 5);
   const project = await loadProject(projectId);
   const { user_id, branch, ignored_paths, file_limit, analysis_depth, privacy_mode } = {
     user_id: project.user_id,
-    branch: project.branch,
+    branch: job.data.branch ?? project.branch,
     ignored_paths: project.ignored_paths,
     file_limit: project.file_limit,
-    analysis_depth: project.analysis_depth,
+    analysis_depth: job.data.depth ?? project.analysis_depth,
     privacy_mode: project.privacy_mode,
   };
   const scope = await resolveScope(projectId, job.data.scopeId);
@@ -210,7 +213,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   try {
     // 2. Download + extract zipball at the requested commit (default: branch head)
     await updateStep('Downloading repository', 15);
-    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit);
+    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded
@@ -559,10 +562,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // snapshot instead of paying for a full package rebuild.
     if (privacy_mode !== 'ai_disabled' && !isIncremental) {
       const summaryJobResult = await query(
-        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
+        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step, role)
+         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4)
          RETURNING id`,
-        [projectId, snapshotId, user_id],
+        [projectId, snapshotId, user_id, job.data.role ?? null],
       );
       const summaryDbJobId: string = summaryJobResult.rows[0].id;
       await getSummaryQueue().add('generate_summary', {
@@ -570,6 +573,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         snapshotId,
         projectId,
         triggeredBy: user_id,
+        role: job.data.role,
       } satisfies SummaryJobData, {
         attempts: 2,
         backoff: { type: 'fixed', delay: 3000 },

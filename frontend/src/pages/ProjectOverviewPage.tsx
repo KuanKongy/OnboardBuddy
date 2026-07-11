@@ -4,7 +4,6 @@ import {
   BookOpen,
   CheckCircle2,
   FileText,
-  GitBranch,
   Loader2,
   Play,
   RefreshCw,
@@ -13,6 +12,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 import { pipelineProgress } from "@/lib/pipelineProgress";
+import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AnalysisRunPanel } from "@/components/AnalysisRunPanel";
 
@@ -52,10 +53,17 @@ interface AnalysisJob {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Per-run configuration as requested (null = project default). */
+  requested_branch: string | null;
+  requested_commit: string | null;
+  requested_depth: string | null;
+  requested_role: string | null;
+  scope_path: string | null;
   file_count: number | null;
   symbol_count: number | null;
   workflow_count: number | null;
   commit_hash: string | null;
+  branch: string | null;
 }
 
 interface AnalysisStatus {
@@ -66,8 +74,22 @@ interface AnalysisStatus {
     symbol_count: number;
     workflow_count: number;
     commit_hash: string;
+    branch: string;
+    semantic_depth: string;
     created_at: string;
   } | null;
+}
+
+/** Human summary of one run's configuration for the config chips row. */
+function runConfigParts(job: AnalysisJob | undefined, defaultBranch: string): string[] {
+  if (!job) return [];
+  const parts = [
+    `branch ${job.branch ?? job.requested_branch ?? defaultBranch}`,
+    `commit ${job.commit_hash?.slice(0, 7) ?? job.requested_commit?.slice(0, 7) ?? "head"}`,
+  ];
+  if (job.scope_path) parts.push(`scope ${job.scope_path}/`);
+  if (job.requested_depth) parts.push(`${job.requested_depth} depth`);
+  return parts;
 }
 
 export function ProjectOverviewPage() {
@@ -78,6 +100,18 @@ export function ProjectOverviewPage() {
   const [rolePackages, setRolePackages] = useState<Array<{ role: string; status: string }>>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasActiveRef = useRef(false);
+
+  // Per-user resume markers: the Continue cards deep-link to the exact
+  // section/step the user last read (falling back to the plain tabs).
+  const { items: progressItems } = useProgress(id);
+  const onboardingProgress = progressItems.find((p) => p.kind === "onboarding" && p.still_exists);
+  const tutorialProgress = progressItems.find((p) => p.kind === "tutorial" && p.still_exists);
+  const onboardingResumeLink = onboardingProgress
+    ? `/projects/${id}/onboarding?view=reader&role=${(onboardingProgress.position.role as string) ?? ""}&section=${(onboardingProgress.position.sectionType as string) ?? ""}`
+    : `/projects/${id}/onboarding`;
+  const tutorialResumeLink = tutorialProgress
+    ? `/projects/${id}/walkthrough?tutorial=${tutorialProgress.ref_id}&step=${(tutorialProgress.position.stepOrder as number) ?? 1}`
+    : `/projects/${id}/walkthrough`;
 
   useEffect(() => {
     if (!id) return;
@@ -163,76 +197,76 @@ export function ProjectOverviewPage() {
 
   return (
     <div>
-      {/* Breadcrumb row */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-x-auto text-xs text-muted-foreground">
-        <span>{project.repo_owner}</span>
-        <span>/</span>
-        <span className="font-medium text-foreground">{project.repo_name}</span>
-        <span className="text-border">|</span>
-        <span className="inline-flex items-center gap-1"><GitBranch className="h-3 w-3" />{project.branch}</span>
-        <span className="text-border">|</span>
-        <Badge variant="outline" className="text-[11px] capitalize">{project.developer_role}</Badge>
-      </div>
+      <PageHeader
+        title="Overview"
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-medium text-foreground">{project.repo_owner}/{project.repo_name}</span>
+            <Badge variant="outline" className="text-[10px] capitalize">{project.developer_role}</Badge>
+          </span>
+        }
+        actions={
+          canManage && (
+            <Button
+              size="sm"
+              onClick={() => setAnalyzeOpen(true)}
+              disabled={isActive || project.status === "analyzing"}
+              data-tour="analyze-button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Analyze
+            </Button>
+          )
+        }
+      />
 
-      <div className="mb-3 flex items-start justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Overview</h1>
-          <p className="text-xs text-muted-foreground">
-            Health and analysis summary for this repository.
-          </p>
-        </div>
-        {canManage && (
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => setAnalyzeOpen(true)}
-            disabled={isActive || project.status === "analyzing"}
-            data-tour="analyze-button"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Analyze…
-          </Button>
-        )}
-      </div>
-
-      {/* Quick actions */}
+      {/* Quick actions: flat rows — icon left, text right */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10">
-              <BookOpen className="h-3.5 w-3.5 text-primary" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
+              <BookOpen className="h-4 w-4 text-primary" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">Pick up where you left off</p>
-            <Link to={`/projects/${id}/onboarding`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              Resume <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
+              <Link to={onboardingResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
+                {onboardingProgress
+                  ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
+                  : "Start reading"}
+                <ArrowRight className="h-3 w-3 shrink-0" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-blue-500/10">
-              <Play className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10">
+              <Play className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">Walk through key workflows</p>
-            <Link to={`/projects/${id}/walkthrough`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              Resume <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
+              <Link to={tutorialResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
+                {tutorialProgress
+                  ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
+                  : "Start a tutorial"}
+                <ArrowRight className="h-3 w-3 shrink-0" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10">
-              <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-500/10">
+              <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Your role</h3>
-            <p className="mt-0.5 text-xs capitalize text-muted-foreground">{project.developer_role}</p>
-            <Link to={`/projects/${id}/team`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              View team <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium capitalize text-foreground">{project.developer_role} role</h3>
+              <Link to={`/projects/${id}/team`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                View team <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -242,7 +276,12 @@ export function ProjectOverviewPage() {
         <Card>
           <CardContent className="p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[13px] font-medium text-foreground">Analysis status</h3>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                <h3 className="text-[13px] font-medium text-foreground">Analysis status</h3>
+                {runConfigParts(latestJob, project.branch).map((part) => (
+                  <Badge key={part} variant="outline" className="font-mono text-[10px]">{part}</Badge>
+                ))}
+              </div>
               {latestJob?.status === "failed" && canManage && (
                 <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
                   <RotateCcw className="mr-1 h-3 w-3" />
@@ -373,7 +412,14 @@ export function ProjectOverviewPage() {
 
         <Card>
           <CardContent className="p-3">
-            <h3 className="mb-2 text-[13px] font-medium text-foreground">Role packages</h3>
+            <h3 className="mb-1 text-[13px] font-medium text-foreground">Role packages</h3>
+            {/* One package per role, all sharing the analyzed snapshot's
+                config — the shared repo config lives in the header line. */}
+            {snap && (
+              <p className="mb-2 font-mono text-[10px] text-muted-foreground">
+                {snap.branch} @ {snap.commit_hash.slice(0, 7)} · {snap.semantic_depth}
+              </p>
+            )}
             <div className="space-y-1.5">
               {rolesList.map((role) => {
                 const pkg = rolePackages.find((p) => p.role === role.key);
@@ -405,14 +451,12 @@ export function ProjectOverviewPage() {
 
       <Separator />
 
-      {id && (
-        <AnalyzeDialog
-          projectId={id}
-          open={analyzeOpen}
-          onOpenChange={setAnalyzeOpen}
-          onStarted={handleAnalysisStarted}
-        />
-      )}
+      <AnalyzeDialog
+        project={project}
+        open={analyzeOpen}
+        onOpenChange={setAnalyzeOpen}
+        onStarted={handleAnalysisStarted}
+      />
     </div>
   );
 }

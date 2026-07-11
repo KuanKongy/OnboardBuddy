@@ -24,6 +24,13 @@ export interface WorkflowStep {
   lineEnd?: number;
   stepKind: WorkflowStepKind;
   deterministicDescription: string;
+  /**
+   * syntheticReturn marks the final response step that re-references the
+   * trigger symbol (Express handlers respond after their callees run). The
+   * graph route renders it as a distinct terminal node instead of an edge
+   * looping back to step 1.
+   */
+  metadata?: { syntheticReturn?: boolean };
 }
 
 export interface ExtractedWorkflow {
@@ -78,7 +85,26 @@ export function extractWorkflows(input: ExtractWorkflowsInput): ExtractedWorkflo
     }
   }
 
-  return workflows.sort((a, b) => b.importanceScore - a.importanceScore);
+  return suppressNearDuplicates(workflows.sort((a, b) => b.importanceScore - a.importanceScore));
+}
+
+/**
+ * Drops workflows whose step nodes are ≥80% shared with a higher-ranked
+ * workflow — UI-route seeds especially produce many traces over the same
+ * few components, which crowds real flows out of the list.
+ */
+function suppressNearDuplicates(sorted: ExtractedWorkflow[]): ExtractedWorkflow[] {
+  const kept: Array<{ wf: ExtractedWorkflow; keys: Set<string> }> = [];
+  for (const wf of sorted) {
+    const keys = new Set(wf.steps.map((s) => s.nodeStableKey));
+    const isDuplicate = kept.some(({ keys: otherKeys }) => {
+      let shared = 0;
+      for (const k of keys) if (otherKeys.has(k)) shared++;
+      return shared / keys.size >= 0.8;
+    });
+    if (!isDuplicate) kept.push({ wf, keys });
+  }
+  return kept.map((k) => k.wf);
 }
 
 // ─── Traversal context ───────────────────────────────────────────────────────
@@ -148,7 +174,7 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
   const externals: string[] = [];
   let effectCount = 0;
 
-  const pushStep = (node: EvidenceNode, kind: WorkflowStepKind, description: string) => {
+  const pushStep = (node: EvidenceNode, kind: WorkflowStepKind, description: string, metadata?: WorkflowStep['metadata']) => {
     steps.push({
       stepOrder: steps.length + 1,
       nodeStableKey: node.stableKey,
@@ -158,6 +184,7 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
       lineEnd: node.lineEnd ?? undefined,
       stepKind: kind,
       deterministicDescription: description,
+      metadata,
     });
   };
 
@@ -208,13 +235,19 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
   if (steps.length < 2 || effectCount === 0) return null;
 
   // Express handlers respond after their callees run; make that explicit.
+  // Tagged syntheticReturn: it re-references the seed node, and rendering it
+  // as the same graph node would draw a bogus last→first cycle.
   const seedSignals = behaviorSignalsOf(seed);
   if (seedSignals.includes('response_output') && !steps.some((s) => s.stepKind === 'response')) {
-    pushStep(seed, 'response', `Sends the response back from ${seed.name}`);
+    pushStep(seed, 'response', `Sends the response back from ${seed.name}`, { syntheticReturn: true });
   }
 
   const sideEffectSteps = steps.filter((s) =>
     s.stepKind === 'data_read' || s.stepKind === 'data_write' || s.stepKind === 'async_work' || s.stepKind === 'side_effect').length;
+
+  // UI-route traces rarely reach real effects and mostly re-walk shared
+  // components — rank them below server flows of the same size.
+  const uiPenalty = ep.kind === 'ui_route' ? 0.5 : 1;
 
   return {
     title: workflowTitle(ep, seed),
@@ -225,7 +258,7 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
     confidence: steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
     entrypoint: ep,
     steps,
-    importanceScore: steps.length * 0.1 + sideEffectSteps * 0.2,
+    importanceScore: (steps.length * 0.1 + sideEffectSteps * 0.2) * uiPenalty,
     externalDependencies: externals,
   };
 }
@@ -280,25 +313,33 @@ function describeStep(
   signals: string[],
 ): string {
   const where = `${node.name} (${node.filePath})`;
+  // Name the actual effect targets (table, queue, URL) when detected — a step
+  // description that says WHAT is touched beats a category label.
+  const effectLabel = (wanted?: DetectedSideEffect['kind']) => {
+    const relevant = wanted ? effects.filter((e) => e.kind === wanted) : effects;
+    return relevant
+      .map((e) => (e.target ? `${e.kind.replace(/_/g, ' ')} → ${e.target}` : e.kind.replace(/_/g, ' ')))
+      .join(', ');
+  };
   switch (kind) {
     case 'trigger':
-      return `Entry point: ${ep.kind.replace(/_/g, ' ')}${ep.method ? ` ${ep.method}` : ''} handled by ${where}`;
+      return `Entry point: ${ep.kind.replace(/_/g, ' ')}${ep.method ? ` ${ep.method}` : ''}${ep.routePattern ? ` ${ep.routePattern}` : ''} handled by ${where}`;
     case 'auth_guard':
-      return `Authentication/authorization: ${where}`;
+      return `Checks authentication/authorization in ${where}`;
     case 'validation':
-      return `Validates input: ${where}`;
+      return `Validates input in ${where}`;
     case 'data_write':
-      return `Persists data: ${effects.map((e) => e.kind).join(', ') || 'database write'} in ${where}`;
+      return `Persists data (${effectLabel('database_write') || 'database write'}) in ${where}`;
     case 'data_read':
-      return `Reads data: ${where}`;
+      return `Reads data in ${where}`;
     case 'async_work':
-      return `Enqueues async work: ${where}`;
+      return `Enqueues async work (${effectLabel('message_publish') || 'queue job'}) in ${where}`;
     case 'side_effect':
-      return `Side effect: ${[...effects.map((e) => e.kind), ...signals.filter((s) => EFFECT_SIGNALS.has(s))].join(', ') || 'external call'} in ${where}`;
+      return `External effect (${effectLabel() || signals.filter((s) => EFFECT_SIGNALS.has(s)).join(', ') || 'external call'}) in ${where}`;
     case 'response':
-      return `Sends response: ${where}`;
+      return `Sends the response from ${where}`;
     default:
-      return `Processes logic: ${where}`;
+      return `Transforms data in ${where}`;
   }
 }
 
@@ -374,8 +415,8 @@ export async function persistWorkflows(
     for (const step of wf.steps) {
       await query(
         `INSERT INTO workflow_steps
-           (workflow_id, step_order, node_id, file_path, symbol_name, line_start, line_end, step_kind, deterministic_description, role_relevance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+           (workflow_id, step_order, node_id, file_path, symbol_name, line_start, line_end, step_kind, deterministic_description, role_relevance, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
         [
           workflowId,
           step.stepOrder,
@@ -387,6 +428,7 @@ export async function persistWorkflows(
           step.stepKind,
           step.deterministicDescription,
           '{}',
+          JSON.stringify(step.metadata ?? {}),
         ],
       );
     }

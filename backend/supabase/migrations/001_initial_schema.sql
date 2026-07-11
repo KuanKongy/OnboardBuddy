@@ -78,6 +78,8 @@ create table if not exists public.projects (
   user_id uuid not null references public.users(id) on delete cascade,
   repo_owner varchar not null,
   repo_name varchar not null,
+  -- Default branch for new analysis runs only; the branch actually analyzed
+  -- lives on analysis_snapshots/analysis_jobs (a project is identified by repo).
   branch varchar not null,
   default_branch varchar,
   github_installation_id text,
@@ -85,7 +87,7 @@ create table if not exists public.projects (
   status varchar not null default 'idle' check (status in ('idle', 'analyzing', 'complete', 'failed')),
   created_at timestamptz not null default now(),
   last_analyzed_at timestamptz,
-  unique (user_id, repo_owner, repo_name, branch)
+  unique (user_id, repo_owner, repo_name)
 );
 
 -- ============================================================
@@ -278,6 +280,11 @@ create table if not exists public.analysis_jobs (
       'preflight', 'analyze_scope', 'generate_package', 'regenerate_section', 'incremental_update'
     )),
   role varchar check (role in ('backend', 'frontend', 'devops', 'qa', 'general')),
+  -- Per-run configuration (null = project default). Branch/commit identify what
+  -- gets fetched; semantic_depth overrides project_settings.analysis_depth.
+  branch varchar,
+  commit_hash varchar,
+  semantic_depth varchar check (semantic_depth in ('cheap', 'standard', 'full')),
   status varchar not null default 'queued'
     check (status in ('queued', 'running', 'paused', 'complete', 'failed')),
   progress_pct integer not null default 0 check (progress_pct between 0 and 100),
@@ -725,6 +732,27 @@ create table if not exists public.tutorial_steps (
   metadata jsonb not null default '{}',
   unique (tutorial_id, step_order)
 );
+
+-- ============================================================
+-- Per-user Progress (resume onboarding/tutorials where you left off)
+-- ============================================================
+
+-- ref_id is polymorphic (onboarding: package_id; tutorial: tutorial_id) and
+-- deliberately not an FK — packages/tutorials are regenerated per commit, so
+-- the API validates existence on read and the UI falls back to static links.
+create table if not exists public.user_progress (
+  user_id uuid not null references public.users(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  kind varchar not null check (kind in ('onboarding', 'tutorial')),
+  ref_id uuid not null,
+  -- Position within the ref: {"sectionType": "architecture"} | {"stepOrder": 3}
+  position jsonb not null default '{}',
+  updated_at timestamptz not null default now(),
+  primary key (user_id, project_id, kind, ref_id)
+);
+
+create index if not exists idx_user_progress_recent
+  on public.user_progress(user_id, project_id, updated_at desc);
 
 -- ============================================================
 -- Source Receipts (typed, trust-levelled)

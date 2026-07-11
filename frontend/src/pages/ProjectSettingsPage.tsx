@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 
 const PRIVACY_MODES = [
@@ -79,7 +81,8 @@ export function ProjectSettingsPage() {
   const [budgetTokens, setBudgetTokens] = useState<string>("");
   const [stopBehavior, setStopBehavior] = useState("pause");
   const [saving, setSaving] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const analyzing = project?.status === "analyzing";
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -220,19 +223,6 @@ export function ProjectSettingsPage() {
     }
   }
 
-  async function handleReanalyze() {
-    setAnalyzing(true);
-    setError("");
-    try {
-      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
-      refetch();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to start analysis");
-    } finally {
-      setAnalyzing(false);
-    }
-  }
-
   async function handleDelete() {
     setDeleting(true);
     try {
@@ -247,16 +237,12 @@ export function ProjectSettingsPage() {
   if (!project) return null;
 
   return (
-    <div className="max-w-5xl">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Project settings</h1>
-          <p className="page-subtitle">
-            Analysis, privacy, budgets, and ranking configuration for this project.
-          </p>
-        </div>
-        <Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>
-      </div>
+    <div className="mx-auto max-w-3xl">
+      <PageHeader
+        title="Project settings"
+        subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
+        actions={<Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>}
+      />
 
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -264,7 +250,7 @@ export function ProjectSettingsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-3">
         <Card>
           <CardContent className="p-3">
             <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
@@ -353,10 +339,10 @@ export function ProjectSettingsPage() {
               ))}
             </div>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label className="text-xs">Analysis depth</Label>
                 <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
                     <SelectItem value="standard">Standard — balanced</SelectItem>
@@ -401,10 +387,10 @@ export function ProjectSettingsPage() {
                   className="h-8 text-[13px]"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label className="text-xs">When exceeded</Label>
                 <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pause">Pause — resume later</SelectItem>
                     <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
@@ -533,11 +519,11 @@ export function ProjectSettingsPage() {
                 <Button
                   variant="outline"
                   size="xs"
-                  onClick={handleReanalyze}
+                  onClick={() => setAnalyzeOpen(true)}
                   disabled={analyzing || project.status === "analyzing"}
                 >
                   <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
-                  Re-analyze
+                  Re-analyze…
                 </Button>
               )}
             </div>
@@ -600,6 +586,13 @@ export function ProjectSettingsPage() {
           </Button>
         </div>
       )}
+
+      <AnalyzeDialog
+        project={project}
+        open={analyzeOpen}
+        onOpenChange={setAnalyzeOpen}
+        onStarted={() => refetch()}
+      />
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-md">

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { BackLink } from "@/components/BackLink";
+import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 
 interface Invitation {
@@ -73,13 +74,11 @@ export function InvitationsPage() {
 
   return (
     <div>
-      <div className="mb-3 flex items-center gap-2">
-        <BackLink />
-        <h1 className="text-lg font-semibold text-foreground">Pending Invitations</h1>
-      </div>
-      <p className="mb-3 text-xs text-muted-foreground">
-        Project invitations from teammates, waiting for you to accept.
-      </p>
+      <PageHeader
+        title="Pending Invitations"
+        subtitle="Project invitations from teammates, waiting for you to accept."
+        actions={<BackLink />}
+      />
 
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">

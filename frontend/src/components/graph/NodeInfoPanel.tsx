@@ -183,7 +183,9 @@ export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {(detail.callers?.length ?? 0) > 0 && (
                 <div>
-                  <p className="section-label mb-1.5">Used by ({detail.callers!.length})</p>
+                  <p className="section-label mb-1.5">
+                    {detail.relation_labels?.inbound ?? "Used by"} ({detail.callers!.length})
+                  </p>
                   <ul className="space-y-0.5">
                     {detail.callers!.map((c) => (
                       <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>
@@ -195,7 +197,9 @@ export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) 
               )}
               {(detail.callees?.length ?? 0) > 0 && (
                 <div>
-                  <p className="section-label mb-1.5">Uses ({detail.callees!.length})</p>
+                  <p className="section-label mb-1.5">
+                    {detail.relation_labels?.outbound ?? "Uses"} ({detail.callees!.length})
+                  </p>
                   <ul className="space-y-0.5">
                     {detail.callees!.map((c) => (
                       <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>

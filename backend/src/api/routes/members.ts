@@ -10,9 +10,18 @@ membersRouter.get("/", requireProjectAccess(), async (req, res) => {
 
     const result = await query(
       `SELECT pm.project_id, pm.user_id, pm.permission_tier, pm.developer_role, pm.joined_at,
-              u.email
+              u.email,
+              gc.github_username,
+              COALESCE(reviewed.sections_reviewed, 0) AS sections_reviewed
        FROM project_members pm
        INNER JOIN users u ON u.id = pm.user_id
+       LEFT JOIN github_connections gc ON gc.user_id = pm.user_id
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*)::int AS sections_reviewed
+         FROM package_sections ps
+         INNER JOIN onboarding_packages op ON op.id = ps.package_id
+         WHERE op.project_id = pm.project_id AND ps.reviewed_by = pm.user_id
+       ) reviewed ON true
        WHERE pm.project_id = $1
        ORDER BY pm.joined_at ASC`,
       [projectId],
@@ -110,7 +119,7 @@ membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", 
   }
 });
 
-membersRouter.patch("/members/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
+membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;
@@ -198,7 +207,7 @@ membersRouter.patch("/members/:userId", requireProjectAccess("owner", "admin"), 
   }
 });
 
-membersRouter.delete("/members/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
+membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;

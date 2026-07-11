@@ -60,6 +60,8 @@ export interface OnboardingSection {
 }
 
 export interface OnboardingPackage {
+  /** Absent only on the synthetic "missing" placeholder. */
+  id?: string;
   projectId: string;
   role: string;
   status: PackageStatus;

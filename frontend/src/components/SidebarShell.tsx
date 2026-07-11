@@ -43,9 +43,11 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
 
 /**
  * One toggle for every viewport: opens/closes the drawer on small screens,
- * collapses/expands the docked sidebar on desktop.
+ * collapses/expands the docked sidebar on desktop. Lives inline in each
+ * page's header row (via PageHeader) instead of its own row, so it never
+ * shifts content down.
  */
-export function SidebarToggle() {
+export function SidebarToggle({ className }: { className?: string }) {
   const { open, setOpen, collapsed, setCollapsed } = useSidebar();
   const toggle = () => {
     if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
@@ -55,7 +57,7 @@ export function SidebarToggle() {
     }
   };
   return (
-    <Button variant="ghost" size="icon-sm" onClick={toggle} aria-label="Toggle sidebar">
+    <Button variant="ghost" size="icon-sm" className={className} onClick={toggle} aria-label="Toggle sidebar">
       {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
     </Button>
   );

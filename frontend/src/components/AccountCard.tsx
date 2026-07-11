@@ -1,5 +1,5 @@
 import { Settings } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ function initials(name: string): string {
 export function AccountCard() {
   const { user } = useAuth();
   const { setOpen } = useSidebar();
+  const location = useLocation();
 
   const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const name =
@@ -42,7 +43,9 @@ export function AccountCard() {
         aria-label="Account settings"
         title="Account settings"
       >
-        <NavLink to="/settings" onClick={() => setOpen(false)}>
+        {/* Carry the origin so the settings page's Back returns to the tab
+            you came from (e.g. deep inside a project), not the dashboard. */}
+        <NavLink to="/settings" state={{ from: location.pathname + location.search }} onClick={() => setOpen(false)}>
           <Settings className="h-3.5 w-3.5" />
         </NavLink>
       </Button>

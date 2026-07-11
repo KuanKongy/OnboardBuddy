@@ -17,11 +17,17 @@ export interface LayoutOptions {
   nodesep?: number;
 }
 
+/** Gap between packed components. */
+const COMPONENT_GAP = 56;
+/** Target canvas aspect ratio (width / height) for component packing. */
+const TARGET_ASPECT = 16 / 9;
+
 /**
- * Layered graph layout via dagre (Sugiyama-style): ranks follow edge
- * direction, nodes within a rank are ordered to minimize crossings, and
- * disconnected components are packed side by side — no more single-file
- * "line of nodes" or stacks of overlapping disconnected nodes.
+ * Layered graph layout via dagre (Sugiyama-style), applied per connected
+ * component. Plain dagre puts every edgeless node in rank 0, which renders
+ * as one tall column of overlapping nodes — so components are laid out
+ * independently and shelf-packed into rows approximating a 16:9 canvas,
+ * with isolated nodes gathered into a compact grid block at the end.
  */
 export function layoutGraph(
   nodes: GraphNode[],
@@ -37,27 +43,147 @@ export function layoutGraph(
   } = options;
   if (nodes.length === 0) return [];
 
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: direction, ranksep, nodesep, marginx: 16, marginy: 16 });
-  g.setDefaultEdgeLabel(() => ({}));
-
   const ids = new Set(nodes.map((n) => n.id));
-  for (const node of nodes) g.setNode(node.id, { width: nodeWidth, height: nodeHeight });
-  for (const edge of edges) {
-    if (!ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target) continue;
-    g.setEdge(edge.source, edge.target);
+  const validEdges = edges.filter(
+    (e) => ids.has(e.source) && ids.has(e.target) && e.source !== e.target,
+  );
+
+  // ── 1. Connected components (union-find) ─────────────────────────────────
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let cur = id;
+    while (cur !== root) {
+      const next = parent.get(cur)!;
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  };
+  for (const n of nodes) parent.set(n.id, n.id);
+  for (const e of validEdges) {
+    const a = find(e.source);
+    const b = find(e.target);
+    if (a !== b) parent.set(a, b);
   }
 
-  dagre.layout(g);
+  const componentNodes = new Map<string, GraphNode[]>();
+  for (const n of nodes) {
+    const root = find(n.id);
+    componentNodes.set(root, [...(componentNodes.get(root) ?? []), n]);
+  }
+  const componentEdges = new Map<string, GraphEdge[]>();
+  for (const e of validEdges) {
+    const root = find(e.source);
+    componentEdges.set(root, [...(componentEdges.get(root) ?? []), e]);
+  }
+
+  // ── 2. Lay out each multi-node component with dagre ──────────────────────
+  interface ComponentBox {
+    width: number;
+    height: number;
+    /** Node positions relative to the component's top-left corner. */
+    positions: Map<string, { x: number; y: number }>;
+  }
+
+  const boxes: ComponentBox[] = [];
+  const isolated: GraphNode[] = [];
+
+  for (const [root, members] of componentNodes) {
+    if (members.length === 1 && (componentEdges.get(root)?.length ?? 0) === 0) {
+      isolated.push(members[0]!);
+      continue;
+    }
+
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: direction, ranksep, nodesep, marginx: 0, marginy: 0 });
+    g.setDefaultEdgeLabel(() => ({}));
+    for (const node of members) g.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+    for (const edge of componentEdges.get(root) ?? []) g.setEdge(edge.source, edge.target);
+    dagre.layout(g);
+
+    const positions = new Map<string, { x: number; y: number }>();
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const node of members) {
+      const pos = g.node(node.id);
+      // dagre positions are node centers; ReactFlow wants top-left corners.
+      const x = (pos?.x ?? 0) - nodeWidth / 2;
+      const y = (pos?.y ?? 0) - nodeHeight / 2;
+      positions.set(node.id, { x, y });
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + nodeWidth);
+      maxY = Math.max(maxY, y + nodeHeight);
+    }
+    for (const [id, pos] of positions) {
+      positions.set(id, { x: pos.x - minX, y: pos.y - minY });
+    }
+    boxes.push({ width: maxX - minX, height: maxY - minY, positions });
+  }
+
+  // Isolated nodes become one grid-block "component" appended last.
+  if (isolated.length > 0) {
+    const cols = Math.max(1, Math.ceil(Math.sqrt((isolated.length * (nodeHeight + nodesep) * TARGET_ASPECT) / (nodeWidth + nodesep))));
+    const positions = new Map<string, { x: number; y: number }>();
+    isolated.forEach((node, i) => {
+      positions.set(node.id, {
+        x: (i % cols) * (nodeWidth + nodesep),
+        y: Math.floor(i / cols) * (nodeHeight + nodesep),
+      });
+    });
+    const rows = Math.ceil(isolated.length / cols);
+    boxes.push({
+      width: Math.min(isolated.length, cols) * (nodeWidth + nodesep) - nodesep,
+      height: rows * (nodeHeight + nodesep) - nodesep,
+      positions,
+    });
+  }
+
+  // ── 3. Shelf-pack component boxes into rows near the target aspect ───────
+  const totalArea = boxes.reduce((a, b) => a + (b.width + COMPONENT_GAP) * (b.height + COMPONENT_GAP), 0);
+  const targetWidth = Math.max(
+    Math.sqrt(totalArea * TARGET_ASPECT),
+    ...boxes.map((b) => b.width),
+  );
+
+  // Biggest components first so small ones fill row remainders; the isolated
+  // grid stays last so strays never lead the canvas.
+  const order = boxes
+    .map((box, i) => ({ box, i }))
+    .sort((a, b) => {
+      const lastIdx = isolated.length > 0 ? boxes.length - 1 : -1;
+      if (a.i === lastIdx) return 1;
+      if (b.i === lastIdx) return -1;
+      return b.box.height * b.box.width - a.box.height * a.box.width;
+    })
+    .map((entry) => entry.box);
+
+  const offsets = new Map<ComponentBox, { x: number; y: number }>();
+  let shelfX = 16, shelfY = 16, shelfHeight = 0;
+  for (const box of order) {
+    if (shelfX > 16 && shelfX + box.width > targetWidth) {
+      shelfX = 16;
+      shelfY += shelfHeight + COMPONENT_GAP;
+      shelfHeight = 0;
+    }
+    offsets.set(box, { x: shelfX, y: shelfY });
+    shelfX += box.width + COMPONENT_GAP;
+    shelfHeight = Math.max(shelfHeight, box.height);
+  }
+
+  // ── 4. Emit absolute positions ────────────────────────────────────────────
+  const absolute = new Map<string, { x: number; y: number }>();
+  for (const box of boxes) {
+    const offset = offsets.get(box)!;
+    for (const [id, pos] of box.positions) {
+      absolute.set(id, { x: pos.x + offset.x, y: pos.y + offset.y });
+    }
+  }
 
   return nodes.map((node) => {
-    const pos = g.node(node.id);
-    return {
-      ...node,
-      // dagre positions are node centers; ReactFlow wants top-left corners.
-      x: (pos?.x ?? 0) - nodeWidth / 2,
-      y: (pos?.y ?? 0) - nodeHeight / 2,
-    };
+    const pos = absolute.get(node.id);
+    return { ...node, x: pos?.x ?? 0, y: pos?.y ?? 0 };
   });
 }
 

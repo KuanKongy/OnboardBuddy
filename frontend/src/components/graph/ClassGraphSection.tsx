@@ -136,7 +136,6 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
             entryPoints={[]}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
-            edgeFilter="imports"
           />
         </div>
 

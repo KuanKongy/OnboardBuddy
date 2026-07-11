@@ -21,8 +21,12 @@ import {
 import ReactMarkdown from "react-markdown";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { PageHeader } from "@/components/PageHeader";
+import { SidebarToggle } from "@/components/SidebarShell";
 import { useProject } from "@/contexts/ProjectContext";
 import { apiFetch } from "@/lib/api";
+import { useProgress } from "@/lib/useProgress";
 import {
   ROLES,
   SECTION_NAV_ORDER,
@@ -33,6 +37,12 @@ import {
 import { MermaidDiagram } from "@/components/MermaidDiagram";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -252,11 +262,21 @@ function SectionView({
 
 // ── package cards ─────────────────────────────────────────────────────────────
 
-function PackageCardView({ card, onOpen }: { card: PackageCard; onOpen: () => void }) {
+function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageCard; onOpen: () => void; onRegenerate?: () => void }) {
   return (
-    <button
+    // A div-with-role instead of <button> so the nested Regenerate button
+    // stays valid HTML.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
-      className="group flex flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="group flex cursor-pointer flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -297,8 +317,23 @@ function PackageCardView({ card, onOpen }: { card: PackageCard; onOpen: () => vo
         {card.low_confidence_sections > 0 && (
           <span className="text-danger">{card.low_confidence_sections} low confidence</span>
         )}
+        {onRegenerate && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-my-1 ml-auto text-muted-foreground hover:text-foreground"
+            disabled={card.status === "generating"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRegenerate();
+            }}
+          >
+            <RefreshCw className={cn("h-3 w-3", card.status === "generating" && "animate-spin")} />
+            {card.status === "generating" ? "Generating…" : "Regenerate…"}
+          </Button>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -318,12 +353,28 @@ export function OnboardingPage() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [freshFilter, setFreshFilter] = useState("all");
 
-  const [activeSectionId, setActiveSectionId] = useState<SectionId>("start-here");
+  // Deep link / resume: ?section= opens the reader at a specific section.
+  const [activeSectionId, setActiveSectionId] = useState<SectionId>(
+    () => (searchParams.get("section") as SectionId) ?? "start-here",
+  );
   const [pkg, setPkg] = useState<OnboardingPackage | null>(null);
   const [generating, setGenerating] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [analyzeInitialRole, setAnalyzeInitialRole] = useState<string | undefined>(undefined);
+  // Per-package regeneration dialog (opened from a package card).
+  const [regenCard, setRegenCard] = useState<PackageCard | null>(null);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenError, setRegenError] = useState("");
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
+  const { save: saveProgress } = useProgress(id);
+
+  // Remember where the reader is so "Continue onboarding" resumes here.
+  useEffect(() => {
+    if (view !== "reader" || !pkg?.id || pkg.status === "missing") return;
+    saveProgress("onboarding", pkg.id, { sectionType: activeSectionId, role: selectedRole });
+  }, [view, pkg?.id, pkg?.status, activeSectionId, selectedRole, saveProgress]);
 
   function setParams(next: Record<string, string | null>) {
     setSearchParams((prev) => {
@@ -393,14 +444,32 @@ export function OnboardingPage() {
   const activeSection = sections.find((s) => s.id === activeSectionId);
   const markedReviewed = activeSection?.reviewStatus === "approved";
 
-  async function handleGenerate() {
-    if (!id) return;
+  // Full re-analysis goes through the guarded AnalyzeDialog (config +
+  // preview + explicit start) — never a bare POST that silently re-runs
+  // the whole pipeline.
+  function handleAnalysisStarted() {
     setGenerating(true);
+    refetch();
+  }
+
+  // Whole-package regeneration from a card: rebuilds this role's package
+  // against the latest complete snapshot (no repo re-analysis; unchanged
+  // content is served from the content-addressed cache).
+  async function handleRegeneratePackage() {
+    if (!id || !regenCard) return;
+    setRegenBusy(true);
+    setRegenError("");
     try {
-      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
-      refetch();
-    } catch {
-      setGenerating(false);
+      await apiFetch(`/projects/${id}/onboarding/generate`, {
+        method: "POST",
+        body: JSON.stringify({ role: regenCard.role }),
+      });
+      setRegenCard(null);
+      loadCards();
+    } catch (err: unknown) {
+      setRegenError(err instanceof Error ? err.message : "Failed to start regeneration");
+    } finally {
+      setRegenBusy(false);
     }
   }
 
@@ -501,21 +570,27 @@ export function OnboardingPage() {
         (freshFilter === "all" || (freshFilter === "latest" ? c.is_latest_commit : !c.is_latest_commit)),
     );
 
+    const analyzeBusy = generating || project?.status === "analyzing";
     return (
       <div>
-        <div className="page-header" data-tour="onboarding-header">
-          <div>
-            <h1 className="page-title">Your onboarding</h1>
-            <p className="page-subtitle">
-              Generated onboarding packages — one per scope, role, and analyzed commit.
-            </p>
-          </div>
-          {canManage && (
-            <Button size="sm" className="gap-1.5" onClick={handleGenerate} disabled={generating}>
-              {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-              {generating ? "Analyzing…" : "Analyze & generate"}
-            </Button>
-          )}
+        <div data-tour="onboarding-header">
+          <PageHeader
+            title="Your onboarding"
+            subtitle="Generated onboarding packages — one per scope, role, and analyzed commit."
+            actions={
+              canManage && (
+                <Button
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
+                  disabled={analyzeBusy}
+                >
+                  {analyzeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {analyzeBusy ? "Analyzing…" : "Analyze & generate…"}
+                </Button>
+              )
+            }
+          />
         </div>
 
         {cards && cards.length > 0 && (
@@ -565,9 +640,14 @@ export function OnboardingPage() {
               workflows, tutorials, and safety notes — every claim backed by code receipts.
             </p>
             {canManage && (
-              <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerate} disabled={generating}>
-                {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                {generating ? "Analyzing…" : "Analyze & generate"}
+              <Button
+                size="sm"
+                className="mt-4 gap-1.5"
+                onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
+                disabled={generating || project?.status === "analyzing"}
+              >
+                {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {generating || project?.status === "analyzing" ? "Analyzing…" : "Analyze & generate…"}
               </Button>
             )}
           </div>
@@ -578,9 +658,87 @@ export function OnboardingPage() {
                 key={card.id}
                 card={card}
                 onOpen={() => setParams({ view: "reader", role: card.role })}
+                onRegenerate={() => {
+                  setRegenError("");
+                  setRegenCard(card);
+                }}
               />
             ))}
           </div>
+        )}
+
+        {/* Per-package regeneration: whole package now, or a fresh analysis
+            at a new commit first. Single sections regenerate in the reader. */}
+        <Dialog open={regenCard !== null} onOpenChange={(open) => !open && setRegenCard(null)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-sm">
+                Regenerate {ROLES.find((r) => r.key === regenCard?.role)?.label ?? regenCard?.role} package
+              </DialogTitle>
+            </DialogHeader>
+
+            {regenError && (
+              <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                {regenError}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={handleRegeneratePackage}
+                disabled={regenBusy}
+                className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60"
+              >
+                <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                  {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  Regenerate from the current analysis
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Rebuilds every section and tutorial of this package against the latest analyzed
+                  commit — no repo re-analysis; unchanged content comes from cache.
+                  {regenCard && !regenCard.is_latest_commit &&
+                    " This package is behind the latest analysis, so this also brings it up to date."}
+                </p>
+              </button>
+
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnalyzeInitialRole(regenCard?.role);
+                    setRegenCard(null);
+                    setAnalyzeOpen(true);
+                  }}
+                  className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40"
+                >
+                  <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Re-analyze at a new commit first…
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Pick branch, commit, and scope with a cost preview; a fresh analysis runs and
+                    this role's package is generated from it.
+                  </p>
+                </button>
+              )}
+            </div>
+
+            <p className="text-[11px] text-muted-foreground">
+              Need just one section? Open the package and use "Regenerate section" inside the
+              reader — it rebuilds only that section against the newest analysis.
+            </p>
+          </DialogContent>
+        </Dialog>
+
+        {project && (
+          <AnalyzeDialog
+            project={project}
+            open={analyzeOpen}
+            onOpenChange={setAnalyzeOpen}
+            onStarted={handleAnalysisStarted}
+            initialRole={analyzeInitialRole}
+          />
         )}
       </div>
     );
@@ -591,6 +749,7 @@ export function OnboardingPage() {
     <div className="flex min-h-full flex-col">
       {/* compact top bar: navigation + role + actions in one row */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
+        <SidebarToggle />
         <Button variant="ghost" size="xs" onClick={() => setParams({ view: null })} className="gap-1">
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
         </Button>
@@ -609,6 +768,22 @@ export function OnboardingPage() {
           </Select>
           {!isMissing && (
             <>
+              {/* Always-visible per-section regeneration (owner/admin — the
+                  endpoint enforces the same tiers). The stale banner keeps
+                  its own contextual copy of this action. */}
+              {canManage && activeSection?.sectionId && (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={handleRegenerateSection}
+                  disabled={regenerating}
+                  title="Rebuild this section against the newest analysis"
+                >
+                  {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                  {regenerating ? "Regenerating…" : "Regenerate section"}
+                </Button>
+              )}
               <Button
                 size="xs"
                 variant={markedReviewed ? "secondary" : "outline"}
