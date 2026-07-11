@@ -6,6 +6,7 @@
  * mapping; the original is kept (superseded) for audit.
  */
 
+import { query } from '../../lib/db.js';
 import type { SemanticContext } from './context.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES, schemaForLevel, renderSummary, type SemanticRecordBody } from './recordTypes.js';
 import { lookupRecord, insertRecord, mapToSnapshot, attachReceipts, type StoredRecord } from './recordStore.js';
@@ -98,6 +99,12 @@ export async function runRefinementPass(
         { alias: 'c2', kind: 'record_reference', trustLevel: 'llm_inference', referencedRecordId: system.id, nodeStableKey: 'system' },
       ],
     });
+    // The refined record replaces the original in retrieval — carry the
+    // original's code-level receipts forward so bundles keep real snippets.
+    if (target.record.receiptIds.length > 0) {
+      refined.receiptIds = [...refined.receiptIds, ...target.record.receiptIds];
+      await query(`UPDATE semantic_records SET receipt_ids = $2 WHERE id = $1`, [refined.id, refined.receiptIds]);
+    }
     // Replaces the original in this snapshot's mapping (same stable_key + level).
     await mapToSnapshot(ctx.snapshotId, refined, ctx.nodeIdMap.get(target.stableKey) ?? null);
     if (target.record.recordLevel === 'symbol') symbolRecords.set(target.stableKey, refined);

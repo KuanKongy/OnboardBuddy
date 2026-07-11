@@ -18,9 +18,10 @@ import { runCapabilityPass } from './capabilityPass.js';
 import { runRefinementPass } from './refinementPass.js';
 import { runCritiquePass } from './critiquePass.js';
 import { runSemanticReranking } from './semanticReranker.js';
+import { runEmbeddingPass } from './embeddingPass.js';
 
 export const SEMANTIC_PHASES = [
-  'semantic_symbols', 'synthesis', 'capabilities', 'refinement', 'critique', 'semantic_ranking',
+  'semantic_symbols', 'synthesis', 'capabilities', 'refinement', 'critique', 'semantic_ranking', 'embeddings',
 ] as const;
 
 export interface SemanticPipelineOutcome {
@@ -84,6 +85,13 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
       run: async () => {
         const result = await runSemanticReranking(ctx, symbols.records, synthesis!);
         return { targets: result.targets, rowsWritten: result.rowsWritten, llmCalls: result.llmCalls };
+      },
+    },
+    {
+      name: 'embeddings',
+      run: async () => {
+        const result = await runEmbeddingPass(ctx);
+        return { embedded: result.embedded, skippedExisting: result.skippedExisting, records: result.records, batches: result.batches };
       },
     },
   ];
