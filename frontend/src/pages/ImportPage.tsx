@@ -205,8 +205,11 @@ export function ImportPage() {
         body: JSON.stringify(settings),
       });
 
+      // Import means go: the default analysis starts immediately, and we land
+      // on the project overview where the live pipeline progress shows.
+      // Custom runs (scope/commit/preview) stay in the Analyze… dialog there.
       await apiFetch(`/projects/${project.id}/analyze`, { method: "POST" });
-      navigate("/dashboard");
+      navigate(`/projects/${project.id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create project");
       setCreating(false);
@@ -464,9 +467,13 @@ export function ImportPage() {
               ) : (
                 <Rocket className="h-3 w-3" />
               )}
-              Start analysis
+              {creating ? "Importing…" : "Import & analyze"}
             </Button>
           </div>
+          <p className="mt-2 text-right text-[11px] text-muted-foreground">
+            Analysis starts right away with default settings — customize later
+            runs (scope, commit, preview) from the project's <span className="font-medium">Analyze…</span> button.
+          </p>
         </CardContent>
       </Card>
     </div>

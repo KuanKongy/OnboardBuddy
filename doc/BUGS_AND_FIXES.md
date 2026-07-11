@@ -23,6 +23,7 @@ Actions to take on the GitHub Issues tracker:
 | **File + Close** | #35 | Fixed same day — file then close with fix note. |
 | **File (Open)** | #36 | Known open item — file and leave Open (P5 future work). |
 | **File (Open)** | #37 | GitHub sign-up provider error — file Open; close once the Supabase GitHub provider config is fixed and sign-up verified. |
+| **File + Close** | #38–#45 | Found during the first real M3 end-to-end run (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
 | **Update** | #2, #12, #16, #20, #21, #23 | Already Closed on GitHub — verify and leave as-is. |
 
 **Close comment for #18:**
@@ -73,6 +74,14 @@ Actions to take on the GitHub Issues tracker:
 | 35 | Inline code in onboarding markdown shows decorative backticks | P4 | Closed | Fixed (M3) |
 | 36 | Stale tutorials cannot be regenerated individually | P5 | Open | — |
 | 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Open | Frontend part fixed; Supabase config pending |
+| 38 | Semantic analysis extremely slow (23 min analyze + 10 min generate) and ~$2/run | P1 | Closed | Fixed (M3) |
+| 39 | Workflow extraction finds 0 workflows on real repos (alias imports + fake route entrypoints) | P1 | Closed | Fixed (M3) |
+| 40 | Onboarding section titles not standardized (raw type strings / LLM-invented) | P3 | Closed | Fixed (M3) |
+| 41 | Sections invisible until the whole generation finishes | P3 | Closed | Fixed (M3) |
+| 42 | Dashboard project card shows hardcoded 45% while analyzing | P2 | Closed | Fixed (M3) |
+| 43 | Ranking-weight sliders always show 0; budget defaults opaque | P2 | Closed | Fixed (M3) |
+| 44 | Section confidence used worst-case rule — sections almost always "low" | P2 | Closed | Fixed (M3) |
+| 45 | Receipts cited by raw UUIDs — small models mangle them, causing citation failures | P2 | Closed | Fixed (M3) |
 
 ### What has been fixed
 
@@ -1247,3 +1256,232 @@ Two independent problems:
    - The OAuth App client secret in the Supabase dashboard was rotated/mistyped.
 
    Fix: in Supabase → Authentication → Providers → GitHub, make sure the Client ID/Secret belong to the login **OAuth App** from DEVOPS.md "GitHub OAuth App (for login)" (create one if missing). If the team intentionally reuses the GitHub App for login instead, grant it "Email addresses: Read-only" under Account permissions and have users re-authorize. Email/password signup is unaffected either way.
+
+---
+
+## [P1][Closed] Bug 38: Semantic analysis extremely slow and expensive (~33 min, ~$2 per run)
+
+**Bug #38**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | backend/src/worker/semantic/*, generation/*, ai/aiClient.ts |
+
+## Expected behavior
+
+A small-to-medium repo analyzes in minutes for well under a dollar.
+
+## Actual behavior
+
+Whole-repo run: analyze scope 23 min, generation 10 min, ~$1.74. Phase timings from the real run: synthesis 627s, refinement 198s, symbols 176s, critique 150s, reranking 144s, generation 601s.
+
+## Steps to reproduce
+
+Import a ~100-file repo, run a standard-depth analysis, watch snapshot_phases timings and ai_generation_runs costs.
+
+## Notes during fixing
+
+Fixed (2026-07-11). Three root causes:
+
+1. **Everything was serial.** Every pass awaited one LLM call at a time even though AiClient already had a concurrency semaphore. Now all passes fan out via `mapLimit` (symbol batches, file/module/service/workflow synthesis, critique batches, refinement, reranking, embeddings, sections, tutorials); `LLM_MAX_CONCURRENCY` default raised 4→6, `PG_POOL_MAX` 10→20.
+2. **Bulk work ran on the strong tier.** File records (26 calls, $0.30) and critique (every pending record, $0.22) moved to the cheap tier; refinement is depth-gated (0/5/10 for cheap/standard/full).
+3. **Thousands of sequential round trips to remote Postgres.** Cache lookups parallelized; embeddings write one multi-row INSERT per batch instead of one INSERT per vector; critique fetches a batch's receipts in one query.
+
+Expected effect on the same run: analysis LLM phases ~23 min → ~4 min, generation ~10 min → ~3 min, cost ~$1.74 → ~$1.05 (sections stay on the strong tier — that's the user-facing artifact). Re-runs stay near-free via the content-addressed cache.
+
+---
+
+## [P1][Closed] Bug 39: Workflow extraction finds 0 workflows on real repos
+
+**Bug #39**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | engine/astParser.ts, evidenceGraphBuilder.ts, entrypointDetector.ts, symbolExtractor.ts, new tsconfigPaths.ts |
+
+## Expected behavior
+
+Real repos produce traced workflows (Workflows tab, tutorials, workflow records) with correct titles.
+
+## Actual behavior
+
+A whole-repo run produced **0 workflows** despite 9 HTTP entrypoints and 11 side effects — only 19 `calls` edges existed in a 437-node graph, so no trace ever reached an effect. Tutorials: 0. Most sections: low confidence (starved of evidence).
+
+## Steps to reproduce
+
+Analyze any monorepo using tsconfig path aliases (`@/components/x`); check `graph_edges` type counts and the workflows table.
+
+## Notes during fixing
+
+Fixed (2026-07-11). Compound root cause:
+
+1. **Path aliases resolved as fake packages.** The worker analyzes a zipball with no node_modules and often no root tsconfig.json; the TS program fell back to Node10 resolution with no `paths`, and our own import resolver treated `@/lib` as a scoped npm package. New `tsconfigPaths.ts` merges `paths` from every workspace tsconfig, rebased to the repo root; the program now uses Bundler resolution with those paths, and `resolveImport` tries aliases before classifying imports external.
+2. **Route entrypoints were name-matched garbage.** Any `*.get(...)` call (`map.get`, `headers.get`) counted as an HTTP route — 285 fake entrypoints on this repo, with wrong seeds producing titles like "GET runSynthesisPass". Route registrations are now AST-detected (`router.get('/x', handler)` with a string path), inline handlers become synthesized symbols (named `GET /x`) with real bodies/hashes/resolved calls, and titles use the actual route pattern.
+3. **Frontend components were invisible to the call graph.** JSX usage (`<UserCard/>`) now resolves as a call edge, and exported page components under `pages/` are `ui_route` entrypoints — frontend repos get UI flows.
+
+Verified on this repo (clean copy, no node_modules): calls edges 19-equivalent → **1057**, imports 442 → 707, entrypoints 285 → 90 (real kinds), workflows 0 → **76** with titles like "POST /installations/link" and "Page: GraphPage". All 302 backend tests pass.
+
+---
+
+## [P3][Closed] Bug 40: Onboarding section titles not standardized
+
+**Bug #40**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | generation/sectionSpecs.ts, sectionGenerator.ts |
+
+## Expected behavior
+
+Every package shows the same set of section titles.
+
+## Actual behavior
+
+Half the sections showed raw type strings ("entry_points", "role_path"), the rest LLM-invented titles ("Start Here: OnboardBuddy Platform Orientation").
+
+## Notes during fixing
+
+Fixed (2026-07-11): canonical `SECTION_TITLES` map (Design.md package structure) — the LLM's title suggestion is ignored on persist.
+
+---
+
+## [P3][Closed] Bug 41: Sections invisible until the whole generation finishes
+
+**Bug #41**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | frontend OnboardingPage.tsx |
+
+## Expected behavior
+
+Sections appear in the reader as each one is generated.
+
+## Actual behavior
+
+The worker persists each section immediately, and the API serves them — but the reader fetched once and never refreshed, so nothing showed until the run finished.
+
+## Notes during fixing
+
+Fixed (2026-07-11): the reader polls every 5s while the package is generating (with a "sections appear as each one finishes (N/11)" banner); the card grid refreshes while anything is generating. Sections also now generate 4 at a time, so the first ones land within seconds.
+
+---
+
+## [P2][Closed] Bug 42: Dashboard project card shows hardcoded 45% while analyzing
+
+**Bug #42**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend ProjectCard.tsx, lib/pipelineProgress.ts |
+
+## Expected behavior
+
+The dashboard card and the project overview show the same progress.
+
+## Actual behavior
+
+The card showed a fixed "Analyzing 45%" regardless of actual progress.
+
+## Notes during fixing
+
+Fixed (2026-07-11): the combined pipeline progress (analysis 0–70%, generation 70–100%, stage-labeled) was extracted into shared `pipelineProgress()`; analyzing cards poll `/analysis-status` and render the identical number and stage as the overview.
+
+---
+
+## [P2][Closed] Bug 43: Ranking-weight sliders always show 0; budget defaults opaque
+
+**Bug #43**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend ProjectSettingsPage.tsx |
+
+## Expected behavior
+
+Weight sliders show each role's real defaults (summing to 100%); budget inputs show the actual depth defaults.
+
+## Actual behavior
+
+The sliders used short view keys ("runtime") that never matched the API's `critical_for_runtime` keys — every slider showed 0, and saves sent keys the backend rejects. Budget inputs said only "depth default".
+
+## Notes during fixing
+
+Fixed (2026-07-11): sliders use the API's `critical_for_*` keys with readable labels, display percentages, and show a "Total: N%" line (defaults sum to 100%). Budget inputs show the real per-depth defaults (e.g. standard: 300 calls, 4M input tokens).
+
+---
+
+## [P2][Closed] Bug 44: Section confidence used a worst-case rule — sections almost always "low"
+
+**Bug #44**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | generation/citationValidator.ts |
+
+## Expected behavior
+
+Section confidence reflects how well-supported the section is overall.
+
+## Actual behavior
+
+Section confidence was the MINIMUM over all claims — one uncited claim among twenty branded the whole section low, so 8 of 11 sections in the first real run were "low" regardless of quality.
+
+## Notes during fixing
+
+Fixed (2026-07-11): distribution-based grade — >30% weak claims → low; ≥60% high with no lows → high; otherwise medium — capped by the model's own self-assessment. Individual weak claims keep their downgrade and unknowns entry, so per-claim honesty is unchanged; only the section-level grade is calibrated.
+
+---
+
+## [P2][Closed] Bug 45: Receipts cited by raw UUIDs — small models mangle them
+
+**Bug #45**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | generation/sectionGenerator.ts |
+
+## Expected behavior
+
+Models can cite evidence reliably regardless of tier.
+
+## Actual behavior
+
+Section prompts identified receipts by full UUIDs. Small models (now the default tier) reproduce UUIDs imperfectly → "unknown receipt id" validation failures, stricter-prompt retries (extra cost), and dropped citations that dragged confidence down.
+
+## Notes during fixing
+
+Fixed (2026-07-11): receipts are aliased r1, r2, … in the prompt and mapped back to UUIDs before validation; unknown aliases still count as unknown for the validator. Shorter prompts, near-zero citation mangling.
+

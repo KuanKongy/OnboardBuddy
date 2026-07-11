@@ -86,7 +86,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     embedQuery: params.embedQuery,
   });
 
-  // Strong-tier structured call + inline validation with one stricter retry.
+  // Structured call + inline validation with one stricter retry.
   let { output, runId } = await callModel(params, bundle, null);
   let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
   let retried = false;
@@ -109,7 +109,14 @@ async function callModel(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
 ): Promise<{ output: GeneratedOutput; runId: string | null }> {
-  const prompt = renderPrompt(params, bundle, previousIssues);
+  // Receipts get short aliases (r1, r2, …) in the prompt — small models
+  // mangle raw UUIDs, which used to surface as "unknown receipt id" hard
+  // failures and dropped citations. Aliases map back to UUIDs before
+  // validation; unknown aliases stay unknown for the validator to count.
+  const aliasToId = new Map<string, string>();
+  bundle.receipts.forEach((r, i) => aliasToId.set(`r${i + 1}`, r.receiptId));
+
+  const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
   const response = await params.ai.call<GeneratedOutput>({
     tier: 'strong',
     targetType: 'section',
@@ -120,23 +127,36 @@ async function callModel(
     schema: SECTION_OUTPUT_SCHEMA,
     user: prompt,
   });
-  return { output: response.value!, runId: response.runId };
+  const raw = response.value!;
+  const translate = (id: string) => aliasToId.get(id.trim()) ?? id;
+  const output: GeneratedOutput = {
+    ...raw,
+    usedReceiptIds: (raw.usedReceiptIds ?? []).map(translate),
+    claims: (raw.claims ?? []).map((c) => ({ ...c, receiptIds: (c.receiptIds ?? []).map(translate) })),
+  };
+  return { output, runId: response.runId };
 }
 
-function renderPrompt(params: GenerateSectionParams, bundle: EvidenceBundleV2, previousIssues: string[] | null): string {
+function renderPrompt(
+  params: GenerateSectionParams,
+  bundle: EvidenceBundleV2,
+  previousIssues: string[] | null,
+  aliasToId: Map<string, string>,
+): string {
   const spec = SECTION_SPECS[params.sectionType];
+  const idToAlias = new Map([...aliasToId.entries()].map(([a, id]) => [id, a]));
   const records = bundle.semanticContext.map(
     (r) => `- [${r.recordLevel}] ${r.stableKey} (confidence ${r.confidence}): ${r.summary.slice(0, 280)}`,
   );
   const receipts = bundle.receipts.map((r) => {
     const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
     const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 500).replace(/\n/g, '\n  ')}` : '';
-    return `- receipt ${r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
+    return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
   });
   return [
     `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${bundle.repo.owner}/${bundle.repo.name} (scope: ${bundle.scope.displayName}).`,
     spec.instructions.replace(/\bROLE\b/g, params.role),
-    'Output rules: use ONLY the provided evidence; cite receipt ids (the exact UUIDs below) in claims and usedReceiptIds for every substantive claim; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting.',
+    'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting.',
     previousIssues && previousIssues.length > 0
       ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
       : null,

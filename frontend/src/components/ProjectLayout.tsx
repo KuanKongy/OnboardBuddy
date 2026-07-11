@@ -277,7 +277,7 @@ function ProjectLayoutContent() {
     <div className="flex h-screen">
       <ProjectSidebar onStartTour={() => setTourOpen(true)} />
       <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
-        <div className="mb-2 lg:hidden">
+        <div className="mb-2">
           <SidebarToggle />
         </div>
         {loading ? (

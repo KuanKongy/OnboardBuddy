@@ -153,7 +153,8 @@ describe('phase 4 — model tiers', () => {
 
   it('cost estimates scale with tokens and tier', () => {
     expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.15, 1e-9);
-    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(18, 1e-9);
+    // strong now defaults to gpt-4o-mini pricing (0.15 in / 0.60 out per Mtok)
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.75, 1e-9);
   });
 });
 

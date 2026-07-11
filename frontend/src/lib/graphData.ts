@@ -41,6 +41,11 @@ export interface NodeDetail {
   composite_score: number | null;
   ranking_reasons: string[];
   connected_workflows: Array<{ id: string; title: string; trigger_type: string }>;
+  /** Deterministic relationships — present even without an AI record. */
+  callers?: Array<{ stable_key: string; name: string; file_path: string | null }>;
+  callees?: Array<{ stable_key: string; name: string; file_path: string | null }>;
+  side_effects?: Array<{ type: string; target: string | null }>;
+  cluster?: { stable_key: string; label: string } | null;
   /** Standard symbol doc (doc/Pipeline.md "Symbol doc format"). */
   doc?: SymbolDoc;
 }
