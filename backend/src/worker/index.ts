@@ -33,6 +33,11 @@ import {
 } from './engine/evidenceGraphBuilder.js';
 import { runPreflight } from './engine/preflightService.js';
 import { markPhase } from './ai/checkpoints.js';
+import { AiClient, AiPausedError } from './ai/aiClient.js';
+import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
+import { resolveTierConfig } from './ai/modelTiers.js';
+import { runSemanticPipeline, SEMANTIC_PHASES } from './semantic/semanticPipeline.js';
+import type { SemanticContext } from './semantic/context.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
 
@@ -50,6 +55,10 @@ interface ProjectRow {
   file_limit: number | null;
   analysis_depth: SemanticDepth;
   privacy_mode: 'full_ai' | 'facts_only_ai' | 'ai_disabled';
+  budget_overrides: unknown;
+  budget_stop_behavior: 'fail' | 'pause' | 'degrade';
+  model_failure_behavior: unknown;
+  model_tier_overrides: unknown;
 }
 
 async function loadProject(projectId: string): Promise<ProjectRow> {
@@ -57,7 +66,11 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
     `SELECT p.user_id, p.repo_owner, p.repo_name, p.branch, p.github_installation_id,
             ps.ignored_paths, ps.file_limit,
             COALESCE(ps.analysis_depth, 'standard') AS analysis_depth,
-            COALESCE(ps.privacy_mode, 'full_ai') AS privacy_mode
+            COALESCE(ps.privacy_mode, 'full_ai') AS privacy_mode,
+            COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
+            COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
+            COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
+            COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides
      FROM projects p
      LEFT JOIN project_settings ps ON ps.project_id = p.id
      WHERE p.id = $1`,
@@ -413,7 +426,83 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       clusterEdges: architecture.edges.length,
     });
 
-    // 12. Mark job complete
+    // 12. Semantic pipeline (phases 7-12): symbol records -> synthesis ->
+    //     capabilities -> refinement -> critique -> Phase B reranking.
+    if (privacy_mode === 'ai_disabled') {
+      for (const phase of SEMANTIC_PHASES) {
+        await markPhase(snapshotId, phase, 'skipped', { reason: 'ai_disabled' });
+      }
+    } else {
+      await updateStep('Semantic analysis (LLM)', 97);
+      // Clear snapshot-scoped semantic rows from a previous scan of this
+      // commit (project-scoped semantic_records stay — they are the cache).
+      await query(`DELETE FROM snapshot_semantic_records WHERE snapshot_id = $1`, [snapshotId]);
+      await query(`DELETE FROM capabilities WHERE snapshot_id = $1`, [snapshotId]);
+
+      const tierConfig = resolveTierConfig({
+        modelTierOverrides: project.model_tier_overrides,
+        modelFailureBehavior: project.model_failure_behavior,
+      });
+      const budget = await new BudgetEnforcer({
+        snapshotId,
+        jobId,
+        depth: analysis_depth,
+        budgetOverrides: project.budget_overrides,
+        stopBehavior: project.budget_stop_behavior,
+      }).load();
+      const ai = new AiClient({ projectId, snapshotId, privacyMode: privacy_mode, budget, tierConfig });
+      const semanticCtx: SemanticContext = {
+        ai,
+        projectId,
+        snapshotId,
+        commitHash,
+        depth: analysis_depth,
+        privacyMode: privacy_mode,
+        modelFamily: { cheap: tierConfig.models.cheap[0]!, strong: tierConfig.models.strong[0]! },
+        graph: evidence,
+        nodeIdMap,
+        entrypoints,
+        sideEffects,
+        workflows,
+        workflowIdMap,
+        architecture,
+        rankings,
+        gating,
+        inventory: snapshot.inventory,
+      };
+
+      try {
+        const outcome = await runSemanticPipeline(semanticCtx);
+        if (outcome.status === 'degraded') {
+          await query(
+            `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "budget_degraded", "phase": "semantic"}]'::jsonb WHERE id = $1`,
+            [snapshotId],
+          );
+        }
+      } catch (err) {
+        if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+          // Resumable: checkpointed phases + content-addressed records make
+          // a re-run skip everything already paid for.
+          await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]);
+          await query(
+            `UPDATE analysis_jobs SET status = 'paused', current_step = $2, finished_at = NOW() WHERE id = $1`,
+            [jobId, `Paused: ${err.message.slice(0, 120)}`],
+          );
+          console.warn(`[worker] semantic pipeline paused (project=${projectId}):`, err.message);
+          return;
+        }
+        if (err instanceof KillSwitchError) {
+          console.warn(`[worker] semantic pipeline stopped by kill switch (project=${projectId})`);
+          return; // job status was already set from the API
+        }
+        if (err instanceof BudgetExceededError && err.behavior === 'fail') {
+          await query(`UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1`, [snapshotId]);
+        }
+        throw err;
+      }
+    }
+
+    // 13. Mark job complete
     await query(
       `UPDATE analysis_jobs
        SET status = 'complete', snapshot_id = $1, scope_id = $4, current_step = 'Complete', progress_pct = 100, finished_at = NOW(),
