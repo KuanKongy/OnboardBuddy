@@ -1,5 +1,4 @@
 import { apiFetch } from "@/lib/api";
-import { mockGraphData } from "@/lib/mockGraphData";
 
 export interface GraphResponse {
   projectId: string;
@@ -9,6 +8,26 @@ export interface GraphResponse {
   totalEdges: number;
   graph: { nodes: Array<{ id: string; label: string; kind: string; metadata: Record<string, unknown> }>; edges: Array<{ id: string; source: string; target: string; kind: string }>; entryPoints: string[] };
   fileAnalyses: unknown[];
+}
+
+export interface SymbolDoc {
+  summary: string | null;
+  summaryConfidence: string | null;
+  factsOnly: boolean | null;
+  signature: string | null;
+  params: Array<{ name?: string; type?: string }>;
+  returns: string | null;
+  exampleUsage: { caller: string; filePath: string; lineStart: number | null; snippet: string } | null;
+  receipts: Array<{
+    id: string;
+    receipt_kind: string;
+    trust_level: string;
+    file_path: string | null;
+    symbol_name: string | null;
+    line_start: number | null;
+    line_end: number | null;
+    snippet: string | null;
+  }>;
 }
 
 export interface NodeDetail {
@@ -22,6 +41,8 @@ export interface NodeDetail {
   composite_score: number | null;
   ranking_reasons: string[];
   connected_workflows: Array<{ id: string; title: string; trigger_type: string }>;
+  /** Standard symbol doc (doc/Pipeline.md "Symbol doc format"). */
+  doc?: SymbolDoc;
 }
 
 export interface WorkflowSummary {
@@ -60,9 +81,7 @@ export async function fetchDependencyGraph(
   try {
     return (await apiFetch(url)) as GraphResponse;
   } catch {
-    if (import.meta.env.DEV) {
-      return { ...mockGraphData, projectId, snapshotId: "", clustered: false, totalNodes: 0, totalEdges: 0 } as unknown as GraphResponse;
-    }
+    // No mock fallback: a failed load shows the honest empty/error state.
     throw new Error("Failed to load dependency graph data");
   }
 }

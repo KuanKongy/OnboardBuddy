@@ -119,20 +119,14 @@ export function DependencyGraphView({
           target: edge.target,
           animated: isActive,
           label,
-          labelStyle: { fill: "#6b7280", fontSize: 9, fontWeight: 700 },
-          labelBgStyle: { fill: isDark ? "oklch(0.17 0 0)" : "oklch(0.96 0 0)", fillOpacity: 0.95 },
+          labelStyle: { fill: "var(--muted-foreground)", fontSize: 9, fontWeight: 700 },
+          labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },
           labelBgPadding: [4, 3] as [number, number],
           labelBgBorderRadius: 3,
           style: {
             opacity: neighborIds === null || isActive ? 1 : 0.1,
             strokeWidth: isActive ? 2 : 1,
-            stroke: isActive
-              ? isDark
-                ? "oklch(0.623 0.214 259)"
-                : "oklch(0.55 0.214 259)"
-              : isDark
-                ? "oklch(0.4 0 0)"
-                : "oklch(0.75 0 0)",
+            stroke: isActive ? "var(--primary)" : "var(--border)",
           },
         };
       }),

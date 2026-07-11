@@ -44,6 +44,12 @@ export function getSummaryQueue(): Queue {
 export interface AnalysisJobData {
   jobId: string;
   projectId: string;
+  /** 'analyze' (default) runs the full pipeline; 'preflight' only builds the analysis preview. */
+  task?: 'analyze' | 'preflight';
+  /** analysis_scopes.id — omitted = whole-repo scope. */
+  scopeId?: string;
+  /** Exact commit SHA to analyze — omitted = branch head. */
+  commit?: string;
 }
 
 export interface SummaryJobData {
@@ -52,4 +58,12 @@ export interface SummaryJobData {
   projectId: string;
   triggeredBy: string;
   role?: string;
+  /** Set for regenerate_section jobs: regenerate only this section type. */
+  sectionType?: string;
+  /**
+   * Set for regenerate_section jobs: the existing package to regenerate
+   * into. Lets a stale section be rebuilt against a newer snapshot without
+   * spawning a new package for the new commit.
+   */
+  packageId?: string;
 }

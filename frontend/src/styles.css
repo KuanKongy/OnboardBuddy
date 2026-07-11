@@ -3,80 +3,125 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Light theme (opt-in). Same cool "slate" hue family (~264-266, low chroma)
-   as the dark palette, inverted for a bright surface. */
+/* ── Design tokens ───────────────────────────────────────────────────────────
+   Slate-blue system, dark-first. The dark theme is a three-step surface
+   ladder (background → card → popover) with visibly separated steps and
+   borders one step lighter again — "distinct, not dark-on-dark". Semantic
+   colors (success/warning/danger/info) are tokens, not ad-hoc utilities, so
+   both themes stay in tune. The node palette drives every graph tab and
+   legend from one place. */
+
+/* Light theme */
 :root {
-  --background: oklch(0.98 0.003 265);
-  --foreground: oklch(0.2 0.015 265);
+  --background: oklch(0.975 0.004 265);
+  --foreground: oklch(0.22 0.02 265);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2 0.015 265);
+  --card-foreground: oklch(0.22 0.02 265);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2 0.015 265);
-  --primary: oklch(0.55 0.214 259);
+  --popover-foreground: oklch(0.22 0.02 265);
+  --primary: oklch(0.54 0.2 259);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.94 0.006 265);
-  --secondary-foreground: oklch(0.2 0.015 265);
-  --muted: oklch(0.94 0.006 265);
-  --muted-foreground: oklch(0.46 0.02 265);
-  --accent: oklch(0.91 0.01 265);
-  --accent-foreground: oklch(0.2 0.015 265);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.88 0.008 265);
-  --input: oklch(0.88 0.008 265);
-  --ring: oklch(0.55 0.214 259);
-  --chart-1: oklch(0.55 0.214 259);
-  --chart-2: oklch(0.6 0.118 184);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  --secondary: oklch(0.93 0.008 265);
+  --secondary-foreground: oklch(0.25 0.02 265);
+  --muted: oklch(0.94 0.007 265);
+  --muted-foreground: oklch(0.47 0.022 265);
+  --accent: oklch(0.9 0.012 262);
+  --accent-foreground: oklch(0.22 0.02 265);
+  --destructive: oklch(0.55 0.22 27);
+  --border: oklch(0.87 0.01 265);
+  --input: oklch(0.87 0.01 265);
+  --ring: oklch(0.54 0.2 259);
   --radius: 0.5rem;
-  --sidebar: oklch(0.96 0.005 265);
-  --sidebar-foreground: oklch(0.2 0.015 265);
-  --sidebar-primary: oklch(0.55 0.214 259);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.91 0.01 265);
-  --sidebar-accent-foreground: oklch(0.2 0.015 265);
-  --sidebar-border: oklch(0.88 0.008 265);
-  --sidebar-ring: oklch(0.55 0.214 259);
+
+  --success: oklch(0.55 0.14 158);
+  --success-soft: oklch(0.55 0.14 158 / 0.12);
+  --warning: oklch(0.6 0.13 75);
+  --warning-soft: oklch(0.72 0.15 75 / 0.15);
+  --danger: oklch(0.55 0.22 27);
+  --danger-soft: oklch(0.55 0.22 27 / 0.1);
+  --info: oklch(0.54 0.16 235);
+  --info-soft: oklch(0.54 0.16 235 / 0.12);
+
+  /* Categorical palette: graph node kinds, cluster kinds, chart series. */
+  --node-api: oklch(0.56 0.19 259);
+  --node-ui: oklch(0.6 0.16 300);
+  --node-data: oklch(0.55 0.14 158);
+  --node-worker: oklch(0.62 0.15 75);
+  --node-config: oklch(0.58 0.12 195);
+  --node-test: oklch(0.6 0.14 340);
+  --node-shared: oklch(0.52 0.03 265);
+
+  --chart-1: var(--node-api);
+  --chart-2: var(--node-data);
+  --chart-3: var(--node-ui);
+  --chart-4: var(--node-worker);
+  --chart-5: var(--node-config);
+
+  --sidebar: oklch(0.955 0.006 265);
+  --sidebar-foreground: oklch(0.22 0.02 265);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.9 0.012 262);
+  --sidebar-accent-foreground: oklch(0.22 0.02 265);
+  --sidebar-border: oklch(0.88 0.01 265);
+  --sidebar-ring: var(--ring);
 }
 
-/* Dark theme (default). Anchored on #0A0D13 (oklch 0.159 0.014 264) for the
-   background. Surfaces step up from there on the same blue hue (~265), with
-   chroma growing toward the borders, to match the mockups. These values are
-   byte-identical to the pre-light-theme palette — dark mode must not change. */
+/* Dark theme (default reference). Surfaces step 0.17 → 0.215 → 0.245 so
+   cards read as raised panels instead of blending into the page; borders sit
+   another step up (0.33) and text contrast is tuned for small sizes. */
 .dark {
-  --background: oklch(0.159 0.014 264);
-  --foreground: oklch(0.93 0.008 264);
-  --card: oklch(0.195 0.017 265);
-  --card-foreground: oklch(0.93 0.008 264);
-  --popover: oklch(0.215 0.02 266);
-  --popover-foreground: oklch(0.93 0.008 264);
-  --primary: oklch(0.623 0.214 259);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.255 0.025 266);
+  --background: oklch(0.17 0.015 264);
+  --foreground: oklch(0.95 0.007 264);
+  --card: oklch(0.215 0.018 264);
+  --card-foreground: oklch(0.95 0.007 264);
+  --popover: oklch(0.245 0.02 265);
+  --popover-foreground: oklch(0.95 0.007 264);
+  --primary: oklch(0.66 0.19 259);
+  --primary-foreground: oklch(0.13 0.02 264);
+  --secondary: oklch(0.28 0.025 265);
   --secondary-foreground: oklch(0.93 0.008 264);
-  --muted: oklch(0.255 0.025 266);
-  --muted-foreground: oklch(0.64 0.02 265);
-  --accent: oklch(0.275 0.028 266);
-  --accent-foreground: oklch(0.93 0.008 264);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.3 0.03 266);
-  --input: oklch(0.3 0.03 266);
-  --ring: oklch(0.623 0.214 259);
-  --chart-1: oklch(0.623 0.214 259);
-  --chart-2: oklch(0.6 0.118 184);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  --muted: oklch(0.265 0.024 265);
+  --muted-foreground: oklch(0.71 0.018 264);
+  --accent: oklch(0.3 0.028 264);
+  --accent-foreground: oklch(0.95 0.007 264);
+  --destructive: oklch(0.64 0.21 27);
+  --border: oklch(0.33 0.028 264);
+  --input: oklch(0.33 0.028 264);
+  --ring: oklch(0.66 0.19 259);
   --radius: 0.5rem;
-  --sidebar: oklch(0.175 0.015 264);
-  --sidebar-foreground: oklch(0.93 0.008 264);
-  --sidebar-primary: oklch(0.623 0.214 259);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.275 0.028 266);
-  --sidebar-accent-foreground: oklch(0.93 0.008 264);
-  --sidebar-border: oklch(0.3 0.03 266);
-  --sidebar-ring: oklch(0.623 0.214 259);
+
+  --success: oklch(0.74 0.15 158);
+  --success-soft: oklch(0.74 0.15 158 / 0.13);
+  --warning: oklch(0.8 0.14 80);
+  --warning-soft: oklch(0.8 0.14 80 / 0.13);
+  --danger: oklch(0.7 0.19 25);
+  --danger-soft: oklch(0.7 0.19 25 / 0.13);
+  --info: oklch(0.74 0.13 235);
+  --info-soft: oklch(0.74 0.13 235 / 0.13);
+
+  --node-api: oklch(0.68 0.17 259);
+  --node-ui: oklch(0.72 0.15 300);
+  --node-data: oklch(0.74 0.15 158);
+  --node-worker: oklch(0.78 0.14 80);
+  --node-config: oklch(0.74 0.11 195);
+  --node-test: oklch(0.72 0.14 340);
+  --node-shared: oklch(0.7 0.02 265);
+
+  --chart-1: var(--node-api);
+  --chart-2: var(--node-data);
+  --chart-3: var(--node-ui);
+  --chart-4: var(--node-worker);
+  --chart-5: var(--node-config);
+
+  --sidebar: oklch(0.19 0.016 264);
+  --sidebar-foreground: oklch(0.95 0.007 264);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: oklch(0.3 0.028 264);
+  --sidebar-accent-foreground: oklch(0.95 0.007 264);
+  --sidebar-border: oklch(0.28 0.024 264);
+  --sidebar-ring: var(--ring);
 }
 
 @theme inline {
@@ -98,6 +143,21 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-node-api: var(--node-api);
+  --color-node-ui: var(--node-ui);
+  --color-node-data: var(--node-data);
+  --color-node-worker: var(--node-worker);
+  --color-node-config: var(--node-config);
+  --color-node-test: var(--node-test);
+  --color-node-shared: var(--node-shared);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -112,6 +172,7 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
 @layer base {
@@ -130,5 +191,35 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     font-size: 14px;
+  }
+  code, pre, kbd {
+    font-family: var(--font-mono);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  /* Standard page chrome: consistent title block so tabs stop re-inventing
+     their own header spacing. */
+  .page-header {
+    @apply mb-4 flex flex-wrap items-start justify-between gap-3;
+  }
+  .page-title {
+    @apply text-xl font-semibold tracking-tight text-foreground;
+    text-wrap: balance;
+  }
+  .page-subtitle {
+    @apply mt-0.5 text-[13px] text-muted-foreground;
+  }
+  .section-label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+  }
+  /* Graph canvases own the viewport instead of a fixed 300px strip. */
+  .graph-canvas {
+    @apply w-full overflow-hidden rounded-xl border border-border bg-card/40;
+    height: max(420px, calc(100dvh - var(--graph-chrome, 220px)));
   }
 }

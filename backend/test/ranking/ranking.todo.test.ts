@@ -1,111 +1,65 @@
 import { expect } from 'chai';
 import * as path from 'path';
-import { buildRepoIndex, filterByLanguage } from '../../src/worker/engine/repoIngester';
-import { createProgram, parseSourceFile } from '../../src/worker/engine/astParser';
-import { extractFileAnalysis } from '../../src/worker/engine/symbolExtractor';
-import { buildDependencyGraph, annotateResolvedImports } from '../../src/worker/engine/graphBuilder';
+import { buildRepoIndex, scanRepositoryFiles, detectRepoInventory } from '../../src/worker/engine/repoIngester';
+import { typescriptParser } from '../../src/worker/engine/parserInterface';
 import { detectEntrypoints } from '../../src/worker/engine/entrypointDetector';
 import { detectSideEffects } from '../../src/worker/engine/sideEffectDetector';
-import { rankCriticalFiles } from '../../src/worker/engine/criticalRanker';
-import type { FileAnalysis } from '../../src/worker/types/analysis';
+import { scanConfigNodes } from '../../src/worker/engine/configScanner';
+import { ingestDocs } from '../../src/worker/engine/docsIngester';
+import { buildEvidenceGraph } from '../../src/worker/engine/evidenceGraphBuilder';
+import { extractWorkflows } from '../../src/worker/engine/workflowExtractor';
+import { rankCandidates, CANDIDATE_WEIGHTS, type CandidateRanking } from '../../src/worker/engine/candidateRanker';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../../src/worker/fixtures/simple');
 
-describe("ranking algorithm", () => {
-  let fileAnalyses: FileAnalysis[];
+describe('ranking algorithm (Phase A candidate ranker)', () => {
+  let rankings: CandidateRanking[];
 
   before(async () => {
+    const records = await scanRepositoryFiles(FIXTURE_DIR);
+    const inventory = await detectRepoInventory(FIXTURE_DIR, records);
     const index = await buildRepoIndex(FIXTURE_DIR);
-    const tsFiles = filterByLanguage(index, 'typescript');
-    const program = createProgram(tsFiles, FIXTURE_DIR);
-    fileAnalyses = tsFiles.map((entry) => {
-      const parsed = parseSourceFile(program, entry.absolutePath);
-      return extractFileAnalysis(parsed, FIXTURE_DIR);
-    });
-    annotateResolvedImports(fileAnalyses, FIXTURE_DIR);
-  });
-
-  it("Composite score matches the weighted 5-signal formula", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
+    const ctx = await typescriptParser.createContext(index.files, FIXTURE_DIR);
+    const fileAnalyses = index.files.map((f) => typescriptParser.parseFile(ctx, f));
     const entrypoints = detectEntrypoints(fileAnalyses);
     const sideEffects = detectSideEffects(fileAnalyses);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(fileAnalyses, graph, entrypointKeys, sideEffectKeys);
+    const configNodes = scanConfigNodes(records, inventory);
+    const docs = ingestDocs(records, new Set(records.map((r) => r.relativePath)));
+    const graph = buildEvidenceGraph({
+      fileAnalyses, fileRecords: records, entrypoints, sideEffects, configNodes, docs, rootPath: FIXTURE_DIR,
+    });
+    const workflows = extractWorkflows({ graph, entrypoints, sideEffects });
+    rankings = rankCandidates({ graph, entrypoints, sideEffects, workflows });
+  });
 
+  it('composite score is the weighted sum of the spec signals', () => {
     expect(rankings.length).to.be.greaterThan(0);
     for (const r of rankings) {
-      expect(r.compositeScore).to.be.greaterThan(0);
-      expect(r.scores).to.have.property('fanIn');
-      expect(r.scores).to.have.property('fanOut');
-      expect(r.scores).to.have.property('exportCount');
-      expect(r.scores).to.have.property('isEntrypoint');
-      expect(r.scores).to.have.property('hasSideEffects');
+      const recomputed = (Object.keys(CANDIDATE_WEIGHTS) as Array<keyof typeof CANDIDATE_WEIGHTS>)
+        .reduce((sum, signal) => sum + r.breakdown[signal] * CANDIDATE_WEIGHTS[signal], 0);
+      expect(Math.abs(recomputed - r.score)).to.be.lessThan(0.01);
     }
   });
 
-  it("Role-based re-ranking changes top files appropriately", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
-    const entrypoints = detectEntrypoints(fileAnalyses);
-    const sideEffects = detectSideEffects(fileAnalyses);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(fileAnalyses, graph, entrypointKeys, sideEffectKeys);
-
-    const backendRankings = rankings.filter((r) => r.role === 'backend');
-    const _frontendRankings = rankings.filter((r) => r.role === 'frontend');
-    const generalRankings = rankings.filter((r) => r.role === 'general');
-
-    expect(generalRankings.length).to.be.greaterThanOrEqual(backendRankings.length);
-  });
-
-  it("Ranking reasons explain the score signals", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
-    const entrypoints = detectEntrypoints(fileAnalyses);
-    const sideEffects = detectSideEffects(fileAnalyses);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(fileAnalyses, graph, entrypointKeys, sideEffectKeys);
-
-    for (const r of rankings) {
-      expect(r.reasons).to.be.an('array');
-    }
-    const entryRankings = rankings.filter((r) => r.scores.isEntrypoint === 1);
-    if (entryRankings.length > 0) {
-      expect(entryRankings.some((r) => r.reasons.some((reason: string) => reason.includes('Entry point')))).to.equal(true);
-    }
-  });
-
-  it("Entry points receive the entrypoint scoring signal across roles", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
-    const entrypoints = detectEntrypoints(fileAnalyses);
-    const sideEffects = detectSideEffects(fileAnalyses);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(fileAnalyses, graph, entrypointKeys, sideEffectKeys);
-
-    const indexRankings = rankings.filter((r) => r.nodeStableKey === 'index.ts');
-    expect(indexRankings.length).to.be.greaterThan(0);
-    for (const r of indexRankings) {
-      expect(r.scores.isEntrypoint).to.equal(1);
+  it('ranking reasons explain the score signals', () => {
+    const entryRankings = rankings.filter(
+      (r) => r.targetType !== 'workflow' && r.breakdown.entrypointParticipation === 1,
+    );
+    expect(entryRankings.length).to.be.greaterThan(0);
+    for (const r of entryRankings) {
       expect(r.reasons).to.include('Entry point');
     }
   });
 
-  it("High fan-in utility files do not outrank entrypoints in general rankings", () => {
-    const graph = buildDependencyGraph(fileAnalyses, FIXTURE_DIR);
-    const entrypoints = detectEntrypoints(fileAnalyses);
-    const sideEffects = detectSideEffects(fileAnalyses);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(fileAnalyses, graph, entrypointKeys, sideEffectKeys);
+  it('entry point files receive the entrypoint signal', () => {
+    const routesFile = rankings.find((r) => r.targetType === 'file' && r.stableKey === 'routes/authRoutes.ts')!;
+    expect(routesFile.breakdown.entrypointParticipation).to.equal(1);
+  });
 
-    const generalRankings = rankings
-      .filter((r) => r.role === 'general')
-      .sort((a, b) => b.compositeScore - a.compositeScore);
-
-    const top = generalRankings[0]!;
-    expect(top.nodeStableKey).to.equal('index.ts');
-    expect(top.scores.isEntrypoint).to.equal(1);
+  it('workflow-participating handlers outrank passive utility files', () => {
+    const files = rankings.filter((r) => r.targetType === 'file');
+    const routes = files.find((r) => r.stableKey === 'routes/authRoutes.ts')!;
+    const util = files.find((r) => r.stableKey === 'utils/textUtil.ts')!;
+    expect(routes.score).to.be.greaterThan(util.score);
   });
 });

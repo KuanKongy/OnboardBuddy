@@ -39,6 +39,16 @@ docker compose up --build
 
 To stop: `docker compose down`
 
+### Running the automated tests
+
+One command runs **every automated test** (backend + frontend). No local Node/npm, no `.env` files, no running services needed — the suites are self-contained:
+
+```sh
+docker compose -f docker-compose.test.yml run --rm test
+```
+
+(With Node 22 installed, `npm install && npm test` runs the same suites locally.) Expected: backend `302 passing`, frontend `21 passed`. Details: [doc/TESTPLAN.md](doc/TESTPLAN.md) and [doc/TESTING.md](doc/TESTING.md).
+
 ## Milestones
 
 ### Milestone 1
@@ -59,11 +69,11 @@ Guided, step-by-step traces through critical workflows derived from the code evi
 ### Role-Based Learning Paths
 The same codebase produces different onboarding paths depending on the developer's role. A backend developer sees routes, services, auth, and database writes first. A frontend developer sees pages, components, state, and API clients. DevOps sees CI/CD, Docker, deploy scripts, and environment configuration. QA sees test structure, fixtures, coverage, and critical flows.
 
-### Architecture and Dependency Graphs
-Interactive visualizations show dependency relationships for a project snapshot. The **Dependencies** tab renders a searchable dependency map with clustering for large repos (directory clusters, drill-down, capped node counts — not the entire repo at once). The **Architecture** tab is not implemented yet (placeholder page). Class/interface and workflow path diagrams from the design doc are not built.
+### Architecture, Dependency, Workflow and Capability Graphs
+Four interactive graph tabs, each on its own data: **Architecture** (server-side deterministic clusters with AI or deterministic summaries and criticality bars), **Dependencies** (searchable file map with a classes/interfaces view and the standard symbol doc on click — summary, signature, real call-site example, receipts), **Workflows** (traced request flows from entry point to side effects), and **Capabilities** (business capabilities linked to the workflows and components that deliver them). Layouts use layered (dagre) graph drawing; Mermaid diagrams additionally render inside onboarding sections.
 
 ### Incremental Re-analysis
-Partial support exists: `sectionValidator.ts` can compare receipt hashes across snapshots and create `stale_flags`, but this logic is **not wired into the analysis worker pipeline** yet. The dashboard may show stale indicators when flags exist, but a new analysis run does not automatically re-check all sections end-to-end.
+Fully wired: re-analyzing a repo at a new commit diffs files and symbols against the previous snapshot, invalidates only semantic records whose evidence actually changed (whitespace-only edits invalidate nothing), marks affected sections/tutorials/packages stale with `stale_flags`, and regenerates stale sections on request against the newest snapshot. Unchanged symbols are never re-summarized — the content-addressed record cache guarantees it.
 
 ## Tech Stack
 
@@ -183,3 +193,67 @@ Our M2 deliverable covers the core analysis pipeline, onboarding package UI, dep
 | Settings (Account + Project) | M3 | Functional | Eugene | Account settings accessible from sidebar. Project settings from the project's "Settings" tab. |
 | Analysis Run Status | M3 | Functional | Eugene | After triggering analysis, the project overview shows progress (queued, running, complete, failed). |
 | Review/Approve Controls | M3 | Functional | Eugene | Click "Mark Reviewed" on any generated onboarding package to toggle section review status. |
+
+---
+
+## Milestone 3
+
+### Milestone 3 Functionality
+
+M3 delivers the full **hybrid semantic pipeline** ([doc/Pipeline.md](doc/Pipeline.md) is the binding spec): a symbol-level code evidence graph, call-graph workflow extraction, two-phase criticality ranking, an LLM semantic layer with caching/budgets/privacy modes, multi-view embeddings with Graph-RAG retrieval, evidence-cited generation with citation validation, code tutorials, incremental re-analysis with staleness, and a reworked UI (four graph tabs, package cards, settings, guided tour). All external services (Supabase, Redis, GitHub App, OpenRouter LLM + embeddings) are integrated.
+
+Run the app with `docker compose up --build` (see Docker Instructions above), open http://localhost:5173, log in, and import a repository. Everything below is reachable from a project's sidebar tabs.
+
+#### Non-Trivial Features (Design.md §1.5) — cumulative across M2 + M3
+
+All five non-trivial features from the design document, as shipped:
+
+| # | Design.md feature | State | How to Use |
+|---|-------------------|-------|------------|
+| 1 | **Role-Based Onboarding Package + AST Parser** — GitHub App import with snapshot download, TypeScript Compiler API evidence extraction (symbols, signatures/body hashes, imports/exports, calls, side effects, entrypoints, docs/config/schema), 11-section package with per-claim source receipts, confidence labels, draft/review workflow, 5 developer roles generated on demand from one analysis | Functional | Import a repo → **Analyze…** → **Your Onboarding** → open your role's package card. Other roles: "Generate for &lt;role&gt;" (no re-analysis). |
+| 2 | **Graph Visualizer, Architecture Map, Module Dependency Graph** — architecture clusters with summaries, searchable file dependency map, class/interface graph (extends/implements), workflow step graphs, capability map; all clustered/capped for readability with receipt drill-down on every node | Functional | Sidebar tabs **Architecture**, **Dependencies** (+ "Classes & interfaces" toggle), **Workflows**, **Capabilities**. Click any node for details + receipts. |
+| 3 | **Generic Workflow Extraction + Walkthrough/Tutorial Generation** — call-graph tracing from entrypoints (routes, UI pages, jobs, exports) to side effects, collapsed into readable steps; tutorials pair each step with a real code snippet, an AI explanation, and receipts | Functional | **Workflows** tab for traced flows; **Tutorials** tab for step-by-step walkthroughs (deterministic fallback when no tutorial is generated for the role). |
+| 4 | **Critical 25% / Critical Path Identification** — two-phase ranking: deterministic composite scoring (entrypoint exposure, downstream impact, centrality, side effects, doc gap, tests, churn) gated, then LLM-blended multi-view scores; role-specific projections with explainable reasons and editable weights | Functional | "Critical 25%" section in the onboarding package; importance + reasons in Dependencies node panels; weights in **Settings → Ranking weights** (applies instantly). |
+| 5 | **Incremental Re-analysis** — file/symbol AST diff against the previous snapshot, evidence-hash invalidation with upward propagation (whitespace-only edits invalidate nothing), stale flags on affected sections/tutorials/packages, per-section regeneration against the newest snapshot, preserved review history | Functional | Push commits → **Analyze…** again (runs incremental) → stale badges appear → **Regenerate** on stale sections. Manual trigger by design (webhooks are future work). |
+
+#### Milestone 3 pipeline work in detail
+
+| Feature | State | Type | How to Use |
+|---------|-------|------|------------|
+| Symbol-level evidence graph (TS Compiler API: symbols, signatures/body hashes, call resolution, side effects, entrypoints, docs/config/schema nodes, trust levels) | Functional | Non-trivial | Runs inside every analysis. Inspect via **Dependencies** (click a node for the symbol doc) and API `GET /projects/:id/graph/*`. |
+| Call-graph workflow extraction (entry point → side effects, step kinds, deterministic descriptions) | Functional | Non-trivial | **Workflows** tab: pick a traced flow, follow the step graph, click steps for details. |
+| Two-phase criticality ranking (deterministic Phase A gating + LLM-blended Phase B multi-view scores, per-role projections with editable weights) | Functional | Non-trivial | "Critical 25%" section in onboarding; importance + reasons in the Dependencies node panel; weights editable in **Settings → Ranking weights** (instant, no re-analysis). |
+| LLM semantic layer (batched symbol records → file/module/service/system synthesis → capabilities → refinement → critique), content-address cached so unchanged code is never re-paid | Functional | Non-trivial | Runs during analysis when AI is enabled. Summaries surface in Architecture components, symbol docs, and onboarding sections. |
+| Budgets, privacy modes and BYO key (per-depth LLM budgets with pause/degrade/fail, kill switch, `full_ai`/`facts_only_ai`/`ai_disabled`, per-project encrypted OpenRouter key) | Functional | Non-trivial | **Settings → AI & privacy / Analysis budget / Project LLM API key**. Live spend under **Overview → Pipeline phases & spend**. |
+| Multi-view embeddings + Graph-RAG retrieval (purpose/domain/dependency/operations views, pgvector + graph-neighborhood expansion) | Functional | Non-trivial | Powers section generation, tutorials and Q&A internally; retrieval stats stored per section in `generation_context`. |
+| Evidence-cited onboarding generation (11 section types incl. capability map & role path, per-claim receipts, trust-aware citation validation with downgrade-not-invent, Mermaid diagrams, honest unknowns) | Functional | Non-trivial | **Your Onboarding** → open a package card → read sections; click receipt chips for code snippets; "Known gaps" lists what could not be verified. |
+| Code tutorials (real traced flows: per-step code snippet + AI explanation + receipts) | Functional | Non-trivial | **Tutorials** tab; falls back to deterministic workflow steps when no tutorial is generated. |
+| Incremental re-analysis + staleness (file/symbol AST diff, evidence-hash invalidation, stale flags, regenerate stale sections against the newest snapshot) | Functional | Non-trivial | Re-run **Analyze…** after pushing commits; stale badges appear on affected sections/packages; click **Regenerate** on a stale section. |
+| Grounded Q&A endpoint (intent-routed retrieval, receipt-cited answers, citation-validated) | Functional (internal eval tool) | Stretch | Dev-only: `POST /api/projects/:id/ask` or the internal chat page at `/api/internal/chat` (non-production). |
+| Analyze preview (preflight: scope + commit selection, file counts, cost tier, privacy summary before spending) | Functional | Non-trivial | **Overview → Analyze…** → pick scope/commit → "Preview first". |
+| Interactive graph tabs (Architecture clusters, Dependencies + classes, Workflows, Capability map; dagre layouts; symbol doc format) | Functional | Non-trivial | Sidebar tabs of any analyzed project. |
+
+#### Standard Features (Design.md §1.6) — cumulative across M2 + M3
+
+All twelve standard features from the design document:
+
+| Feature | Milestone | State | How to Use |
+|---------|-----------|-------|------------|
+| User authentication (Supabase Auth + GitHub OAuth) | M2 | Functional | Sign up / log in at `/login` with email+password or GitHub. Connect the GitHub App from Account Settings for repo access. |
+| Repository import + branch selection (GitHub App) | M2 | Functional | Dashboard → **Import Repository** → pick installation, repo, branch, role. |
+| Project dashboard navigation | M2 | Functional | Project cards with status on the dashboard; project view with sidebar tabs (Overview, Onboarding, Architecture, Dependencies, Workflows, Capabilities, Tutorials, Team, Settings). |
+| Project CRUD | M2 | Functional | Create via import; view on dashboard; update settings (branch metadata, ignored paths, limits); delete from project settings. |
+| Project team invitations | M3 | Functional | **Team** tab → Invite Member by email with tier + role; invitee accepts from their Invitations page; revocable. |
+| Permission tiers (Owner / Admin / Developer) | M3 | Functional | Set at invitation. Owner: full control. Admin: members + settings. Developer: view content, pick role, generate missing role packages — cannot re-run analysis. |
+| Developer-role preference selector | M2 | Functional | Chosen at import/join; changeable in project settings; decides which package opens first. |
+| Settings (Privacy, AI provider, Project, Team) | M3 | Functional | **Settings** tab: privacy mode (`full_ai` / `facts_only_ai` / `ai_disabled`), analysis depth, budgets + stop behavior, BYO OpenRouter key, ranking weights, ignored paths, limits. Team settings in the **Team** tab. |
+| Analysis run status | M3 | Functional | One combined progress bar on **Overview** (analysis 0–70%, generation 70–100%, stage-labeled, never moves backwards) with a live activity list and per-phase metrics + spend. |
+| Package export (Markdown / zip) | M2 | Functional (Markdown) | Reader → **Export** → downloads a Markdown file with all sections. Zip bundle not implemented — Markdown covers the single-file case. |
+| Review/approval controls | M3 | Functional | Mark sections reviewed in the reader; approval state shows on package cards and persists. |
+| Snapshot history (stretch) | M3 | Partial | `GET /projects/:id/snapshots` lists past snapshots (commit, scope, date, trigger); package cards show which commit each package was generated from. No dedicated history page yet. |
+
+Beyond the design document, M3 also added: onboarding package cards with role/status/freshness filters, on-demand per-role generation (no 5-role fan-out), an analyze preview (preflight cost/privacy estimate before spending), a first-timer guided tour, and contrast-tuned dark/light themes.
+
+#### Testing
+
+All automated suites run with one command — `docker compose -f docker-compose.test.yml run --rm test` (see "Running the automated tests" above). The full test plan for the TA — automated commands plus manual checklists — is in [doc/TESTPLAN.md](doc/TESTPLAN.md), with every suite explained in [doc/TESTING.md](doc/TESTING.md). Bugs are tracked in [doc/BUGS_AND_FIXES.md](doc/BUGS_AND_FIXES.md) and mirrored to GitHub Issues.

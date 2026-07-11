@@ -110,8 +110,8 @@ describe("AI generation quality", () => {
           }],
         };
       }
-      if (text.includes("SELECT ai_enabled FROM project_settings")) {
-        return { rows: [{ ai_enabled: false }] };
+      if (text.includes("SELECT privacy_mode FROM project_settings")) {
+        return { rows: [{ privacy_mode: "ai_disabled" }] };
       }
       return { rows: [] };
     });

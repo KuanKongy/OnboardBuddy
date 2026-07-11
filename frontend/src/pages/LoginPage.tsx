@@ -2,6 +2,7 @@ import { Github, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
+import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -43,9 +44,7 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
-            OB
-          </div>
+          <LogoMark className="mx-auto mb-3 h-10 w-10" />
           <h1 className="text-lg font-semibold text-foreground">Welcome back</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">Sign in to OnboardBuddy</p>
         </div>

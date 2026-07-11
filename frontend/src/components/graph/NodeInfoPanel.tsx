@@ -1,11 +1,11 @@
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NodeDetail } from "@/lib/graphData";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { FileAnalysis, GraphNode } from "@/types/graph";
+import type { GraphNode } from "@/types/graph";
 
 export interface GithubRepoRef {
   owner: string;
@@ -15,13 +15,9 @@ export interface GithubRepoRef {
 
 interface NodeInfoPanelProps {
   node: GraphNode;
-  fileAnalysis: FileAnalysis | undefined;
   detail?: NodeDetail | null;
   githubRepo?: GithubRepoRef;
 }
-
-const FUNCTION_KINDS = new Set(["function", "arrow-function", "method"]);
-const INTERFACE_KINDS = new Set(["interface", "type"]);
 
 function buildGithubBlobUrl(repo: GithubRepoRef, filePath: string): string {
   const encodedPath = filePath
@@ -53,14 +49,15 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelProps) {
-
-  const functions = fileAnalysis?.symbols.filter((s) => FUNCTION_KINDS.has(s.kind)) ?? [];
-  const interfaces = fileAnalysis?.symbols.filter((s) => INTERFACE_KINDS.has(s.kind)) ?? [];
-  const imports = fileAnalysis?.imports ?? [];
+/**
+ * Single-column detail panel following the standard symbol doc format
+ * (doc/Pipeline.md): one-line summary, signature/params/returns, a real
+ * call-site example, then importance and receipts.
+ */
+export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
-
-  const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, node.id) : null;
+  const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
+  const doc = detail?.doc;
 
   async function handleCopyPath() {
     const ok = await copyToClipboard(node.id);
@@ -71,13 +68,13 @@ export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelP
   }
 
   return (
-    <div className="mt-3 overflow-hidden rounded-xl border border-border bg-card">
+    <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-foreground" title={node.label}>
             {node.label}
           </p>
-          <p className="truncate text-xs text-muted-foreground" title={node.id}>
+          <p className="truncate font-mono text-[11px] text-muted-foreground" title={node.id}>
             {node.id}
           </p>
         </div>
@@ -86,9 +83,8 @@ export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelP
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button variant="outline" size="xs" asChild>
-                  <a href={githubUrl} target="_blank" rel="noopener noreferrer">
+                  <a href={githubUrl} target="_blank" rel="noopener noreferrer" aria-label="Open on GitHub">
                     <ExternalLink className="h-3 w-3" />
-                    View on GitHub
                   </a>
                 </Button>
               </TooltipTrigger>
@@ -97,162 +93,130 @@ export function NodeInfoPanel({ node, fileAnalysis, githubRepo }: NodeInfoPanelP
           )}
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="outline" size="xs" onClick={handleCopyPath}>
+              <Button variant="outline" size="xs" onClick={handleCopyPath} aria-label="Copy path">
                 {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                {copied ? "Copied" : "Copy path"}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="top">Copy the file path</TooltipContent>
           </Tooltip>
         </div>
       </div>
-      <div className="flex flex-col divide-y divide-border md:flex-row md:divide-x md:divide-y-0">
-        {/* Column 1: Functions */}
-        <div className="flex-1 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground">
-              Functions
-            </h3>
-            <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {functions.length}
-            </span>
+
+      <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {/* 1. One-line summary */}
+        {doc?.summary && (
+          <div>
+            <p className="text-[13px] leading-relaxed text-foreground">{doc.summary}</p>
+            <p className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-muted-foreground/70">
+              {doc.factsOnly ? (
+                "Deterministic facts only — no AI summary for this symbol"
+              ) : (
+                <>
+                  <Sparkles className="h-2.5 w-2.5" /> AI summary ({doc.summaryConfidence} confidence), backed by the receipts below
+                </>
+              )}
+            </p>
           </div>
-          {functions.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No functions exported</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {functions.map((fn) => (
-                <li key={fn.name} className="flex items-start gap-1.5">
-                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                  <div>
-                    <span className="text-[12px] font-mono text-foreground">{fn.name}()</span>
-                    {fn.signature && (
-                      <p className="max-w-[160px] truncate text-[11px] text-muted-foreground" title={fn.signature}>
-                        {fn.signature}
-                      </p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+        )}
 
-          {fileAnalysis?.symbols.filter((s) => s.kind === "class").map((cls) => (
-            <div key={cls.name} className="mt-3">
-              <Separator className="mb-2" />
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Class</span>
-              </div>
-              <div className="flex items-start gap-1.5">
-                <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-blue-400" />
-                <span className="text-[12px] font-mono text-foreground">{cls.name}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+        {/* 2-3. Signature, params, returns (deterministic) */}
+        {doc?.signature && (
+          <div>
+            <p className="section-label mb-1">Signature</p>
+            <pre className="overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11.5px] leading-relaxed text-foreground">
+              {doc.signature}
+            </pre>
+            {doc.returns && (
+              <p className="mt-1 text-[11.5px] text-muted-foreground">
+                Returns <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{doc.returns}</code>
+              </p>
+            )}
+          </div>
+        )}
 
-        {/* Column 2: Imports + Interfaces */}
-        <div className="flex-1 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-foreground">
-            Imports
-            <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-              {imports.length}
-            </span>
-          </h3>
-          {imports.length === 0 ? (
-            <p className="text-xs text-muted-foreground">No imports</p>
-          ) : (
-            <ul className="mb-4 space-y-1.5">
-              {imports.map((imp) => (
-                <li key={imp.toSpecifier} className="flex items-start gap-1.5">
-                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-cyan-400" />
-                  <div>
-                    <span className="text-[12px] font-mono text-muted-foreground">{imp.toSpecifier}</span>
-                    {imp.namedImports.length > 0 && (
-                      <p className="text-[11px] text-muted-foreground/70">
-                        {imp.namedImports.join(", ")}
-                      </p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+        {/* 4. Real example usage from a call site */}
+        {doc?.exampleUsage && (
+          <div>
+            <p className="section-label mb-1">Example usage</p>
+            <p className="mb-1 font-mono text-[11px] text-muted-foreground">
+              called from {doc.exampleUsage.caller} · {doc.exampleUsage.filePath}
+              {doc.exampleUsage.lineStart ? `:${doc.exampleUsage.lineStart}` : ""}
+            </p>
+            <pre className="max-h-40 overflow-auto rounded-md bg-muted px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
+              {doc.exampleUsage.snippet}
+            </pre>
+          </div>
+        )}
 
-          {interfaces.length > 0 && (
-            <>
-              <Separator className="mb-3" />
-              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-foreground">
-                Interfaces
-                <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-                  {interfaces.length}
-                </span>
-              </h3>
-              <ul className="space-y-1.5">
-                {interfaces.map((iface) => (
-                  <li key={iface.name} className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
-                    <span className="text-[12px] font-mono text-foreground">{iface.name}</span>
-                    <Badge variant="outline" className="h-4 px-1 py-0 text-[9px]">
-                      {iface.kind}
-                    </Badge>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
-
-        {/* Column 3: Importance + connected workflows (from node detail endpoint) */}
+        {/* Importance (ranking always shown with its reasons) */}
         {detail && (
-          <div className="flex-1 p-4">
-            <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-foreground">
-              Importance
-            </h3>
+          <div>
+            <p className="section-label mb-1.5">Importance</p>
             {detail.composite_score === null ? (
-              <p className="text-[11px] text-muted-foreground">Not ranked in this snapshot</p>
+              <p className="text-[11.5px] text-muted-foreground">Not ranked in this snapshot</p>
             ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-semibold text-foreground">
+              <div className="flex items-baseline gap-2">
+                <span className="text-lg font-semibold tabular-nums text-foreground">
                   {Math.round(detail.composite_score * 100)}
                 </span>
-                <span className="text-[10px] text-muted-foreground">/ 100 critical-path score</span>
+                <span className="text-[10.5px] text-muted-foreground">/ 100 critical-path score</span>
               </div>
             )}
             {detail.ranking_reasons.length > 0 && (
-              <ul className="mt-2 space-y-1">
+              <ul className="mt-1.5 space-y-1">
                 {detail.ranking_reasons.map((reason) => (
                   <li key={reason} className="flex items-start gap-1.5">
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                    <span className="text-[11px] text-muted-foreground">{reason}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-
-            <Separator className="my-3" />
-            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground">
-              Connected workflows
-              <span className="ml-1.5 rounded bg-secondary px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {detail.connected_workflows.length}
-              </span>
-            </h3>
-            {detail.connected_workflows.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground">Not part of an extracted workflow</p>
-            ) : (
-              <ul className="space-y-1.5">
-                {detail.connected_workflows.map((wf) => (
-                  <li key={wf.id} className="flex items-center gap-1.5">
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
-                    <span className="max-w-[180px] truncate text-[12px] text-foreground">{wf.title}</span>
-                    <Badge variant="outline" className="h-4 px-1 py-0 text-[9px]">
-                      {wf.trigger_type}
-                    </Badge>
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-success" />
+                    <span className="text-[11.5px] text-muted-foreground">{reason}</span>
                   </li>
                 ))}
               </ul>
             )}
           </div>
+        )}
+
+        {/* Connected workflows */}
+        {detail && detail.connected_workflows.length > 0 && (
+          <div>
+            <Separator className="mb-3" />
+            <p className="section-label mb-1.5">Part of workflows</p>
+            <ul className="space-y-1.5">
+              {detail.connected_workflows.map((wf) => (
+                <li key={wf.id} className="flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--node-worker)" }} />
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{wf.title}</span>
+                  <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[9px]">
+                    {wf.trigger_type}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* 5. Receipts */}
+        {doc && doc.receipts.length > 0 && (
+          <div>
+            <Separator className="mb-3" />
+            <p className="section-label mb-1.5">Receipts</p>
+            <ul className="space-y-1">
+              {doc.receipts.map((r) => (
+                <li key={r.id} className="flex items-center gap-1.5 text-[11px]">
+                  <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[9px] uppercase">
+                    {r.trust_level}
+                  </Badge>
+                  <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={r.file_path ?? undefined}>
+                    {r.file_path ?? r.receipt_kind}
+                    {r.line_start ? `:${r.line_start}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {!detail && (
+          <p className="text-[11.5px] text-muted-foreground">Loading details…</p>
         )}
       </div>
     </div>

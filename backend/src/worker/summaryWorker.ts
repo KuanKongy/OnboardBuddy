@@ -1,570 +1,274 @@
+/**
+ * Generation worker (doc/Pipeline.md "Generation"): builds onboarding
+ * packages per (scope, role, commit) — request-flow tutorials first, then
+ * the eleven sections one at a time, each with its own deterministic
+ * query, semantic retrieval bundle, strong-tier call, and inline
+ * trust-aware citation validation. Also serves `regenerate_section` jobs:
+ * rebuild that section's bundle against the same snapshot, regenerate,
+ * revalidate, replace content, keep the old generation run for audit.
+ */
+
 import { Worker, Job } from 'bullmq';
-import type { PoolClient } from 'pg';
-import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
+import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
-import { query, pool } from '../lib/db.js';
-import { chatCompletion, SUMMARY_MODEL } from '../lib/openrouter.js';
-import { embedAndStore, type EmbeddingTarget } from './engine/embeddingService.js';
-import { buildContext, DEFAULT_SECTION_REVIEW_STATUS, type EvidenceBundle } from './engine/evidenceContext.js';
+import { query } from '../lib/db.js';
+import { mapLimit } from '../lib/parallel.js';
+import { AiClient, AiPausedError } from './ai/aiClient.js';
+import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
+import { resolveTierConfig } from './ai/modelTiers.js';
+import { markPhase } from './ai/checkpoints.js';
+import type { PrivacyMode } from './ai/privacy.js';
+import type { SemanticDepth } from './engine/budgets.js';
+import type { DeveloperRole } from './semantic/projections.js';
+import { settlePackageStaleness } from './incrementalAnalyzer.js';
+import { SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
+import { generateSection } from './generation/sectionGenerator.js';
+import { generateTutorials } from './generation/tutorialGenerator.js';
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-const SECTION_TYPES = [
-  'start_here',
-  'entry_points',
-  'critical_25',
-  'workflow_guide',
-  'data_schema',
-  'safety_rails',
-  'architecture',
-  'dependency_graph',
-  'doc_health',
-] as const;
-
-type SectionType = typeof SECTION_TYPES[number];
+// ── Snapshot + settings ──────────────────────────────────────────────────────
 
 interface SnapRow {
   commit_hash: string;
-  branch: string;
-  file_count: number;
-  symbol_count: number;
-  workflow_count: number;
-  repo_owner: string;
-  repo_name: string;
-  role: string;
+  project_id: string;
+  scope_id: string;
+  role: DeveloperRole;
+  semantic_depth: SemanticDepth;
+  privacy_mode: PrivacyMode;
+  budget_overrides: unknown;
+  budget_stop_behavior: 'fail' | 'pause' | 'degrade';
+  model_failure_behavior: unknown;
+  model_tier_overrides: unknown;
 }
 
-interface NodeRow {
-  id: string;
-  stable_key: string;
-  type: string;
-  name: string;
-  file_path: string;
-  line_start: number | null;
-  line_end: number | null;
-  hash: string;
-  import_count: number;
-  metadata: { exportedSymbols?: string[]; importCount?: number };
-  exported_symbols: string[];
-}
-
-interface EdgeRow {
-  source_key: string;
-  target_key: string;
-  type: string;
-}
-
-interface WorkflowRow {
-  id: string;
-  title: string;
-  trigger_type: string;
-  purpose: string;
-  importance_score: number;
-  confidence: string;
-  composite_score: number;
-  ranking_reasons: string[];
-  steps: Array<{
-    step_order: number;
-    file_path: string;
-    symbol_name: string | null;
-    line_start: number | null;
-    line_end: number | null;
-    explanation: string | null;
-  }>;
-}
-
-interface AiSectionResponse {
-  title: string;
-  content: string;
-  confidence: 'high' | 'medium' | 'low';
-  sources: Array<{
-    stable_key: string;
-    file_path: string;
-    symbol_name?: string;
-    snippet?: string;
-  }>;
-}
-
-// ── Evidence bundle ──────────────────────────────────────────────────────────
-
-async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> {
-  const empty = { rows: [] };
-  const [snapRes, nodesRes, edgesRes, workflowsRes] = await Promise.all([
-    query(
-      `SELECT s.commit_hash, s.branch, s.file_count, s.symbol_count, s.workflow_count,
-              p.repo_owner, p.repo_name,
-              COALESCE(ps.default_developer_role, 'general') AS role
-       FROM analysis_snapshots s
-       JOIN projects p ON p.id = s.project_id
-       LEFT JOIN project_settings ps ON ps.project_id = s.project_id
-       WHERE s.id = $1`,
-      [snapshotId],
-    ),
-    query(
-      `SELECT n.id, n.stable_key, n.type, n.name, n.file_path, n.line_start, n.line_end, n.hash,
-              COALESCE((n.metadata->>'importCount')::int, 0) AS import_count,
-              n.metadata
-       FROM graph_nodes n
-       WHERE n.snapshot_id = $1
-       ORDER BY (n.metadata->>'importCount')::int DESC NULLS LAST`,
-      [snapshotId],
-    ).catch(() => empty),
-    query(
-      `SELECT sn.stable_key AS source_key, tn.stable_key AS target_key, e.type
-       FROM graph_edges e
-       JOIN graph_nodes sn ON sn.id = e.source_node_id
-       JOIN graph_nodes tn ON tn.id = e.target_node_id
-       WHERE e.snapshot_id = $1`,
-      [snapshotId],
-    ).catch(() => empty),
-    query(
-      `SELECT w.id, w.title, w.trigger_type, w.purpose, w.importance_score, w.confidence,
-              COALESCE(ws.composite_score, 0) AS composite_score,
-              COALESCE(ws.ranking_reasons, '{}'::text[]) AS ranking_reasons
-       FROM workflows w
-       LEFT JOIN workflow_scores ws ON ws.workflow_id = w.id
-       WHERE w.snapshot_id = $1
-       ORDER BY COALESCE(ws.composite_score, 0) DESC
-       LIMIT 20`,
-      [snapshotId],
-    ).catch(() => empty),
-  ]);
-
-  const snap = snapRes.rows[0] as SnapRow | undefined;
-  if (!snap) throw new Error(`Snapshot not found: ${snapshotId}`);
-
-  const nodes = ((nodesRes.rows ?? []) as Omit<NodeRow, 'exported_symbols'>[]).map((n) => ({
-    ...n,
-    exported_symbols: Array.isArray(n.metadata?.exportedSymbols) ? n.metadata.exportedSymbols : [],
-  })) as NodeRow[];
-
-  const edges = (edgesRes.rows ?? []) as EdgeRow[];
-
-  const workflows: WorkflowRow[] = [];
-  for (const wf of (workflowsRes.rows ?? []) as Omit<WorkflowRow, 'steps'>[]) {
-    const stepsRes = await query(
-      `SELECT step_order, file_path, symbol_name, line_start, line_end, explanation
-       FROM workflow_steps WHERE workflow_id = $1 ORDER BY step_order`,
-      [wf.id],
-    ).catch(() => ({ rows: [] }));
-    workflows.push({ ...wf, steps: stepsRes.rows as WorkflowRow['steps'] });
-  }
-
-  // Fetch entrypoints, side effects, and critical rankings for richer context
-  const [entrypointsRes, sideEffectsRes, rankingsRes] = await Promise.all([
-    query(
-      `SELECT e.kind, e.method, e.route_pattern, n.file_path, n.name
-       FROM entrypoints e
-       JOIN graph_nodes n ON n.id = e.node_id
-       WHERE e.snapshot_id = $1
-       ORDER BY e.kind
-       LIMIT 30`,
-      [snapshotId],
-    ).catch(() => empty),
-    query(
-      `SELECT s.kind, s.target, n.file_path
-       FROM side_effects s
-       JOIN graph_nodes n ON n.id = s.node_id
-       WHERE s.snapshot_id = $1
-       LIMIT 20`,
-      [snapshotId],
-    ).catch(() => empty),
-    query(
-      `SELECT n.file_path, n.name, cr.composite_score, cr.ranking_reasons
-       FROM critical_rankings cr
-       JOIN graph_nodes n ON n.id = cr.target_id
-       WHERE cr.snapshot_id = $1
-       ORDER BY cr.composite_score DESC
-       LIMIT 40`,
-      [snapshotId],
-    ).catch(() => empty),
-  ]);
-
-  const nodeIndex = new Map<string, NodeRow>();
-  for (const n of nodes) {
-    nodeIndex.set(n.stable_key, n);
-    nodeIndex.set(n.file_path, n);
-  }
-
-  return {
-    snap, nodes, edges, workflows, nodeIndex,
-    entrypoints: entrypointsRes.rows as Array<{ kind: string; method: string | null; route_pattern: string | null; file_path: string; name: string }>,
-    sideEffects: sideEffectsRes.rows as Array<{ kind: string; target: string | null; file_path: string }>,
-    criticalRankings: (rankingsRes.rows ?? []) as EvidenceBundle['criticalRankings'],
-  };
-}
-
-const SECTION_INSTRUCTIONS: Record<SectionType, string> = {
-  start_here: `Write a focused orientation for a new developer joining this team. Include:
-- What this system does in 2 sentences (business purpose, not tech stack)
-- The 3-5 files they should read first and WHY (not just "important" — explain what understanding they unlock)
-- A mental model: "Think of this codebase as..." that helps them reason about it
-- Common first-day tasks and where to look
-Target: 200-300 words. Be concrete — reference exact file paths from the data.`,
-
-  entry_points: `List the 8-15 most important entry points a "${'{role}'}" developer must understand. For EACH entry point include:
-- The exact file path and primary exported symbol
-- What triggers it (HTTP request, cron, event, CLI command)
-- What downstream systems it touches
-- One sentence on its business purpose
-Group them by category (API routes, background jobs, event handlers, etc). This is the "table of contents" for the codebase.`,
-
-  critical_25: `Identify the critical ~25% of modules that deliver ~80% of the system's value. For EACH critical file include:
-- File path and its role in one sentence
-- Why it's critical: high fan-in? core business logic? single point of failure?
-- What breaks if this file has a bug
-- Related files that work with it
-List at least 10-15 files. Sort by importance. Use the import counts and dependency edges provided to justify your choices.`,
-
-  workflow_guide: `Document the 5-8 most important end-to-end workflows/request flows. For EACH workflow:
-- Name it clearly (e.g., "User Registration Flow", "Payment Processing")
-- Trace the full path: trigger → validation → business logic → persistence → response
-- List each file touched in order with the key function/symbol
-- Note side effects (DB writes, external API calls, events published)
-- Call out error handling: what happens when it fails?
-Use the workflow data provided. Reference specific file paths and symbols.`,
-
-  data_schema: `Document the core data model and schemas. Include:
-- Key entities/models and their relationships (1:many, many:many)
-- Where schemas are defined (file paths)
-- Important fields and their business meaning
-- Data flow: where data is created, read, updated, deleted
-- Any important constraints, validations, or invariants
-- Database patterns used (transactions, soft deletes, audit trails)
-Be thorough — a developer should understand the data layer after reading this.`,
-
-  safety_rails: `Identify dangerous areas of the codebase that require extra caution. Include:
-- Files/modules that should NEVER be modified without thorough review (and why)
-- Common gotchas and mistakes new developers make
-- Shared modules where a change ripples to many consumers
-- Security-sensitive areas (auth, encryption, permissions)
-- Performance-critical paths where naive changes cause outages
-- Implicit contracts or assumptions in the code that aren't obvious
-For each, explain the RISK: what goes wrong if someone makes a mistake here.`,
-
-  architecture: `Provide a comprehensive architecture overview in 4-6 paragraphs covering:
-1. High-level structure: layers, services, and their boundaries
-2. Key patterns and conventions used (naming, file organization, module structure)
-3. How data flows through the system end-to-end
-4. Infrastructure and deployment model (as inferred from file structure)
-5. Key architectural decisions and trade-offs visible in the structure
-6. Where to look for different types of code (routes, business logic, data access, config)
-Write for a developer who needs to understand the "big picture" before diving into specifics.`,
-
-  dependency_graph: `Analyze the dependency structure and explain:
-- The most central/connected modules (highest fan-in) and why they matter
-- Key dependency chains: what depends on what, and the implications
-- Potential coupling risks: circular dependencies, overly-connected modules
-- Architectural boundaries visible in the dependency graph
-- Modules that could be refactored or decoupled
-- Import patterns: shared utilities, core libraries, domain modules
-Reference specific file paths and their connection counts from the data above.`,
-
-  doc_health: `Assess the project's documentation and knowledge capture:
-- Which areas appear well-documented (config files, README patterns, structured code)
-- Which areas are likely underdocumented (complex logic with no comments inferred from structure)
-- Key files that should have documentation but might not
-- Suggestions for documentation priorities based on the critical 25%
-- Gaps between workflow complexity and available explanation
-Be constructive — identify what's needed, not just what's missing.`,
-};
-
-function buildSectionPrompt(sectionType: SectionType, context: string): string {
-  const instruction = SECTION_INSTRUCTIONS[sectionType].replace('{role}', 'this');
-
-  return `You are an expert technical writer creating detailed onboarding documentation. Your goal is to help a new developer become productive quickly by understanding the critical 25% of the codebase that drives 80% of the value.
-
-${context}
-
----
-
-Generate the "${sectionType.replace(/_/g, ' ')}" section.
-
-${instruction}
-
-Respond with a JSON object in this exact shape (no markdown fences):
-{
-  "title": "<descriptive title for this section>",
-  "content": "<detailed markdown content with headers, bullet points, and code references>",
-  "confidence": "<high|medium|low — high if clearly evidenced by the graph data, medium if inferred from patterns, low if speculative>",
-  "sources": [
-    {
-      "stable_key": "<exact file path from the data above>",
-      "file_path": "<same as stable_key>",
-      "symbol_name": "<optional: key function/class>",
-      "snippet": "<optional: 1-2 line description of what this source proves>"
-    }
-  ]
-}
-
-Rules:
-- Content should use markdown: headers (##, ###), bullet points, bold for emphasis, \`code\` for paths/symbols
-- Be specific and actionable — reference exact file paths and symbol names from the data
-- Minimum 3 sources required, aim for 5-10 for thorough sections
-- Content length: aim for 300-600 words depending on section complexity
-- Only reference file paths that appear in the data above
-- Return ONLY the JSON object, no explanation`;
-}
-
-// ── Generate one section ─────────────────────────────────────────────────────
-
-async function generateSection(
-  sectionType: SectionType,
-  context: string,
-): Promise<AiSectionResponse> {
-  const prompt = buildSectionPrompt(sectionType, context);
-  const raw = await chatCompletion([{ role: 'user', content: prompt }]);
-  const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-  try {
-    return JSON.parse(cleaned) as AiSectionResponse;
-  } catch {
-    return {
-      title: sectionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      content: cleaned,
-      confidence: 'low',
-      sources: [],
-    };
-  }
-}
-
-// ── Persist one section ──────────────────────────────────────────────────────
-
-async function persistSection(params: {
-  client: PoolClient;
-  packageId: string;
-  snapshotId: string;
-  sectionType: SectionType;
-  section: AiSectionResponse;
-  snap: SnapRow;
-  nodeIndex: Map<string, NodeRow>;
-}): Promise<void> {
-  const { client, packageId, snapshotId, sectionType, section, snap, nodeIndex } = params;
-
-  const validConf = ['high', 'medium', 'low'].includes(section.confidence) ? section.confidence : 'low';
-  const sourceStableKeys = (section.sources ?? []).map((s) => s.stable_key);
-
-  const genContext = {
-    model: SUMMARY_MODEL,
-    node_stable_keys: sourceStableKeys,
-    file_count: snap.file_count,
-  };
-
-  const secRes = await client.query<{ id: string }>(
-    `INSERT INTO package_sections
-       (package_id, snapshot_id, type, title, content, confidence,
-        review_status, analyzed_commit, role, generation_context)
-     VALUES ($1, $2, $3, $4, $5, $6, '${DEFAULT_SECTION_REVIEW_STATUS}', $7, $8, $9)
-     RETURNING id`,
-    [
-      packageId, snapshotId, sectionType,
-      section.title || sectionType, section.content || '',
-      validConf, snap.commit_hash, snap.role,
-      JSON.stringify(genContext),
-    ],
-  );
-  const sectionId = secRes.rows[0]!.id;
-
-  for (const src of section.sources ?? []) {
-    const node = nodeIndex.get(src.stable_key) ?? nodeIndex.get(src.file_path);
-    await client.query(
-      `INSERT INTO source_receipts
-         (section_id, node_id, node_stable_key, node_hash, file_path, symbol_name, snippet, commit_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
-        sectionId,
-        node?.id ?? null,
-        src.stable_key,
-        node?.hash ?? null,
-        src.file_path,
-        src.symbol_name ?? null,
-        src.snippet ?? null,
-        snap.commit_hash,
-      ],
-    );
-  }
+async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
+  const row = (await query(
+    `SELECT s.commit_hash, s.project_id, s.scope_id, s.semantic_depth, s.privacy_mode,
+            COALESCE(ps.default_developer_role, 'general') AS role,
+            COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
+            COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
+            COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
+            COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides
+     FROM analysis_snapshots s
+     LEFT JOIN project_settings ps ON ps.project_id = s.project_id
+     WHERE s.id = $1`,
+    [snapshotId],
+  )).rows[0] as SnapRow | undefined;
+  if (!row) throw new Error(`Snapshot not found: ${snapshotId}`);
+  return row;
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────────
 
-const ALL_ROLES = ['backend', 'frontend', 'devops', 'qa', 'general'] as const;
-
 async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
-  const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole } = job.data;
+  const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole, sectionType: regenerateSectionType } = job.data;
 
   const updateJob = (status: string, step: string, pct: number, errorMsg?: string) => {
-    const finishedAt = status === 'complete' || status === 'failed' ? new Date() : null;
+    const finishedAt = status === 'complete' || status === 'failed' || status === 'paused' ? new Date() : null;
     return query(
       `UPDATE analysis_jobs
        SET status = $1, current_step = $2, progress_pct = $3,
            started_at = COALESCE(started_at, NOW()),
-           error_message = $4,
-           finished_at = $6,
+           error_message = $4, finished_at = $6,
            step_log = step_log || $7::jsonb
        WHERE id = $5`,
-      [status, step, pct, errorMsg ?? null, jobId, finishedAt, JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
+      [status, step, pct, errorMsg ?? null, jobId, finishedAt,
+       JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
   };
 
   try {
-    await updateJob('running', 'Building evidence bundle', 5);
-    const bundle = await buildEvidenceBundle(snapshotId);
+    await updateJob('running', 'Loading snapshot', 5);
+    const snap = await loadSnapshot(snapshotId);
 
-    // Use requested role or default from project settings
-    const primaryRole = requestedRole ?? bundle.snap.role;
-    bundle.snap.role = primaryRole;
-    const context = buildContext(bundle);
+    if (snap.privacy_mode === 'ai_disabled') {
+      await markPhase(snapshotId, 'generation', 'skipped', { reason: 'ai_disabled' });
+      await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
+      await updateJob('complete', 'AI disabled — deterministic outputs only', 100);
+      return;
+    }
+    const privacyMode = snap.privacy_mode as 'full_ai' | 'facts_only_ai';
+    const role = (requestedRole as DeveloperRole | undefined) ?? snap.role;
 
-    await updateJob('running', 'Creating package', 8);
-    const client = await pool.connect();
-    let packageId: string;
-    try {
-      const pkgRes = await client.query<{ id: string }>(
-        `INSERT INTO onboarding_packages
-           (snapshot_id, project_id, role, status, generated_by, analyzed_commit)
-         VALUES ($1, $2, $3, 'generating', $4, $5)
-         ON CONFLICT (project_id, role, analyzed_commit) DO UPDATE
-           SET snapshot_id = EXCLUDED.snapshot_id, status = 'generating', updated_at = NOW()
-         RETURNING id`,
-        [snapshotId, projectId, bundle.snap.role, triggeredBy, bundle.snap.commit_hash],
-      );
-      packageId = pkgRes.rows[0]!.id;
+    const budget = await new BudgetEnforcer({
+      snapshotId, jobId,
+      depth: snap.semantic_depth,
+      budgetOverrides: snap.budget_overrides,
+      stopBehavior: snap.budget_stop_behavior,
+    }).load();
+    const ai = new AiClient({
+      projectId, snapshotId, privacyMode, budget,
+      tierConfig: resolveTierConfig({
+        modelTierOverrides: snap.model_tier_overrides,
+        modelFailureBehavior: snap.model_failure_behavior,
+      }),
+    });
 
-      await client.query(`DELETE FROM package_sections WHERE package_id = $1`, [packageId]);
-    } finally {
-      client.release();
+    // Package row per (scope, role, commit). Regenerate jobs target the
+    // section's existing package (possibly built from an older commit) so a
+    // stale section rebuilt against a newer snapshot lands in place instead
+    // of spawning a fresh one-section package for the new commit.
+    const packageId = job.data.packageId ?? ((await query(
+      `INSERT INTO onboarding_packages
+         (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit)
+       VALUES ($1, $2, $3, $4, 'generating', $5, $6)
+       ON CONFLICT (project_id, scope_id, role, analyzed_commit) DO UPDATE
+         SET snapshot_id = EXCLUDED.snapshot_id, status = 'generating', updated_at = NOW()
+       RETURNING id`,
+      [snapshotId, projectId, snap.scope_id, role, triggeredBy, snap.commit_hash],
+    )).rows[0] as { id: string }).id;
+
+    const deps = await buildSectionDeps(snapshotId, projectId, role);
+    const sectionMetrics: Record<string, unknown> = {};
+
+    if (regenerateSectionType) {
+      // ── regenerate_section: one section, same snapshot, replace content ──
+      await updateJob('running', `Regenerating: ${regenerateSectionType}`, 40);
+      const result = await generateSection({
+        ai, snapshotId, projectId, packageId, role,
+        sectionType: regenerateSectionType as SectionType,
+        privacyMode, commitHash: snap.commit_hash, deps,
+      });
+      // The package stays 'stale' while any other section still is; its
+      // stale flags resolve once the last stale section is regenerated.
+      await settlePackageStaleness(packageId);
+      await updateJob('complete', `Regenerated ${regenerateSectionType}`, 100);
+      console.log(`[summary-worker] regenerated ${regenerateSectionType} (section=${result.sectionId}, issues=${result.validation.issues.length})`);
+      return;
     }
 
-    // Generate sections in parallel batches of 3 to reduce total time
-    const BATCH_SIZE = 3;
-    for (let batchStart = 0; batchStart < SECTION_TYPES.length; batchStart += BATCH_SIZE) {
-      const batch = SECTION_TYPES.slice(batchStart, batchStart + BATCH_SIZE);
-      const pct = 10 + Math.floor((batchStart / SECTION_TYPES.length) * 82);
-      await updateJob('running', `Generating: ${batch.join(', ')}`, pct);
+    // Resume support: a retry of this job row skips work it already persisted.
+    const checkpointRes = await query(`SELECT checkpoint FROM analysis_jobs WHERE id = $1`, [jobId]);
+    const checkpoint = (checkpointRes.rows[0] as { checkpoint?: { completedSections?: string[]; tutorialsDone?: boolean } } | undefined)?.checkpoint;
+    const completedSections = new Set<string>(checkpoint?.completedSections ?? []);
+    let tutorialsDone = checkpoint?.tutorialsDone === true;
 
-      const results = await Promise.all(
-        batch.map((sectionType) => generateSection(sectionType, context)),
-      );
+    const saveCheckpoint = async () => {
+      const cursor = { completedSections: [...completedSections], tutorialsDone };
+      await query(`UPDATE analysis_jobs SET checkpoint = $2 WHERE id = $1`, [jobId, JSON.stringify(cursor)]);
+      await markPhase(snapshotId, 'generation', 'running', {}, { checkpoint: cursor });
+    };
+    await markPhase(snapshotId, 'generation', 'running', {}, {
+      checkpoint: { completedSections: [...completedSections], tutorialsDone },
+    });
 
-      for (let j = 0; j < batch.length; j++) {
-        const sectionClient = await pool.connect();
-        try {
-          await persistSection({
-            client: sectionClient,
-            packageId,
-            snapshotId,
-            sectionType: batch[j]!,
-            section: results[j]!,
-            snap: bundle.snap,
-            nodeIndex: bundle.nodeIndex,
-          });
-        } finally {
-          sectionClient.release();
-        }
-      }
-    }
-
-    // Enrich top workflows with LLM-generated step explanations
-    if (bundle.workflows.length > 0) {
-      await updateJob('running', 'Enriching workflow explanations', 93);
-      const topWorkflows = bundle.workflows.slice(0, 10);
-      for (const wf of topWorkflows) {
-        if (!wf.steps || wf.steps.length === 0) continue;
-        const stepsDescription = wf.steps
-          .map((s) => `${s.step_order}. ${s.file_path}${s.symbol_name ? `::${s.symbol_name}` : ''} (${s.line_start ?? '?'}–${s.line_end ?? '?'})`)
-          .join('\n');
-        try {
-          const prompt = `You are documenting a codebase workflow called "${wf.title}" (${wf.purpose}).
-Here are the steps in order:
-${stepsDescription}
-
-For each step, write a concise 1-2 sentence explanation of what that step does from a developer's perspective. Return ONLY a JSON array of strings, one per step in order. No markdown fences.`;
-          const raw = await chatCompletion([{ role: 'user', content: prompt }]);
-          const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-          const explanations = JSON.parse(cleaned) as string[];
-          for (let i = 0; i < Math.min(explanations.length, wf.steps.length); i++) {
-            await query(
-              `UPDATE workflow_steps SET explanation = $1
-               WHERE workflow_id = $2 AND step_order = $3`,
-              [explanations[i], wf.id, wf.steps[i]!.step_order],
-            );
-          }
-        } catch (err) {
-          console.warn(`[summaryWorker] Failed to enrich workflow ${wf.id}:`, err);
-        }
-      }
-    }
-
-    await query(
-      `UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`,
-      [packageId],
-    );
-
-    // Embed section content for RAG retrieval (best-effort: don't fail the job)
-    if (process.env.EMBEDDINGS_API_KEY || process.env.OPENROUTER_API_KEY) {
+    // ── tutorials first (role_path sections reference them) ────────────────
+    let budgetDegraded = false;
+    if (!tutorialsDone) {
+      await updateJob('running', 'Generating request-flow tutorials', 12);
       try {
-        await updateJob('running', 'Embedding sections for retrieval', 94);
-        const embeddingSections = await query(
-          `SELECT id, type, content FROM package_sections WHERE package_id = $1`,
+        const tutorialResult = await generateTutorials({
+          ai, snapshotId, projectId, packageId, role,
+          commitHash: snap.commit_hash, projections: deps.projections,
+        });
+        sectionMetrics.tutorials = tutorialResult;
+        // Walkthrough UI enrichment: tutorial step explanations map 1:1 onto
+        // workflow steps — copy them over instead of paying for a second pass.
+        await query(
+          `UPDATE workflow_steps ws SET explanation = ts.explanation
+           FROM tutorial_steps ts
+           JOIN tutorials t ON t.id = ts.tutorial_id
+           JOIN workflows w ON w.id = t.workflow_id
+           WHERE t.package_id = $1 AND ws.workflow_id = w.id AND ws.step_order = ts.step_order
+             AND ts.explanation <> ''`,
           [packageId],
         );
-        if (embeddingSections.rows.length > 0) {
-          // Create semantic_summaries rows for each section, then embed
-          const targets: EmbeddingTarget[] = [];
-          for (const sec of embeddingSections.rows as Array<{ id: string; type: string; content: string }>) {
-            const summaryRes = await query(
-              `INSERT INTO semantic_summaries
-                 (snapshot_id, target_type, target_id, stable_key, summary, confidence, evidence_hash, prompt_version)
-               VALUES ($1, 'section', $2, $3, $4, 'medium', md5($4), $5)
-               ON CONFLICT (snapshot_id, target_type, target_id, evidence_hash) DO UPDATE SET summary = EXCLUDED.summary
-               RETURNING id`,
-              [snapshotId, sec.id, `section:${sec.type}`, sec.content, 'v1'],
-            );
-            const summaryId = summaryRes.rows[0]?.id;
-            if (summaryId && sec.content.length > 0) {
-              targets.push({ summaryId, targetType: 'section', targetId: sec.id, content: sec.content });
-            }
-          }
-          if (targets.length > 0) {
-            await embedAndStore(snapshotId, targets);
-          }
-        }
-      } catch (embedErr) {
-        console.warn('[summary-worker] Embedding failed (non-fatal):', embedErr instanceof Error ? embedErr.message : embedErr);
+        tutorialsDone = true;
+        await saveCheckpoint();
+      } catch (err) {
+        if (err instanceof BudgetExceededError && err.behavior === 'degrade') budgetDegraded = true;
+        else throw err;
       }
     }
 
-    // Enqueue generation for remaining roles (if this is the primary role job)
-    if (!requestedRole) {
-      const remainingRoles = ALL_ROLES.filter((r) => r !== primaryRole);
-      for (const nextRole of remainingRoles) {
-        const roleJobResult = await query(
-          `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
-           VALUES ($1, $2, $3, 'generate_onboarding', $4, 'queued', 'Waiting for worker')
-           RETURNING id`,
-          [projectId, snapshotId, triggeredBy, nextRole],
-        );
-        const roleJobId = roleJobResult.rows[0]?.id;
-        if (roleJobId) {
-          await getSummaryQueue().add(`generate_summary_${nextRole}`, {
-            jobId: roleJobId,
-            snapshotId,
-            projectId,
-            triggeredBy,
-            role: nextRole,
-          } satisfies SummaryJobData, {
-            attempts: 2,
-            backoff: { type: 'fixed', delay: 3000 },
-            removeOnComplete: { count: 10 },
-            removeOnFail: { count: 10 },
+    // ── sections: one call each (spec: never one giant call), generated
+    //    concurrently — each persists as soon as it finishes, so the reader
+    //    can show sections while the rest are still generating.
+    const pending = SECTION_TYPES.filter((t) => !completedSections.has(t));
+    if (!budgetDegraded && pending.length > 0) {
+      await updateJob('running', `Generating sections (0/${pending.length})`, 15);
+      let done = 0;
+      try {
+        await mapLimit(pending, 4, async (sectionType) => {
+          const result = await generateSection({
+            ai, snapshotId, projectId, packageId, role, sectionType,
+            privacyMode, commitHash: snap.commit_hash, deps,
           });
+          sectionMetrics[sectionType] = {
+            confidence: result.validation.confidence,
+            issues: result.validation.issues.length,
+            retried: result.retried,
+          };
+          completedSections.add(sectionType);
+          done += 1;
+          await updateJob('running', `Generated section: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
+          await saveCheckpoint();
+        });
+      } catch (err) {
+        if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
+          budgetDegraded = true; // keep what exists, stop LLM work
+        } else {
+          throw err;
         }
       }
     }
+    if (budgetDegraded) {
+      await query(
+        `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "budget_degraded", "phase": "generation"}]'::jsonb WHERE id = $1`,
+        [snapshotId],
+      );
+    }
 
-    await updateJob('complete', 'Summary ready', 100);
-    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${primaryRole}) sections=${SECTION_TYPES.length}`);
+    await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
+    await markPhase(snapshotId, 'generation', 'complete', {
+      sections: completedSections.size,
+      budgetDegraded,
+      llmCalls: ai.stats.calls,
+      cacheHits: ai.stats.cacheHits,
+      inputTokens: ai.stats.inputTokens,
+      outputTokens: ai.stats.outputTokens,
+      estimatedCostUsd: Math.round(ai.stats.estimatedCostUsd * 1e6) / 1e6,
+      perSection: sectionMetrics,
+    });
+
+    // ── validation phase: aggregate re-check over persisted sections ───────
+    await updateJob('running', 'Validating citations', 93);
+    const validationStats = (await query(
+      `SELECT confidence, count(*)::int AS n,
+              count(*) FILTER (WHERE (SELECT count(*) FROM source_receipts r WHERE r.section_id = ps.id) = 0)::int AS unreceipted
+       FROM package_sections ps WHERE ps.package_id = $1 GROUP BY confidence`,
+      [packageId],
+    )).rows;
+    await markPhase(snapshotId, 'validation', 'complete', {
+      sectionsByConfidence: validationStats,
+      tutorials: sectionMetrics.tutorials ?? null,
+    });
+
+    // Other roles are generated on demand (POST /onboarding/generate) — a
+    // full 5-role fan-out here paid 5x LLM cost for packages nobody may open
+    // (bug #17).
+
+    await updateJob('complete', 'Onboarding package ready', 100);
+    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size}`);
   } catch (err) {
+    if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+      const message = err.message.slice(0, 200);
+      await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
+      await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]).catch(() => {});
+      await updateJob('paused', `Paused: ${message}`, 0).catch(() => {});
+      console.warn(`[summary-worker] job ${job.id} paused:`, message);
+      return; // resumable — a retry would just re-pause
+    }
+    if (err instanceof KillSwitchError) {
+      await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: err.message }).catch(() => {});
+      console.warn(`[summary-worker] job ${job.id} stopped by kill switch (job status: ${err.jobStatus})`);
+      return; // status was already set from the API
+    }
+    if (err instanceof BudgetExceededError && err.behavior === 'fail') {
+      await query(`UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1`, [snapshotId]).catch(() => {});
+    }
+
     const message = err instanceof Error ? err.message : String(err);
+    await markPhase(snapshotId, 'generation', 'failed', {}, { errorMessage: message.slice(0, 500) }).catch(() => {});
     await updateJob('failed', 'Failed', 0, message).catch(() => {});
     await query(
       `UPDATE onboarding_packages SET status = 'failed', updated_at = NOW()

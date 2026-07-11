@@ -5,11 +5,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/lib/supabase";
 
+/**
+ * Supabase reports OAuth failures by redirecting back with error params in
+ * the query string and/or URL hash instead of a session — read both, or the
+ * page spins forever (bug #37).
+ */
+function readOAuthError(): string {
+  const query = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const description = hash.get("error_description") ?? query.get("error_description");
+  const code = hash.get("error") ?? query.get("error");
+  if (!description && !code) return "";
+  return description?.replace(/\+/g, " ") ?? code ?? "";
+}
+
 export function AuthCallbackPage() {
   const navigate = useNavigate();
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() => readOAuthError());
 
   useEffect(() => {
+    if (error) return;
     let cancelled = false;
 
     const {
@@ -42,7 +57,9 @@ export function AuthCallbackPage() {
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [navigate]);
+  }, [navigate, error]);
+
+  const isProviderProfileError = /user profile from external provider/i.test(error);
 
   if (error) {
     return (
@@ -51,6 +68,13 @@ export function AuthCallbackPage() {
           <CardContent className="p-4 text-center">
             <h1 className="text-sm font-semibold text-foreground">Sign in failed</h1>
             <p className="mt-1 text-xs text-destructive">{error}</p>
+            {isProviderProfileError && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                GitHub sign-in couldn't read your profile. You can still sign up
+                with email and password, and connect GitHub afterwards from
+                Account Settings.
+              </p>
+            )}
             <Button variant="link" size="sm" className="mt-2" asChild>
               <Link to="/login">Back to login</Link>
             </Button>

@@ -2,7 +2,6 @@ import dns from 'node:dns';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import 'dotenv/config';
@@ -15,26 +14,168 @@ import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken } from '../lib/github.js';
 import { runAnalysis } from './engine/analysisRunner.js';
-import { buildClassGraph } from './engine/graphBuilder.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
 import { extractWorkflows, persistWorkflows } from './engine/workflowExtractor.js';
-import { rankCriticalFiles, persistRankings } from './engine/criticalRanker.js';
+import {
+  rankCandidates,
+  persistCandidateRankings,
+  gateSymbolsForDepth,
+} from './engine/candidateRanker.js';
+import { fetchChurnSignals, persistChurn, type ChurnStats } from './engine/churnService.js';
+import { clusterArchitecture, persistArchitecture } from './engine/architectureClusterer.js';
+import { scanConfigNodes } from './engine/configScanner.js';
+import { ingestDocs } from './engine/docsIngester.js';
+import {
+  buildEvidenceGraph,
+  persistEvidenceGraph,
+  persistRepositoryFiles,
+} from './engine/evidenceGraphBuilder.js';
+import { runPreflight } from './engine/preflightService.js';
+import { markPhase } from './ai/checkpoints.js';
+import { AiClient, AiPausedError } from './ai/aiClient.js';
+import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
+import { resolveTierConfig } from './ai/modelTiers.js';
+import { runSemanticPipeline, SEMANTIC_PHASES } from './semantic/semanticPipeline.js';
+import { findPreviousSnapshot, runIncrementalDiff } from './incrementalAnalyzer.js';
+import type { SemanticContext } from './semantic/context.js';
+import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
-import { glob } from 'glob';
-
-interface AnalysisCheckpoint {
-  lastCompletedStep?: number;
-  tmpDir?: string;
-  snapshotId?: string;
-  commitHash?: string;
-}
 
 const execFileAsync = promisify(execFile);
 
-function stableHash(content: string): string {
-  return crypto.createHash('sha1').update(content).digest('hex').slice(0, 16);
+// ─── Shared job helpers ──────────────────────────────────────────────────────
+
+interface ProjectRow {
+  user_id: string;
+  repo_owner: string;
+  repo_name: string;
+  branch: string;
+  github_installation_id: string | null;
+  ignored_paths: string[] | null;
+  file_limit: number | null;
+  analysis_depth: SemanticDepth;
+  privacy_mode: 'full_ai' | 'facts_only_ai' | 'ai_disabled';
+  budget_overrides: unknown;
+  budget_stop_behavior: 'fail' | 'pause' | 'degrade';
+  model_failure_behavior: unknown;
+  model_tier_overrides: unknown;
 }
+
+async function loadProject(projectId: string): Promise<ProjectRow> {
+  const projectResult = await query(
+    `SELECT p.user_id, p.repo_owner, p.repo_name, p.branch, p.github_installation_id,
+            ps.ignored_paths, ps.file_limit,
+            COALESCE(ps.analysis_depth, 'standard') AS analysis_depth,
+            COALESCE(ps.privacy_mode, 'full_ai') AS privacy_mode,
+            COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
+            COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
+            COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
+            COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides
+     FROM projects p
+     LEFT JOIN project_settings ps ON ps.project_id = p.id
+     WHERE p.id = $1`,
+    [projectId],
+  );
+  if (projectResult.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
+  return projectResult.rows[0] as ProjectRow;
+}
+
+/**
+ * Downloads and extracts the repo zipball; returns the extracted repo root.
+ * `requestedCommit` pins the analysis to an exact SHA (the GitHub zipball
+ * API accepts any ref); omitted = branch head.
+ */
+async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
+  if (!project.github_installation_id) {
+    throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
+  }
+  const token = await getInstallationToken(Number(project.github_installation_id));
+
+  const zipPath = path.join(tmpDir, 'repo.zip');
+  const extractDir = path.join(tmpDir, 'extracted');
+  fs.mkdirSync(extractDir);
+
+  const commitHash = requestedCommit
+    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, project.branch)).trim();
+  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? project.branch, zipPath);
+  await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
+  const entries = fs.readdirSync(extractDir);
+  return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
+}
+
+/** Resolves the job's scope (path prefix); defaults to the whole-repo scope. */
+async function resolveScope(projectId: string, scopeId?: string): Promise<{ scopeId: string; pathPrefix: string }> {
+  if (scopeId) {
+    const result = await query(
+      `SELECT id, path_prefix FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
+      [scopeId, projectId],
+    );
+    if (result.rows.length === 0) throw new Error(`Scope not found: ${scopeId}`);
+    const row = result.rows[0] as { id: string; path_prefix: string };
+    return { scopeId: row.id, pathPrefix: row.path_prefix };
+  }
+  const result = await query(
+    `INSERT INTO analysis_scopes (project_id, path_prefix, display_name, kind, detected_from)
+     VALUES ($1, '', 'Whole repository', 'whole_repo', 'default')
+     ON CONFLICT (project_id, path_prefix) DO UPDATE SET updated_at = NOW()
+     RETURNING id`,
+    [projectId],
+  );
+  return { scopeId: (result.rows[0] as { id: string }).id, pathPrefix: '' };
+}
+
+// ─── Preflight job ───────────────────────────────────────────────────────────
+
+async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
+  const { jobId, projectId, scopeId } = job.data;
+
+  const update = (step: string, pct: number) =>
+    query(
+      `UPDATE analysis_jobs SET current_step = $1, progress_pct = $2, status = 'running',
+              started_at = COALESCE(started_at, NOW())
+       WHERE id = $3`,
+      [step, pct, jobId],
+    );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-preflight-${projectId}-`));
+  try {
+    await update('Loading project', 10);
+    const project = await loadProject(projectId);
+    const scope = scopeId ? await resolveScope(projectId, scopeId) : { scopeId: null, pathPrefix: '' };
+
+    await update('Downloading repository', 30);
+    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir);
+
+    await update('Building analysis preview', 70);
+    const preview = await runPreflight(repoRoot, {
+      pathPrefix: scope.pathPrefix,
+      ignoredPaths: project.ignored_paths ?? undefined,
+      depth: project.analysis_depth,
+      privacyMode: project.privacy_mode,
+    });
+
+    // The preview lands on the job's checkpoint; /analysis-status returns it.
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'complete', current_step = 'Preview ready', progress_pct = 100,
+           finished_at = NOW(), checkpoint = $1
+       WHERE id = $2`,
+      [JSON.stringify({ preview, commitHash }), jobId],
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await query(
+      `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW() WHERE id = $2`,
+      [message, jobId],
+    );
+    throw err;
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
+// ─── Analysis job ────────────────────────────────────────────────────────────
 
 async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   const { jobId, projectId } = job.data;
@@ -51,151 +192,144 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       [step, pct, jobId, JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
 
-  const saveCheckpoint = (cp: AnalysisCheckpoint) =>
-    query(
-      `UPDATE analysis_jobs SET checkpoint = $1 WHERE id = $2`,
-      [JSON.stringify(cp), jobId],
-    );
-
-  // 1. Look up project + settings
+  // 1. Look up project + settings + scope
   await updateStep('Loading project', 5);
-  const projectResult = await query(
-    `SELECT p.user_id, p.repo_owner, p.repo_name, p.branch, p.github_installation_id,
-            ps.ignored_paths, ps.file_limit, ps.loc_limit, ps.ai_enabled
-     FROM projects p
-     LEFT JOIN project_settings ps ON ps.project_id = p.id
-     WHERE p.id = $1`,
-    [projectId],
-  );
-  if (projectResult.rows.length === 0) throw new Error(`Project not found: ${projectId}`);
-
-  const { user_id, repo_owner, repo_name, branch, github_installation_id,
-          ignored_paths, file_limit, loc_limit: _loc_limit, ai_enabled } = projectResult.rows[0] as {
-    user_id: string;
-    repo_owner: string;
-    repo_name: string;
-    branch: string;
-    github_installation_id: string | null;
-    ignored_paths: string[] | null;
-    file_limit: number | null;
-    loc_limit: number | null;
-    ai_enabled: boolean | null;
+  const project = await loadProject(projectId);
+  const { user_id, branch, ignored_paths, file_limit, analysis_depth, privacy_mode } = {
+    user_id: project.user_id,
+    branch: project.branch,
+    ignored_paths: project.ignored_paths,
+    file_limit: project.file_limit,
+    analysis_depth: project.analysis_depth,
+    privacy_mode: project.privacy_mode,
   };
-
-  // 2. Mint fresh installation token (short-lived, on demand)
-  if (!github_installation_id) {
-    throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
-  }
-  const token = await getInstallationToken(Number(github_installation_id));
+  const scope = await resolveScope(projectId, job.data.scopeId);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-${projectId}-`));
-  const zipPath = path.join(tmpDir, 'repo.zip');
-  const extractDir = path.join(tmpDir, 'extracted');
-  fs.mkdirSync(extractDir);
 
   try {
-    // 3. Get commit SHA
-    await updateStep('Fetching commit info', 10);
-    const commitHash = (await getCommitSha(token, repo_owner, repo_name, branch)).trim();
+    // 2. Download + extract zipball at the requested commit (default: branch head)
+    await updateStep('Downloading repository', 15);
+    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit);
 
-    // 4. Download zipball
-    await updateStep('Downloading repository', 20);
-    await downloadZipball(token, repo_owner, repo_name, branch, zipPath);
-
-    // 5. Extract
-    await updateStep('Extracting archive', 35);
-    await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
-    const entries = fs.readdirSync(extractDir);
-    const repoRoot = path.join(extractDir, entries[0]!);
-
-    // 6. Run AST analysis
-    await updateStep('Analyzing codebase', 50);
+    // 3. Deterministic analysis: inventory, language guardrail input, AST,
+    //    symbol extraction, dependency graph — scope-bounded
+    await updateStep('Analyzing codebase', 40);
     const snapshot = await runAnalysis({
       projectId,
       triggeredBy: user_id,
       repoPath: repoRoot,
       ignoredPaths: ignored_paths ?? undefined,
       fileLimit: file_limit ?? undefined,
+      pathPrefix: scope.pathPrefix,
     });
-    await saveCheckpoint({ lastCompletedStep: 6, tmpDir, commitHash: commitHash });
 
-    // 7. Count workflow files
-    const workflowFiles = await glob('**/*.{yml,yaml}', {
-      cwd: path.join(repoRoot, '.github', 'workflows'),
-      absolute: false,
-    }).catch(() => []);
+    // 4. Upsert proposed scopes so the UI can offer them next time
+    for (const proposal of snapshot.scopeProposals) {
+      await query(
+        `INSERT INTO analysis_scopes (project_id, path_prefix, display_name, kind, detected_from)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (project_id, path_prefix) DO NOTHING`,
+        [projectId, proposal.pathPrefix, proposal.displayName, proposal.kind, proposal.detectedFrom],
+      );
+    }
 
-    // 8. Persist everything in a transaction
-    await updateStep('Persisting results', 80);
-    const fileCount = snapshot.repoIndex.files.length;
+    const unknowns: Array<Record<string, unknown>> = [];
+    if (snapshot.languageInventory.unsupportedFileCount > 0) {
+      unknowns.push({
+        kind: 'unsupported_languages',
+        detail: Object.keys(snapshot.languageInventory.unsupported).join(', '),
+        fileCount: snapshot.languageInventory.unsupportedFileCount,
+      });
+    }
+
+    // 5. Language guardrail: nothing parseable -> fail transparently.
+    if (snapshot.languageInventory.supportedFileCount === 0) {
+      unknowns.push({ kind: 'unsupported_only_repo' });
+      await query(
+        `INSERT INTO analysis_snapshots
+           (project_id, scope_id, commit_hash, branch, status, semantic_depth, privacy_mode,
+            language_inventory, unknowns, warnings)
+         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, '[]')
+         ON CONFLICT (scope_id, commit_hash) DO UPDATE
+           SET status = 'failed', language_inventory = EXCLUDED.language_inventory,
+               unknowns = EXCLUDED.unknowns`,
+        [projectId, scope.scopeId, commitHash, branch, analysis_depth, privacy_mode,
+         JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns)],
+      );
+      throw new Error(
+        `No supported source files in scope '${scope.pathPrefix || 'whole repo'}'. ` +
+        `Found: ${Object.keys(snapshot.languageInventory.unsupported).join(', ') || 'no source files'}. ` +
+        `OnboardBuddy currently parses TypeScript/JavaScript only.`,
+      );
+    }
+
+    // 6. Detectors + evidence-node scanners (symbol-level)
+    await updateStep('Detecting entrypoints and side effects', 55);
+    const entrypoints = detectEntrypoints(snapshot.fileAnalyses);
+    const sideEffects = detectSideEffects(snapshot.fileAnalyses);
+    const configNodes = scanConfigNodes(snapshot.fileRecords, snapshot.inventory);
+    const knownPaths = new Set(snapshot.fileRecords.map((r) => r.relativePath));
+    const docs = ingestDocs(snapshot.fileRecords, knownPaths);
+
+    // 7. Build the full evidence graph
+    await updateStep('Building evidence graph', 65);
+    const evidence = buildEvidenceGraph({
+      fileAnalyses: snapshot.fileAnalyses,
+      fileRecords: snapshot.fileRecords,
+      entrypoints,
+      sideEffects,
+      configNodes,
+      docs,
+      rootPath: repoRoot,
+    });
+
+    // 8. Persist snapshot + files + graph in one transaction
+    await updateStep('Persisting results', 75);
+    const fileCount = snapshot.fileRecords.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
     let snapshotId = '';
-    const nodeIdMap = new Map<string, string>();
+    let nodeIdMap = new Map<string, string>();
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
 
-      // Insert snapshot row — re-analyze same commit overwrites counts
       const snapResult = await client.query<{ id: string }>(
         `INSERT INTO analysis_snapshots
-           (project_id, commit_hash, branch, file_count, symbol_count, workflow_count, status, warnings)
-         VALUES ($1, $2, $3, $4, $5, $6, 'complete', $7)
-         ON CONFLICT (project_id, commit_hash) DO UPDATE
+           (project_id, scope_id, commit_hash, branch, file_count, symbol_count, workflow_count,
+            status, semantic_depth, privacy_mode, language_inventory, unknowns, warnings)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'complete', $8, $9, $10, $11, $12)
+         ON CONFLICT (scope_id, commit_hash) DO UPDATE
            SET file_count = EXCLUDED.file_count,
                symbol_count = EXCLUDED.symbol_count,
                workflow_count = EXCLUDED.workflow_count,
                status = 'complete',
+               semantic_depth = EXCLUDED.semantic_depth,
+               privacy_mode = EXCLUDED.privacy_mode,
+               language_inventory = EXCLUDED.language_inventory,
+               unknowns = EXCLUDED.unknowns,
                warnings = EXCLUDED.warnings
          RETURNING id`,
-        [projectId, commitHash, branch, fileCount, symbolCount, workflowFiles.length, JSON.stringify(snapshot.errors)],
+        [projectId, scope.scopeId, commitHash, branch, fileCount, symbolCount, 0 /* set after extraction */,
+         analysis_depth, privacy_mode,
+         JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns), JSON.stringify(snapshot.errors)],
       );
       snapshotId = snapResult.rows[0]!.id;
 
-      // Clear stale data from previous scan of same commit
+      // Clear stale data from a previous scan of the same commit
       await client.query(`DELETE FROM workflows WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM entrypoints WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM side_effects WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM critical_rankings WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM criticality_scores WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM architecture_edges WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM architecture_clusters WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
       await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
+      await client.query(`DELETE FROM repository_files WHERE snapshot_id = $1`, [snapshotId]);
 
-      // Insert graph_nodes: one per file module, plus one per class/interface
-      // symbol (ids are `relativePath#SymbolName`, so file_path strips the
-      // symbol suffix)
-      const classGraph = buildClassGraph(snapshot.fileAnalyses);
-      for (const node of [...snapshot.graph.nodes, ...classGraph.nodes]) {
-        const exportedSymbols = node.metadata.exportedSymbols;
-        const nodeHash = stableHash(JSON.stringify(exportedSymbols));
-        const filePath = node.id.includes('#') ? node.id.split('#')[0]! : node.id;
-        const nodeResult = await client.query<{ id: string }>(
-          `INSERT INTO graph_nodes (snapshot_id, stable_key, type, name, file_path, hash, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
-           RETURNING id`,
-          [
-            snapshotId,
-            node.id,
-            node.kind,
-            node.label,
-            filePath,
-            nodeHash,
-            JSON.stringify({ exportedSymbols, importCount: node.metadata.importCount, dependentCount: node.metadata.dependentCount }),
-          ],
-        );
-        nodeIdMap.set(node.id, nodeResult.rows[0]!.id);
-      }
-
-      // Insert graph_edges
-      for (const edge of [...snapshot.graph.edges, ...classGraph.edges]) {
-        const sourceId = nodeIdMap.get(edge.source);
-        const targetId = nodeIdMap.get(edge.target);
-        if (!sourceId || !targetId) continue;
-        await client.query(
-          `INSERT INTO graph_edges (snapshot_id, source_node_id, target_node_id, type, metadata)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [snapshotId, sourceId, targetId, edge.kind, JSON.stringify({ weight: edge.weight })],
-        );
-      }
+      await persistRepositoryFiles(client, snapshotId, snapshot.fileRecords);
+      nodeIdMap = await persistEvidenceGraph(client, snapshotId, evidence);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -205,48 +339,228 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       client.release();
     }
 
-    // 9. Run advanced pipeline steps (entrypoints, side effects, workflows, rankings)
-    await updateStep('Detecting entrypoints', 85);
-    const entrypoints = detectEntrypoints(snapshot.fileAnalyses);
-    await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
+    // Link the job to its snapshot as soon as it exists — the overview's
+    // unified run panel reads phase rows by the job's snapshot_id live.
+    await query(`UPDATE analysis_jobs SET snapshot_id = $2 WHERE id = $1`, [jobId, snapshotId]);
 
-    await updateStep('Detecting side effects', 88);
-    const sideEffects = detectSideEffects(snapshot.fileAnalyses);
+    await markPhase(snapshotId, 'ingest', 'complete', {
+      files: fileCount,
+      supportedFiles: snapshot.languageInventory.supportedFileCount,
+      unsupportedFiles: snapshot.languageInventory.unsupportedFileCount,
+    });
+    await markPhase(snapshotId, 'parse', 'complete', {
+      parsedFiles: snapshot.fileAnalyses.length,
+      symbols: symbolCount,
+      parseErrors: snapshot.errors.length,
+    });
+    await markPhase(snapshotId, 'graph', 'complete', {
+      nodes: evidence.nodes.length,
+      edges: evidence.edges.length,
+      docNodes: docs.nodes.length,
+      configNodes: configNodes.length,
+    });
+
+    // 9. Entrypoints, side effects, workflows (call-graph traversal)
+    await updateStep('Persisting entrypoints and side effects', 82);
+    const entrypointIdMap = await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
     await persistSideEffects(snapshotId, sideEffects, nodeIdMap);
 
-    await updateStep('Extracting workflows', 90);
-    const workflows = extractWorkflows(
-      snapshot.fileAnalyses,
-      snapshot.graph,
-      entrypoints,
-      sideEffects,
+    await updateStep('Extracting workflows', 86);
+    const workflows = extractWorkflows({ graph: evidence, entrypoints, sideEffects });
+    const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
+    await query(
+      `UPDATE analysis_snapshots SET workflow_count = $2 WHERE id = $1`,
+      [snapshotId, workflows.length],
     );
-    await persistWorkflows(snapshotId, workflows, nodeIdMap);
+    await markPhase(snapshotId, 'workflows', 'complete', { workflows: workflows.length });
+    if (workflows.length === 0) {
+      await query(
+        `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "no_workflows_found"}]'::jsonb WHERE id = $1`,
+        [snapshotId],
+      );
+    }
 
-    await updateStep('Ranking critical files', 93);
-    const entrypointKeys = new Set(entrypoints.map((e) => e.nodeStableKey));
-    const sideEffectKeys = new Set(sideEffects.map((e) => e.nodeStableKey));
-    const rankings = rankCriticalFiles(snapshot.fileAnalyses, snapshot.graph, entrypointKeys, sideEffectKeys);
-    await persistRankings(snapshotId, rankings, nodeIdMap);
+    // 10. Churn (GitHub API, degrades to 0-weight on any failure), then
+    //     Phase A candidate ranking + depth gating
+    await updateStep('Fetching churn signals', 89);
+    let churn = new Map<string, ChurnStats>();
+    try {
+      // Preliminary churn-free ranking picks the top files worth a per-file
+      // churn request; dirs give everything else a coarse fallback signal.
+      const preliminary = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows });
+      const topFiles = preliminary
+        .filter((r) => r.targetType === 'file')
+        .slice(0, 20)
+        .map((r) => r.stableKey);
+      const topLevelDirs = [...new Set(
+        snapshot.fileRecords
+          .filter((r) => r.relativePath.includes('/'))
+          .map((r) => r.relativePath.split('/')[0]!),
+      )].slice(0, 10);
+      churn = await fetchChurnSignals({
+        token,
+        owner: project.repo_owner,
+        repo: project.repo_name,
+        branch,
+        topLevelDirs,
+        topFiles,
+      });
+      await persistChurn(snapshotId, churn, new Set(snapshot.fileRecords.map((r) => r.relativePath)));
+    } catch (err) {
+      console.warn(`[worker] churn fetch failed (project=${projectId}):`, err instanceof Error ? err.message : err);
+    }
 
-    // 10. Mark job complete
+    await updateStep('Ranking candidates', 93);
+    const rankings = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows, churn });
+    const rankedTargets = await persistCandidateRankings(snapshotId, rankings, nodeIdMap, workflowIdMap);
+    const gating = gateSymbolsForDepth(analysis_depth, rankings, { graph: evidence, entrypoints, workflows });
+    await markPhase(snapshotId, 'candidate_ranking', 'complete', {
+      rankedTargets,
+      churnPathsFetched: churn.size,
+      depth: analysis_depth,
+      symbolsSelectedForLlm: gating.selected.length,
+      symbolsFactsOnly: gating.factsOnly.length,
+    });
+
+    // 11. Deterministic architecture clustering
+    await updateStep('Clustering architecture', 96);
+    const architecture = clusterArchitecture({
+      graph: evidence,
+      inventory: snapshot.inventory,
+      workflows,
+      rankings,
+    });
+    await persistArchitecture(snapshotId, architecture, nodeIdMap);
+    await markPhase(snapshotId, 'clustering', 'complete', {
+      clusters: architecture.clusters.length,
+      clusterEdges: architecture.edges.length,
+    });
+
+    // 11.5 Incremental diff (spec "Incremental Updates"): when this scope was
+    //      analyzed before at a different commit, diff files/symbols, insert
+    //      stale flags, and mark affected sections/tutorials/packages stale.
+    //      Downstream, content addressing makes unchanged symbols cache hits.
+    const previous = await findPreviousSnapshot(scope.scopeId, snapshotId);
+    const isIncremental = previous !== null && previous.commitHash !== commitHash;
+    if (isIncremental) {
+      await updateStep('Diffing against previous snapshot', 96);
+      await query(`UPDATE analysis_snapshots SET trigger_type = 'incremental' WHERE id = $1`, [snapshotId]);
+      const diff = await runIncrementalDiff({
+        projectId,
+        scopeId: scope.scopeId,
+        snapshotId,
+        commitHash,
+        prevSnapshotId: previous.snapshotId,
+        prevCommitHash: previous.commitHash,
+        graph: evidence,
+        sideEffects,
+        architecture,
+        inventory: snapshot.inventory,
+      });
+      await markPhase(snapshotId, 'incremental_diff', 'complete', diff.metrics);
+    } else {
+      await markPhase(snapshotId, 'incremental_diff', 'skipped', {
+        reason: previous ? 'same_commit_rescan' : 'no_previous_snapshot',
+      });
+    }
+
+    // 12. Semantic pipeline (phases 7-12): symbol records -> synthesis ->
+    //     capabilities -> refinement -> critique -> Phase B reranking.
+    if (privacy_mode === 'ai_disabled') {
+      for (const phase of SEMANTIC_PHASES) {
+        await markPhase(snapshotId, phase, 'skipped', { reason: 'ai_disabled' });
+      }
+    } else {
+      await updateStep('Semantic analysis (LLM)', 97);
+      // Clear snapshot-scoped semantic rows from a previous scan of this
+      // commit (project-scoped semantic_records stay — they are the cache).
+      await query(`DELETE FROM snapshot_semantic_records WHERE snapshot_id = $1`, [snapshotId]);
+      await query(`DELETE FROM capabilities WHERE snapshot_id = $1`, [snapshotId]);
+
+      const tierConfig = resolveTierConfig({
+        modelTierOverrides: project.model_tier_overrides,
+        modelFailureBehavior: project.model_failure_behavior,
+      });
+      const budget = await new BudgetEnforcer({
+        snapshotId,
+        jobId,
+        depth: analysis_depth,
+        budgetOverrides: project.budget_overrides,
+        stopBehavior: project.budget_stop_behavior,
+      }).load();
+      const ai = new AiClient({ projectId, snapshotId, privacyMode: privacy_mode, budget, tierConfig });
+      const semanticCtx: SemanticContext = {
+        ai,
+        projectId,
+        snapshotId,
+        commitHash,
+        depth: analysis_depth,
+        privacyMode: privacy_mode,
+        modelFamily: { cheap: tierConfig.models.cheap[0]!, strong: tierConfig.models.strong[0]! },
+        graph: evidence,
+        nodeIdMap,
+        entrypoints,
+        sideEffects,
+        workflows,
+        workflowIdMap,
+        architecture,
+        rankings,
+        gating,
+        inventory: snapshot.inventory,
+      };
+
+      try {
+        const outcome = await runSemanticPipeline(semanticCtx);
+        if (outcome.status === 'degraded') {
+          await query(
+            `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "budget_degraded", "phase": "semantic"}]'::jsonb WHERE id = $1`,
+            [snapshotId],
+          );
+        }
+      } catch (err) {
+        if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+          // Resumable: checkpointed phases + content-addressed records make
+          // a re-run skip everything already paid for.
+          await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]);
+          await query(
+            `UPDATE analysis_jobs SET status = 'paused', current_step = $2, finished_at = NOW() WHERE id = $1`,
+            [jobId, `Paused: ${err.message.slice(0, 120)}`],
+          );
+          console.warn(`[worker] semantic pipeline paused (project=${projectId}):`, err.message);
+          return;
+        }
+        if (err instanceof KillSwitchError) {
+          console.warn(`[worker] semantic pipeline stopped by kill switch (project=${projectId})`);
+          return; // job status was already set from the API
+        }
+        if (err instanceof BudgetExceededError && err.behavior === 'fail') {
+          await query(`UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1`, [snapshotId]);
+        }
+        throw err;
+      }
+    }
+
+    // 13. Mark job complete
     await query(
       `UPDATE analysis_jobs
-       SET status = 'complete', snapshot_id = $1, current_step = 'Complete', progress_pct = 100, finished_at = NOW(),
+       SET status = 'complete', snapshot_id = $1, scope_id = $4, current_step = 'Complete', progress_pct = 100, finished_at = NOW(),
            step_log = step_log || $3::jsonb
        WHERE id = $2`,
-      [snapshotId, jobId, JSON.stringify([{ step: 'Complete', pct: 100, ts: new Date().toISOString() }])],
+      [snapshotId, jobId, JSON.stringify([{ step: 'Complete', pct: 100, ts: new Date().toISOString() }]), scope.scopeId],
     );
     await query(
       `UPDATE projects SET status = 'complete', last_analyzed_at = NOW() WHERE id = $1`,
       [projectId],
     );
 
-    // Enqueue summary generation job (only if AI is enabled)
-    if (ai_enabled !== false) {
+    // Enqueue summary generation job (only if AI is enabled). Incremental
+    // runs skip this: existing packages were stale-flagged where affected,
+    // and stale sections/tutorials are regenerated on request against this
+    // snapshot instead of paying for a full package rebuild.
+    if (privacy_mode !== 'ai_disabled' && !isIncremental) {
       const summaryJobResult = await query(
         `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-         VALUES ($1, $2, $3, 'generate_onboarding', 'queued', 'Waiting for worker')
+         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
          RETURNING id`,
         [projectId, snapshotId, user_id],
       );
@@ -280,7 +594,13 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
 const worker = new Worker<AnalysisJobData>(
   ANALYSIS_QUEUE,
-  processAnalysisJob,
+  async (job: Job<AnalysisJobData>) => {
+    if (job.data.task === 'preflight') {
+      await processPreflightJob(job);
+    } else {
+      await processAnalysisJob(job);
+    }
+  },
   {
     connection,
     concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),

@@ -1,6 +1,6 @@
 import * as ts from 'typescript';
-import * as path from 'path';
 import type { FileEntry } from '../types/analysis.js';
+import { collectPathAliases } from './tsconfigPaths.js';
 
 export interface ParsedSourceFile {
   filePath: string;
@@ -11,26 +11,32 @@ export interface ParsedSourceFile {
   errors: string[];
 }
 
+/**
+ * One program over the whole scope with deterministic compiler options.
+ * We deliberately do NOT load the repo's own tsconfig wholesale: the worker
+ * analyzes a zipball extract (no node_modules, monorepos often have no root
+ * tsconfig.json, and findConfigFile's upward walk can escape the extraction
+ * dir). Bundler resolution handles extensionless, `.js`→`.ts` and index
+ * imports; `paths` are merged from every workspace tsconfig so alias imports
+ * (`@/components/x`) resolve to repo files instead of fake packages.
+ */
 export function createProgram(files: FileEntry[], rootPath: string): ts.Program {
   const filePaths = files.map((f) => f.absolutePath);
+  const aliases = collectPathAliases(rootPath);
 
-  const configPath = ts.findConfigFile(rootPath, ts.sys.fileExists, 'tsconfig.json');
-  let compilerOptions: ts.CompilerOptions = {
+  const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
-    module: ts.ModuleKind.CommonJS,
-    moduleResolution: ts.ModuleResolutionKind.Node10,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
     allowJs: true,
-    jsx: ts.JsxEmit.React,
+    jsx: ts.JsxEmit.ReactJSX,
     strict: false,
     noEmit: true,
     skipLibCheck: true,
+    experimentalDecorators: true,
+    baseUrl: rootPath,
+    ...(Object.keys(aliases.paths).length > 0 ? { paths: aliases.paths } : {}),
   };
-
-  if (configPath) {
-    const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
-    const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, path.dirname(configPath));
-    compilerOptions = { ...parsed.options, noEmit: true, skipLibCheck: true };
-  }
 
   return ts.createProgram(filePaths, compilerOptions);
 }

@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
-import { NodeDetailPanel } from "@/components/graph/NodeDetailPanel";
+import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -92,8 +92,8 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
 
   if (error || !data || nodes.length === 0) {
     return (
-      <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
+      <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
+        <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
         <div className="flex-1">
           <p className="text-sm font-medium text-foreground">
             {error || "No class or interface data available"}
@@ -128,26 +128,24 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
         </Badge>
       </div>
 
-      <div className="h-[300px] w-full rounded-xl border border-border sm:h-[400px] md:h-[480px]">
-        <DependencyGraphView
-          nodes={positionedNodes}
-          edges={visibleEdges}
-          entryPoints={[]}
-          selectedNodeId={selectedNodeId}
-          onSelectNode={setSelectedNodeId}
-          edgeFilter="imports"
-        />
-      </div>
-
-      {selectedNode && (
-        <div className="mt-3">
-          <NodeDetailPanel
-            node={selectedNode}
-            fileAnalysis={undefined}
-            onClose={() => setSelectedNodeId(null)}
+      <div className={selectedNode ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
+        <div className="graph-canvas">
+          <DependencyGraphView
+            nodes={positionedNodes}
+            edges={visibleEdges}
+            entryPoints={[]}
+            selectedNodeId={selectedNodeId}
+            onSelectNode={setSelectedNodeId}
+            edgeFilter="imports"
           />
         </div>
-      )}
+
+        {selectedNode && (
+          <aside className="graph-canvas overflow-y-auto !bg-card">
+            <NodeInfoPanel node={selectedNode} />
+          </aside>
+        )}
+      </div>
     </>
   );
 }

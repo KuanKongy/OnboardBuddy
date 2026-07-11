@@ -18,6 +18,11 @@ Actions to take on the GitHub Issues tracker:
 |--------|-------|------------|
 | **Close** | #13 | Endpoint and file removed. Token save via `POST /github/oauth/complete`. Comment "Fixed: save-token flow replaced by server-side App OAuth" and close. |
 | **Close** | #18 | All server + client fixes shipped. Comment with summary below and close. |
+| **Close** | #17, #19, #26, #27, #28, #29 | Fixed in Milestone 3 — copy each bug's "Fix notes (2026-07-10)" as the closing comment. |
+| **File + Close** | #30–#34 | New M3 bugs, already fixed — file with the full body from this doc, then close with the fix notes. |
+| **File + Close** | #35 | Fixed same day — file then close with fix note. |
+| **File (Open)** | #36 | Known open item — file and leave Open (P5 future work). |
+| **File (Open)** | #37 | GitHub sign-up provider error — file Open; close once the Supabase GitHub provider config is fixed and sign-up verified. |
 | **Update** | #2, #12, #16, #20, #21, #23 | Already Closed on GitHub — verify and leave as-is. |
 
 **Close comment for #18:**
@@ -47,19 +52,27 @@ Actions to take on the GitHub Issues tracker:
 | 14 | InvitationsPage error persists across operations | P3 | Open | — |
 | 15 | CORS falls back to localhost when CORS_ORIGIN unset | P3 | Open | — |
 | 16 | Mark as Reviewed was UI-only (did not persist) | P2 | Closed | Fixed |
-| 17 | Analysis generates onboarding for all 5 roles, not just selected role | P2 | Open | — |
+| 17 | Analysis generates onboarding for all 5 roles, not just selected role | P2 | Closed | Fixed (M3) |
 | 18 | GitHub OAuth can link wrong GitHub account | P3 | Closed | Fixed |
-| 19 | Regenerate section is a UI stub | P3 | Open | — |
+| 19 | Regenerate section is a UI stub | P3 | Closed | Fixed (M3) |
 | 20 | Package export was a frontend alert stub | P3 | Closed | Fixed |
 | 21 | graphBuilder did not resolve .js imports to .ts sources | P3 | Closed | Fixed |
 | 22 | OnboardingPage swallows role-status fetch errors | P4 | Open | — |
 | 23 | GraphPage tests relied on DEV mock fallback | P4 | Closed | Fixed |
 | 24 | No per-route React error boundaries | P5 | Open | — |
 | 25 | graphBuilder edge tests could pass vacuously when edges empty | P5 | Open | — |
-| 26 | Architecture tab is a placeholder stub | P3 | Open | — |
-| 27 | LLM evidence context ignores role when loading critical rankings | P3 | Open | — |
-| 28 | Incremental re-analysis helpers not wired into worker | P3 | Open | — |
-| 29 | Workflow extraction is dependency BFS, not Design.md call-flow | P5 | Won't-Fix | Won't fix |
+| 26 | Architecture tab is a placeholder stub | P3 | Closed | Fixed (M3) |
+| 27 | LLM evidence context ignores role when loading critical rankings | P3 | Closed | Fixed (M3) |
+| 28 | Incremental re-analysis helpers not wired into worker | P3 | Closed | Fixed (M3) |
+| 29 | Workflow extraction is dependency BFS, not Design.md call-flow | P5 | Closed | Fixed (M3) |
+| 30 | Analysis progress bar shows random/backwards percentages | P2 | Closed | Fixed (M3) |
+| 31 | Semantic-record cache: refinement records superseded base records | P2 | Closed | Fixed (M3) |
+| 32 | Refined records lost their original code receipts | P2 | Closed | Fixed (M3) |
+| 33 | DEV mock fallbacks masked real API failures | P3 | Closed | Fixed (M3) |
+| 34 | Graph layout stacked nodes / rendered a line of nodes | P2 | Closed | Fixed (M3) |
+| 35 | Inline code in onboarding markdown shows decorative backticks | P4 | Closed | Fixed (M3) |
+| 36 | Stale tutorials cannot be regenerated individually | P5 | Open | — |
+| 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Open | Frontend part fixed; Supabase config pending |
 
 ### What has been fixed
 
@@ -566,7 +579,7 @@ Open onboarding section → Click Mark Reviewed → Refresh page — status lost
 
 ---
 
-## [P2][Open] Bug 17: Analysis generates onboarding for all 5 roles, not just selected role
+## [P2][Closed] Bug 17: Analysis generates onboarding for all 5 roles, not just selected role
 
 **Bug #17**
 
@@ -575,7 +588,7 @@ Open onboarding section → Click Mark Reviewed → Refresh page — status lost
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P2 |
-| State | Open |
+| State | Closed |
 | File / area | backend/src/worker/summaryWorker.ts (~line 537) |
 
 ## Expected behavior
@@ -593,6 +606,9 @@ Import repo choosing role General Dev → Run analysis → Check analysis_jobs /
 ## Notes
 
 Observed in testing: 3+ developer packages appear immediately. Increases OpenRouter cost and confuses users.
+
+
+**Fix notes (2026-07-10):** Fixed in M3: the 5-role fan-out was removed from summaryWorker; packages now generate only for the requested role. Other roles generate on demand via POST /projects/:id/onboarding/generate {role}, reusing the latest snapshot (no re-analysis). UI: "Generate for <role>" button in the onboarding reader.
 
 ---
 
@@ -645,7 +661,7 @@ Several related failures in the GitHub link / repo-import path:
 
 ---
 
-## [P3][Open] Bug 19: Regenerate section is a UI stub
+## [P3][Closed] Bug 19: Regenerate section is a UI stub
 
 **Bug #19**
 
@@ -654,7 +670,7 @@ Several related failures in the GitHub link / repo-import path:
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx handleRegenerateSection |
 
 ## Expected behavior
@@ -672,6 +688,9 @@ Click Regenerate on any onboarding section — no network request.
 ## Notes
 
 Wire to future regenerate endpoint or hide button until implemented.
+
+
+**Fix notes (2026-07-10):** Fixed in M3 (Phase 10): the button now calls POST /onboarding/sections/:id/regenerate, which queues a regenerate_section job; stale sections rebuild against the newest snapshot into the same package, and the UI polls until the new section lands.
 
 ---
 
@@ -855,7 +874,7 @@ Partially mitigated by Bug 21 fix; keep monitoring.
 
 ---
 
-## [P3][Open] Bug 26: Architecture tab is a placeholder stub
+## [P3][Closed] Bug 26: Architecture tab is a placeholder stub
 
 **Bug #26**
 
@@ -864,7 +883,7 @@ Partially mitigated by Bug 21 fix; keep monitoring.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/App.tsx route architecture → EmptyStubPage |
 
 ## Expected behavior
@@ -879,9 +898,12 @@ Route renders EmptyStubPage with title Architecture only.
 
 Open project → Architecture tab.
 
+
+**Fix notes (2026-07-10):** Fixed in M3 (Phase 10): the Architecture tab renders server-side deterministic clusters (architecture_clusters/-edges) as an interactive layered graph with AI/deterministic summaries, criticality bars, and a detail panel.
+
 ---
 
-## [P3][Open] Bug 27: LLM evidence context ignores role when loading critical rankings
+## [P3][Closed] Bug 27: LLM evidence context ignores role when loading critical rankings
 
 **Bug #27**
 
@@ -890,7 +912,7 @@ Open project → Architecture tab.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | backend/src/worker/summaryWorker.ts buildContext (~line 172) |
 
 ## Expected behavior
@@ -909,9 +931,12 @@ Generate backend package; inspect evidence context / DB — rankings from all ro
 
 Role packages differ mainly via prompts; ranking context is not role-filtered.
 
+
+**Fix notes (2026-07-10):** Fixed in M3: the old buildContext path was replaced by the retrieval service + role projections; criticality is projected per role via ranking_weight_configs and used in retrieval boosts and section context.
+
 ---
 
-## [P3][Open] Bug 28: Incremental re-analysis helpers not wired into worker
+## [P3][Closed] Bug 28: Incremental re-analysis helpers not wired into worker
 
 **Bug #28**
 
@@ -920,7 +945,7 @@ Role packages differ mainly via prompts; ranking context is not role-filtered.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | backend/src/worker/engine/sectionValidator.ts + worker/index.ts |
 
 ## Expected behavior
@@ -939,9 +964,12 @@ Run analysis → Change code, re-analyze same project → Stale flags may not au
 
 Unit tests cover helpers; end-to-end re-analysis incomplete.
 
+
+**Fix notes (2026-07-10):** Fixed in M3 (Phase 9): incrementalAnalyzer is wired into every re-analysis — file/symbol AST diff, evidence-hash upward invalidation, stale_flags on records/sections/tutorials/packages, on-request regeneration.
+
 ---
 
-## [P5][Won't-Fix] Bug 29: Workflow extraction is dependency BFS, not Design.md call-flow
+## [P5][Closed] Bug 29: Workflow extraction is dependency BFS, not Design.md call-flow
 
 **Bug #29**
 
@@ -950,7 +978,7 @@ Unit tests cover helpers; end-to-end re-analysis incomplete.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P5 |
-| State | Won't-Fix |
+| State | Closed |
 | File / area | backend/src/worker/engine/workflowExtractor.ts |
 
 ## Expected behavior
@@ -968,3 +996,254 @@ N/A — documented limitation for M2.
 ## Notes
 
 Accepted M2 scope gap. Walkthrough UI works on simplified extraction. Full call-flow deferred to M3.
+
+
+**Fix notes (2026-07-10):** Reopened and fixed in M3 (Phase 3): workflow extraction is now a real call-graph traversal (entrypoint → calls/handles_route/enqueues_job edges → side effects) with step kinds and deterministic descriptions, per doc/Pipeline.md.
+
+---
+
+## [P2][Closed] Bug 30: Analysis progress bar shows random/backwards percentages
+
+**Bug #30**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15, user report) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend/src/pages/ProjectOverviewPage.tsx, backend analysis-status route |
+
+## Expected behavior
+
+One progress bar that advances monotonically from 0 to 100% across the whole pipeline, with a clear statement of what is running.
+
+## Actual behavior
+
+The bar appeared to jump to random values and move backwards: each pipeline job (analysis, then up to five generation jobs) was its own 0-100% bar, and the UI flipped between whichever job was newest.
+
+## Steps to reproduce
+
+Import a repo → run analysis → watch the Overview progress bar as the analysis job completes and generation jobs start; the percentage drops from 100 back to a low number repeatedly.
+
+## Notes during fixing
+
+Root causes: (1) 5-role generation fan-out created five sequential jobs (bug #17); (2) `jobs[0]` was ordered by created_at only, so a queued job could shadow the running one; (3) analysis and generation each reported their own 0-100%. Fixed by removing the fan-out, ordering active jobs first in `/analysis-status`, and mapping analysis to 0-70% / generation to 70-100% with a stage label ("Analyzing code — …", "Generating onboarding — …"). A live activity list under the bar now shows the current step and the recent step trail with timestamps.
+
+---
+
+## [P2][Closed] Bug 31: Semantic-record cache: refinement records superseded base records
+
+**Bug #31**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-08 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | backend/src/worker/semantic/recordStore.ts insertRecord |
+
+## Expected behavior
+
+Re-analyzing unchanged code should hit the content-addressed record cache — unchanged symbols are never re-paid.
+
+## Actual behavior
+
+`insertRecord` marked records of *different prompt versions* superseded, so refinement-v1 records invalidated the base symbol-record-v1 records; the next run cache-missed on every refined symbol and re-paid LLM calls.
+
+## Steps to reproduce
+
+Run the semantic pipeline twice on the same commit (e2e-phase5 script); observe cache misses for all refined symbols on the second run.
+
+## Notes during fixing
+
+Caught by the Phase 5 end-to-end caching checks. Fix: supersede only within the *same* prompt_version when evidence hash or model family differs — different prompt versions layer, never invalidate each other.
+
+---
+
+## [P2][Closed] Bug 32: Refined records lost their original code receipts
+
+**Bug #32**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-08 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | backend/src/worker/semantic/refinementPass.ts |
+
+## Expected behavior
+
+A refined record replaces the base record in the snapshot mapping but keeps the base record's code receipts, so citation validation can still bottom out in code.
+
+## Actual behavior
+
+Refined records carried only record_reference receipts; sections citing them failed trust resolution and were downgraded to low confidence.
+
+## Steps to reproduce
+
+Generate sections for a snapshot with refined records (e2e-phase6 script); observe validation downgrades on claims citing refined records.
+
+## Notes during fixing
+
+Fix: the refinement pass unions the original record's receipt ids into the refined record. A related validator fix treats facts-only records as code-trust when resolving reference chains.
+
+---
+
+## [P3][Closed] Bug 33: DEV mock fallbacks masked real API failures
+
+**Bug #33**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | frontend/src/lib/graphData.ts, frontend/src/lib/onboardingData.ts |
+
+## Expected behavior
+
+A failed API call shows the honest error/empty state so problems are visible during development and demos.
+
+## Actual behavior
+
+In dev builds, dependency-graph and onboarding fetch failures silently fell back to hardcoded mock data, hiding backend errors and showing fake content.
+
+## Steps to reproduce
+
+Run the frontend in dev with the backend stopped → open Dependencies or Onboarding → mock data rendered as if real.
+
+## Notes during fixing
+
+M3 finalizes features: mock fallbacks removed along with the mock data files, the dead stub pages (EmptyStubPage, WalkthroughPage), and the hardcoded "Role packages" card on Overview (now backed by the packages endpoint).
+
+---
+
+## [P2][Closed] Bug 34: Graph layout stacked nodes / rendered a line of nodes
+
+**Bug #34**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15, user report) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend/src/lib/graphLayout.ts |
+
+## Expected behavior
+
+Graph tabs show a readable graph: grouped, spaced nodes with visible edge flow.
+
+## Actual behavior
+
+The hand-rolled longest-path layout pushed most nodes into deep single-node columns (a horizontal line of nodes) and stacked all disconnected nodes on top of each other at the same coordinates.
+
+## Steps to reproduce
+
+Open Dependencies or Architecture on any repo with disconnected files; nodes overlap at the far end of the canvas.
+
+## Notes during fixing
+
+Replaced with dagre (Sugiyama layered layout): rank assignment, crossing minimization, and side-by-side packing of disconnected components. All four graph tabs share the new `layoutGraph`.
+
+---
+
+## [P4][Closed] Bug 35: Inline code in onboarding markdown shows decorative backticks
+
+**Bug #35**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P4 |
+| State | Closed |
+| File / area | frontend prose styles (@tailwindcss/typography defaults) |
+
+## Expected behavior
+
+Inline code like `authService.ts` renders as a code chip without literal backtick characters.
+
+## Actual behavior
+
+The typography plugin's default adds decorative backtick pseudo-elements before/after inline code, which reads as noise inside the code-chip background.
+
+## Steps to reproduce
+
+Open any onboarding section containing inline code; backticks are visible around code spans.
+
+## Notes during fixing
+
+Fixed (2026-07-10): prose override `prose-code:before:content-none prose-code:after:content-none` applied to the onboarding reader.
+
+---
+
+## [P5][Open] Bug 36: Stale tutorials cannot be regenerated individually
+
+**Bug #36**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P5 |
+| State | Open |
+| File / area | backend tutorials routes / summaryWorker |
+
+## Expected behavior
+
+A stale tutorial offers a Regenerate action like stale sections do.
+
+## Actual behavior
+
+Incremental analysis marks tutorials stale, but regeneration currently only exists per-section; a stale tutorial refreshes only with a full package regeneration.
+
+## Steps to reproduce
+
+Change a file on a tutorial's path → incremental re-analysis → tutorial shows stale with no regenerate button.
+
+## Notes during fixing
+
+Future work: mirror the regenerate_section flow for tutorials (queue job, rebuild against latest snapshot, settle package staleness including tutorials).
+
+---
+
+## [P1][Open] Bug 37: GitHub sign-up fails with "Error getting user profile from external provider"
+
+**Bug #37**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-10 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Open |
+| File / area | Supabase GitHub auth provider config; frontend/src/pages/AuthCallbackPage.tsx |
+
+## Expected behavior
+
+"Sign up with GitHub" completes and lands on the dashboard; if the provider fails, the callback page explains what went wrong.
+
+## Actual behavior
+
+Supabase redirects back to `/auth/callback?error=server_error&error_code=unexpected_failure&error_description=Error+getting+user+profile+from+external+provider`. The callback page ignored the error params and showed a "Completing sign in..." spinner forever; the only clue was the raw URL.
+
+## Steps to reproduce
+
+1. Open the login or signup page → **Sign up with GitHub** → authorize.
+2. GitHub redirects to Supabase, Supabase redirects back with the error above.
+
+## Notes during fixing
+
+Two independent problems:
+
+1. **Frontend (fixed 2026-07-10):** `AuthCallbackPage` never read `error`/`error_description` from the callback URL (Supabase puts them in both the query string and the hash). It now surfaces the message with a hint to use email/password signup and connect GitHub later from Account Settings.
+2. **Supabase provider config (open):** the error means Supabase's GoTrue exchanged the OAuth code successfully but could not fetch the user's profile/email from GitHub. Likeliest causes, in order:
+   - The Supabase GitHub provider was configured with the **GitHub App's** client ID/secret (client ID starts with `Iv1.`) instead of a dedicated **OAuth App** (DEVOPS.md §3). A GitHub App token cannot read the user's email addresses unless the App has **Account permissions → Email addresses: Read-only**, so profile fetch fails exactly this way.
+   - The OAuth App client secret in the Supabase dashboard was rotated/mistyped.
+
+   Fix: in Supabase → Authentication → Providers → GitHub, make sure the Client ID/Secret belong to the login **OAuth App** from DEVOPS.md "GitHub OAuth App (for login)" (create one if missing). If the team intentionally reuses the GitHub App for login instead, grant it "Email addresses: Read-only" under Account permissions and have users re-authorize. Email/password signup is unaffected either way.

@@ -1,3 +1,4 @@
+import dagre from "@dagrejs/dagre";
 import type { GraphEdge, GraphNode } from "@/types/graph";
 
 export interface PositionedNode extends GraphNode {
@@ -5,95 +6,66 @@ export interface PositionedNode extends GraphNode {
   y: number;
 }
 
-const COLUMN_WIDTH = 300;
-const ROW_HEIGHT = 140;
+export interface LayoutOptions {
+  /** Flow direction: LR for dependency maps, TB for step/flow graphs. */
+  direction?: "LR" | "TB";
+  nodeWidth?: number;
+  nodeHeight?: number;
+  /** Gap between ranks (columns in LR). */
+  ranksep?: number;
+  /** Gap between nodes in the same rank. */
+  nodesep?: number;
+}
 
 /**
- * Assigns each node a column via longest-path-from-root leveling, then
- * stacks nodes within a column into rows. Roots are the declared entry
- * points, falling back to nodes with no incoming edges, falling back to
- * any node not reached by either (e.g. an isolated cycle).
+ * Layered graph layout via dagre (Sugiyama-style): ranks follow edge
+ * direction, nodes within a rank are ordered to minimize crossings, and
+ * disconnected components are packed side by side — no more single-file
+ * "line of nodes" or stacks of overlapping disconnected nodes.
  */
+export function layoutGraph(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  options: LayoutOptions = {},
+): PositionedNode[] {
+  const {
+    direction = "LR",
+    nodeWidth = 216,
+    nodeHeight = 92,
+    ranksep = 90,
+    nodesep = 28,
+  } = options;
+  if (nodes.length === 0) return [];
+
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: direction, ranksep, nodesep, marginx: 16, marginy: 16 });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  const ids = new Set(nodes.map((n) => n.id));
+  for (const node of nodes) g.setNode(node.id, { width: nodeWidth, height: nodeHeight });
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target) || edge.source === edge.target) continue;
+    g.setEdge(edge.source, edge.target);
+  }
+
+  dagre.layout(g);
+
+  return nodes.map((node) => {
+    const pos = g.node(node.id);
+    return {
+      ...node,
+      // dagre positions are node centers; ReactFlow wants top-left corners.
+      x: (pos?.x ?? 0) - nodeWidth / 2,
+      y: (pos?.y ?? 0) - nodeHeight / 2,
+    };
+  });
+}
+
+/** Back-compat signature used by the dependency views. */
 export function layoutDependencyGraph(
   nodes: GraphNode[],
   edges: GraphEdge[],
-  entryPoints: string[],
+  _entryPoints: string[],
 ): PositionedNode[] {
-  const nodeIds = new Set(nodes.map((n) => n.id));
-  const outgoing = new Map<string, string[]>();
-  const incomingCount = new Map<string, number>();
-  for (const node of nodes) {
-    outgoing.set(node.id, []);
-    incomingCount.set(node.id, 0);
-  }
-  for (const edge of edges) {
-    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
-    outgoing.get(edge.source)?.push(edge.target);
-    incomingCount.set(edge.target, (incomingCount.get(edge.target) ?? 0) + 1);
-  }
-
-  const level = new Map<string, number>();
-  const roots = entryPoints.filter((id) => nodeIds.has(id));
-  const rootSet = new Set(roots.length > 0 ? roots : []);
-  if (rootSet.size === 0) {
-    for (const [id, count] of incomingCount) {
-      if (count === 0) rootSet.add(id);
-    }
-  }
-  if (rootSet.size === 0 && nodes.length > 0) {
-    rootSet.add(nodes[0]!.id);
-  }
-
-  const queue: string[] = [];
-  for (const id of rootSet) {
-    level.set(id, 0);
-    queue.push(id);
-  }
-
-  // BFS with iteration cap to prevent infinite loops from cycles
-  const maxIterations = nodes.length * nodes.length;
-  let iterations = 0;
-  while (queue.length > 0 && iterations < maxIterations) {
-    iterations++;
-    const current = queue.shift()!;
-    const currentLevel = level.get(current) ?? 0;
-    for (const next of outgoing.get(current) ?? []) {
-      const candidate = currentLevel + 1;
-      if (candidate > nodes.length) continue; // prevent deep cycle traversal
-      if (level.get(next) === undefined || candidate > level.get(next)!) {
-        level.set(next, candidate);
-        queue.push(next);
-      }
-    }
-  }
-
-  // Any node unreached (isolated cycle, disconnected component) gets
-  // appended after the deepest known level.
-  let maxLevel = 0;
-  for (const value of level.values()) maxLevel = Math.max(maxLevel, value);
-  for (const node of nodes) {
-    if (!level.has(node.id)) {
-      level.set(node.id, maxLevel + 1);
-    }
-  }
-
-  const columns = new Map<number, GraphNode[]>();
-  for (const node of nodes) {
-    const col = level.get(node.id) ?? 0;
-    if (!columns.has(col)) columns.set(col, []);
-    columns.get(col)!.push(node);
-  }
-
-  const positioned: PositionedNode[] = [];
-  for (const [col, colNodes] of columns) {
-    colNodes.forEach((node, row) => {
-      positioned.push({
-        ...node,
-        x: col * COLUMN_WIDTH,
-        y: row * ROW_HEIGHT,
-      });
-    });
-  }
-
-  return positioned;
+  return layoutGraph(nodes, edges, { direction: "LR" });
 }

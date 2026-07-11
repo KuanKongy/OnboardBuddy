@@ -7,6 +7,7 @@ import {
   Trash2,
   XCircle,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
+import { pipelineProgress, type PipelineJobLite } from "@/lib/pipelineProgress";
 
 export interface Project {
   id: string;
@@ -88,6 +90,31 @@ export function ProjectCard({
   const StatusIcon = status.icon;
   const canManage = project.permission_tier === "owner" || project.permission_tier === "admin";
 
+  // While analyzing, show the SAME combined pipeline % and stage as the
+  // project overview page (bug: the card showed a hardcoded 45%).
+  const [liveJob, setLiveJob] = useState<PipelineJobLite | null>(null);
+  useEffect(() => {
+    if (project.status !== "analyzing") {
+      setLiveJob(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      apiFetch(`/projects/${project.id}/analysis-status`)
+        .then((data: { jobs: PipelineJobLite[] }) => { if (!cancelled) setLiveJob(data.jobs?.[0] ?? null); })
+        .catch(() => {});
+    };
+    load();
+    const timer = window.setInterval(load, 6000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [project.id, project.status]);
+
+  const live = pipelineProgress(liveJob);
+  const progressValue = project.status === "analyzing" && liveJob ? live.pct : status.progress;
+  const progressText = project.status === "analyzing"
+    ? (live.stageLabel ? `${live.stageLabel.split(" — ")[0]} ${live.pct}%` : `Analyzing ${live.pct}%`)
+    : "";
+
   async function handleDelete() {
     if (!confirm(`Delete ${project.repo_owner}/${project.repo_name}? This cannot be undone.`)) return;
     try {
@@ -137,9 +164,7 @@ export function ProjectCard({
         </div>
 
         <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">
-            {project.status === "analyzing" ? `Analyzing ${status.progress}%` : ""}
-          </span>
+          <span className="truncate text-muted-foreground">{progressText}</span>
           <Tooltip>
             <TooltipTrigger asChild>
               <span
@@ -153,7 +178,7 @@ export function ProjectCard({
           </Tooltip>
         </div>
 
-        <Progress value={status.progress} indicatorClassName={status.bar} className="mb-2.5 h-1" />
+        <Progress value={progressValue} indicatorClassName={status.bar} className="mb-2.5 h-1" />
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3 text-xs">
