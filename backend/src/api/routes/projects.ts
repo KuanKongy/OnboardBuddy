@@ -588,11 +588,24 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       }
     }
 
+    // Re-analyzing an already-analyzed scope is an incremental update (spec
+    // job type): the worker diffs against the previous snapshot and flags
+    // stale artifacts instead of regenerating everything.
+    const previousSnapshot = await client.query(
+      scope_id
+        ? `SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND scope_id = $2 AND status = 'complete' LIMIT 1`
+        : `SELECT 1 FROM analysis_snapshots s
+           JOIN analysis_scopes sc ON sc.id = s.scope_id
+           WHERE s.project_id = $1 AND sc.path_prefix = '' AND s.status = 'complete' LIMIT 1`,
+      scope_id ? [projectId, scope_id] : [projectId],
+    );
+    const jobType = previousSnapshot.rows.length > 0 ? 'incremental_update' : 'analyze_scope';
+
     const jobResult = await client.query(
       `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, 'analyze_scope', 'queued', 'Waiting for worker')
+       VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker')
        RETURNING id, status`,
-      [projectId, scope_id ?? null, userId],
+      [projectId, scope_id ?? null, userId, jobType],
     );
 
     await client.query("COMMIT");
@@ -613,7 +626,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       analysis: {
         id: dbJobId,
         status: jobResult.rows[0].status,
-        mode: "initial",
+        mode: jobType === 'incremental_update' ? "incremental" : "initial",
         branch: project.branch,
       },
     });

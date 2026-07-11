@@ -37,6 +37,7 @@ import { AiClient, AiPausedError } from './ai/aiClient.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
 import { resolveTierConfig } from './ai/modelTiers.js';
 import { runSemanticPipeline, SEMANTIC_PHASES } from './semantic/semanticPipeline.js';
+import { findPreviousSnapshot, runIncrementalDiff } from './incrementalAnalyzer.js';
 import type { SemanticContext } from './semantic/context.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
@@ -426,6 +427,34 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       clusterEdges: architecture.edges.length,
     });
 
+    // 11.5 Incremental diff (spec "Incremental Updates"): when this scope was
+    //      analyzed before at a different commit, diff files/symbols, insert
+    //      stale flags, and mark affected sections/tutorials/packages stale.
+    //      Downstream, content addressing makes unchanged symbols cache hits.
+    const previous = await findPreviousSnapshot(scope.scopeId, snapshotId);
+    const isIncremental = previous !== null && previous.commitHash !== commitHash;
+    if (isIncremental) {
+      await updateStep('Diffing against previous snapshot', 96);
+      await query(`UPDATE analysis_snapshots SET trigger_type = 'incremental' WHERE id = $1`, [snapshotId]);
+      const diff = await runIncrementalDiff({
+        projectId,
+        scopeId: scope.scopeId,
+        snapshotId,
+        commitHash,
+        prevSnapshotId: previous.snapshotId,
+        prevCommitHash: previous.commitHash,
+        graph: evidence,
+        sideEffects,
+        architecture,
+        inventory: snapshot.inventory,
+      });
+      await markPhase(snapshotId, 'incremental_diff', 'complete', diff.metrics);
+    } else {
+      await markPhase(snapshotId, 'incremental_diff', 'skipped', {
+        reason: previous ? 'same_commit_rescan' : 'no_previous_snapshot',
+      });
+    }
+
     // 12. Semantic pipeline (phases 7-12): symbol records -> synthesis ->
     //     capabilities -> refinement -> critique -> Phase B reranking.
     if (privacy_mode === 'ai_disabled') {
@@ -515,8 +544,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       [projectId],
     );
 
-    // Enqueue summary generation job (only if AI is enabled)
-    if (privacy_mode !== 'ai_disabled') {
+    // Enqueue summary generation job (only if AI is enabled). Incremental
+    // runs skip this: existing packages were stale-flagged where affected,
+    // and stale sections/tutorials are regenerated on request against this
+    // snapshot instead of paying for a full package rebuild.
+    if (privacy_mode !== 'ai_disabled' && !isIncremental) {
       const summaryJobResult = await query(
         `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
          VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
