@@ -2,6 +2,7 @@ import { LayoutDashboard, List, Mail, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { AccountCard } from "@/components/AccountCard";
+import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarShell, useSidebar } from "@/components/SidebarShell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -18,10 +19,8 @@ export function Sidebar() {
   return (
     <SidebarShell>
       <div className="flex items-center gap-2 px-3 py-3">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
-          OB
-        </div>
-        <span className="text-sm font-semibold text-foreground">OnboardBuddy</span>
+        <LogoMark className="h-7 w-7" />
+        <LogoWordmark />
       </div>
 
       <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">

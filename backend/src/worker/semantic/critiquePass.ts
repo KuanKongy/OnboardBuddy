@@ -7,6 +7,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES } from './recordTypes.js';
 import { setRecordStatus } from './recordStore.js';
@@ -73,8 +74,11 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
     [ctx.snapshotId],
   )).rows as PendingRecord[];
 
+  const batches: PendingRecord[][] = [];
   for (let i = 0; i < pending.length; i += RECORDS_PER_CRITIQUE_CALL) {
-    const batch = pending.slice(i, i + RECORDS_PER_CRITIQUE_CALL);
+    batches.push(pending.slice(i, i + RECORDS_PER_CRITIQUE_CALL));
+  }
+  await mapLimit(batches, 6, async (batch) => {
     const verdicts = await critiqueBatch(ctx, batch);
     for (const record of batch) {
       result.reviewed += 1;
@@ -105,20 +109,32 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
       await setRecordStatus(record.id, 'rejected', [{ kind: 'record_rejected', notes: verdict.notes }]);
       result.rejected += 1;
     }
-  }
+  });
   return result;
 }
 
+interface ReceiptRow {
+  id: string; receipt_kind: string; trust_level: string;
+  file_path: string | null; symbol_name: string | null; snippet: string | null; node_stable_key: string | null;
+}
+
 async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Promise<Map<string, Verdict>> {
+  // One receipts query for the whole batch instead of one per record —
+  // the DB is remote, round trips dominate.
+  const allReceiptIds = [...new Set(batch.flatMap((r) => r.receipt_ids))];
+  const receiptById = new Map<string, ReceiptRow>();
+  if (allReceiptIds.length > 0) {
+    const rows = (await query(
+      `SELECT id, receipt_kind, trust_level, file_path, symbol_name, snippet, node_stable_key
+       FROM source_receipts WHERE id = ANY($1)`,
+      [allReceiptIds],
+    )).rows as ReceiptRow[];
+    for (const row of rows) receiptById.set(row.id, row);
+  }
+
   const sections: string[] = [];
   for (const record of batch) {
-    const receipts = record.receipt_ids.length > 0
-      ? (await query(
-          `SELECT id, receipt_kind, trust_level, file_path, symbol_name, snippet, node_stable_key
-           FROM source_receipts WHERE id = ANY($1)`,
-          [record.receipt_ids],
-        )).rows as Array<{ id: string; receipt_kind: string; trust_level: string; file_path: string | null; symbol_name: string | null; snippet: string | null; node_stable_key: string | null }>
-      : [];
+    const receipts = record.receipt_ids.map((id) => receiptById.get(id)).filter((r): r is ReceiptRow => r !== undefined);
     const receiptLines = receipts.map((r) =>
       `  - [${r.id}] ${r.receipt_kind} (${r.trust_level}) ${r.file_path ?? r.node_stable_key ?? ''}${r.snippet ? `\n    ${r.snippet.slice(0, RECEIPT_SNIPPET_CAP).replace(/\n/g, '\n    ')}` : ''}`,
     );
@@ -138,7 +154,9 @@ async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Prom
   ].join('\n\n');
 
   const response = await ctx.ai.call<{ verdicts: Verdict[] }>({
-    tier: 'strong',
+    // Claim-vs-receipt verification is a constrained judgment task the cheap
+    // tier handles; critique reviews EVERY pending record, so tier matters.
+    tier: 'cheap',
     targetType: 'critique',
     promptVersion: PROMPT_VERSIONS.critique,
     schemaName: 'critique_verdicts',

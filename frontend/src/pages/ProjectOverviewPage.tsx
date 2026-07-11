@@ -21,8 +21,9 @@ import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
+import { pipelineProgress } from "@/lib/pipelineProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
-import { PhaseMetricsPanel } from "@/components/PhaseMetricsPanel";
+import { AnalysisRunPanel } from "@/components/AnalysisRunPanel";
 
 const rolesList = [
   { key: "backend", label: "Backend" },
@@ -44,6 +45,7 @@ interface AnalysisJob {
   status: string;
   progress_pct: number;
   current_step: string | null;
+  snapshot_id: string | null;
   checkpoint: Record<string, unknown>;
   step_log: StepLogEntry[];
   error_message: string | null;
@@ -73,6 +75,7 @@ export function ProjectOverviewPage() {
   const { id } = useParams<{ id: string }>();
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus | null>(null);
+  const [rolePackages, setRolePackages] = useState<Array<{ role: string; status: string }>>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasActiveRef = useRef(false);
 
@@ -109,11 +112,32 @@ export function ProjectOverviewPage() {
     return () => { cancelled = true; if (pollRef.current) clearInterval(pollRef.current); };
   }, [id]);
 
+  // Real per-role package status for the "Role packages" card (latest
+  // package per role wins — the list endpoint is sorted newest first).
+  useEffect(() => {
+    if (!id) return;
+    apiFetch(`/projects/${id}/onboarding/packages`)
+      .then((data: { packages: Array<{ role: string; status: string }> }) => {
+        const seen = new Set<string>();
+        setRolePackages((data.packages ?? []).filter((p) => {
+          if (seen.has(p.role)) return false;
+          seen.add(p.role);
+          return true;
+        }));
+      })
+      .catch(() => setRolePackages([]));
+  }, [id, project?.status]);
+
   if (!project) return null;
 
   const latestJob = analysisStatus?.jobs[0];
   const snap = analysisStatus?.latestSnapshot;
   const isActive = latestJob?.status === "queued" || latestJob?.status === "running";
+
+  // Shared combined pipeline bar (analysis 0-70%, generation 70-100%) —
+  // the dashboard project cards use the same helper, so both surfaces
+  // always show the same number and stage.
+  const { pct: pipelinePct, stageLabel } = pipelineProgress(latestJob);
 
   // Called when the AnalyzeDialog has accepted a job: resume status polling.
   function handleAnalysisStarted() {
@@ -236,7 +260,7 @@ export function ProjectOverviewPage() {
                     {latestJob?.status === "complete" && <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />}
                     {latestJob?.status === "failed" && <AlertTriangle className="h-3 w-3 text-destructive" />}
                     {isActive
-                      ? latestJob.current_step ?? "Processing..."
+                      ? stageLabel
                       : latestJob?.status === "complete"
                         ? "Analysis complete"
                         : latestJob?.status === "failed"
@@ -261,7 +285,7 @@ export function ProjectOverviewPage() {
                 {latestJob?.status ?? project.status}
               </Badge>
             </div>
-            <Progress value={latestJob?.progress_pct ?? 0} className="mb-2 h-1.5" />
+            <Progress value={pipelinePct} className="mb-2 h-1.5" />
 
             {/* Error message */}
             {latestJob?.status === "failed" && latestJob.error_message && (
@@ -291,31 +315,18 @@ export function ProjectOverviewPage() {
               </div>
             </div>
 
-            {/* Per-phase pipeline metrics + budget spend */}
-            {snap?.id && (
+            {/* The run, in one panel: every pipeline step with status,
+                start/finish times and key numbers, plus the spend line. */}
+            {(latestJob || snap) && (
               <div className="mt-3">
-                <PhaseMetricsPanel projectId={id!} snapshotId={snap.id} />
+                <AnalysisRunPanel
+                  projectId={id!}
+                  snapshotId={latestJob?.snapshot_id ?? snap?.id ?? null}
+                  isActive={isActive}
+                  currentStep={latestJob?.current_step ?? null}
+                  stepLog={latestJob?.step_log ?? []}
+                />
               </div>
-            )}
-
-            {/* Step history timeline for latest job */}
-            {latestJob?.step_log && latestJob.step_log.length > 0 && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                  Step history ({latestJob.step_log.length} steps)
-                </summary>
-                <div className="mt-1.5 border-l border-border pl-3">
-                  {latestJob.step_log.map((entry, i) => (
-                    <div key={i} className="relative mb-1.5 flex items-start gap-2">
-                      <div className="absolute -left-[15px] top-1 h-1.5 w-1.5 rounded-full bg-primary/60" />
-                      <span className="flex-1 text-xs text-muted-foreground">{entry.step}</span>
-                      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
-                        {new Date(entry.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </details>
             )}
 
             {/* Previous jobs */}
@@ -364,22 +375,29 @@ export function ProjectOverviewPage() {
           <CardContent className="p-3">
             <h3 className="mb-2 text-[13px] font-medium text-foreground">Role packages</h3>
             <div className="space-y-1.5">
-              {rolesList.map((role) => (
-                <div key={role.key} className="flex items-center justify-between py-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <FileText className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-xs text-foreground">{role.label}</span>
-                  </div>
-                  {role.key === project.developer_role ? (
+              {rolesList.map((role) => {
+                const pkg = rolePackages.find((p) => p.role === role.key);
+                return (
+                  <div key={role.key} className="flex items-center justify-between py-0.5">
                     <div className="flex items-center gap-1.5">
-                      <Badge variant="secondary" className="text-[11px]">Draft</Badge>
-                      <Button variant="ghost" size="xs">Open</Button>
+                      <FileText className="h-3 w-3 text-muted-foreground" />
+                      <span className="text-xs text-foreground">{role.label}</span>
                     </div>
-                  ) : (
-                    <span className="text-xs text-muted-foreground">Missing</span>
-                  )}
-                </div>
-              ))}
+                    {pkg ? (
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant="secondary" className="text-[11px] capitalize">{pkg.status}</Badge>
+                        <Button variant="ghost" size="xs" asChild>
+                          <Link to={`/projects/${id}/onboarding?view=reader&role=${role.key}`}>Open</Link>
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button variant="ghost" size="xs" className="text-muted-foreground" asChild>
+                        <Link to={`/projects/${id}/onboarding?view=reader&role=${role.key}`}>Generate…</Link>
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>

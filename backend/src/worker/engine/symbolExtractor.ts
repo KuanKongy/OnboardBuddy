@@ -11,6 +11,7 @@ import type {
   MethodInfo,
   ConstructorInfo,
   EnumMember,
+  RouteRegistration,
 } from '../types/analysis.js';
 import {
   ParsedSourceFile,
@@ -45,6 +46,11 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     visitTopLevel(statement);
   }
 
+  // Route registrations (`router.get('/x', handler)`) live anywhere in the
+  // file, usually top-level with inline handlers — synthesize real symbol
+  // nodes for those handlers so workflow tracing has a seed with a body.
+  const routes = extractRouteRegistrations(sourceFile, relativePath, ctx, symbols);
+
   // Stamp stable keys (repo-local, '/'-separated) on every symbol.
   for (const sym of symbols) {
     sym.stableKey = symbolKey(normalizePath(relativePath), sym.name);
@@ -56,6 +62,7 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     symbols,
     imports,
     exports,
+    ...(routes.length > 0 ? { routeRegistrations: routes } : {}),
     hasParseErrors: parsed.hasErrors,
     parseErrors: parsed.errors,
   };
@@ -272,15 +279,25 @@ function extractResolvedCalls(
   const resolved: import('../types/analysis.js').ResolvedCall[] = [];
   const seen = new Set<string>();
 
+  function record(expr: ts.Expression, calleeText: string): void {
+    const target = resolveCallTarget(expr, checker!, ctx.rootPath);
+    if (!target) return;
+    const dedupe = `${target.targetRelativePath}#${target.targetParentName ?? ''}.${target.targetName}`;
+    if (seen.has(dedupe)) return;
+    seen.add(dedupe);
+    resolved.push({ callee: calleeText, ...target });
+  }
+
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
-      const target = resolveCallTarget(node.expression, checker!, ctx.rootPath);
-      if (target) {
-        const dedupe = `${target.targetRelativePath}#${target.targetParentName ?? ''}.${target.targetName}`;
-        if (!seen.has(dedupe)) {
-          seen.add(dedupe);
-          resolved.push({ callee: node.expression.getText(sf), ...target });
-        }
+      record(node.expression, node.expression.getText(sf));
+    }
+    // JSX usage is a call in flow terms: <UserCard/> runs UserCard. This is
+    // what connects frontend components into the call graph.
+    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+      const tag = node.tagName;
+      if (ts.isIdentifier(tag) && /^[A-Z]/.test(tag.text)) {
+        record(tag, tag.text);
       }
     }
     ts.forEachChild(node, visit);
@@ -288,6 +305,89 @@ function extractResolvedCalls(
 
   visit(body);
   return resolved;
+}
+
+// ─── Route registrations ─────────────────────────────────────────────────────
+
+const ROUTE_METHOD_NAMES = new Set(['get', 'post', 'put', 'patch', 'delete', 'all']);
+
+/**
+ * Finds Express-style route registrations anywhere in the file:
+ * `router.get('/path', ...handlers)` with a string path starting with '/'.
+ * Inline handlers become synthesized symbols (named `GET /path`) with real
+ * bodies, hashes and resolved calls, so entrypoint detection gets a precise
+ * seed instead of guessing from `*.get(...)` name matches (old bug: every
+ * `map.get(...)` counted as an HTTP route).
+ */
+function extractRouteRegistrations(
+  sourceFile: ts.SourceFile,
+  relativePath: string,
+  ctx: ExtractCtx,
+  symbols: SymbolInfo[],
+): RouteRegistration[] {
+  const routes: RouteRegistration[] = [];
+  const usedNames = new Set(symbols.map((s) => s.name));
+  const normalizedPath = normalizePath(relativePath);
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ROUTE_METHOD_NAMES.has(node.expression.name.text) &&
+      node.arguments.length >= 2 &&
+      ts.isStringLiteralLike(node.arguments[0]!) &&
+      (node.arguments[0] as ts.StringLiteralLike).text.startsWith('/')
+    ) {
+      const method = node.expression.name.text.toUpperCase();
+      const routePath = (node.arguments[0] as ts.StringLiteralLike).text;
+      const handler = node.arguments[node.arguments.length - 1]!;
+      const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+
+      if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
+        let name = `${method} ${routePath}`;
+        for (let i = 2; usedNames.has(name); i++) name = `${method} ${routePath} (${i})`;
+        usedNames.add(name);
+        const loc = getNodeLocation(node, sourceFile);
+        const params = extractParameters(handler.parameters, sourceFile);
+        const calls = extractCallSymbols(handler.body, sourceFile);
+        const resolvedCalls = extractResolvedCalls(handler.body, sourceFile, ctx);
+        const signature = buildSignature(params, 'void');
+        symbols.push({
+          name,
+          kind: 'arrow-function',
+          filePath: sourceFile.fileName,
+          ...loc,
+          exported: false,
+          isDefault: false,
+          signature,
+          parameters: params,
+          returnType: 'void',
+          isAsync: hasModifier(handler, ts.SyntaxKind.AsyncKeyword),
+          ...(calls.length > 0 ? { callsSymbols: calls } : {}),
+          ...(resolvedCalls.length > 0 ? { resolvedCalls } : {}),
+          signatureHash: sha256(`${method} ${routePath}${signature}`),
+          bodyHash: hashBody(handler.getText(sourceFile)),
+          snippet: snippetOf(node, sourceFile),
+          isTrivial: false,
+        });
+        routes.push({ method, routePath, handlerSymbolName: name, handlerRelativePath: normalizedPath, line });
+      } else if (ts.isIdentifier(handler) || ts.isPropertyAccessExpression(handler)) {
+        const target = ctx.checker ? resolveCallTarget(handler, ctx.checker, ctx.rootPath) : null;
+        routes.push({
+          method,
+          routePath,
+          ...(target ? { handlerSymbolName: target.targetName, handlerRelativePath: target.targetRelativePath } : {}),
+          line,
+        });
+      } else {
+        routes.push({ method, routePath, line });
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return routes;
 }
 
 function resolveCallTarget(

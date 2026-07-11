@@ -259,12 +259,25 @@ export interface ExportRecord {
 
 // ─── Per-file parse result ────────────────────────────────────────────────────
 
+/** An HTTP route registration (`router.get('/x', handler)`) found in a file. */
+export interface RouteRegistration {
+  method: string;      // GET / POST / ...
+  routePath: string;   // '/projects/:id'
+  /** Symbol name of the handler in `handlerRelativePath` (synthesized for inline handlers). */
+  handlerSymbolName?: string;
+  /** Repo-relative file declaring the handler (this file for inline handlers). */
+  handlerRelativePath?: string;
+  line: number;
+}
+
 export interface FileAnalysis {
   filePath: string;
   relativePath: string;
   symbols: SymbolInfo[];
   imports: ImportRecord[];
   exports: ExportRecord[];
+  /** HTTP route registrations found anywhere in the file (AST-detected). */
+  routeRegistrations?: RouteRegistration[];
   hasParseErrors: boolean;
   parseErrors: string[];
 }

@@ -449,13 +449,13 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     const projectId = req.params.id;
 
     const jobResult = await query(
-      `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step,
+      `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step, aj.snapshot_id,
               aj.checkpoint, aj.step_log, aj.error_message, aj.created_at, aj.started_at, aj.finished_at,
               s.file_count, s.symbol_count, s.workflow_count, s.commit_hash
        FROM analysis_jobs aj
        LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
        WHERE aj.project_id = $1
-       ORDER BY aj.created_at DESC
+       ORDER BY (aj.status IN ('queued', 'running')) DESC, aj.created_at DESC
        LIMIT 5`,
       [projectId],
     );

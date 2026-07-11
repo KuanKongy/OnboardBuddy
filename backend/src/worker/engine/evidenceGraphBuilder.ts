@@ -15,6 +15,7 @@ import type { DocsIngestResult } from './docsIngester.js';
 import { symbolKey, externalKey, normalizePath } from './stableKeys.js';
 import { deriveBehaviorSignals, derivePurposeSignals } from './behaviorSignals.js';
 import { schemaTableIndex } from './configScanner.js';
+import { collectPathAliases, resolveAlias, type CollectedAliases } from './tsconfigPaths.js';
 
 /**
  * Builds the full symbol-level evidence graph (doc/Pipeline.md "Code
@@ -55,6 +56,7 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
 
   const recordByPath = new Map(input.fileRecords.map((r) => [r.relativePath, r]));
   const parsedPaths = new Set(input.fileAnalyses.map((fa) => normalizePath(fa.relativePath)));
+  const aliases = collectPathAliases(input.rootPath);
 
   const addNode = (n: EvidenceNode) => {
     if (!nodes.has(n.stableKey)) nodes.set(n.stableKey, n);
@@ -138,7 +140,7 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
   for (const fa of input.fileAnalyses) {
     const relPath = normalizePath(fa.relativePath);
     for (const imp of fa.imports) {
-      const resolved = resolveImport(relPath, imp.toSpecifier, parsedPaths);
+      const resolved = resolveImport(relPath, imp.toSpecifier, parsedPaths, aliases);
       if (resolved.kind === 'internal') {
         addEdge({
           sourceKey: relPath,
@@ -352,8 +354,36 @@ type ImportResolution =
   | { kind: 'internal'; target: string }
   | { kind: 'external'; target: string; boundary: 'package' | 'out_of_scope' };
 
-function resolveImport(fromFile: string, specifier: string, parsedPaths: Set<string>): ImportResolution {
+function withExtensionCandidates(resolved: string): string[] {
+  const candidates: string[] = [];
+  if (resolved.endsWith('.js')) candidates.push(`${resolved.slice(0, -3)}.ts`, `${resolved.slice(0, -3)}.tsx`);
+  else if (resolved.endsWith('.jsx')) candidates.push(`${resolved.slice(0, -4)}.tsx`, `${resolved.slice(0, -4)}.jsx`);
+  candidates.push(
+    resolved,
+    `${resolved}.ts`, `${resolved}.tsx`, `${resolved}/index.ts`, `${resolved}/index.tsx`,
+    `${resolved}.js`, `${resolved}/index.js`,
+  );
+  return candidates;
+}
+
+function resolveImport(
+  fromFile: string,
+  specifier: string,
+  parsedPaths: Set<string>,
+  aliases: CollectedAliases,
+): ImportResolution {
   if (!specifier.startsWith('.') && !specifier.startsWith('/')) {
+    // Try tsconfig path aliases first — `@/components/x` is a repo file,
+    // not a package, when a tsconfig maps it.
+    const aliasTargets = resolveAlias(aliases, specifier);
+    if (aliasTargets) {
+      for (const target of aliasTargets) {
+        const normalized = path.posix.normalize(target);
+        for (const c of withExtensionCandidates(normalized)) {
+          if (parsedPaths.has(c)) return { kind: 'internal', target: c };
+        }
+      }
+    }
     // Bare specifier: third-party package. Keep the package root only.
     const parts = specifier.split('/');
     const pkg = specifier.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]!;
@@ -363,16 +393,7 @@ function resolveImport(fromFile: string, specifier: string, parsedPaths: Set<str
   const fromDir = path.posix.dirname(fromFile);
   const resolved = path.posix.normalize(path.posix.join(fromDir, specifier));
 
-  const candidates: string[] = [];
-  if (resolved.endsWith('.js')) candidates.push(`${resolved.slice(0, -3)}.ts`, `${resolved.slice(0, -3)}.tsx`);
-  else if (resolved.endsWith('.jsx')) candidates.push(`${resolved.slice(0, -4)}.tsx`, `${resolved.slice(0, -4)}.jsx`);
-  candidates.push(
-    resolved,
-    `${resolved}.ts`, `${resolved}.tsx`, `${resolved}/index.ts`, `${resolved}/index.tsx`,
-    `${resolved}.js`, `${resolved}/index.js`,
-  );
-
-  for (const c of candidates) {
+  for (const c of withExtensionCandidates(resolved)) {
     if (parsedPaths.has(c)) return { kind: 'internal', target: c };
   }
   // Relative import that resolves outside the parsed scope: boundary node.

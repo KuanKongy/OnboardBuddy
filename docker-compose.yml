@@ -27,3 +27,6 @@ services:
       - "5173:80"
     depends_on:
       - backend-api
+
+# Automated tests live in docker-compose.test.yml:
+#   docker compose -f docker-compose.test.yml run --rm test

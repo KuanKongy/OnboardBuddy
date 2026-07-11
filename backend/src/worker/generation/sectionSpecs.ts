@@ -20,6 +20,26 @@ export const SECTION_TYPES = [
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
+/**
+ * Canonical display titles (Design.md package structure). Section titles are
+ * standardized — the LLM's title suggestion is ignored so packages always
+ * read the same (bug: half the sections showed raw type strings like
+ * "role_path", the other half LLM-invented titles).
+ */
+export const SECTION_TITLES: Record<SectionType, string> = {
+  start_here: 'Start Here: Repository Overview',
+  architecture: 'Architecture & Boundaries',
+  entry_points: 'Entry Points and Why They Matter',
+  critical_25: 'Critical 25% Learning Path',
+  capability_map: 'Capability Map',
+  role_path: 'Your Role-Based Path',
+  workflow_guide: 'Workflow Guides',
+  data_schema: 'Data Schema & Source of Truth',
+  safety_rails: 'Safety Rails & Risky Areas',
+  dependency_graph: 'Dependency & Coupling Reference',
+  doc_health: 'Documentation Health',
+};
+
 export interface SectionDeps {
   snapshotId: string;
   projectId: string;

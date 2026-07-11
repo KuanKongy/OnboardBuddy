@@ -1,0 +1,10 @@
+# Run every automated test (backend + frontend) with one command —
+# no local Node, no .env, no cloud services needed:
+#
+#   docker compose -f docker-compose.test.yml run --rm test
+#
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test

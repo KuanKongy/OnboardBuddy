@@ -9,9 +9,10 @@
  */
 
 import { Worker, Job } from 'bullmq';
-import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
+import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
+import { mapLimit } from '../lib/parallel.js';
 import { AiClient, AiPausedError } from './ai/aiClient.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
 import { resolveTierConfig } from './ai/modelTiers.js';
@@ -57,8 +58,6 @@ async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────────
-
-const ALL_ROLES: DeveloperRole[] = ['backend', 'frontend', 'devops', 'qa', 'general'];
 
 async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole, sectionType: regenerateSectionType } = job.data;
@@ -181,23 +180,29 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       }
     }
 
-    // ── sections, one at a time (spec: never one giant call) ───────────────
+    // ── sections: one call each (spec: never one giant call), generated
+    //    concurrently — each persists as soon as it finishes, so the reader
+    //    can show sections while the rest are still generating.
     const pending = SECTION_TYPES.filter((t) => !completedSections.has(t));
-    for (let i = 0; i < pending.length && !budgetDegraded; i++) {
-      const sectionType = pending[i]!;
-      await updateJob('running', `Generating: ${sectionType}`, 15 + Math.floor(((i + 1) / pending.length) * 75));
+    if (!budgetDegraded && pending.length > 0) {
+      await updateJob('running', `Generating sections (0/${pending.length})`, 15);
+      let done = 0;
       try {
-        const result = await generateSection({
-          ai, snapshotId, projectId, packageId, role, sectionType,
-          privacyMode, commitHash: snap.commit_hash, deps,
+        await mapLimit(pending, 4, async (sectionType) => {
+          const result = await generateSection({
+            ai, snapshotId, projectId, packageId, role, sectionType,
+            privacyMode, commitHash: snap.commit_hash, deps,
+          });
+          sectionMetrics[sectionType] = {
+            confidence: result.validation.confidence,
+            issues: result.validation.issues.length,
+            retried: result.retried,
+          };
+          completedSections.add(sectionType);
+          done += 1;
+          await updateJob('running', `Generated section: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
+          await saveCheckpoint();
         });
-        sectionMetrics[sectionType] = {
-          confidence: result.validation.confidence,
-          issues: result.validation.issues.length,
-          retried: result.retried,
-        };
-        completedSections.add(sectionType);
-        await saveCheckpoint();
       } catch (err) {
         if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
           budgetDegraded = true; // keep what exists, stop LLM work
@@ -238,25 +243,9 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       tutorials: sectionMetrics.tutorials ?? null,
     });
 
-    // Fan out the remaining roles (only from the settings-default role job).
-    if (!requestedRole) {
-      for (const nextRole of ALL_ROLES.filter((r) => r !== role)) {
-        const roleJobId = ((await query(
-          `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
-           VALUES ($1, $2, $3, 'generate_package', $4, 'queued', 'Waiting for worker')
-           RETURNING id`,
-          [projectId, snapshotId, triggeredBy, nextRole],
-        )).rows[0] as { id: string }).id;
-        await getSummaryQueue().add(`generate_summary_${nextRole}`, {
-          jobId: roleJobId, snapshotId, projectId, triggeredBy, role: nextRole,
-        } satisfies SummaryJobData, {
-          attempts: 2,
-          backoff: { type: 'fixed', delay: 3000 },
-          removeOnComplete: { count: 10 },
-          removeOnFail: { count: 10 },
-        });
-      }
-    }
+    // Other roles are generated on demand (POST /onboarding/generate) — a
+    // full 5-role fan-out here paid 5x LLM cost for packages nobody may open
+    // (bug #17).
 
     await updateJob('complete', 'Onboarding package ready', 100);
     console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size}`);

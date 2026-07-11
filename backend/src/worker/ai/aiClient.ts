@@ -126,7 +126,7 @@ export class AiClient {
   constructor(private readonly options: AiClientOptions) {
     this.provider = options.provider ?? new OpenRouterProvider();
     this.tierConfig = options.tierConfig ?? resolveTierConfig();
-    this.semaphore = new Semaphore(options.maxConcurrency ?? Number(process.env.LLM_MAX_CONCURRENCY ?? 4));
+    this.semaphore = new Semaphore(options.maxConcurrency ?? Number(process.env.LLM_MAX_CONCURRENCY ?? 6));
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }

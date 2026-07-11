@@ -1,218 +1,124 @@
-# OnboardBuddy -- Test Plan (Milestone 2)
+# OnboardBuddy — Test Plan (Milestone 3)
 
-This document describes how to test OnboardBuddy. It covers setup, automated test suites, and manual test checklists for the TA to validate the application.
-
----
-
-## 1. Setup
-
-### Prerequisites
-
-- **Node.js 22** and **npm** (for running automated tests locally)
-- **Docker Desktop** (for running the full app)
-
-### Clone and Install
-
-```bash
-git clone <repo-url>
-cd team15
-npm install
-```
-
-### Environment Files
-
-**For unit tests (Tier 1):** No `.env` files or Docker are needed. Tests call the same backend engine functions the worker uses, with a shared fixture repo (`backend/src/worker/fixtures/simple/`). The API boots in-process via Supertest with placeholder env vars from `backend/test/setup.ts`. See [TESTING.md](./TESTING.md) for the full test catalog and layer breakdown.
-
-```bash
-npm run test    # backend + frontend unit tests (no Docker)
-npm run lint
-npm run build
-```
-
-**For stack tests (Tier 2) and manual tests:** Docker + real credentials:
-
-```bash
-docker compose up --build -d
-npm run test:stack   # Playwright smoke tests against the running stack
-```
-
-**For manual browser checklists:** Docker + real credentials:
-
-1. Place `backend/.env` in the `backend/` directory (submitted on UBC Mail).
-2. Place `frontend/.env` in the `frontend/` directory (submitted on UBC Mail).
-3. Place `github-app.pem` in the `backend/` directory (submitted on UBC Mail).
-4. Fork 'https://github.com/KuanKongy/CourseInsights' repo into your GitHub account and use it for onboarding. It is a CPSC 310 project.
-
-### Running the App (for manual tests)
-
-```bash
-docker compose up --build
-```
-
-| Service | URL |
-|---------|-----|
-| Frontend | http://localhost:5173 |
-| Backend API | http://localhost:3000/api |
-| Health check | http://localhost:3000/api/health |
+How to validate OnboardBuddy: one command for all automated tests, then manual checklists that exercise the M3 features end to end.
 
 ---
 
-## 2. Automated Tests
+## 1. Automated Tests — one command
 
-### Run All Tests
-
-```bash
-npm run test
-```
-
-This fans out to each workspace's `test` script via npm workspaces, running both backend (Mocha) and frontend (Vitest) tests.
-
-### Backend Tests (Mocha + Chai + Supertest)
+With only Docker installed, from the repo root:
 
 ```bash
-npm run test -w backend
+docker compose -f docker-compose.test.yml run --rm test
 ```
 
-**Expected output:** 137 passing, 0 pending.
-
-**What is covered:**
-- Health endpoint (`GET /api/health`) returns 200
-- Auth routes: signup/login validation (400 for missing fields), unauthenticated guards (401)
-- GitHub routes: unauthenticated guards (401) for app, installations, repos, branches
-- Project routes: unauthenticated guards (401) for CRUD, analyze, settings
-- Member routes: unauthenticated guards (401) for list, invitations, role updates, removal
-- Invitation routes: unauthenticated guards (401) for list, detail, accept
-- Onboarding routes: unauthenticated guards (401) for package, export, receipts, validate, review
-- Workflow routes: unauthenticated guards (401) for list, walkthrough
-- Graph routes: unauthenticated guards (401) for dependencies, node detail
-- Encryption: AES-256-GCM round-trip, random IV, format validation, tamper detection, key validation
-- Repo Ingester: file discovery, language detection, path resolution, error handling, language filtering
-- Symbol Extractor: type aliases, functions, classes, enums, interfaces, imports, JSDoc, exports
-- Graph Builder: node creation, import edges, dependent counts, entry point detection, edge deduplication
-- Entrypoint Detector: detects entry files by pattern and inbound-edge absence
-- Side Effect Detector: identifies DB writes, network calls, file I/O, process exits
-- Workflow Extractor: traces entrypoint-to-side-effect paths
-- Analysis Pipeline: repo inventory, privacy filtering, AST extraction, symbol hashing
-- Critical Ranking: composite scoring, role-based re-weighting
-
-### Frontend Tests (Vitest + Testing Library)
+Or, with Node 22 instead of Docker:
 
 ```bash
-npm run test -w frontend
+npm install && npm test
 ```
 
-**Expected output:** 20 passing, 0 todo.
+Either way this runs **every automated test** — backend (Mocha/Chai/Supertest) and frontend (Vitest/Testing Library). **Expected output:** backend `302 passing`, frontend `21 passed`; non-zero exit code on any failure. No `.env`, no cloud services, no running stack needed — the suites are self-contained (DB stubbed, API booted in-process, fixture repo shipped in-tree). The first Docker run builds the image (~1–2 min); repeats are cached.
 
-**What is covered:**
-- App routing: intro page, login page, signup page, protected route redirect
-- Graph page: node rendering from mock data, search filtering, node click info panel
-- Login page: form rendering, validation, submit behavior
-- Signup page: form rendering, password validation, submit behavior
-- Feature flows: GitHub import chain, role-specific onboarding, walkthrough steps, graph rendering, review status
+What each suite covers, layer by layer and file by file, is documented in [TESTING.md](./TESTING.md) — including the optional Playwright UI regression suite (21 tests rendering every tab in dark + light themes).
 
-### Lint
+---
 
-```bash
-npm run lint
-```
+## 2. Running the App (for manual tests)
 
-**Expected output:** 0 errors. ESLint runs across the entire monorepo.
+1. Place `backend/.env`, `frontend/.env` (submitted on Canvas/UBC mail) and `github-app.pem` in `backend/`.
+2. `docker compose up --build`
+3. Open http://localhost:5173 (API: http://localhost:3000/api, health: http://localhost:3000/api/health).
 
-### Build (Type Check + Production Build)
-
-```bash
-npm run build
-```
-
-**Expected output:** Clean build with 0 TypeScript errors and successful Vite production bundle.
+For a repo to analyze, fork https://github.com/KuanKongy/CourseInsights (a CPSC 310 project) into your GitHub account and install the OnboardBuddy GitHub App on it during import.
 
 ---
 
 ## 3. Manual Test Checklists
 
-Run these against the Docker stack (`docker compose up --build`) with valid `.env` files.
-
-### 3.1 Authentication
+### 3.1 Authentication & GitHub setup (unchanged from M2)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Navigate to http://localhost:5173 | Landing page with "Onboard Developers" heading is displayed |
-| 2 | Click "Get Started" or navigate to `/signup` | Signup form with email, password fields and "Sign in with GitHub" button |
-| 3 | Enter a valid email and password (min 8 chars), click "Create Account" | Account created, redirected to `/dashboard` |
-| 4 | Click the user avatar in the sidebar, click "Sign Out" | Redirected to `/login` or intro page |
-| 5 | Navigate to `/login`, enter credentials, click "Sign In" | Redirected to `/dashboard` |
-| 6 | Click "Sign in with GitHub" on the login page | Redirected to GitHub OAuth, then back to the app's dashboard |
+| 1 | Open http://localhost:5173, sign up (email + password ≥ 8 chars) | Redirected to `/dashboard` |
+| 2 | Account Settings → Connect GitHub → authorize the App | GitHub shows as connected |
+| 3 | Sign out and back in | Session restored; GitHub stays connected |
 
-### 3.2 GitHub Setup
+### 3.2 Import & analyze with preview (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Go to Account Settings (sidebar) | Shows GitHub connection status |
-| 2 | Click "Connect GitHub" | Redirected to GitHub App authorization flow |
-| 3 | Authorize the OnboardBuddy GitHub App | Returned to app with GitHub connected status |
+| 1 | Dashboard → Import Repository → pick installation, repo, branch, role → Create Project | Project overview opens |
+| 2 | Overview → **Analyze…** | Dialog with scope selector and optional commit SHA |
+| 3 | Click **Preview first** | Preview appears: analyzable file count, ~symbols, ~AI calls, cost tier, privacy summary, unsupported-language note if any |
+| 4 | Click **Start analysis** | Progress bar advances **without ever moving backwards**: "Analyzing code — …" (0–70%), then "Generating onboarding — …" (70–100%) |
+| 5 | While running, watch below the bar | Live activity list shows the current step (spinner) and recently completed steps (checkmarks) with timestamps |
+| 6 | After completion, expand **Pipeline phases & spend** | Per-phase rows (ingest…generation) with metrics; budget line shows AI calls, tokens, ~cost |
 
-### 3.3 Repository Import
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Click "Import Repository" on the dashboard | Import page loads showing GitHub App configuration |
-| 2 | If no installations, click "Configure repositories" | GitHub App install flow opens |
-| 3 | After installing, select an installation from the dropdown | Repository list loads |
-| 4 | Select a repository | Branch dropdown appears |
-| 5 | Select a branch | Branch selected, developer role dropdown visible |
-| 6 | Choose a developer role (e.g., "General") | Role selected |
-| 7 | Click "Create Project" | Project created, redirected to project overview |
-
-### 3.4 Analysis
+### 3.3 Onboarding package cards & reader (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | On the project overview page, click "Run Analysis" | Analysis job queued, progress indicator appears |
-| 2 | Wait for analysis to complete | Status changes from "Analyzing" to "Complete" with stats (files, symbols, edges) |
-| 3 | If analysis fails, check the status message | Error message displayed, can retry |
+| 1 | Open **Your Onboarding** | Card grid: one card per (scope, role, commit) with status, commit freshness, section/tutorial counts |
+| 2 | Use the role/status/commit filters | Card list narrows; counter updates |
+| 3 | Open a card | Reader: numbered section nav (11 sections), content with Markdown, confidence badge |
+| 4 | Click a receipt chip | Code snippet viewer opens with file/line |
+| 5 | Open the **Architecture** section | An embedded Mermaid diagram renders |
+| 6 | Find a section with "Known gaps" | Honest unknowns listed in plain language (nothing invented) |
+| 7 | Switch role to one without a package → **Generate for <role>** | Only that role generates (no re-analysis); package appears after generation — other roles remain untouched |
+| 8 | Export → Markdown file | `.md` downloads with all sections |
+| 9 | Mark a section reviewed | Badge flips; persists on refresh |
 
-### 3.5 Onboarding Package
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Navigate to the "Your Onboarding" tab | Onboarding page loads with section navigation on the left |
-| 2 | Click through different sections (Start Here, Entry Points, etc.) | Content updates in the main area with Markdown rendering |
-| 3 | Each section shows source receipts | Receipts display with file paths, line numbers, confidence labels |
-| 4 | Switch roles using the role dropdown in the right panel | Package reloads with role-specific content; role status badges update |
-| 5 | Click "Mark Reviewed" on a generated package | Section review status updates to "Approved" (persists on refresh) |
-| 6 | Click "Export" > "Markdown file" | Markdown file downloads with all sections |
-
-### 3.6 Dependency Graph
+### 3.4 Graph tabs (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Navigate to the "Dependencies" tab | Graph renders with module nodes and edges |
-| 2 | Type in the search bar | Nodes filter to match the search, count updates (e.g., "2 / 15 modules") |
-| 3 | Click a node | Info panel opens showing exported symbols, functions, imports |
-| 4 | Large repos show clustered directory groups | Clusters are expandable/navigable |
+| 1 | **Architecture** | Layered cluster graph (no overlapping/line-of-nodes); kind-colored chips + criticality bars; click a component → summary (labeled AI vs deterministic), file list, criticality |
+| 2 | **Dependencies** | File graph with search; click a node → symbol doc panel: one-line summary, signature, real call-site example, importance + reasons, receipts |
+| 3 | Dependencies → **Classes & interfaces** | Class/interface graph with extends/implements edges |
+| 4 | **Workflows** | Traced flows list; step graph top-to-bottom with numbered, kind-colored steps; click a step for detail |
+| 5 | **Capabilities** | Business capabilities linked to their workflows and components; click for details with cross-links |
 
-### 3.7 Walkthrough
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Navigate to the "Walkthrough" tab | List of discovered workflows loads |
-| 2 | Select a workflow | Step-by-step walkthrough opens |
-| 3 | Navigate through stops | Each stop shows the file, symbol, and contextual explanation |
-
-### 3.8 Team Management
+### 3.5 Tutorials (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Navigate to the "Team" tab | Team member list displays (at minimum, the owner) |
-| 2 | Click "Invite Member" | Dialog opens with email field and permission tier selector |
-| 3 | Enter an email, select a tier, click "Send Invitation" | Invitation created, shown in pending invitations list |
-| 4 | Log in as the invited user, go to Invitations page | Pending invitation visible with accept/decline options |
-| 5 | Click "Accept" | User gains access to the project |
+| 1 | Open **Tutorials** | First tutorial auto-opens: step pager, real code snippet, AI explanation, "Backed by" receipts per step |
+| 2 | Step through with the pager/arrows | Each step shows file/lines/kind + snippet + explanation |
+| 3 | If no tutorials exist for the role | Deterministic workflow walkthrough shows instead, with an honest notice |
 
-### 3.9 Settings
+### 3.6 Incremental re-analysis & staleness (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Click "Settings" in the sidebar | Account settings page loads with profile info |
-| 2 | GitHub connection status visible | Shows connected/disconnected state with username |
-| 3 | Navigate to a project's "Settings" tab | Project settings load: ignored paths, AI toggle, branch info |
+| 1 | Push a commit changing one function body to the analyzed repo | — |
+| 2 | Overview → **Analyze…** → Start analysis | Response mode is incremental; run completes faster (cached records reused) |
+| 3 | Open **Your Onboarding** | Sections citing the changed file show **Stale** badges; the package card shows a stale count |
+| 4 | Open a stale section → **Regenerate** | Section rebuilds against the newest snapshot; stale badge clears |
+
+### 3.7 Settings (M3)
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Project **Settings** | Two-column layout: privacy mode (3 options), analysis depth, budget limits + stop behavior, LLM API key, ranking weights, ignored paths, limits |
+| 2 | Set privacy to "AI disabled", re-analyze | Pipeline completes deterministic-only; onboarding generation is skipped with an honest notice |
+| 3 | Add a project OpenRouter key | Shows "Key configured by <email>" — the key value is never displayed again |
+| 4 | Ranking weights → move a slider → Save | Saves instantly; **Revert to defaults** restores |
+
+### 3.8 Q&A evaluation endpoint (stretch, dev-only)
+
+With the stack running and `INTERNAL_CHAT_ENABLED=1` (or non-production), open http://localhost:3000/api/internal/chat, paste a bearer token (from the browser's Supabase session) and a project id, and ask e.g. *"What does the auth service do?"* — expect a receipt-cited answer with confidence and intent shown.
+
+### 3.9 First-timer tour & themes
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Open any project in a fresh browser profile | 9-step tour starts, spotlighting each sidebar tab with an explanation |
+| 2 | Esc or "Skip tour" | Tour dismisses and stays dismissed; "Take a tour" in the sidebar restarts it |
+| 3 | Toggle dark/light theme | All tabs stay legible; graphs re-color |
+
+---
+
+## 4. Recording bugs
+
+Any defect found during these checks goes into [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md) (and GitHub Issues) with date, reporter, expected vs actual, repro steps, priority (P0–P5) and state (New/Open/Closed/Won't-Fix).

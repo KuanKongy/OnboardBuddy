@@ -135,7 +135,9 @@ function seedsForEntrypoint(ep: DetectedEntrypoint, ctx: TraversalContext): Evid
     const hasFlow = (ctx.outgoing.get(childKey) ?? []).length > 0;
     if (hasFlow || hasEffect(child, ctx)) candidates.push(child);
   }
-  return candidates.sort((a, b) => (a.lineStart ?? 0) - (b.lineStart ?? 0));
+  // A file-level entrypoint without a resolved handler is a guess — cap the
+  // fan-out so one file doesn't spawn a workflow per symbol.
+  return candidates.sort((a, b) => (a.lineStart ?? 0) - (b.lineStart ?? 0)).slice(0, 3);
 }
 
 // ─── Trace ───────────────────────────────────────────────────────────────────
@@ -216,7 +218,8 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
 
   return {
     title: workflowTitle(ep, seed),
-    triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}` : ep.kind,
+    triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}`
+      : ep.kind === 'ui_route' ? 'UI page' : ep.kind,
     purpose: classifyPurpose(ep, seed, steps, ctx),
     stableKey: `wf:${ep.nodeStableKey}:${seed.name}`,
     confidence: steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
@@ -303,6 +306,7 @@ function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {
   if (ep.kind === 'http_route') {
     return `${ep.method ?? 'HTTP'} ${ep.routePattern ?? seed.name}`;
   }
+  if (ep.kind === 'ui_route') return `Page: ${seed.name}`;
   return `${ep.kind.replace(/_/g, ' ')}: ${seed.name}`;
 }
 

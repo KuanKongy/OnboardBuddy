@@ -8,6 +8,7 @@
  * children's evidence hashes.
  */
 
+import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import {
   PROMPT_VERSIONS, OUTPUT_RULES, schemaForLevel, renderSummary,
@@ -46,8 +47,8 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
     symbolsByFile.get(file)!.push(record);
   }
   const fileNodes = new Map(ctx.graph.nodes.filter((n) => n.type === 'file' || n.type === 'module' || n.type === 'test').map((n) => [n.stableKey, n]));
-  for (const [filePath, children] of symbolsByFile) {
-    if (!children.some((c) => !c.factsOnly)) continue; // facts-only files add no synthesis value
+  const fileEntries = [...symbolsByFile.entries()].filter(([, children]) => children.some((c) => !c.factsOnly));
+  await mapLimit(fileEntries, 6, async ([filePath, children]) => {
     const fileNode = fileNodes.get(filePath);
     const record = await synthesizeOne(ctx, result, {
       level: 'file',
@@ -57,16 +58,19 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
       localFacts: { fileHash: fileNode?.hash ?? null, exported: fileNode?.metadata.exportedSymbols ?? null },
       nodeId: ctx.nodeIdMap.get(filePath) ?? null,
       task: `Synthesize a FILE record for ${filePath} from its symbol records. Include key_symbols (most important symbols) and file_role (e.g. route file / service / util / config glue).`,
+      // File records summarize already-summarized symbols — the cheap tier
+      // handles this well, and there are many of them (cost + latency).
+      tier: 'cheap',
     });
     if (record) result.fileRecords.set(filePath, record);
-  }
+  });
 
   // ── module records (architecture clusters are the module grouping) ─────────
-  for (const cluster of ctx.architecture.clusters) {
+  await mapLimit(ctx.architecture.clusters, 6, async (cluster) => {
     const children = cluster.members
       .map((m) => result.fileRecords.get(m.nodeStableKey))
       .filter((r): r is StoredRecord => r !== undefined);
-    if (children.length === 0) continue;
+    if (children.length === 0) return;
     const crossEdges = ctx.architecture.edges
       .filter((e) => e.sourceClusterKey === cluster.stableKey || e.targetClusterKey === cluster.stableKey)
       .map((e) => `${e.sourceClusterKey} -[${e.type}]-> ${e.targetClusterKey} (weight ${e.weight})`);
@@ -81,15 +85,15 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
       extraFacts: crossEdges.length > 0 ? `Cross-module edges:\n${crossEdges.join('\n')}` : undefined,
     });
     if (record) result.moduleRecords.set(cluster.stableKey, record);
-  }
+  });
 
   // ── service records (workspace packages; single-package repos get one) ─────
   const services = groupClustersIntoServices(ctx);
-  for (const service of services) {
+  await mapLimit(services, 4, async (service) => {
     const children = service.clusterKeys
       .map((key) => result.moduleRecords.get(key))
       .filter((r): r is StoredRecord => r !== undefined);
-    if (children.length === 0) continue;
+    if (children.length === 0) return;
     const runtimeFacts = {
       entrypointKinds: [...new Set(ctx.entrypoints.map((e) => e.kind))],
       frameworks: ctx.inventory.detectedFrameworks,
@@ -105,7 +109,7 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
       task: `Synthesize a SERVICE record for "${service.name}" from its module records and runtime facts (entrypoints: ${runtimeFacts.entrypointKinds.join(', ') || 'none'}; frameworks: ${runtimeFacts.frameworks.join(', ') || 'none'}). Include runtime_shape (api/worker/frontend/library).`,
     });
     if (record) result.serviceRecords.set(service.stableKey, record);
-  }
+  });
 
   // ── system record ───────────────────────────────────────────────────────────
   const systemChildren = [...result.serviceRecords.values()];
@@ -124,7 +128,7 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
   }
 
   // ── workflow records (top N, from steps + participating symbol records) ────
-  for (const workflow of ctx.workflows.slice(0, TOP_WORKFLOWS_FOR_RECORDS)) {
+  await mapLimit(ctx.workflows.slice(0, TOP_WORKFLOWS_FOR_RECORDS), 6, async (workflow) => {
     const participantRecords = workflow.steps
       .map((s) => symbolRecords.get(s.nodeStableKey))
       .filter((r): r is StoredRecord => r !== undefined);
@@ -142,7 +146,7 @@ export async function runSynthesisPass(ctx: SemanticContext, symbolRecords: Map<
       extraFacts: `Traced steps:\n${steps.join('\n')}`,
     });
     if (record) result.workflowRecords.set(workflow.stableKey, record);
-  }
+  });
 
   return result;
 }
@@ -182,9 +186,12 @@ interface SynthesizeInput {
   nodeId: string | null;
   task: string;
   extraFacts?: string;
+  /** Model tier; module/service/system/workflow default to 'strong'. */
+  tier?: 'cheap' | 'strong';
 }
 
 async function synthesizeOne(ctx: SemanticContext, tally: { cacheHits: number; llmRecords: number }, input: SynthesizeInput): Promise<StoredRecord | null> {
+  const tier = input.tier ?? 'strong';
   const promptVersion = PROMPT_VERSIONS[input.level as keyof typeof PROMPT_VERSIONS] ?? PROMPT_VERSIONS.file;
   const cacheKey = {
     projectId: ctx.projectId,
@@ -196,7 +203,7 @@ async function synthesizeOne(ctx: SemanticContext, tally: { cacheHits: number; l
     ),
     promptVersion,
     depth: ctx.depth,
-    modelFamily: ctx.modelFamily.strong,
+    modelFamily: tier === 'cheap' ? ctx.modelFamily.cheap : ctx.modelFamily.strong,
   };
   const cached = await lookupRecord(cacheKey);
   if (cached) {
@@ -226,7 +233,7 @@ async function synthesizeOne(ctx: SemanticContext, tally: { cacheHits: number; l
   ].filter(Boolean).join('\n\n');
 
   const response = await ctx.ai.call<SemanticRecordBody>({
-    tier: 'strong',
+    tier,
     targetType: `${input.level}_record`,
     promptVersion,
     schemaName: `${input.level}_record`,

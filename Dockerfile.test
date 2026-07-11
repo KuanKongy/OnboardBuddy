@@ -1,0 +1,21 @@
+# Test-runner image: everything needed to run the automated suites inside
+# Docker — no local Node/npm required (TA feedback from M2).
+#
+#   docker compose -f docker-compose.test.yml run --rm test
+#
+# The suites are self-contained: the backend tests stub the database layer
+# and boot the API in-process (Supertest), so no services, credentials, or
+# .env files are needed.
+FROM node:22-alpine AS test
+WORKDIR /app
+
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY backend/package.json backend/package.json
+COPY frontend/package.json frontend/package.json
+RUN npm ci
+
+COPY backend ./backend
+COPY frontend ./frontend
+
+# Default: run both suites back to back (backend first).
+CMD ["sh", "-c", "npm test -w backend && npm test -w frontend"]
