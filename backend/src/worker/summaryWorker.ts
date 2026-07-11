@@ -3,8 +3,13 @@ import type { PoolClient } from 'pg';
 import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query, pool } from '../lib/db.js';
-import { chatCompletion, SUMMARY_MODEL } from '../lib/openrouter.js';
 import { buildContext, DEFAULT_SECTION_REVIEW_STATUS, type EvidenceBundle } from './engine/evidenceContext.js';
+import { AiClient, AiPausedError, AiFailedError } from './ai/aiClient.js';
+import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
+import { resolveTierConfig } from './ai/modelTiers.js';
+import { markPhase } from './ai/checkpoints.js';
+import { stripSnippetsDeep, privacyNotice, type PrivacyMode } from './ai/privacy.js';
+import type { SemanticDepth } from './engine/budgets.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,6 +38,12 @@ interface SnapRow {
   repo_owner: string;
   repo_name: string;
   role: string;
+  semantic_depth: SemanticDepth;
+  privacy_mode: PrivacyMode;
+  budget_overrides: unknown;
+  budget_stop_behavior: 'fail' | 'pause' | 'degrade';
+  model_failure_behavior: unknown;
+  model_tier_overrides: unknown;
 }
 
 interface NodeRow {
@@ -81,21 +92,27 @@ interface AiSectionResponse {
   sources: Array<{
     stable_key: string;
     file_path: string;
-    symbol_name?: string;
-    snippet?: string;
+    symbol_name?: string | null;
+    snippet?: string | null;
   }>;
 }
 
 // ── Evidence bundle ──────────────────────────────────────────────────────────
 
-async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> {
+type SummaryBundle = EvidenceBundle & { snap: SnapRow };
+
+async function buildEvidenceBundle(snapshotId: string): Promise<SummaryBundle> {
   const empty = { rows: [] };
   const [snapRes, nodesRes, edgesRes, workflowsRes] = await Promise.all([
     query(
       `SELECT s.commit_hash, s.branch, s.file_count, s.symbol_count, s.workflow_count,
-              s.project_id, s.scope_id,
+              s.project_id, s.scope_id, s.semantic_depth, s.privacy_mode,
               p.repo_owner, p.repo_name,
-              COALESCE(ps.default_developer_role, 'general') AS role
+              COALESCE(ps.default_developer_role, 'general') AS role,
+              COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
+              COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
+              COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
+              COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides
        FROM analysis_snapshots s
        JOIN projects p ON p.id = s.project_id
        LEFT JOIN project_settings ps ON ps.project_id = s.project_id
@@ -200,6 +217,29 @@ async function buildEvidenceBundle(snapshotId: string): Promise<EvidenceBundle> 
   };
 }
 
+/**
+ * Privacy-mode-aware prompt input (doc/Pipeline.md "Privacy modes"):
+ * facts_only_ai mechanically strips snippet-bearing fields from the
+ * evidence before any prompt is assembled. nodeIndex is kept as-is — it
+ * only serves receipt persistence, never prompts.
+ */
+function buildPromptContext(bundle: SummaryBundle): string {
+  const mode = bundle.snap.privacy_mode;
+  const promptBundle: EvidenceBundle = mode === 'facts_only_ai'
+    ? {
+        ...bundle,
+        nodes: stripSnippetsDeep(bundle.nodes),
+        edges: stripSnippetsDeep(bundle.edges),
+        workflows: stripSnippetsDeep(bundle.workflows),
+        entrypoints: stripSnippetsDeep(bundle.entrypoints),
+        sideEffects: stripSnippetsDeep(bundle.sideEffects),
+        criticalRankings: stripSnippetsDeep(bundle.criticalRankings),
+      }
+    : bundle;
+  const notice = privacyNotice(mode);
+  return buildContext(promptBundle) + (notice ? `\n\n${notice}` : '');
+}
+
 const SECTION_INSTRUCTIONS: Record<SectionType, string> = {
   start_here: `Write a focused orientation for a new developer joining this team. Include:
 - What this system does in 2 sentences (business purpose, not tech stack)
@@ -288,49 +328,63 @@ Generate the "${sectionType.replace(/_/g, ' ')}" section.
 
 ${instruction}
 
-Respond with a JSON object in this exact shape (no markdown fences):
-{
-  "title": "<descriptive title for this section>",
-  "content": "<detailed markdown content with headers, bullet points, and code references>",
-  "confidence": "<high|medium|low — high if clearly evidenced by the graph data, medium if inferred from patterns, low if speculative>",
-  "sources": [
-    {
-      "stable_key": "<exact file path from the data above>",
-      "file_path": "<same as stable_key>",
-      "symbol_name": "<optional: key function/class>",
-      "snippet": "<optional: 1-2 line description of what this source proves>"
-    }
-  ]
+Rules:
+- content should use markdown: headers (##, ###), bullet points, bold for emphasis, \`code\` for paths/symbols
+- Be specific and actionable — reference exact file paths and symbol names from the data
+- Minimum 3 sources required, aim for 5-10 for thorough sections; only reference file paths that appear in the data above
+- confidence: high if clearly evidenced by the graph data, medium if inferred from patterns, low if speculative
+- Content length: aim for 300-600 words depending on section complexity`;
 }
 
-Rules:
-- Content should use markdown: headers (##, ###), bullet points, bold for emphasis, \`code\` for paths/symbols
-- Be specific and actionable — reference exact file paths and symbol names from the data
-- Minimum 3 sources required, aim for 5-10 for thorough sections
-- Content length: aim for 300-600 words depending on section complexity
-- Only reference file paths that appear in the data above
-- Return ONLY the JSON object, no explanation`;
-}
+// Structured-output schema for a section (strict mode requires every key in
+// `required`; optional fields are string|null).
+export const SECTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'content', 'confidence', 'sources'],
+  properties: {
+    title: { type: 'string' },
+    content: { type: 'string' },
+    confidence: { enum: ['high', 'medium', 'low'] },
+    sources: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['stable_key', 'file_path', 'symbol_name', 'snippet'],
+        properties: {
+          stable_key: { type: 'string' },
+          file_path: { type: 'string' },
+          symbol_name: { type: ['string', 'null'] },
+          snippet: { type: ['string', 'null'] },
+        },
+      },
+    },
+  },
+} as const;
+
+export const SECTION_PROMPT_VERSION = 'section-v1';
 
 // ── Generate one section ─────────────────────────────────────────────────────
 
 async function generateSection(
+  ai: AiClient,
+  packageId: string,
   sectionType: SectionType,
   context: string,
-): Promise<AiSectionResponse> {
+): Promise<{ section: AiSectionResponse; runId: string | null; model: string | null }> {
   const prompt = buildSectionPrompt(sectionType, context);
-  const raw = await chatCompletion([{ role: 'user', content: prompt }]);
-  const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-  try {
-    return JSON.parse(cleaned) as AiSectionResponse;
-  } catch {
-    return {
-      title: sectionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-      content: cleaned,
-      confidence: 'low',
-      sources: [],
-    };
-  }
+  const response = await ai.call<AiSectionResponse>({
+    tier: 'strong',
+    targetType: 'section',
+    sectionType,
+    packageId,
+    promptVersion: SECTION_PROMPT_VERSION,
+    schemaName: 'onboarding_section',
+    schema: SECTION_SCHEMA as unknown as Record<string, unknown>,
+    user: prompt,
+  });
+  return { section: response.value!, runId: response.runId, model: response.model };
 }
 
 // ── Persist one section ──────────────────────────────────────────────────────
@@ -341,16 +395,19 @@ async function persistSection(params: {
   snapshotId: string;
   sectionType: SectionType;
   section: AiSectionResponse;
+  runId: string | null;
+  model: string | null;
   snap: SnapRow;
   nodeIndex: Map<string, NodeRow>;
 }): Promise<void> {
-  const { client, packageId, snapshotId, sectionType, section, snap, nodeIndex } = params;
+  const { client, packageId, snapshotId, sectionType, section, runId, model, snap, nodeIndex } = params;
 
   const validConf = ['high', 'medium', 'low'].includes(section.confidence) ? section.confidence : 'low';
   const sourceStableKeys = (section.sources ?? []).map((s) => s.stable_key);
 
   const genContext = {
-    model: SUMMARY_MODEL,
+    model,
+    prompt_version: SECTION_PROMPT_VERSION,
     node_stable_keys: sourceStableKeys,
     file_count: snap.file_count,
   };
@@ -358,14 +415,14 @@ async function persistSection(params: {
   const secRes = await client.query<{ id: string }>(
     `INSERT INTO package_sections
        (package_id, snapshot_id, type, title, content, confidence,
-        review_status, analyzed_commit, role, generation_context)
-     VALUES ($1, $2, $3, $4, $5, $6, '${DEFAULT_SECTION_REVIEW_STATUS}', $7, $8, $9)
+        review_status, analyzed_commit, role, generation_context, generation_run_id)
+     VALUES ($1, $2, $3, $4, $5, $6, '${DEFAULT_SECTION_REVIEW_STATUS}', $7, $8, $9, $10)
      RETURNING id`,
     [
       packageId, snapshotId, sectionType,
       section.title || sectionType, section.content || '',
       validConf, snap.commit_hash, snap.role,
-      JSON.stringify(genContext),
+      JSON.stringify(genContext), runId,
     ],
   );
   const sectionId = secRes.rows[0]!.id;
@@ -418,10 +475,41 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     await updateJob('running', 'Building evidence bundle', 5);
     const bundle = await buildEvidenceBundle(snapshotId);
 
+    if (bundle.snap.privacy_mode === 'ai_disabled') {
+      await markPhase(snapshotId, 'generation', 'skipped', { reason: 'ai_disabled' });
+      await updateJob('complete', 'AI disabled — deterministic outputs only', 100);
+      return;
+    }
+
     // Use requested role or default from project settings
     const primaryRole = requestedRole ?? bundle.snap.role;
     bundle.snap.role = primaryRole;
-    const context = buildContext(bundle);
+    const context = buildPromptContext(bundle);
+
+    const budget = await new BudgetEnforcer({
+      snapshotId,
+      jobId,
+      depth: bundle.snap.semantic_depth,
+      budgetOverrides: bundle.snap.budget_overrides,
+      stopBehavior: bundle.snap.budget_stop_behavior,
+    }).load();
+    const ai = new AiClient({
+      projectId,
+      snapshotId,
+      privacyMode: bundle.snap.privacy_mode,
+      budget,
+      tierConfig: resolveTierConfig({
+        modelTierOverrides: bundle.snap.model_tier_overrides,
+        modelFailureBehavior: bundle.snap.model_failure_behavior,
+      }),
+    });
+
+    // Resume support: a retry of this job row skips sections it already
+    // persisted (cursor in analysis_jobs.checkpoint); a fresh job row
+    // starts with an empty cursor and regenerates everything.
+    const checkpointRes = await query(`SELECT checkpoint FROM analysis_jobs WHERE id = $1`, [jobId]);
+    const checkpoint = (checkpointRes.rows[0] as { checkpoint?: { completedSections?: string[] } } | undefined)?.checkpoint;
+    const completedSections = new Set<string>(checkpoint?.completedSections ?? []);
 
     await updateJob('running', 'Creating package', 8);
     const client = await pool.connect();
@@ -438,23 +526,44 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       );
       packageId = pkgRes.rows[0]!.id;
 
-      await client.query(`DELETE FROM package_sections WHERE package_id = $1`, [packageId]);
+      // Keep sections this job already generated (resume); clear the rest.
+      await client.query(
+        `DELETE FROM package_sections WHERE package_id = $1 AND NOT (type = ANY($2::varchar[]))`,
+        [packageId, [...completedSections]],
+      );
     } finally {
       client.release();
     }
 
+    await markPhase(snapshotId, 'generation', 'running', {}, {
+      checkpoint: { completedSections: [...completedSections] },
+    });
+
+    const saveCheckpoint = async () => {
+      const cursor = { completedSections: [...completedSections] };
+      await query(`UPDATE analysis_jobs SET checkpoint = $2 WHERE id = $1`, [jobId, JSON.stringify(cursor)]);
+      await markPhase(snapshotId, 'generation', 'running', {}, { checkpoint: cursor });
+    };
+
     // Generate sections in parallel batches of 3 to reduce total time
+    let budgetDegraded = false;
     const BATCH_SIZE = 3;
-    for (let batchStart = 0; batchStart < SECTION_TYPES.length; batchStart += BATCH_SIZE) {
-      const batch = SECTION_TYPES.slice(batchStart, batchStart + BATCH_SIZE);
-      const pct = 10 + Math.floor((batchStart / SECTION_TYPES.length) * 82);
+    const pendingSections = SECTION_TYPES.filter((t) => !completedSections.has(t));
+    outer:
+    for (let batchStart = 0; batchStart < pendingSections.length; batchStart += BATCH_SIZE) {
+      const batch = pendingSections.slice(batchStart, batchStart + BATCH_SIZE);
+      const pct = 10 + Math.floor((batchStart / pendingSections.length) * 82);
       await updateJob('running', `Generating: ${batch.join(', ')}`, pct);
 
-      const results = await Promise.all(
-        batch.map((sectionType) => generateSection(sectionType, context)),
+      const results = await Promise.allSettled(
+        batch.map((sectionType) => generateSection(ai, packageId, sectionType, context)),
       );
 
+      // Persist the batch's successes before surfacing any failure, so a
+      // pause/retry never loses paid-for work.
       for (let j = 0; j < batch.length; j++) {
+        const result = results[j]!;
+        if (result.status === 'rejected') continue;
         const sectionClient = await pool.connect();
         try {
           await persistSection({
@@ -462,18 +571,38 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
             packageId,
             snapshotId,
             sectionType: batch[j]!,
-            section: results[j]!,
+            section: result.value.section,
+            runId: result.value.runId,
+            model: result.value.model,
             snap: bundle.snap,
             nodeIndex: bundle.nodeIndex,
           });
+          completedSections.add(batch[j]!);
         } finally {
           sectionClient.release();
         }
       }
+      await saveCheckpoint();
+
+      for (const result of results) {
+        if (result.status !== 'rejected') continue;
+        if (result.reason instanceof BudgetExceededError && result.reason.behavior === 'degrade') {
+          budgetDegraded = true;
+          break outer; // keep what we have; drop remaining LLM work
+        }
+        throw result.reason; // pause/fail/kill-switch: outer catch decides
+      }
+    }
+
+    if (budgetDegraded) {
+      await query(
+        `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "budget_degraded", "phase": "generation"}]'::jsonb WHERE id = $1`,
+        [snapshotId],
+      );
     }
 
     // Enrich top workflows with LLM-generated step explanations
-    if (bundle.workflows.length > 0) {
+    if (!budgetDegraded && bundle.workflows.length > 0) {
       await updateJob('running', 'Enriching workflow explanations', 93);
       const topWorkflows = bundle.workflows.slice(0, 10);
       for (const wf of topWorkflows) {
@@ -486,10 +615,25 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
 Here are the steps in order:
 ${stepsDescription}
 
-For each step, write a concise 1-2 sentence explanation of what that step does from a developer's perspective. Return ONLY a JSON array of strings, one per step in order. No markdown fences.`;
-          const raw = await chatCompletion([{ role: 'user', content: prompt }]);
-          const cleaned = raw.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim();
-          const explanations = JSON.parse(cleaned) as string[];
+For each step, write a concise 1-2 sentence explanation of what that step does from a developer's perspective. Produce one explanation per step, in order.`;
+          const response = await ai.call<{ explanations: string[] }>({
+            tier: 'strong',
+            targetType: 'workflow_record',
+            targetId: wf.id,
+            packageId,
+            promptVersion: 'workflow-steps-v1',
+            schemaName: 'workflow_step_explanations',
+            schema: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['explanations'],
+              properties: { explanations: { type: 'array', items: { type: 'string' } } },
+            },
+            user: prompt,
+            skipIfCached: true, // explanations persist on workflow_steps; identical reruns skip
+          });
+          if (response.cached) continue;
+          const explanations = response.value!.explanations;
           for (let i = 0; i < Math.min(explanations.length, wf.steps.length); i++) {
             await query(
               `UPDATE workflow_steps SET explanation = $1
@@ -498,6 +642,14 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
             );
           }
         } catch (err) {
+          if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
+            budgetDegraded = true;
+            break; // enrichment is optional polish — stop quietly
+          }
+          if (err instanceof BudgetExceededError || err instanceof AiPausedError ||
+              err instanceof AiFailedError || err instanceof KillSwitchError) {
+            throw err;
+          }
           console.warn(`[summaryWorker] Failed to enrich workflow ${wf.id}:`, err);
         }
       }
@@ -507,6 +659,18 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
       `UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`,
       [packageId],
     );
+
+    await markPhase(snapshotId, 'generation', 'complete', {
+      sections: completedSections.size,
+      llmCalls: ai.stats.calls,
+      cacheHits: ai.stats.cacheHits,
+      inputTokens: ai.stats.inputTokens,
+      outputTokens: ai.stats.outputTokens,
+      estimatedCostUsd: Math.round(ai.stats.estimatedCostUsd * 1e6) / 1e6,
+      schemaFallbacks: ai.stats.schemaFallbacks,
+      degradedCalls: ai.stats.degradedCalls,
+      budgetDegraded,
+    });
 
     // NOTE: the old section-markdown embedding path (semantic_summaries +
     // evidence_embeddings) is deleted per doc/Pipeline.md; multi-view
@@ -541,9 +705,32 @@ For each step, write a concise 1-2 sentence explanation of what that step does f
     }
 
     await updateJob('complete', 'Summary ready', 100);
-    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${primaryRole}) sections=${SECTION_TYPES.length}`);
+    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${primaryRole}) sections=${completedSections.size}`);
   } catch (err) {
+    // Resumable stops: pause behavior (model failure or budget) and the
+    // kill switch. The job keeps its checkpoint; re-enqueueing resumes it.
+    if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+      const message = err.message.slice(0, 200);
+      await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
+      await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]).catch(() => {});
+      await updateJob('paused', `Paused: ${message}`, 0).catch(() => {});
+      console.warn(`[summary-worker] job ${job.id} paused:`, message);
+      return; // not a BullMQ failure — a retry would just re-pause
+    }
+    if (err instanceof KillSwitchError) {
+      await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: err.message }).catch(() => {});
+      console.warn(`[summary-worker] job ${job.id} stopped by kill switch (job status: ${err.jobStatus})`);
+      return; // job status was already set from the API — leave it alone
+    }
+
+    if (err instanceof BudgetExceededError && err.behavior === 'fail') {
+      // Spec: 'fail' stop behavior fails the snapshot with a transparent
+      // budget report (the tripped-limit event is already in budget_usage).
+      await query(`UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1`, [snapshotId]).catch(() => {});
+    }
+
     const message = err instanceof Error ? err.message : String(err);
+    await markPhase(snapshotId, 'generation', 'failed', {}, { errorMessage: message.slice(0, 500) }).catch(() => {});
     await updateJob('failed', 'Failed', 0, message).catch(() => {});
     await query(
       `UPDATE onboarding_packages SET status = 'failed', updated_at = NOW()
