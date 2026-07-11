@@ -319,7 +319,15 @@ export function WalkthroughTab() {
                   onJump={setCurrentStep}
                 />
 
-                <StepLocation step={tStep} />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <StepLocation step={tStep} />
+                  <Link
+                    to={`/projects/${id}/dependencies?focus=${encodeURIComponent(tStep.file_path)}`}
+                    className="inline-flex items-center gap-1 text-[11.5px] font-medium text-primary hover:underline"
+                  >
+                    Open in Dependencies <ArrowRight className="h-3 w-3" />
+                  </Link>
+                </div>
 
                 {tStep.snippet && (
                   <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 text-[12px] leading-relaxed text-foreground">

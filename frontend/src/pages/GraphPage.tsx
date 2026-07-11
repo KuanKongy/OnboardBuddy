@@ -1,6 +1,6 @@
 import { AlertTriangle, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
@@ -42,6 +42,7 @@ export function GraphPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
+  const [allEdges, setAllEdges] = useState(false);
   const [edgeFilter, setEdgeFilter] = useState<EdgeFilter>("imports");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
@@ -59,6 +60,14 @@ export function GraphPage() {
   }
 
   useEffect(() => { loadGraph(); }, [id]);
+
+  // Deep link from other tabs (?focus=<file path>): select the node so the
+  // symbol doc panel opens on arrival.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const focus = searchParams.get("focus");
+    if (focus) setSelectedNodeId(focus);
+  }, [searchParams]);
 
   // Enrich the selected node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
@@ -117,10 +126,23 @@ export function GraphPage() {
     [nodes, filteredNodeIds],
   );
 
-  const visibleEdges = useMemo(
-    () => edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target)),
-    [edges, filteredNodeIds],
-  );
+  const visibleEdges = useMemo(() => {
+    const inFilter = edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target));
+    if (allEdges) return inFilter;
+    // Dense repos mangle: default to each node's strongest 3 edges in each
+    // direction — the layout stays readable and "Show all edges" is one click.
+    const perNode = new Map<string, number>();
+    const kept: typeof inFilter = [];
+    for (const edge of inFilter) {
+      const out = perNode.get(`out:${edge.source}`) ?? 0;
+      const inn = perNode.get(`in:${edge.target}`) ?? 0;
+      if (out >= 3 && inn >= 3) continue;
+      perNode.set(`out:${edge.source}`, out + 1);
+      perNode.set(`in:${edge.target}`, inn + 1);
+      kept.push(edge);
+    }
+    return kept;
+  }, [edges, filteredNodeIds, allEdges]);
 
   const positionedNodes = useMemo(
     () => layoutDependencyGraph(visibleNodes, visibleEdges, data?.graph.entryPoints ?? []),
@@ -169,10 +191,20 @@ export function GraphPage() {
             ))}
           </div>
           {view === "files" && data && (
-            <Badge variant="outline" className="text-[11px] tabular-nums">
-              {data.totalNodes} files · {data.totalEdges} edges
-              {data.clustered && " (grouped)"}
-            </Badge>
+            <>
+              <Badge variant="outline" className="text-[11px] tabular-nums">
+                {data.totalNodes} files · {data.totalEdges} edges
+                {data.clustered && " (grouped)"}
+              </Badge>
+              <Button
+                variant={allEdges ? "secondary" : "outline"}
+                size="xs"
+                onClick={() => setAllEdges((v) => !v)}
+                title="By default only each file's strongest edges are drawn to keep the layout readable"
+              >
+                {allEdges ? "Strongest edges" : "Show all edges"}
+              </Button>
+            </>
           )}
         </div>
       </div>

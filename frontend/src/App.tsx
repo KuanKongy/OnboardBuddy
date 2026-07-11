@@ -61,7 +61,7 @@ function AuthenticatedLayout() {
       <div className="flex h-screen">
         <Sidebar />
         <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
-          <div className="mb-2 lg:hidden">
+          <div className="mb-2">
             <SidebarToggle />
           </div>
           <Outlet />

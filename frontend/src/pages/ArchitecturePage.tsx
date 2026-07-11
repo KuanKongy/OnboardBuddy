@@ -1,6 +1,6 @@
 import { AlertTriangle, Loader2, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -279,8 +279,13 @@ export function ArchitecturePage() {
                 <p className="section-label mb-1.5">Files ({selected.members.length})</p>
                 <ul className="space-y-0.5">
                   {selected.members.slice(0, 30).map((m) => (
-                    <li key={m.key} className="truncate font-mono text-[11.5px] text-muted-foreground" title={m.filePath ?? m.key}>
-                      {m.filePath ?? m.key}
+                    <li key={m.key} className="truncate font-mono text-[11.5px]" title={m.filePath ?? m.key}>
+                      <Link
+                        to={`/projects/${id}/dependencies?focus=${encodeURIComponent(m.filePath ?? m.key)}`}
+                        className="text-muted-foreground hover:text-primary hover:underline"
+                      >
+                        {m.filePath ?? m.key}
+                      </Link>
                     </li>
                   ))}
                   {selected.members.length > 30 && (

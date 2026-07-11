@@ -463,7 +463,8 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
     const node = result.rows[0] as { id: string } & Record<string, unknown>;
 
     const nodeRow = node as unknown as { id: string; stable_key: string; metadata: Record<string, unknown> };
-    const [workflowsResult, rankingResult, recordResult, callerResult, receiptsResult] = await Promise.all([
+    const [workflowsResult, rankingResult, recordResult, callerResult, receiptsResult,
+           callersResult, calleesResult, effectsResult, clusterResult] = await Promise.all([
       query(
         `SELECT DISTINCT w.id, w.title, w.trigger_type
          FROM workflow_steps ws
@@ -510,6 +511,32 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
          LIMIT 6`,
         [snapshotId, nodeRow.stable_key],
       ),
+      // Deterministic relationships — every node has these even when it has
+      // no LLM record, so the detail panel is never empty.
+      query(
+        `SELECT gn.stable_key, gn.name, gn.file_path
+         FROM graph_edges e JOIN graph_nodes gn ON gn.id = e.source_node_id
+         WHERE e.snapshot_id = $1 AND e.target_node_id = $2 AND e.type IN ('calls', 'imports')
+         ORDER BY gn.name LIMIT 8`,
+        [snapshotId, node.id],
+      ),
+      query(
+        `SELECT gn.stable_key, gn.name, gn.file_path
+         FROM graph_edges e JOIN graph_nodes gn ON gn.id = e.target_node_id
+         WHERE e.snapshot_id = $1 AND e.source_node_id = $2 AND e.type IN ('calls', 'imports')
+         ORDER BY gn.name LIMIT 8`,
+        [snapshotId, node.id],
+      ),
+      query(
+        `SELECT type, target FROM side_effects WHERE snapshot_id = $1 AND node_id = $2 LIMIT 8`,
+        [snapshotId, node.id],
+      ),
+      query(
+        `SELECT c.stable_key, c.label
+         FROM architecture_cluster_members m JOIN architecture_clusters c ON c.id = m.cluster_id
+         WHERE c.snapshot_id = $1 AND m.node_id = $2 LIMIT 1`,
+        [snapshotId, node.id],
+      ),
     ]);
 
     const ranking = rankingResult.rows[0] as
@@ -531,6 +558,10 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         connected_workflows: workflowsResult.rows,
         composite_score: ranking ? Number(ranking.composite_score) : null,
         ranking_reasons: ranking?.ranking_reasons ?? [],
+        callers: callersResult.rows,
+        callees: calleesResult.rows,
+        side_effects: effectsResult.rows,
+        cluster: clusterResult.rows[0] ?? null,
         doc: {
           summary: record ? record.summary.split(/(?<=[.!?])\s/)[0] : null,
           summaryConfidence: record?.confidence ?? null,

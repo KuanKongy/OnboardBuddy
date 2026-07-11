@@ -643,6 +643,27 @@ export function OnboardingPage() {
         </div>
       )}
 
+      {/* Mobile section picker — the section nav aside is desktop-only. */}
+      {!isMissing && sections.length > 0 && (
+        <div className="border-b px-4 py-2 lg:hidden">
+          <Select value={activeSectionId ?? undefined} onValueChange={(v) => setActiveSectionId(v as typeof activeSectionId)}>
+            <SelectTrigger className="h-8 w-full text-[13px]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
+            <SelectContent>
+              {SECTION_NAV_ORDER
+                .filter((navId) => sections.some((s) => s.id === navId))
+                .map((navId, idx) => {
+                  const section = sections.find((s) => s.id === navId);
+                  return (
+                    <SelectItem key={navId} value={navId} className="text-[13px]">
+                      {idx + 1}. {section?.label ?? navId}
+                    </SelectItem>
+                  );
+                })}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
         <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block">

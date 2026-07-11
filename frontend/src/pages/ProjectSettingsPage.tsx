@@ -30,7 +30,32 @@ const PRIVACY_MODES = [
   { key: "ai_disabled", label: "AI disabled", hint: "No LLM calls at all; deterministic outputs only." },
 ];
 
-const WEIGHT_VIEWS = ["runtime", "business", "onboarding", "change_risk", "architecture", "workflow"] as const;
+// Must match the backend's SEMANTIC_VIEWS keys exactly — the old short names
+// ("runtime") never matched the API's "critical_for_runtime" keys, so every
+// slider showed 0 and saves were rejected.
+const WEIGHT_VIEWS = [
+  "critical_for_runtime", "critical_for_business", "critical_for_onboarding",
+  "critical_for_role", "critical_for_change_risk", "critical_for_architecture",
+  "critical_for_workflow",
+] as const;
+
+// Mirrors backend DEPTH_BUDGETS (engine/budgets.ts) so the inputs show the
+// real defaults instead of an opaque "depth default" placeholder.
+const DEPTH_BUDGET_DEFAULTS: Record<string, { calls: number; tokens: number }> = {
+  cheap: { calls: 100, tokens: 1_000_000 },
+  standard: { calls: 300, tokens: 4_000_000 },
+  full: { calls: 1_500, tokens: 20_000_000 },
+};
+
+const WEIGHT_LABELS: Record<string, string> = {
+  critical_for_runtime: "Runtime",
+  critical_for_business: "Business",
+  critical_for_onboarding: "Onboarding",
+  critical_for_role: "Role relevance",
+  critical_for_change_risk: "Change risk",
+  critical_for_architecture: "Architecture",
+  critical_for_workflow: "Workflows",
+};
 
 interface RoleWeights {
   role: string;
@@ -360,7 +385,7 @@ export function ProjectSettingsPage() {
                   type="number"
                   value={budgetCalls}
                   onChange={(e) => setBudgetCalls(e.target.value)}
-                  placeholder="depth default"
+                  placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -371,7 +396,7 @@ export function ProjectSettingsPage() {
                   type="number"
                   value={budgetTokens}
                   onChange={(e) => setBudgetTokens(e.target.value)}
-                  placeholder="depth default"
+                  placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000}M`}
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -389,7 +414,9 @@ export function ProjectSettingsPage() {
               </div>
             </div>
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              Empty fields use the depth's built-in limits. Live spend shows in the analysis status.
+              Empty fields use the {analysisDepth} depth's built-in limits
+              ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
+              Live spend shows in the analysis status.
             </p>
           </CardContent>
         </Card>
@@ -456,8 +483,8 @@ export function ProjectSettingsPage() {
               <div className="space-y-2">
                 {WEIGHT_VIEWS.map((view) => (
                   <div key={view} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-[11.5px] capitalize text-muted-foreground">
-                      {view.replace(/_/g, " ")}
+                    <span className="w-28 shrink-0 text-[11.5px] text-muted-foreground">
+                      {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
                     </span>
                     <input
                       type="range"
@@ -468,13 +495,21 @@ export function ProjectSettingsPage() {
                       onChange={(e) => setWeight(view, Number(e.target.value))}
                       disabled={!canEdit}
                       className="h-1.5 flex-1 accent-[var(--primary)]"
-                      aria-label={`${view} weight`}
+                      aria-label={`${WEIGHT_LABELS[view] ?? view} weight`}
                     />
                     <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-foreground">
-                      {(activeWeights.weights[view] ?? 0).toFixed(2)}
+                      {Math.round((activeWeights.weights[view] ?? 0) * 100)}%
                     </span>
                   </div>
                 ))}
+                {(() => {
+                  const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
+                  return (
+                    <p className={`text-right text-[11px] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
+                      Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
+                    </p>
+                  );
+                })()}
                 {canEdit && (
                   <div className="flex justify-end gap-2 pt-1">
                     <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>

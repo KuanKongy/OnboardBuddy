@@ -110,7 +110,34 @@ so the `openai` npm package works directly.
 |---|---|---|
 | `OPENROUTER_API_KEY` | `backend/.env` | API key from openrouter.ai |
 | `OPENROUTER_BASE_URL` | `backend/.env` | `https://openrouter.ai/api/v1` |
-| `OPENROUTER_MODEL` | `backend/.env` | Model identifier (e.g. `openai/gpt-4o-mini`) |
+| `OPENROUTER_MODEL` | `backend/.env` | Legacy alias for the cheap-tier model |
+
+#### LLM models & cost — where to change the models
+
+The pipeline uses two chat tiers (**cheap** for bulk symbol/file work and
+claim verification, **strong** for synthesis, ranking, tutorials and the
+onboarding sections) plus an **embedding** tier. **Both chat tiers default to
+`openai/gpt-4o-mini`** — a full standard-depth analysis of a small/medium
+repo costs cents. Change them in either of two places:
+
+1. **Server-wide (env, `backend/.env`)** — any OpenRouter model id:
+
+   ```bash
+   OPENROUTER_MODEL_CHEAP=openai/gpt-4o-mini
+   OPENROUTER_MODEL_STRONG=openai/gpt-4o-mini    # e.g. anthropic/claude-sonnet-4.5 for premium quality (~20x price)
+   EMBEDDINGS_MODEL=text-embedding-3-small
+   ```
+
+2. **Per project (DB/API)** — `project_settings.model_tier_overrides`, e.g.
+   `{"strong": ["anthropic/claude-sonnet-4.5", "openai/gpt-4o"]}` via
+   `PUT /api/projects/:id/settings` (later list entries are degrade
+   fallbacks). Failure behavior per tier lives in
+   `project_settings.model_failure_behavior`.
+
+Defaults live in `backend/src/worker/ai/modelTiers.ts`
+(`defaultTierModels()`); the coarse per-tier price table used for the cost
+UI is in the same file — update the `strong` row if you point that tier at
+a premium model.
 
 ### 6. OpenAI Embeddings (for RAG)
 

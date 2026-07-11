@@ -15,11 +15,20 @@ export interface TierConfig {
   failureBehavior: Record<ModelTier, FailureBehavior[]>;
 }
 
+/**
+ * WHERE TO CHANGE MODELS (see doc/DEVOPS.md "LLM models & cost"):
+ *  1. Env (server-wide defaults): OPENROUTER_MODEL_CHEAP, OPENROUTER_MODEL_STRONG,
+ *     EMBEDDINGS_MODEL in backend/.env — any OpenRouter model id works.
+ *  2. Per project: project_settings.model_tier_overrides, e.g.
+ *     {"strong": ["anthropic/claude-sonnet-4.5"]} (PUT /projects/:id/settings).
+ * Both tiers default to gpt-4o-mini: a full analysis costs cents. Point the
+ * strong tier at a premium model only when quality is worth ~20x the price.
+ */
 export function defaultTierModels(): Record<ModelTier, string[]> {
   return {
     // Legacy OPENROUTER_MODEL keeps working as the cheap-tier default.
     cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'openai/gpt-4o-mini'],
-    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'anthropic/claude-sonnet-4.5'],
+    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'openai/gpt-4o-mini'],
     embedding: [process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'],
   };
 }
@@ -71,9 +80,11 @@ export function resolveTierConfig(overrides?: {
 // Coarse per-tier prices used for ai_generation_runs.estimated_cost_usd.
 // Deliberately not a per-model price table: these estimates feed the cost
 // UI and budget trend lines, not billing. USD per million tokens.
+// Matches the gpt-4o-mini defaults — update the strong row if you point
+// OPENROUTER_MODEL_STRONG at a premium model.
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
   cheap: { input: 0.15, output: 0.6 },
-  strong: { input: 3.0, output: 15.0 },
+  strong: { input: 0.15, output: 0.6 },
   embedding: { input: 0.02, output: 0 },
 };
 
