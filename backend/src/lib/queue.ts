@@ -58,4 +58,10 @@ export interface SummaryJobData {
   role?: string;
   /** Set for regenerate_section jobs: regenerate only this section type. */
   sectionType?: string;
+  /**
+   * Set for regenerate_section jobs: the existing package to regenerate
+   * into. Lets a stale section be rebuilt against a newer snapshot without
+   * spawning a new package for the new commit.
+   */
+  packageId?: string;
 }

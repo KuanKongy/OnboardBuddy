@@ -19,6 +19,7 @@ import { markPhase } from './ai/checkpoints.js';
 import type { PrivacyMode } from './ai/privacy.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import type { DeveloperRole } from './semantic/projections.js';
+import { settlePackageStaleness } from './incrementalAnalyzer.js';
 import { SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
 import { generateTutorials } from './generation/tutorialGenerator.js';
@@ -103,8 +104,11 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       }),
     });
 
-    // Package row per (scope, role, commit).
-    const packageId = ((await query(
+    // Package row per (scope, role, commit). Regenerate jobs target the
+    // section's existing package (possibly built from an older commit) so a
+    // stale section rebuilt against a newer snapshot lands in place instead
+    // of spawning a fresh one-section package for the new commit.
+    const packageId = job.data.packageId ?? ((await query(
       `INSERT INTO onboarding_packages
          (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit)
        VALUES ($1, $2, $3, $4, 'generating', $5, $6)
@@ -125,7 +129,9 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         sectionType: regenerateSectionType as SectionType,
         privacyMode, commitHash: snap.commit_hash, deps,
       });
-      await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
+      // The package stays 'stale' while any other section still is; its
+      // stale flags resolve once the last stale section is regenerated.
+      await settlePackageStaleness(packageId);
       await updateJob('complete', `Regenerated ${regenerateSectionType}`, 100);
       console.log(`[summary-worker] regenerated ${regenerateSectionType} (section=${result.sectionId}, issues=${result.validation.issues.length})`);
       return;

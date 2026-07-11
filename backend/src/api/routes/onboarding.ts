@@ -7,8 +7,10 @@ export const onboardingRouter = Router({ mergeParams: true });
 
 /**
  * Regenerate one section (doc/Pipeline.md "Regeneration"): rebuilds the
- * section's bundle against the same snapshot, regenerates, revalidates,
- * and replaces the content; old generation runs stay for audit.
+ * section's bundle against the same snapshot — or the latest complete
+ * snapshot of the scope when regenerating a stale section — regenerates,
+ * revalidates, and replaces the content in the same package; old
+ * generation runs stay for audit.
  */
 onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
@@ -17,18 +19,32 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
     const userId = req.user!.id;
 
     const sectionResult = await query(
-      `SELECT ps.type, ps.snapshot_id, ps.role, op.project_id
+      `SELECT ps.type, ps.snapshot_id, ps.role, ps.review_status, ps.package_id, op.scope_id
        FROM package_sections ps
        JOIN onboarding_packages op ON op.id = ps.package_id
        WHERE ps.id = $1 AND op.project_id = $2`,
       [sectionId, projectId],
     );
     const section = sectionResult.rows[0] as
-      | { type: string; snapshot_id: string; role: string | null }
+      | { type: string; snapshot_id: string; role: string | null; review_status: string;
+          package_id: string; scope_id: string }
       | undefined;
     if (!section) {
       res.status(404).json({ error: "Section not found" });
       return;
+    }
+
+    // Stale sections regenerate against the newest analyzed code, not the
+    // snapshot that made them stale in the first place.
+    let targetSnapshotId = section.snapshot_id;
+    if (section.review_status === "stale") {
+      const latest = await query(
+        `SELECT id FROM analysis_snapshots
+         WHERE scope_id = $1 AND status = 'complete'
+         ORDER BY created_at DESC LIMIT 1`,
+        [section.scope_id],
+      );
+      targetSnapshotId = (latest.rows[0] as { id: string } | undefined)?.id ?? section.snapshot_id;
     }
 
     const settingsResult = await query(
@@ -48,16 +64,17 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
       `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step)
        VALUES ($1, $2, $3, 'regenerate_section', $4, 'queued', 'Waiting for worker')
        RETURNING id`,
-      [projectId, section.snapshot_id, userId, section.role ?? "general"],
+      [projectId, targetSnapshotId, userId, section.role ?? "general"],
     )).rows[0] as { id: string }).id;
 
     await getSummaryQueue().add("regenerate_section", {
       jobId,
-      snapshotId: section.snapshot_id,
+      snapshotId: targetSnapshotId,
       projectId,
       triggeredBy: userId,
       role: section.role ?? "general",
       sectionType: section.type,
+      packageId: section.package_id,
     } satisfies SummaryJobData, {
       attempts: 2,
       backoff: { type: "fixed", delay: 3000 },
