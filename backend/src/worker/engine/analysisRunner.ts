@@ -8,7 +8,6 @@ import type {
 } from '../types/analysis.js';
 import {
   buildRepoIndex,
-  filterByLanguage,
   scanRepositoryFiles,
   buildLanguageInventory,
   detectRepoInventory,

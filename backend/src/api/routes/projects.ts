@@ -157,14 +157,20 @@ projectsRouter.get("/:id", requireProjectAccess(), async (req, res) => {
 projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const projectId = req.params.id;
-    const { ignored_paths, privacy_mode, analysis_depth, default_developer_role, file_limit, loc_limit } =
-      req.body as {
+    const {
+      ignored_paths, privacy_mode, analysis_depth, default_developer_role, file_limit, loc_limit,
+      budget_overrides, budget_stop_behavior, model_failure_behavior, model_tier_overrides,
+    } = req.body as {
         ignored_paths?: string[];
         privacy_mode?: string;
         analysis_depth?: string;
         default_developer_role?: string;
         file_limit?: number;
         loc_limit?: number;
+        budget_overrides?: Record<string, unknown>;
+        budget_stop_behavior?: string;
+        model_failure_behavior?: Record<string, unknown>;
+        model_tier_overrides?: Record<string, unknown>;
       };
 
     if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
@@ -174,6 +180,45 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
     if (analysis_depth !== undefined && !['cheap', 'standard', 'full'].includes(analysis_depth)) {
       res.status(400).json({ error: "Invalid analysis_depth" });
       return;
+    }
+    if (budget_stop_behavior !== undefined && !['fail', 'pause', 'degrade'].includes(budget_stop_behavior)) {
+      res.status(400).json({ error: "Invalid budget_stop_behavior" });
+      return;
+    }
+    const BUDGET_KEYS = ['max_files', 'max_symbols_to_llm', 'max_llm_calls', 'max_input_tokens', 'max_runtime_ms'];
+    if (budget_overrides !== undefined) {
+      const invalid = budget_overrides === null || typeof budget_overrides !== 'object' || Array.isArray(budget_overrides) ||
+        Object.entries(budget_overrides).some(
+          ([k, v]) => !BUDGET_KEYS.includes(k) || typeof v !== 'number' || !Number.isFinite(v) || v <= 0,
+        );
+      if (invalid) {
+        res.status(400).json({ error: `budget_overrides must map ${BUDGET_KEYS.join('/')} to positive numbers` });
+        return;
+      }
+    }
+    const TIERS = ['cheap', 'strong', 'embedding'];
+    if (model_failure_behavior !== undefined) {
+      const BEHAVIORS = ['retry', 'degrade', 'pause', 'fail'];
+      const invalid = model_failure_behavior === null || typeof model_failure_behavior !== 'object' || Array.isArray(model_failure_behavior) ||
+        Object.entries(model_failure_behavior).some(
+          ([tier, list]) => !TIERS.includes(tier) || !Array.isArray(list) || list.length === 0 ||
+            list.some((b) => typeof b !== 'string' || !BEHAVIORS.includes(b)),
+        );
+      if (invalid) {
+        res.status(400).json({ error: "model_failure_behavior must map tiers to lists of retry/degrade/pause/fail" });
+        return;
+      }
+    }
+    if (model_tier_overrides !== undefined) {
+      const invalid = model_tier_overrides === null || typeof model_tier_overrides !== 'object' || Array.isArray(model_tier_overrides) ||
+        Object.entries(model_tier_overrides).some(
+          ([tier, list]) => !TIERS.includes(tier) || !Array.isArray(list) || list.length === 0 ||
+            list.some((m) => typeof m !== 'string' || m.length === 0),
+        );
+      if (invalid) {
+        res.status(400).json({ error: "model_tier_overrides must map tiers to non-empty model-name lists" });
+        return;
+      }
     }
 
     const setClauses: string[] = [];
@@ -204,6 +249,22 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
       setClauses.push(`loc_limit = $${paramIndex++}`);
       values.push(loc_limit);
     }
+    if (budget_overrides !== undefined) {
+      setClauses.push(`budget_overrides = $${paramIndex++}`);
+      values.push(JSON.stringify(budget_overrides));
+    }
+    if (budget_stop_behavior !== undefined) {
+      setClauses.push(`budget_stop_behavior = $${paramIndex++}`);
+      values.push(budget_stop_behavior);
+    }
+    if (model_failure_behavior !== undefined) {
+      setClauses.push(`model_failure_behavior = $${paramIndex++}`);
+      values.push(JSON.stringify(model_failure_behavior));
+    }
+    if (model_tier_overrides !== undefined) {
+      setClauses.push(`model_tier_overrides = $${paramIndex++}`);
+      values.push(JSON.stringify(model_tier_overrides));
+    }
 
     if (setClauses.length === 0) {
       res.status(400).json({ error: "No settings fields provided" });
@@ -223,6 +284,58 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
     res.json({ settings: result.rows[0] });
   } catch (err) {
     console.error("Update settings error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Internal observability endpoint (doc/Pipeline.md "Observability"):
+ * per-phase metrics + checkpoints, live budget counters, and per-model
+ * LLM call/token/cost aggregates from ai_generation_runs.
+ */
+projectsRouter.get("/:id/snapshots/:snapshotId/metrics", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const snapshotId = req.params.snapshotId;
+
+    const snapResult = await query(
+      `SELECT id, status, semantic_depth, privacy_mode, budget_usage, unknowns,
+              file_count, symbol_count, workflow_count, commit_hash, branch, created_at
+       FROM analysis_snapshots WHERE id = $1 AND project_id = $2`,
+      [snapshotId, projectId],
+    );
+    if (snapResult.rows.length === 0) {
+      res.status(404).json({ error: "Snapshot not found" });
+      return;
+    }
+
+    const [phasesResult, llmResult] = await Promise.all([
+      query(
+        `SELECT phase, status, started_at, finished_at, error_message, metrics, checkpoint
+         FROM snapshot_phases WHERE snapshot_id = $1 ORDER BY started_at NULLS LAST`,
+        [snapshotId],
+      ),
+      query(
+        `SELECT model, model_tier, status,
+                COUNT(*)::int AS calls,
+                COALESCE(SUM((token_usage->>'inputTokens')::bigint), 0)::bigint AS input_tokens,
+                COALESCE(SUM((token_usage->>'outputTokens')::bigint), 0)::bigint AS output_tokens,
+                COALESCE(SUM(estimated_cost_usd), 0)::numeric AS estimated_cost_usd,
+                COALESCE(AVG(latency_ms), 0)::int AS avg_latency_ms
+         FROM ai_generation_runs WHERE snapshot_id = $1
+         GROUP BY model, model_tier, status
+         ORDER BY model_tier, model, status`,
+        [snapshotId],
+      ),
+    ]);
+
+    res.json({
+      snapshot: snapResult.rows[0],
+      phases: phasesResult.rows,
+      llm: llmResult.rows,
+    });
+  } catch (err) {
+    console.error("Snapshot metrics error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

@@ -32,6 +32,7 @@ import {
   persistRepositoryFiles,
 } from './engine/evidenceGraphBuilder.js';
 import { runPreflight } from './engine/preflightService.js';
+import { markPhase } from './ai/checkpoints.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
 
@@ -103,26 +104,6 @@ async function resolveScope(projectId: string, scopeId?: string): Promise<{ scop
     [projectId],
   );
   return { scopeId: (result.rows[0] as { id: string }).id, pathPrefix: '' };
-}
-
-/** Upserts a snapshot phase-status row (observability + future resume). */
-async function markPhase(
-  snapshotId: string,
-  phase: string,
-  status: 'running' | 'complete' | 'failed' | 'skipped',
-  metrics: Record<string, unknown> = {},
-): Promise<void> {
-  await query(
-    `INSERT INTO snapshot_phases (snapshot_id, phase, status, started_at, finished_at, metrics)
-     VALUES ($1, $2, $3, NOW(),
-             CASE WHEN $3 IN ('complete', 'failed', 'skipped') THEN NOW() ELSE NULL END,
-             $4)
-     ON CONFLICT (snapshot_id, phase) DO UPDATE
-       SET status = EXCLUDED.status,
-           finished_at = EXCLUDED.finished_at,
-           metrics = snapshot_phases.metrics || EXCLUDED.metrics`,
-    [snapshotId, phase, status, JSON.stringify(metrics)],
-  );
 }
 
 // ─── Preflight job ───────────────────────────────────────────────────────────
