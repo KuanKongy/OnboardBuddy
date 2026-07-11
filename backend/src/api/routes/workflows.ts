@@ -25,13 +25,15 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
               COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
               w.confidence,
               COALESCE(cs.score, (w.metadata->>'importance_score')::numeric, 0) AS composite_score,
-              (SELECT COUNT(*)::int FROM workflow_steps s WHERE s.workflow_id = w.id) AS step_count
+              (SELECT COUNT(*)::int FROM workflow_steps s WHERE s.workflow_id = w.id) AS step_count,
+              COALESCE(cs.reasons, '{}') AS reasons,
+              COALESCE(cs.score_breakdown, '{}') AS score_breakdown
        FROM workflows w
        LEFT JOIN criticality_scores cs
          ON cs.snapshot_id = w.snapshot_id AND cs.phase = 'candidate' AND cs.view = 'candidate'
         AND cs.target_type = 'workflow' AND cs.stable_key = w.stable_key AND cs.role = 'general'
        WHERE w.snapshot_id = $1
-       ORDER BY 7 DESC`,
+       ORDER BY composite_score DESC`,
       [snapshotId],
     );
 

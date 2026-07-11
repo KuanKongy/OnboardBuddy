@@ -13,9 +13,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { apiFetch } from "@/lib/api";
 import { ROLES } from "@/lib/onboardingData";
+import { useProgress } from "@/lib/useProgress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +33,8 @@ interface TutorialSummary {
   id: string;
   title: string;
   summary: string;
+  /** "After this tutorial, you can …" — the concrete skill it teaches. */
+  goal: string | null;
   status: string;
   confidence: string;
   trigger_type: string | null;
@@ -159,6 +163,13 @@ export function WalkthroughTab() {
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  const { save: saveProgress } = useProgress(id);
+
+  // Remember the reader's step so "Continue tutorial" resumes here.
+  useEffect(() => {
+    if (!detail?.tutorial.id) return;
+    saveProgress("tutorial", detail.tutorial.id, { stepOrder: currentStep + 1 });
+  }, [detail?.tutorial.id, currentStep, saveProgress]);
 
   // Deterministic fallback state (no tutorials generated / AI disabled).
   const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
@@ -182,7 +193,11 @@ export function WalkthroughTab() {
         const wf = await apiFetch(`/projects/${id}/workflows`);
         setWorkflows(wf.workflows ?? []);
       } else {
-        void openTutorial(list[0]!.id);
+        // Deep link / resume: ?tutorial=<id>&step=<n> opens at that step.
+        const requested = searchParams.get("tutorial");
+        const target = requested && list.some((t) => t.id === requested) ? requested : list[0]!.id;
+        const step = Number(searchParams.get("step"));
+        void openTutorial(target, Number.isFinite(step) && step > 0 ? step - 1 : 0);
       }
     } catch {
       setTutorials([]);
@@ -193,7 +208,7 @@ export function WalkthroughTab() {
 
   useEffect(() => { load(); }, [load]);
 
-  async function openTutorial(tutorialId: string) {
+  async function openTutorial(tutorialId: string, startStep = 0) {
     if (!id) return;
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -202,7 +217,11 @@ export function WalkthroughTab() {
     setCurrentStep(0);
     try {
       const data = await apiFetch(`/projects/${id}/tutorials/${tutorialId}`, { signal: controller.signal });
-      if (!controller.signal.aborted) setDetail(data as TutorialDetail);
+      if (!controller.signal.aborted) {
+        const loaded = data as TutorialDetail;
+        setDetail(loaded);
+        if (startStep > 0) setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+      }
     } catch { /* list stays */ }
     finally {
       if (!controller.signal.aborted) setLoadingDetail(false);
@@ -233,19 +252,19 @@ export function WalkthroughTab() {
 
   return (
     <div>
-      <div className="page-header" data-tour="tutorials-header">
-        <div>
-          <h1 className="page-title">Tutorials</h1>
-          <p className="page-subtitle">
-            Real traced flows, step by step — the actual code at each step, with an explanation of what it does.
-          </p>
-        </div>
-        <Select value={role} onValueChange={(next) => setSearchParams((prev) => { prev.set("role", next); return prev; }, { replace: true })}>
-          <SelectTrigger className="h-8 w-[160px] text-[13px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div data-tour="tutorials-header">
+        <PageHeader
+          title="Tutorials"
+          subtitle="Real traced flows, step by step — the actual code at each step, with an explanation of what it does."
+          actions={
+            <Select value={role} onValueChange={(next) => setSearchParams((prev) => { prev.set("role", next); return prev; }, { replace: true })}>
+              <SelectTrigger className="h-8 w-[160px] text-[13px]"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          }
+        />
       </div>
 
       {loading ? (
@@ -308,6 +327,9 @@ export function WalkthroughTab() {
                       <Sparkles className="h-2.5 w-2.5" /> AI explanations · {detail.tutorial.confidence} confidence
                     </span>
                   </div>
+                  {detail.tutorial.goal && (
+                    <p className="mt-1 text-[12.5px] font-medium text-foreground">{detail.tutorial.goal}</p>
+                  )}
                   <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
                 </div>
 
@@ -329,27 +351,35 @@ export function WalkthroughTab() {
                   </Link>
                 </div>
 
-                {tStep.snippet && (
-                  <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 text-[12px] leading-relaxed text-foreground">
-                    {tStep.snippet}
-                  </pre>
-                )}
-
-                <div className="rounded-md border border-border px-4 py-3">
-                  <p className="text-[13px] leading-relaxed text-foreground">
-                    {tStep.explanation || "No explanation could be grounded in the evidence for this step."}
-                  </p>
-                  {tStep.receipts.length > 0 && (
-                    <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-muted-foreground/70">
-                      Backed by:
-                      {tStep.receipts.map((r) => (
-                        <span key={r.id} className="font-mono">
-                          {r.file_path}
-                          {r.line_start ? `:${r.line_start}` : ""}
-                        </span>
-                      ))}
+                {/* Code and explanation side by side — the tutorial's whole
+                    point is reading real code with the note next to it. */}
+                <div className={cn("grid gap-3", tStep.snippet && "xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
+                  {tStep.snippet ? (
+                    <pre className="max-h-80 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 text-[12px] leading-relaxed text-foreground">
+                      {tStep.snippet}
+                    </pre>
+                  ) : (
+                    <p className="rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-muted-foreground">
+                      No snippet was captured for this step — open it in Dependencies to read the code.
                     </p>
                   )}
+
+                  <div className="h-fit rounded-md border border-border px-4 py-3">
+                    <p className="text-[13px] leading-relaxed text-foreground">
+                      {tStep.explanation || "No explanation could be grounded in the evidence for this step."}
+                    </p>
+                    {tStep.receipts.length > 0 && (
+                      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-muted-foreground/70">
+                        Backed by:
+                        {tStep.receipts.map((r) => (
+                          <span key={r.id} className="font-mono">
+                            {r.file_path}
+                            {r.line_start ? `:${r.line_start}` : ""}
+                          </span>
+                        ))}
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {detail.tutorial.unknowns?.length > 0 && currentStep === detail.steps.length - 1 && (

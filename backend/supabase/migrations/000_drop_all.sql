@@ -8,6 +8,7 @@ drop function if exists public.handle_new_user();
 drop function if exists public.graph_neighborhood(uuid, uuid[], integer, text[], integer, integer);
 
 drop table if exists public.stale_flags cascade;
+drop table if exists public.user_progress cascade;
 drop table if exists public.source_receipts cascade;
 drop table if exists public.tutorial_steps cascade;
 drop table if exists public.tutorials cascade;

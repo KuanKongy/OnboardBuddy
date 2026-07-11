@@ -1,6 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -47,6 +48,14 @@ export function ArchitecturePage() {
   }
 
   useEffect(() => { load(); }, [id]);
+
+  // Deep link from the capabilities hub: ?cluster=<stable_key> preselects
+  // that component (cluster ids are stable keys).
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const cluster = searchParams.get("cluster");
+    if (cluster && data?.clusters.some((c) => c.id === cluster)) setSelectedId(cluster);
+  }, [searchParams, data]);
 
   const visibleClusters = useMemo(() => {
     if (!data) return [];
@@ -138,18 +147,18 @@ export function ArchitecturePage() {
 
   return (
     <div style={{ "--graph-chrome": "190px" } as React.CSSProperties}>
-      <div className="page-header" data-tour="architecture-header">
-        <div>
-          <h1 className="page-title">Architecture</h1>
-          <p className="page-subtitle">
-            How the codebase is organized into layers — click a component to see what it does and what it talks to.
-          </p>
-        </div>
-        {data && (
-          <Badge variant="outline" className="text-[11px] tabular-nums">
-            {data.clusters.length} components · {data.edges.length} connections
-          </Badge>
-        )}
+      <div data-tour="architecture-header">
+        <PageHeader
+          title="Architecture"
+          subtitle="How the codebase is organized into layers — click a component to see what it does and what it talks to."
+          actions={
+            data ? (
+              <Badge variant="outline" className="text-[11px] tabular-nums">
+                {data.clusters.length} components · {data.edges.length} connections
+              </Badge>
+            ) : undefined
+          }
+        />
       </div>
 
       {loading && (

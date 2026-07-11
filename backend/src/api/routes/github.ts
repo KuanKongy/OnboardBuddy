@@ -9,6 +9,7 @@ import {
   getGitHubUser,
   listInstallationRepos,
   listBranches,
+  listCommits,
 } from "../../lib/github.js";
 import {
   assertGithubAccountCanBeLinked,
@@ -274,6 +275,32 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.error("List branches error:", err);
+    }
+    handleGitHubRouteError(res, err);
+  }
+});
+
+githubRouter.get("/repos/:owner/:repo/commits", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const { owner, repo } = req.params;
+    const installationId = Number(req.query.installation_id);
+    const branch = typeof req.query.branch === "string" ? req.query.branch : "";
+    if (!installationId || Number.isNaN(installationId)) {
+      res.status(400).json({ error: "installation_id query parameter is required" });
+      return;
+    }
+    if (!branch) {
+      res.status(400).json({ error: "branch query parameter is required" });
+      return;
+    }
+
+    const installationToken = await getInstallationTokenForUser(userId, installationId);
+    const commits = await listCommits(installationToken, owner, repo, branch);
+    res.json({ commits });
+  } catch (err) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("List commits error:", err);
     }
     handleGitHubRouteError(res, err);
   }

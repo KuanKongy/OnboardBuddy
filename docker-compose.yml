@@ -5,6 +5,10 @@ services:
       dockerfile: backend/Dockerfile.api
     env_file:
       - backend/.env
+    environment:
+      # API + worker pools share Supabase's session-mode pool_size (15):
+      # 4 + 8 stays under the cap (doc/DEVOPS.md "Connection pooling").
+      PG_POOL_MAX: 4
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
     ports:
@@ -16,6 +20,8 @@ services:
       dockerfile: backend/Dockerfile.worker
     env_file:
       - backend/.env
+    environment:
+      PG_POOL_MAX: 8
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
 
