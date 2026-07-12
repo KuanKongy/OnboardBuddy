@@ -65,7 +65,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
       aria-labelledby="receipt-viewer-title"
     >
       <div
-        className="w-full max-w-lg rounded-lg border bg-background shadow-xl"
+        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -99,7 +99,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
         </div>
 
         {/* Body */}
-        <div className="space-y-4 px-5 py-4">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
           {/* Confidence & staleness badges */}
           <div className="flex flex-wrap items-center gap-2">
             <ConfidenceBadge confidence={receipt.confidence} />
@@ -125,7 +125,18 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             </span>
           </div>
 
-          {/* Code snippet */}
+          {/* What the cited symbol does — evidence should explain, not just show */}
+          {receipt.summary && (
+            <div className="rounded-md border px-3 py-2.5">
+              <p className="text-xs font-medium text-muted-foreground">
+                What this does
+              </p>
+              <p className="mt-1 text-[13px] leading-relaxed text-foreground">{receipt.summary}</p>
+            </div>
+          )}
+
+          {/* Code snippet — capped height so a long function never swallows
+              the whole modal; scrolls both ways. */}
           {receipt.snippet && (
             <div className="rounded-md border bg-muted/30">
               <div className="border-b px-3 py-1.5">
@@ -133,7 +144,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                   Source Evidence
                 </span>
               </div>
-              <pre className="overflow-x-auto p-3 text-[12px] leading-relaxed text-foreground">
+              <pre className="max-h-[40vh] overflow-auto p-3 text-[12px] leading-relaxed text-foreground">
                 <code>{receipt.snippet}</code>
               </pre>
             </div>

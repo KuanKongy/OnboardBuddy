@@ -21,6 +21,8 @@ export interface SourceReceipt {
   lineEnd?: number;
   symbolName?: string;
   snippet?: string;
+  /** Semantic summary of the cited symbol ("what this does"), when available. */
+  summary?: string | null;
   claim?: string;
   commitHash?: string;
   nodeStableKey?: string;

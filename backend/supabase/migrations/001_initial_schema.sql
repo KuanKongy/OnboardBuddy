@@ -294,7 +294,12 @@ create table if not exists public.analysis_jobs (
   error_message text,
   created_at timestamptz not null default now(),
   started_at timestamptz,
-  finished_at timestamptz
+  finished_at timestamptz,
+  -- Worker liveness: stamped every ~15s while a run is genuinely alive. A
+  -- 'running' job silent for minutes is presumed dead and gets reconciled.
+  last_heartbeat_at timestamptz,
+  -- Delivery attempt (>1 = the queue retried this run after an interruption).
+  attempt integer not null default 1
 );
 
 -- ============================================================

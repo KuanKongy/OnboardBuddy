@@ -22,10 +22,13 @@ import ReactMarkdown from "react-markdown";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { AppTour, type TourStep } from "@/components/AppTour";
 import { PageHeader } from "@/components/PageHeader";
 import { SidebarToggle } from "@/components/SidebarShell";
+import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { apiFetch } from "@/lib/api";
+import { dismissTour, tourDismissed } from "@/lib/tourState";
 import { useProgress } from "@/lib/useProgress";
 import {
   ROLES,
@@ -101,7 +104,39 @@ const UNKNOWN_LABELS: Record<string, string> = {
   unsupported_languages: "Some files are in languages the analyzer doesn't parse yet",
   docs_conflict_with_code: "Documentation disagrees with the code — the code was trusted",
   unexplained_step: "A step in a flow couldn't be explained from the available evidence",
+  ai_disabled: "Generated without AI (privacy mode: AI disabled) — deterministic facts only",
+  noReceipt: "No citable evidence was available for this topic",
+  docs_only_support: "This claim rests on documentation alone (docs may lag the code)",
 };
+
+/**
+ * "How packages work" tour: the transparency contract for package lifecycle —
+ * when a package is updated in place, when a new one appears, when nothing is
+ * ever silently discarded, when stale badges (the diff signal) show up, and
+ * what the AI & privacy setting changes.
+ */
+const LIFECYCLE_TOUR_STEPS: TourStep[] = [
+  {
+    target: "onboarding-header",
+    title: "One package per scope, role & commit",
+    body: "Every package is pinned to the exact commit it was analyzed at. Generating the same role at the same commit UPDATES that package in place — packages are never silently discarded.",
+  },
+  {
+    target: "onboarding-cards",
+    title: "When a package updates vs. multiplies",
+    body: "Regenerate rebuilds sections in place for the same commit. Analyzing a NEW commit re-checks existing packages and stale-flags only what changed; a new card appears once you generate or regenerate a package at that commit. Older cards stay, marked 'behind latest'.",
+  },
+  {
+    target: "onboarding-cards",
+    title: "Stale badges are your diff signal",
+    body: "Push commits, then re-analyze: only sections whose underlying code evidence actually changed get a stale badge (whitespace-only edits flag nothing). A stale section shows a banner in the reader — Regenerate rebuilds it against the newest analysis while review history is kept.",
+  },
+  {
+    target: "onboarding-filters",
+    title: "Privacy decides HOW, not WHETHER",
+    body: "The AI & privacy setting applies to the very next generation — no re-analysis needed. Full AI narrates with code snippets, facts-only sends no code to the model, and AI-disabled builds deterministic fact sheets with zero LLM calls.",
+  },
+];
 
 // ── section reader ────────────────────────────────────────────────────────────
 
@@ -173,7 +208,7 @@ function SectionView({
         )}
         {section.reviewedBy && (
           <span className="text-xs text-muted-foreground">
-            Reviewed by <span className="font-medium text-foreground">@{section.reviewedBy}</span>
+            Reviewed by <span className="font-medium text-foreground">{section.reviewedBy}</span>
           </span>
         )}
         {hasSecondaryBlocks && (
@@ -219,7 +254,7 @@ function SectionView({
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
-                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[13.5px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13.5px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1">
+                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[13.5px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13.5px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
                   <ReactMarkdown>{block.body}</ReactMarkdown>
                 </div>
                 {block.receipts.length > 0 && (
@@ -366,6 +401,12 @@ export function OnboardingPage() {
   const [regenCard, setRegenCard] = useState<PackageCard | null>(null);
   const [regenBusy, setRegenBusy] = useState(false);
   const [regenError, setRegenError] = useState("");
+  // Reader-level generate/regenerate failures — silently swallowing these
+  // made "Regenerate" look like it did nothing (e.g. permission errors).
+  const [actionError, setActionError] = useState("");
+  // "How packages work" lifecycle tour (cards view).
+  const [lifecycleTourOpen, setLifecycleTourOpen] = useState(false);
+  const { user } = useAuth();
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
   const { save: saveProgress } = useProgress(id);
@@ -438,6 +479,21 @@ export function OnboardingPage() {
     return () => window.clearInterval(timer);
   }, [view, project?.status, cards]);
 
+  // First visit to the package grid: auto-run the "How packages work" tour —
+  // but only after the project-level tour was dismissed, so two spotlight
+  // overlays never stack on a brand-new account's first project visit.
+  useEffect(() => {
+    if (view === "reader" || cardsLoading || !user) return;
+    if (!tourDismissed("project", user.id)) return;
+    if (tourDismissed("onboardingLifecycle", user.id)) return;
+    setLifecycleTourOpen(true);
+  }, [view, cardsLoading, user]);
+
+  function finishLifecycleTour() {
+    if (user) dismissTour("onboardingLifecycle", user.id);
+    setLifecycleTourOpen(false);
+  }
+
   const canManage = project?.permission_tier === "owner" || project?.permission_tier === "admin";
   const isMissing = !pkg || pkg.status === "missing";
   const sections = isMissing ? [] : pkg.sections;
@@ -478,6 +534,7 @@ export function OnboardingPage() {
   async function handleGenerateRole() {
     if (!id) return;
     setGenerating(true);
+    setActionError("");
     try {
       await apiFetch(`/projects/${id}/onboarding/generate`, {
         method: "POST",
@@ -493,14 +550,16 @@ export function OnboardingPage() {
           loadCards();
         }
       }, 5000);
-    } catch {
+    } catch (err: unknown) {
       setGenerating(false);
+      setActionError(err instanceof Error ? err.message : "Failed to start generation");
     }
   }
 
   async function handleRegenerateSection() {
     if (!id || !activeSection?.sectionId) return;
     setRegenerating(true);
+    setActionError("");
     try {
       await regenerateSection(id, activeSection.sectionId);
       // Poll until the regenerated section lands (worker replaces the row).
@@ -509,15 +568,20 @@ export function OnboardingPage() {
       const poll = window.setInterval(async () => {
         const data = await fetchOnboardingPackage(id, selectedRole);
         const fresh = data?.sections.find((s) => s.id === activeSectionId);
-        if ((fresh && fresh.sectionId !== oldId) || Date.now() - started > 120_000) {
+        if (fresh && fresh.sectionId !== oldId) {
           window.clearInterval(poll);
           setRegenerating(false);
           if (data) setPkg(data);
           loadCards();
+        } else if (Date.now() - started > 120_000) {
+          window.clearInterval(poll);
+          setRegenerating(false);
+          setActionError("Regeneration is taking longer than expected — the section will replace itself when the worker finishes. Check the Overview page for job status.");
         }
       }, 4000);
-    } catch {
+    } catch (err: unknown) {
       setRegenerating(false);
+      setActionError(err instanceof Error ? err.message : "Failed to start regeneration");
     }
   }
 
@@ -578,17 +642,29 @@ export function OnboardingPage() {
             title="Your onboarding"
             subtitle="Generated onboarding packages — one per scope, role, and analyzed commit."
             actions={
-              canManage && (
+              <>
                 <Button
                   size="sm"
-                  className="gap-1.5"
-                  onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
-                  disabled={analyzeBusy}
+                  variant="ghost"
+                  className="gap-1.5 text-muted-foreground"
+                  onClick={() => setLifecycleTourOpen(true)}
+                  title="When packages update, when new ones appear, and when stale badges show up"
                 >
-                  {analyzeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  {analyzeBusy ? "Analyzing…" : "Analyze & generate…"}
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  How packages work
                 </Button>
-              )
+                {canManage && (
+                  <Button
+                    size="sm"
+                    className="gap-1.5"
+                    onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
+                    disabled={analyzeBusy}
+                  >
+                    {analyzeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {analyzeBusy ? "Analyzing…" : "Analyze & generate…"}
+                  </Button>
+                )}
+              </>
             }
           />
         </div>
@@ -740,6 +816,10 @@ export function OnboardingPage() {
             initialRole={analyzeInitialRole}
           />
         )}
+
+        {lifecycleTourOpen && (
+          <AppTour steps={LIFECYCLE_TOUR_STEPS} onDone={finishLifecycleTour} />
+        )}
       </div>
     );
   }
@@ -815,6 +895,18 @@ export function OnboardingPage() {
         <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Generating — sections appear here as each one finishes ({sections.length}/11 so far).
+        </div>
+      )}
+
+      {actionError && (
+        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger">
+          <span>
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            {actionError}
+          </span>
+          <button className="shrink-0 opacity-70 hover:opacity-100" onClick={() => setActionError("")} aria-label="Dismiss">
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 

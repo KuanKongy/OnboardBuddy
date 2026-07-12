@@ -265,6 +265,8 @@ export interface RouteRegistration {
   routePath: string;   // '/projects/:id'
   /** Symbol name of the handler in `handlerRelativePath` (synthesized for inline handlers). */
   handlerSymbolName?: string;
+  /** Declaring class when the handler is a class method — method nodes are keyed `file#Class.method`. */
+  handlerParentName?: string;
   /** Repo-relative file declaring the handler (this file for inline handlers). */
   handlerRelativePath?: string;
   line: number;

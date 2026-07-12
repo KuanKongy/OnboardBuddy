@@ -23,6 +23,7 @@ import type { DeveloperRole } from './semantic/projections.js';
 import { settlePackageStaleness } from './incrementalAnalyzer.js';
 import { SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
+import { generateDeterministicSection } from './generation/deterministicSectionGenerator.js';
 import { generateTutorials } from './generation/tutorialGenerator.js';
 
 // ── Snapshot + settings ──────────────────────────────────────────────────────
@@ -34,6 +35,10 @@ interface SnapRow {
   role: DeveloperRole;
   semantic_depth: SemanticDepth;
   privacy_mode: PrivacyMode;
+  /** Live settings value — generation follows the CURRENT setting, not the
+   * mode copied onto the snapshot when the analysis ran (changing AI &
+   * privacy must change how packages generate without a re-analysis). */
+  effective_privacy_mode: PrivacyMode;
   budget_overrides: unknown;
   budget_stop_behavior: 'fail' | 'pause' | 'degrade';
   model_failure_behavior: unknown;
@@ -43,6 +48,7 @@ interface SnapRow {
 async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
   const row = (await query(
     `SELECT s.commit_hash, s.project_id, s.scope_id, s.semantic_depth, s.privacy_mode,
+            COALESCE(ps.privacy_mode, s.privacy_mode) AS effective_privacy_mode,
             COALESCE(ps.default_developer_role, 'general') AS role,
             COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
             COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
@@ -62,46 +68,39 @@ async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
 async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole, sectionType: regenerateSectionType } = job.data;
 
-  const updateJob = (status: string, step: string, pct: number, errorMsg?: string) => {
+  const updateJob = async (status: string, step: string, pct: number, errorMsg?: string) => {
     const finishedAt = status === 'complete' || status === 'failed' || status === 'paused' ? new Date() : null;
-    return query(
+    // Progress updates must not stomp a user-set pause/stop; terminal writes
+    // always apply (a run finishing beats a just-clicked pause).
+    const guard = status === 'running' ? `AND status NOT IN ('paused', 'failed')` : '';
+    const result = await query(
       `UPDATE analysis_jobs
        SET status = $1, current_step = $2, progress_pct = $3,
            started_at = COALESCE(started_at, NOW()),
+           last_heartbeat_at = NOW(),
            error_message = $4, finished_at = $6,
            step_log = step_log || $7::jsonb
-       WHERE id = $5`,
+       WHERE id = $5 ${guard}
+       RETURNING id`,
       [status, step, pct, errorMsg ?? null, jobId, finishedAt,
        JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
+    if (status === 'running' && result.rows.length === 0) {
+      const row = (await query(`SELECT status FROM analysis_jobs WHERE id = $1`, [jobId])).rows[0] as { status?: string } | undefined;
+      throw new KillSwitchError(row?.status === 'paused' ? 'paused' : 'failed');
+    }
   };
 
+  const heartbeat = setInterval(() => {
+    query(`UPDATE analysis_jobs SET last_heartbeat_at = NOW() WHERE id = $1 AND status = 'running'`, [jobId])
+      .catch(() => {});
+  }, 15_000);
+
   try {
+    await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
     await updateJob('running', 'Loading snapshot', 5);
     const snap = await loadSnapshot(snapshotId);
-
-    if (snap.privacy_mode === 'ai_disabled') {
-      await markPhase(snapshotId, 'generation', 'skipped', { reason: 'ai_disabled' });
-      await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
-      await updateJob('complete', 'AI disabled — deterministic outputs only', 100);
-      return;
-    }
-    const privacyMode = snap.privacy_mode as 'full_ai' | 'facts_only_ai';
     const role = (requestedRole as DeveloperRole | undefined) ?? snap.role;
-
-    const budget = await new BudgetEnforcer({
-      snapshotId, jobId,
-      depth: snap.semantic_depth,
-      budgetOverrides: snap.budget_overrides,
-      stopBehavior: snap.budget_stop_behavior,
-    }).load();
-    const ai = new AiClient({
-      projectId, snapshotId, privacyMode, budget,
-      tierConfig: resolveTierConfig({
-        modelTierOverrides: snap.model_tier_overrides,
-        modelFailureBehavior: snap.model_failure_behavior,
-      }),
-    });
 
     // Package row per (scope, role, commit). Regenerate jobs target the
     // section's existing package (possibly built from an older commit) so a
@@ -118,6 +117,52 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     )).rows[0] as { id: string }).id;
 
     const deps = await buildSectionDeps(snapshotId, projectId, role);
+
+    if (snap.effective_privacy_mode === 'ai_disabled') {
+      // Spec: ai_disabled = deterministic-only outputs — the package still
+      // exists, built from extracted facts, with zero LLM calls. Tutorials
+      // are skipped (the Tutorials tab falls back to raw workflow steps).
+      if (regenerateSectionType) {
+        await updateJob('running', `Regenerating (deterministic): ${regenerateSectionType}`, 40);
+        await generateDeterministicSection({
+          snapshotId, packageId, role,
+          sectionType: regenerateSectionType as SectionType,
+          commitHash: snap.commit_hash, deps,
+        });
+        await settlePackageStaleness(packageId);
+        await updateJob('complete', `Regenerated ${regenerateSectionType} (AI disabled)`, 100);
+        return;
+      }
+      let done = 0;
+      for (const sectionType of SECTION_TYPES) {
+        await generateDeterministicSection({
+          snapshotId, packageId, role, sectionType, commitHash: snap.commit_hash, deps,
+        });
+        done += 1;
+        await updateJob('running', `Generated section: ${sectionType} (${done}/${SECTION_TYPES.length})`, 10 + Math.floor((done / SECTION_TYPES.length) * 85));
+      }
+      await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
+      await markPhase(snapshotId, 'generation', 'complete', { sections: SECTION_TYPES.length, mode: 'deterministic' });
+      await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
+      await updateJob('complete', 'Deterministic onboarding package ready (AI disabled)', 100);
+      return;
+    }
+    const privacyMode = snap.effective_privacy_mode as 'full_ai' | 'facts_only_ai';
+
+    const budget = await new BudgetEnforcer({
+      snapshotId, jobId,
+      depth: snap.semantic_depth,
+      budgetOverrides: snap.budget_overrides,
+      stopBehavior: snap.budget_stop_behavior,
+    }).load();
+    const ai = new AiClient({
+      projectId, snapshotId, privacyMode, budget,
+      tierConfig: resolveTierConfig({
+        modelTierOverrides: snap.model_tier_overrides,
+        modelFailureBehavior: snap.model_failure_behavior,
+      }),
+    });
+
     const sectionMetrics: Record<string, unknown> = {};
 
     if (regenerateSectionType) {
@@ -250,6 +295,17 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     await updateJob('complete', 'Onboarding package ready', 100);
     console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size}`);
   } catch (err) {
+    // A failed/paused regenerate must not leave the section stuck in
+    // 'regenerate_requested' (write-only state nothing resets): mark it
+    // stale so the old content stays visible and the Regenerate button
+    // comes back instead of the job silently vanishing.
+    if (regenerateSectionType && job.data.packageId) {
+      await query(
+        `UPDATE package_sections SET review_status = 'stale'
+         WHERE package_id = $1 AND type = $2 AND review_status = 'regenerate_requested'`,
+        [job.data.packageId, regenerateSectionType],
+      ).catch(() => {});
+    }
     if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
       const message = err.message.slice(0, 200);
       await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
@@ -279,6 +335,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     ).catch(() => {});
     console.error(`[summary-worker] job ${job.id} failed:`, message);
     throw err;
+  } finally {
+    clearInterval(heartbeat);
   }
 }
 
@@ -302,6 +360,12 @@ summaryWorker.on('completed', (job: Job<SummaryJobData>) => {
 
 summaryWorker.on('failed', (job: Job<SummaryJobData> | undefined, err: Error) => {
   console.error(`[summary-worker] failed job ${job?.id}:`, err.message);
+});
+
+// Connection-level errors were invisible — a dead blocking socket looked like
+// an idle worker. Log them so "listening but deaf" is diagnosable.
+summaryWorker.on('error', (err: Error) => {
+  console.error('[summary-worker] worker error:', err.message);
 });
 
 console.log(`[summary-worker] listening on queue "${SUMMARY_QUEUE}"`);
