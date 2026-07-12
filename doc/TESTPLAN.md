@@ -93,6 +93,8 @@ For a repo to analyze, fork https://github.com/KuanKongy/CourseInsights (a CPSC 
 |------|--------|-----------------|
 | 1 | Push a commit changing one function body to the analyzed repo | — |
 | 2 | Overview → **Analyze…** → Start analysis | Response mode is incremental; run completes faster (cached records reused) |
+| 3 | Open **Your Onboarding** | Sections citing the changed file show **Stale** badges; the package card shows a stale count |
+| 4 | Open a stale section → **Regenerate** | Section rebuilds against the newest snapshot; stale badge clears |
 
 ### 3.7 Settings (M3)
 
