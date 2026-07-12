@@ -98,8 +98,12 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   fs.mkdirSync(extractDir);
 
   const branch = requestedBranch ?? project.branch;
-  const commitHash = requestedCommit
-    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, branch)).trim();
+  // Always record the full 40-char SHA: a short requested SHA stored verbatim
+  // forks the (scope, commit) snapshot identity — the same commit gets two
+  // snapshot rows and incremental diffs compare the wrong pair.
+  const commitHash = requestedCommit && /^[0-9a-f]{40}$/i.test(requestedCommit)
+    ? requestedCommit
+    : (await getCommitSha(token, project.repo_owner, project.repo_name, requestedCommit ?? branch)).trim();
   await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
