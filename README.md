@@ -47,7 +47,7 @@ One command runs **every automated test** (backend + frontend). No local Node/np
 docker compose -f docker-compose.test.yml run --rm test
 ```
 
-(With Node 22 installed, `npm install && npm test` runs the same suites locally.) Expected: backend `302 passing`, frontend `21 passed`. Details: [doc/TESTPLAN.md](doc/TESTPLAN.md) and [doc/TESTING.md](doc/TESTING.md).
+(With Node 22 installed, `npm install && npm test` runs the same suites locally.) Expected: backend `321 passing`, frontend `25 passed`. Details: [doc/TESTPLAN.md](doc/TESTPLAN.md) and [doc/TESTING.md](doc/TESTING.md).
 
 ## Milestones
 

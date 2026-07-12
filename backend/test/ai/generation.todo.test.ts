@@ -97,7 +97,7 @@ describe("AI generation quality", () => {
     expect(results[0]!.issues.length).to.be.greaterThan(0);
   });
 
-  it("AI-disabled mode produces deterministic package sections only", async () => {
+  it("AI-disabled mode no longer blocks generation — the worker builds a deterministic package", async () => {
     installTestAuth();
     mockQuery((text, params) => {
       if (text.includes("FROM project_members") && params?.[0] === TEST_PROJECT_ID) {
@@ -120,8 +120,10 @@ describe("AI generation quality", () => {
       .post(`/api/projects/${TEST_PROJECT_ID}/summarize`)
       .set(authHeader());
 
-    expect(res.status).to.equal(403);
-    expect(res.body.error).to.match(/AI features are disabled/i);
+    // The old 403 privacy gate is gone; without a completed snapshot the
+    // request proceeds to the analysis check instead of being refused.
+    expect(res.status).to.equal(409);
+    expect(res.body.error).to.match(/No completed analysis/i);
   });
 
   it("Generated sections start as draft review status", () => {

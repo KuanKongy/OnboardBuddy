@@ -85,7 +85,12 @@ export function extractWorkflows(input: ExtractWorkflowsInput): ExtractedWorkflo
     }
   }
 
-  return suppressNearDuplicates(workflows.sort((a, b) => b.importanceScore - a.importanceScore));
+  // Score ties: an AST-detected route (`PUT /dataset/:id/:kind`) beats a
+  // convention-guessed seed over the same steps — it carries the real
+  // method + route pattern, so it survives duplicate suppression.
+  return suppressNearDuplicates(workflows.sort((a, b) =>
+    b.importanceScore - a.importanceScore
+    || Number(Boolean(b.entrypoint.routePattern)) - Number(Boolean(a.entrypoint.routePattern))));
 }
 
 /**
@@ -150,20 +155,48 @@ function seedsForEntrypoint(ep: DetectedEntrypoint, ctx: TraversalContext): Evid
   if (ep.symbolStableKey) {
     const node = ctx.nodesByKey.get(ep.symbolStableKey);
     if (node) return [node];
+    // Class-method handlers from older snapshots may be keyed with the bare
+    // method name (`file#echo`) while the node is `file#Server.echo` — accept
+    // an unambiguous `.name` suffix match in the same file before giving up.
+    const qualified = qualifiedMemberMatch(ep.symbolStableKey, ctx);
+    if (qualified) return [qualified];
   }
   const fileNode = ctx.nodesByKey.get(ep.nodeStableKey);
   if (!fileNode) return [];
 
   const candidates: EvidenceNode[] = [];
-  for (const childKey of ctx.contained.get(fileNode.stableKey) ?? []) {
+  const consider = (childKey: string, depth: number): void => {
     const child = ctx.nodesByKey.get(childKey);
-    if (!child || child.metadata.isTrivial === true) continue;
+    if (!child || child.metadata.isTrivial === true) return;
+    // Classes rarely carry traversal edges themselves — their methods do.
+    // Descend one level so a route file whose handlers are class methods
+    // (`class Server { echo() {...} }`) still yields real seeds.
+    if (child.type === 'class' && depth === 0) {
+      for (const memberKey of ctx.contained.get(childKey) ?? []) consider(memberKey, depth + 1);
+      return;
+    }
     const hasFlow = (ctx.outgoing.get(childKey) ?? []).length > 0;
     if (hasFlow || hasEffect(child, ctx)) candidates.push(child);
-  }
+  };
+  for (const childKey of ctx.contained.get(fileNode.stableKey) ?? []) consider(childKey, 0);
   // A file-level entrypoint without a resolved handler is a guess — cap the
   // fan-out so one file doesn't spawn a workflow per symbol.
   return candidates.sort((a, b) => (a.lineStart ?? 0) - (b.lineStart ?? 0)).slice(0, 3);
+}
+
+/** Resolves `file#member` to the single `file#Class.member` node if exactly one class in the file declares it. */
+function qualifiedMemberMatch(symbolStableKey: string, ctx: TraversalContext): EvidenceNode | null {
+  const hashIdx = symbolStableKey.lastIndexOf('#');
+  if (hashIdx <= 0) return null;
+  const filePrefix = symbolStableKey.slice(0, hashIdx + 1);
+  const memberSuffix = `.${symbolStableKey.slice(hashIdx + 1)}`;
+  let match: EvidenceNode | null = null;
+  for (const [key, node] of ctx.nodesByKey) {
+    if (node.type !== 'method' || !key.startsWith(filePrefix) || !key.endsWith(memberSuffix)) continue;
+    if (match) return null; // ambiguous — two classes declare the member
+    match = node;
+  }
+  return match;
 }
 
 // ─── Trace ───────────────────────────────────────────────────────────────────

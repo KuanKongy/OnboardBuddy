@@ -15,7 +15,9 @@ import {
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
+import { useAuth } from "@/contexts/AuthContext";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
+import { dismissTour, tourDismissed } from "@/lib/tourState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -91,16 +93,6 @@ const projectNavItems = [
   },
 ];
 
-const PROJECT_TOUR_DISMISSED_KEY = "onboardbuddy:project-tour-dismissed";
-
-function readProjectTourDismissed(): boolean {
-  try {
-    return localStorage.getItem(PROJECT_TOUR_DISMISSED_KEY) === "1";
-  } catch {
-    // localStorage unavailable — never auto-run so it can't loop every visit.
-    return true;
-  }
-}
 
 /**
  * First-timer walkthrough of a project: what each tab is for and where the
@@ -117,6 +109,11 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
     target: "nav-onboarding",
     title: "Your onboarding",
     body: "Generated reading paths, one package per scope, role, and commit. Every claim carries receipts — click one to see the code it's based on.",
+  },
+  {
+    target: "nav-onboarding",
+    title: "When packages change",
+    body: "Regenerating replaces a package's content in place; analyzing a new commit adds a new package and keeps the old one — nothing is silently discarded. Stale badges appear only on sections whose code actually changed. The 'How packages work' tour inside Your Onboarding has the full rules.",
   },
   {
     target: "nav-architecture",
@@ -151,7 +148,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-settings",
     title: "Settings",
-    body: "Privacy mode (what, if anything, is sent to AI), analysis depth, budgets, your own API key, and per-role ranking weights.",
+    body: "Privacy mode (what, if anything, is sent to AI), analysis depth, budgets, your own API key, and per-role ranking weights. AI & privacy changes apply to the next generation immediately — no re-analysis needed; AI-disabled still produces deterministic packages.",
   },
 ];
 
@@ -248,21 +245,20 @@ function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
 
 function ProjectLayoutContent() {
   const { loading, error } = useProject();
+  const { user } = useAuth();
   const [tourOpen, setTourOpen] = useState(false);
 
   // First visit to any project: walk through what each tab is for. Waits for
   // the project to load so the tour never spotlights a spinner.
   useEffect(() => {
-    if (loading || error) return;
-    if (readProjectTourDismissed()) return;
+    if (loading || error || !user) return;
+    if (tourDismissed("project", user.id)) return;
     setTourOpen(true);
-  }, [loading, error]);
+  }, [loading, error, user]);
 
-  function dismissTour() {
+  function handleTourDone() {
     setTourOpen(false);
-    try {
-      localStorage.setItem(PROJECT_TOUR_DISMISSED_KEY, "1");
-    } catch { /* storage unavailable */ }
+    if (user) dismissTour("project", user.id);
   }
 
   if (error) {
@@ -293,7 +289,7 @@ function ProjectLayoutContent() {
           <Outlet />
         )}
       </main>
-      {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={dismissTour} />}
+      {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={handleTourDone} />}
     </div>
   );
 }

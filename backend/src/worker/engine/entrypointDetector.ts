@@ -17,6 +17,10 @@ export interface DetectedEntrypoint {
 /** Exported worker/consumer symbols that actually look like job handlers. */
 const HANDLER_NAME = /^(process|handle|consume|on[A-Z])/;
 
+/** Test files are never triggers — `test/controller/x.spec.ts` must not
+ * become a convention-based http_route entrypoint. */
+const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(spec|test)\.[cm]?[jt]sx?$/i;
+
 export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypoint[] {
   const entrypoints: DetectedEntrypoint[] = [];
 
@@ -38,16 +42,18 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
         method: route.method,
         routePattern: route.routePath,
         filePath: relativePath,
-        symbolName: route.handlerSymbolName,
+        symbolName: route.handlerParentName
+          ? `${route.handlerParentName}.${route.handlerSymbolName}`
+          : route.handlerSymbolName,
         symbolStableKey: route.handlerSymbolName && route.handlerRelativePath
-          ? symbolKey(route.handlerRelativePath, route.handlerSymbolName)
+          ? symbolKey(route.handlerRelativePath, route.handlerSymbolName, route.handlerParentName)
           : undefined,
       });
       foundEntrypoint = true;
     }
 
     // Routes/controllers by convention only when nothing was AST-detected.
-    if (!foundEntrypoint && (relativePath.match(/routes?\//i) || relativePath.match(/controller/i))) {
+    if (!foundEntrypoint && !TEST_FILE.test(relativePath) && (relativePath.match(/routes?\//i) || relativePath.match(/controller/i))) {
       entrypoints.push({
         nodeStableKey: relativePath,
         kind: 'http_route',

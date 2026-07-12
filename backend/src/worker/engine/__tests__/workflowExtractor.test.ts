@@ -14,6 +14,7 @@ import type { DetectedSideEffect } from '../sideEffectDetector';
 
 const SIMPLE_DIR = path.resolve(__dirname, '../../fixtures/simple');
 const MIXED_DIR = path.resolve(__dirname, '../../fixtures/mixed');
+const CLASS_SERVER_DIR = path.resolve(__dirname, '../../fixtures/classServer');
 
 async function buildFixtureGraph(dir: string): Promise<{
   graph: EvidenceGraph;
@@ -94,5 +95,54 @@ describe('workflowExtractor (call-graph traversal)', () => {
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const mixedWorkflows = extractWorkflows({ graph, entrypoints, sideEffects });
     expect(mixedWorkflows).to.deep.equal([]);
+  });
+});
+
+describe('workflowExtractor (class-method route handlers — CourseInsights regression)', () => {
+  let workflows: ExtractedWorkflow[];
+  let entrypoints: DetectedEntrypoint[];
+
+  before(async () => {
+    const built = await buildFixtureGraph(CLASS_SERVER_DIR);
+    entrypoints = built.entrypoints;
+    workflows = extractWorkflows({ graph: built.graph, entrypoints, sideEffects: built.sideEffects });
+  });
+
+  it('resolves class-method handlers to class-qualified symbol keys', () => {
+    const echo = entrypoints.find((e) => e.routePattern === '/echo/:msg');
+    expect(echo, 'echo entrypoint').to.exist;
+    expect(echo!.symbolStableKey).to.equal('src/rest/Server.ts#Server.echo');
+    const put = entrypoints.find((e) => e.routePattern === '/dataset/:id/:kind');
+    expect(put, 'addDataset entrypoint').to.exist;
+    expect(put!.symbolStableKey).to.equal('src/controller/InsightFacade.ts#InsightFacade.addDataset');
+  });
+
+  it('does not turn test/controller spec files into route entrypoints', () => {
+    const testEps = entrypoints.filter((e) => e.filePath.startsWith('test/'));
+    expect(testEps).to.deep.equal([]);
+  });
+
+  it('extracts a workflow for a route handled by a facade method', () => {
+    const put = workflows.find((w) => w.title.includes('/dataset/:id/:kind'));
+    expect(put, 'PUT /dataset workflow').to.exist;
+    const keys = put!.steps.map((s) => s.nodeStableKey);
+    expect(keys[0]).to.equal('src/controller/InsightFacade.ts#InsightFacade.addDataset');
+    expect(keys).to.include('src/datasetProcessor/DatasetProcessor.ts#DatasetProcessor.processAddDataset');
+  });
+
+  it('extracts a workflow for a route handled by a static class method', () => {
+    const echo = workflows.find((w) => w.title.includes('/echo/:msg'));
+    expect(echo, 'GET /echo workflow').to.exist;
+    expect(echo!.steps[0]!.nodeStableKey).to.equal('src/rest/Server.ts#Server.echo');
+  });
+
+  it('extracts a workflow for a route handled by an arrow-property class member', () => {
+    const post = entrypoints.find((e) => e.routePattern === '/query');
+    expect(post, 'performQuery entrypoint').to.exist;
+    expect(post!.symbolStableKey).to.equal('src/rest/Server.ts#Server.performQuery');
+    const query = workflows.find((w) => w.title.includes('POST /query'));
+    expect(query, 'POST /query workflow').to.exist;
+    expect(query!.steps[0]!.nodeStableKey).to.equal('src/rest/Server.ts#Server.performQuery');
+    expect(query!.steps.map((s) => s.nodeStableKey)).to.include('src/queryProcessor/QueryRunner.ts#QueryRunner.runQuery');
   });
 });

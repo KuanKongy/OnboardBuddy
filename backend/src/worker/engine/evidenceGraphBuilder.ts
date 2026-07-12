@@ -313,15 +313,26 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
   }
 
   // ── 8. Behavior/purpose signals stamped into symbol metadata ──────────────
+  const stampSignals = (key: string, source: Parameters<typeof deriveBehaviorSignals>[0], relPath: string, name: string): void => {
+    const node = nodes.get(key);
+    if (!node) return;
+    const behavior = deriveBehaviorSignals(source);
+    const purpose = derivePurposeSignals(relPath, { name });
+    if (behavior.length > 0) node.metadata.behaviorSignals = behavior;
+    if (purpose.length > 0) node.metadata.purposeSignals = purpose;
+  };
   for (const fa of input.fileAnalyses) {
     const relPath = normalizePath(fa.relativePath);
     for (const sym of fa.symbols) {
-      const node = nodes.get(sym.stableKey ?? symbolKey(relPath, sym.name));
-      if (!node) continue;
-      const behavior = deriveBehaviorSignals(sym);
-      const purpose = derivePurposeSignals(relPath, sym);
-      if (behavior.length > 0) node.metadata.behaviorSignals = behavior;
-      if (purpose.length > 0) node.metadata.purposeSignals = purpose;
+      stampSignals(sym.stableKey ?? symbolKey(relPath, sym.name), sym, relPath, sym.name);
+      // Method nodes carry their own calls/snippet — signal them individually
+      // so workflow traces classify `Server.echo` by what echo does, not by
+      // what the whole class does.
+      if (sym.kind === 'class' && sym.methods) {
+        for (const m of sym.methods) {
+          stampSignals(symbolKey(relPath, m.name, sym.name), m, relPath, m.name);
+        }
+      }
     }
   }
 

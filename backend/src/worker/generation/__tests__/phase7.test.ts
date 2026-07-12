@@ -6,6 +6,7 @@ import {
 } from '../diagrams.js';
 import { critical25, type ProjectedTarget } from '../roleProjection.js';
 import { SECTION_SPECS, SECTION_TYPES } from '../sectionSpecs.js';
+import { generateDeterministicSection } from '../deterministicSectionGenerator.js';
 import { validateGeneratedOutput, type GeneratedOutput } from '../citationValidator.js';
 import type { EvidenceBundleV2 } from '../../../retrieval/retrievalService.js';
 
@@ -212,5 +213,66 @@ describe('phase 7 — citation validator', () => {
     });
     expect(bad.hardFailure).to.equal(true);
     expect(bad.adjustedClaims[0]!.confidence).to.equal('low');
+  });
+});
+
+describe('phase 7 — deterministic section generation (ai_disabled)', () => {
+  afterEach(() => __setQueryForTests(null));
+
+  it('renders extracted facts into markdown with no LLM run and medium confidence', async () => {
+    let inserted: unknown[] | null = null;
+    __setQueryForTests(async (text, params) => {
+      if (text.includes('FROM entrypoints')) {
+        return {
+          rows: [
+            { trigger_type: 'http_route', method: 'PUT', route_path: '/dataset/:id/:kind', file_path: 'src/rest/Server.ts', symbol: 'InsightFacade.addDataset', workflow_title: 'PUT /dataset/:id/:kind' },
+            { trigger_type: 'http_route', method: 'GET', route_path: '/echo/:msg', file_path: 'src/rest/Server.ts', symbol: 'Server.echo', workflow_title: null },
+          ],
+        } as never;
+      }
+      if (text.startsWith('INSERT INTO package_sections')) {
+        inserted = params ?? [];
+        return { rows: [{ id: 'sec-det-1' }] } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    const result = await generateDeterministicSection({
+      snapshotId: 'snap-1', packageId: 'pkg-1', role: 'backend',
+      sectionType: 'entry_points', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [] },
+    });
+
+    expect(result.sectionId).to.equal('sec-det-1');
+    expect(result.confidence).to.equal('medium');
+    expect(inserted, 'insert params').to.not.equal(null);
+    const [, , , title, content, , confidence, , , unknowns, context] = inserted! as string[];
+    expect(title).to.equal('Entry Points and Why They Matter');
+    expect(content).to.include('AI explanations are off');
+    expect(content).to.include('/dataset/:id/:kind');
+    expect(content).to.include('Server.echo');
+    expect(confidence).to.equal('medium');
+    expect(JSON.parse(unknowns)[0].kind).to.equal('ai_disabled');
+    expect(JSON.parse(context).mode).to.equal('deterministic');
+  });
+
+  it('grades empty evidence low and says so instead of inventing content', async () => {
+    let content = '';
+    __setQueryForTests(async (text, params) => {
+      if (text.startsWith('INSERT INTO package_sections')) {
+        content = (params?.[4] as string) ?? '';
+        return { rows: [{ id: 'sec-det-2' }] } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    const result = await generateDeterministicSection({
+      snapshotId: 'snap-1', packageId: 'pkg-1', role: 'general',
+      sectionType: 'capability_map', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'general', projections: [] },
+    });
+
+    expect(result.confidence).to.equal('low');
+    expect(content).to.include('No deterministic evidence');
   });
 });

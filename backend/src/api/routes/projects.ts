@@ -379,15 +379,8 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     const projectId = req.params.id as string;
     const userId = req.user!.id;
 
-    const settingsResult = await query(
-      `SELECT privacy_mode FROM project_settings WHERE project_id = $1`,
-      [projectId],
-    );
-    if (settingsResult.rows.length > 0 && settingsResult.rows[0].privacy_mode === 'ai_disabled') {
-      res.status(403).json({ error: "AI features are disabled for this project" });
-      return;
-    }
-
+    // ai_disabled does not block generation: the worker reads the project's
+    // current privacy mode and builds a deterministic (LLM-free) package.
     const snapResult = await query(
       `SELECT id, commit_hash FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
@@ -472,6 +465,10 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     const jobResult = await query(
       `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step, aj.snapshot_id,
               aj.checkpoint, aj.step_log, aj.error_message, aj.created_at, aj.started_at, aj.finished_at,
+              aj.last_heartbeat_at, aj.attempt,
+              (aj.status = 'running'
+                AND COALESCE(aj.last_heartbeat_at, aj.started_at, aj.created_at) < NOW() - INTERVAL '2 minutes'
+              ) AS stalled,
               aj.branch AS requested_branch, aj.commit_hash AS requested_commit,
               aj.semantic_depth AS requested_depth, aj.role AS requested_role,
               s.file_count, s.symbol_count, s.workflow_count, s.commit_hash, s.branch,
@@ -499,6 +496,163 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     });
   } catch (err) {
     console.error("Analysis status error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── Run controls: pause / stop / resume ─────────────────────────────────────
+// Workers obey at the next step or AI-batch boundary (kill switch): progress
+// updates on a paused/stopped job fail their status guard and the worker
+// exits without stomping the user's choice. Phase checkpoints and the
+// content-addressed record cache make resume cheap — completed work is
+// never re-paid.
+
+/** Project status once no run is active: complete if anything ever finished, else idle. */
+async function settleProjectStatus(projectId: string): Promise<void> {
+  await query(
+    `UPDATE projects SET status = (
+       CASE WHEN EXISTS (SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND status = 'complete')
+            THEN 'complete' ELSE 'idle' END)
+     WHERE id = $1 AND status = 'analyzing'`,
+    [projectId],
+  );
+}
+
+projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const result = await query(
+      `UPDATE analysis_jobs SET status = 'paused', current_step = 'Paused by user'
+       WHERE id = $1 AND project_id = $2 AND status IN ('queued', 'running')
+       RETURNING id`,
+      [jobId, projectId],
+    );
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Job is not queued or running" });
+      return;
+    }
+    await settleProjectStatus(projectId);
+    res.json({ job: { id: jobId, status: "paused" } });
+  } catch (err) {
+    console.error("Pause job error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const result = await query(
+      `UPDATE analysis_jobs
+       SET status = 'failed', current_step = 'Stopped by user',
+           error_message = 'Stopped by user — completed phases stay checkpointed; Resume or a new Analyze… picks up from cache.',
+           finished_at = NOW()
+       WHERE id = $1 AND project_id = $2 AND status IN ('queued', 'running', 'paused')
+       RETURNING id`,
+      [jobId, projectId],
+    );
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Job is not active" });
+      return;
+    }
+    await settleProjectStatus(projectId);
+    res.json({ job: { id: jobId, status: "failed" } });
+  } catch (err) {
+    console.error("Stop job error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Resume a paused run — or retry a failed/stalled one — on the SAME job row:
+// checkpoints live there, so the worker skips everything already persisted.
+projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const row = (await query(
+      `SELECT aj.status, aj.job_type, aj.scope_id, aj.branch, aj.commit_hash, aj.semantic_depth,
+              aj.role, aj.snapshot_id, s.commit_hash AS snapshot_commit
+       FROM analysis_jobs aj
+       LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       WHERE aj.id = $1 AND aj.project_id = $2`,
+      [jobId, projectId],
+    )).rows[0] as {
+      status: string; job_type: string; scope_id: string | null; branch: string | null;
+      commit_hash: string | null; semantic_depth: string | null; role: string | null;
+      snapshot_id: string | null; snapshot_commit: string | null;
+    } | undefined;
+    if (!row) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    if (!["paused", "failed"].includes(row.status)) {
+      res.status(409).json({ error: "Only paused or failed runs can be resumed" });
+      return;
+    }
+    if (row.job_type === "regenerate_section") {
+      res.status(409).json({ error: "Regenerations restart from the section — use its Regenerate button" });
+      return;
+    }
+    if (row.job_type === "preflight") {
+      res.status(409).json({ error: "Preflight previews are not resumable — run a new preview" });
+      return;
+    }
+    const active = await query(
+      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
+      [projectId],
+    );
+    if (active.rows.length > 0) {
+      res.status(409).json({ error: "Another run is already active for this project", active_job_id: active.rows[0].id });
+      return;
+    }
+
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'queued', current_step = 'Waiting for worker (resume)',
+           error_message = NULL, finished_at = NULL, last_heartbeat_at = NULL
+       WHERE id = $1`,
+      [jobId],
+    );
+
+    if (row.job_type === "generate_package") {
+      if (!row.snapshot_id) {
+        res.status(409).json({ error: "This generation has no snapshot to resume against" });
+        return;
+      }
+      await getSummaryQueue().add(`generate_summary_${row.role ?? "general"}`, {
+        jobId,
+        snapshotId: row.snapshot_id,
+        projectId,
+        triggeredBy: req.user!.id,
+        role: row.role ?? undefined,
+      } satisfies SummaryJobData, {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 3000 },
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 10 },
+      });
+    } else {
+      await query(`UPDATE projects SET status = 'analyzing' WHERE id = $1`, [projectId]);
+      await getAnalysisQueue().add("analyze_scope", {
+        jobId,
+        projectId,
+        scopeId: row.scope_id ?? undefined,
+        // Resume the exact commit that was being analyzed, not a moved branch head.
+        commit: row.snapshot_commit ?? row.commit_hash ?? undefined,
+        branch: row.branch ?? undefined,
+        depth: (row.semantic_depth ?? undefined) as AnalysisJobData["depth"],
+        role: row.role ?? undefined,
+      } satisfies AnalysisJobData, {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 5000 },
+      });
+    }
+
+    res.status(202).json({ job: { id: jobId, status: "queued" } });
+  } catch (err) {
+    console.error("Resume job error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

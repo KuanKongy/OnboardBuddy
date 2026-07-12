@@ -47,15 +47,9 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
       targetSnapshotId = (latest.rows[0] as { id: string } | undefined)?.id ?? section.snapshot_id;
     }
 
-    const settingsResult = await query(
-      `SELECT privacy_mode FROM project_settings WHERE project_id = $1`,
-      [projectId],
-    );
-    if (settingsResult.rows[0]?.privacy_mode === "ai_disabled") {
-      res.status(403).json({ error: "AI features are disabled for this project" });
-      return;
-    }
-
+    // No privacy-mode gate: under ai_disabled the worker regenerates the
+    // section deterministically (facts-only markdown, zero LLM calls), so
+    // regeneration always works — the mode decides HOW, not WHETHER.
     await query(
       `UPDATE package_sections SET review_status = 'regenerate_requested' WHERE id = $1`,
       [sectionId],
@@ -106,19 +100,17 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
     }
 
     const snapshot = (await query(
-      `SELECT id, privacy_mode FROM analysis_snapshots
+      `SELECT id FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
        ORDER BY created_at DESC LIMIT 1`,
       [projectId],
-    )).rows[0] as { id: string; privacy_mode: string } | undefined;
+    )).rows[0] as { id: string } | undefined;
     if (!snapshot) {
       res.status(404).json({ error: "No completed analysis — run an analysis first" });
       return;
     }
-    if (snapshot.privacy_mode === "ai_disabled") {
-      res.status(403).json({ error: "AI features are disabled for this project" });
-      return;
-    }
+    // The worker reads the project's CURRENT privacy mode: ai_disabled
+    // yields a deterministic package, the other modes an AI-narrated one.
 
     const active = await query(
       `SELECT id FROM analysis_jobs
@@ -258,8 +250,10 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     const sectionsResult = await query(
       `SELECT ps.id, ps.type, ps.title, ps.content, ps.confidence,
               ps.review_status, ps.analyzed_commit, ps.reviewed_at, ps.reviewed_by,
+              u.email AS reviewed_by_email,
               ps.generation_context, ps.diagrams, ps.unknowns
        FROM package_sections ps
+       LEFT JOIN users u ON u.id = ps.reviewed_by
        WHERE ps.package_id = $1
        ORDER BY ps.created_at ASC`,
       [pkg.id],
@@ -275,6 +269,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
       analyzed_commit: string;
       reviewed_at: string | null;
       reviewed_by: string | null;
+      reviewed_by_email: string | null;
       generation_context: Record<string, unknown>;
       diagrams: Array<{ kind: string; mermaid: string }>;
       unknowns: Array<{ kind: string; detail?: string | null }>;
@@ -282,9 +277,23 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
 
     const sections = await Promise.all(
       (sectionsResult.rows as SectionRow[]).map(async (sec) => {
+        // symbol_summary: the semantic record's rendered summary for the
+        // cited symbol (falls back to its JSDoc) — a receipt should say what
+        // the code DOES, not just show the snippet.
         const receiptsResult = await query(
           `SELECT sr.id, sr.file_path, sr.symbol_name, sr.line_start, sr.line_end,
-                  sr.snippet, sr.confidence, sr.commit_hash, sr.node_stable_key
+                  sr.snippet, sr.confidence, sr.commit_hash, sr.node_stable_key,
+                  COALESCE(
+                    (SELECT rec.summary FROM snapshot_semantic_records ssr
+                       JOIN semantic_records rec ON rec.id = ssr.record_id
+                     WHERE ssr.snapshot_id = sr.snapshot_id
+                       AND ssr.stable_key = sr.node_stable_key
+                       AND rec.status = 'usable'
+                     ORDER BY rec.created_at DESC LIMIT 1),
+                    (SELECT gn.metadata->>'jsdoc' FROM graph_nodes gn
+                     WHERE gn.snapshot_id = sr.snapshot_id
+                       AND gn.stable_key = sr.node_stable_key LIMIT 1)
+                  ) AS symbol_summary
            FROM source_receipts sr WHERE sr.section_id = $1`,
           [sec.id],
         );
@@ -316,7 +325,8 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             type: sec.type,
             status: sec.review_status === "stale" ? "stale" : "complete",
             confidence: sec.confidence,
-            reviewedBy: sec.reviewed_by,
+            // Human-readable reviewer (email) — raw UUIDs are meaningless in the UI.
+            reviewedBy: sec.reviewed_by_email ?? sec.reviewed_by,
             reviewedAt: sec.reviewed_at,
             diagrams: sec.diagrams ?? [],
             unknowns: sec.unknowns ?? [],
@@ -331,6 +341,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
                   lineStart: r.line_start as number | null,
                   lineEnd: r.line_end as number | null,
                   snippet: r.snippet as string | null,
+                  summary: (r.symbol_summary as string | null) ?? null,
                   confidence: (r.confidence as string) ?? "medium",
                   staleness: "current",
                   ageLabel: "recent",
@@ -355,7 +366,16 @@ onboardingRouter.get("/sections/:sectionId/receipts", requireProjectAccess(), as
       `SELECT sr.id, sr.file_path, sr.symbol_name, sr.line_start, sr.line_end,
               sr.snippet, sr.confidence, sr.commit_hash, sr.node_stable_key,
               sr.node_hash, sr.claim,
-              gn.metadata AS node_metadata
+              gn.metadata AS node_metadata,
+              COALESCE(
+                (SELECT rec.summary FROM snapshot_semantic_records ssr
+                   JOIN semantic_records rec ON rec.id = ssr.record_id
+                 WHERE ssr.snapshot_id = sr.snapshot_id
+                   AND ssr.stable_key = sr.node_stable_key
+                   AND rec.status = 'usable'
+                 ORDER BY rec.created_at DESC LIMIT 1),
+                gn.metadata->>'jsdoc'
+              ) AS symbol_summary
        FROM source_receipts sr
        LEFT JOIN graph_nodes gn ON gn.id = sr.node_id
        WHERE sr.section_id = $1

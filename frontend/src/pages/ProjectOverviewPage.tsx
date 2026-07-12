@@ -5,9 +5,11 @@ import {
   CheckCircle2,
   FileText,
   Loader2,
+  PauseCircle,
   Play,
   RefreshCw,
   RotateCcw,
+  Square,
   User,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -53,6 +55,12 @@ interface AnalysisJob {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Worker liveness: stamped every ~15s while the run is genuinely alive. */
+  last_heartbeat_at: string | null;
+  /** Delivery attempt (>1 = the queue retried this run). */
+  attempt: number;
+  /** Running but silent for 2+ minutes — presumed dead until reconciled. */
+  stalled: boolean;
   /** Per-run configuration as requested (null = project default). */
   requested_branch: string | null;
   requested_commit: string | null;
@@ -162,11 +170,51 @@ export function ProjectOverviewPage() {
       .catch(() => setRolePackages([]));
   }, [id, project?.status]);
 
+  // Live "last worker activity" ticker while a run is active.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const job = analysisStatus?.jobs[0];
+    const active = job?.status === "queued" || job?.status === "running";
+    if (!active) return;
+    const t = window.setInterval(() => setNowTs(Date.now()), 5000);
+    return () => window.clearInterval(t);
+  }, [analysisStatus]);
+
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlError, setControlError] = useState("");
+
   if (!project) return null;
 
   const latestJob = analysisStatus?.jobs[0];
   const snap = analysisStatus?.latestSnapshot;
   const isActive = latestJob?.status === "queued" || latestJob?.status === "running";
+  const heartbeatAgoSec = latestJob?.last_heartbeat_at
+    ? Math.max(0, Math.round((nowTs - new Date(latestJob.last_heartbeat_at).getTime()) / 1000))
+    : null;
+  // The worker resumes analyze/generate jobs from their checkpoints; section
+  // regenerations and previews restart from their own buttons instead.
+  const resumable = latestJob != null &&
+    ["analyze_scope", "incremental_update", "generate_package"].includes(latestJob.job_type);
+
+  async function jobControl(action: "pause" | "stop" | "resume") {
+    if (!id || !latestJob) return;
+    setControlBusy(true);
+    setControlError("");
+    try {
+      await apiFetch(`/projects/${id}/analysis-jobs/${latestJob.id}/${action}`, { method: "POST" });
+      if (action === "resume") {
+        handleAnalysisStarted();
+      } else {
+        const data = await apiFetch(`/projects/${id}/analysis-status`) as AnalysisStatus;
+        setAnalysisStatus(data);
+        refetch();
+      }
+    } catch (err: unknown) {
+      setControlError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setControlBusy(false);
+    }
+  }
 
   // Shared combined pipeline bar (analysis 0-70%, generation 70-100%) —
   // the dashboard project cards use the same helper, so both surfaces
@@ -282,13 +330,45 @@ export function ProjectOverviewPage() {
                   <Badge key={part} variant="outline" className="font-mono text-[10px]">{part}</Badge>
                 ))}
               </div>
-              {latestJob?.status === "failed" && canManage && (
-                <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
-                  <RotateCcw className="mr-1 h-3 w-3" />
-                  Retry
-                </Button>
+              {canManage && latestJob && (
+                <div className="flex items-center gap-1.5">
+                  {isActive && (
+                    <>
+                      <Button variant="outline" size="xs" onClick={() => jobControl("pause")} disabled={controlBusy} title="Worker pauses at the next step — completed work is checkpointed">
+                        <PauseCircle className="mr-1 h-3 w-3" />
+                        Pause
+                      </Button>
+                      <Button variant="outline" size="xs" className="text-destructive hover:text-destructive" onClick={() => jobControl("stop")} disabled={controlBusy} title="Stops the run; completed phases stay cached">
+                        <Square className="mr-1 h-3 w-3" />
+                        Stop
+                      </Button>
+                    </>
+                  )}
+                  {latestJob.status === "paused" && resumable && (
+                    <Button variant="outline" size="xs" onClick={() => jobControl("resume")} disabled={controlBusy}>
+                      <Play className="mr-1 h-3 w-3" />
+                      Resume
+                    </Button>
+                  )}
+                  {latestJob.status === "failed" && resumable && (
+                    <Button variant="outline" size="xs" onClick={() => jobControl("resume")} disabled={controlBusy} title="Re-runs this job — checkpointed phases and cached AI work are skipped">
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Resume run
+                    </Button>
+                  )}
+                  {latestJob.status === "failed" && (
+                    <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
+                      <RefreshCw className="mr-1 h-3 w-3" />
+                      New run…
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
+
+            {controlError && (
+              <p className="mb-1.5 text-xs text-destructive">{controlError}</p>
+            )}
 
             {/* Live step display */}
             <div className="mb-1.5 flex items-center justify-between text-xs">
@@ -317,14 +397,35 @@ export function ProjectOverviewPage() {
                         : "This repository hasn't been analyzed yet."}
                 </TooltipContent>
               </Tooltip>
-              <Badge
-                variant={latestJob?.status === "complete" ? "default" : latestJob?.status === "failed" ? "destructive" : "secondary"}
-                className="text-[11px]"
-              >
-                {latestJob?.status ?? project.status}
-              </Badge>
+              <span className="flex items-center gap-1.5">
+                {latestJob && latestJob.attempt > 1 && (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
+                    attempt #{latestJob.attempt}
+                  </Badge>
+                )}
+                {latestJob?.stalled && (
+                  <Badge variant="destructive" className="text-[10px]" title="Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it">
+                    stalled
+                  </Badge>
+                )}
+                <Badge
+                  variant={latestJob?.status === "complete" ? "default" : latestJob?.status === "failed" ? "destructive" : "secondary"}
+                  className="text-[11px]"
+                >
+                  {latestJob?.status ?? project.status}
+                </Badge>
+              </span>
             </div>
             <Progress value={pipelinePct} className="mb-2 h-1.5" />
+
+            {/* Worker liveness: the honest "is anything actually happening?" signal. */}
+            {isActive && (
+              <p className={`mb-2 text-[11px] tabular-nums ${latestJob?.stalled ? "text-destructive" : "text-muted-foreground"}`}>
+                {heartbeatAgoSec === null
+                  ? "Waiting for the worker's first signal…"
+                  : `Last worker activity ${heartbeatAgoSec < 5 ? "just now" : `${heartbeatAgoSec}s ago`}`}
+              </p>
+            )}
 
             {/* Error message */}
             {latestJob?.status === "failed" && latestJob.error_message && (

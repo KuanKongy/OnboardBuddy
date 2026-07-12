@@ -17,40 +17,15 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard, type Project } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
+import { dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 
 const RECENT_LIMIT = 6;
 const ACTIVITY_LIMIT = 8;
 
-const TOUR_DISMISSED_KEY = "onboardbuddy:tour-dismissed";
-
-function readTourDismissed(): boolean {
-  try {
-    return localStorage.getItem(TOUR_DISMISSED_KEY) === "1";
-  } catch {
-    // localStorage unavailable (private browsing, disabled storage) — never
-    // auto-start in that case rather than crash or loop.
-    return true;
-  }
-}
-
-function persistTourDismissed(): void {
-  try {
-    localStorage.setItem(TOUR_DISMISSED_KEY, "1");
-  } catch {
-    // Best-effort only; nothing to fall back to.
-  }
-}
-
-function clearTourDismissed(): void {
-  try {
-    localStorage.removeItem(TOUR_DISMISSED_KEY);
-  } catch {
-    // Best-effort only.
-  }
-}
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -148,6 +123,7 @@ function StatCard({
 
 export function DashboardPage() {
   const { projects, setProjects, loading, error } = useProjects();
+  const { user } = useAuth();
   const [inviteCount, setInviteCount] = useState(0);
   const [tourOpen, setTourOpen] = useState(false);
 
@@ -158,20 +134,20 @@ export function DashboardPage() {
   }, []);
 
   // First-run tour: auto-start once the dashboard has finished its initial
-  // load (never spotlight loading skeletons) and the user hasn't seen it yet.
+  // load (never spotlight loading skeletons) and THIS account hasn't seen it.
   useEffect(() => {
-    if (loading) return;
-    if (readTourDismissed()) return;
+    if (loading || !user) return;
+    if (tourDismissed("dashboard", user.id)) return;
     setTourOpen(true);
-  }, [loading]);
+  }, [loading, user]);
 
   function finishTour() {
-    persistTourDismissed();
+    if (user) dismissTour("dashboard", user.id);
     setTourOpen(false);
   }
 
   function startTour() {
-    clearTourDismissed();
+    if (user) resetTour("dashboard", user.id);
     setTourOpen(true);
   }
 

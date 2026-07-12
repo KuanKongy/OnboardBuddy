@@ -303,20 +303,43 @@ async function flagStaleArtifacts(params: {
 }): Promise<ArtifactStaleness> {
   const { projectId, scopeId, newSnapshotId, newCommit } = params;
 
+  // Documentation changes stale doc-derived content even without code
+  // changes: doc receipts key as `doc:<path>#<slug>` (prefix-match them), and
+  // doc_health's deterministic basis IS the doc set — a changed README with
+  // zero code edits used to flag nothing at all.
+  const docNodePatterns = params.changedFilePaths.map((f) => `doc:${f}%`);
+  const changedDocFiles = params.changedFilePaths.length > 0
+    ? ((await query(
+        `SELECT stable_key FROM repository_files
+         WHERE snapshot_id = $1 AND stable_key = ANY($2) AND category = 'doc'`,
+        [newSnapshotId, params.changedFilePaths],
+      )).rows as Array<{ stable_key: string }>).map((r) => r.stable_key)
+    : [];
+  const docStaleTypes: string[] = [];
+  if (changedDocFiles.length > 0) {
+    docStaleTypes.push('doc_health');
+    // The repo orientation leans on the README specifically.
+    if (changedDocFiles.some((f) => /(^|\/)readme\.(md|rst|txt)$/i.test(f))) docStaleTypes.push('start_here');
+  }
+
   const sections = (await query(
     `SELECT DISTINCT ps.id, ps.type, ps.role, ps.package_id
      FROM package_sections ps
      JOIN onboarding_packages op ON op.id = ps.package_id
      WHERE op.project_id = $1 AND op.scope_id = $2 AND op.analyzed_commit <> $3
        AND ps.review_status <> 'stale'
-       AND EXISTS (
-         SELECT 1 FROM source_receipts r
-         WHERE r.section_id = ps.id
-           AND (r.file_path = ANY($4) OR r.node_stable_key = ANY($5)
-                OR r.referenced_record_id = ANY($6::uuid[]))
+       AND (
+         ps.type = ANY($7)
+         OR EXISTS (
+           SELECT 1 FROM source_receipts r
+           WHERE r.section_id = ps.id
+             AND (r.file_path = ANY($4) OR r.node_stable_key = ANY($5)
+                  OR r.node_stable_key LIKE ANY($8)
+                  OR r.referenced_record_id = ANY($6::uuid[]))
+         )
        )`,
     [projectId, scopeId, newCommit, params.changedFilePaths, params.changedSymbolKeys,
-     params.invalidatedRecordIds],
+     params.invalidatedRecordIds, docStaleTypes, docNodePatterns],
   )).rows as Array<{ id: string; type: string; role: string | null; package_id: string }>;
   for (const s of sections) {
     await query(
