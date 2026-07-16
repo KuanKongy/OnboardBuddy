@@ -1,5 +1,5 @@
 import { HelpCircle, Keyboard, LayoutDashboard, List, Mail, Settings } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { AccountCard } from "@/components/AccountCard";
 import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
@@ -25,9 +25,16 @@ export function Sidebar({
 
   return (
     <SidebarShell>
-      <div className="flex items-center gap-2 px-3 py-3">
-        <LogoMark className="h-7 w-7" />
-        <LogoWordmark />
+      <div className="px-3 py-3">
+        <Link
+          to="/dashboard"
+          onClick={() => setOpen(false)}
+          className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
+          title="Back to main dashboard"
+        >
+          <LogoMark className="h-7 w-7" />
+          <LogoWordmark />
+        </Link>
       </div>
 
       <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">

@@ -53,10 +53,23 @@ function base64url(buf: Buffer): string {
   return buf.toString("base64url");
 }
 
+/**
+ * The App's RS256 private key: `GITHUB_APP_PRIVATE_KEY` (full PEM contents —
+ * the option for hosts without file mounts, e.g. Railway; `\n`-escaped
+ * newlines are normalized) wins over `GITHUB_APP_PRIVATE_KEY_PATH` (a .pem
+ * file, the local-dev default).
+ */
+function loadAppPrivateKey(): string {
+  const inline = process.env.GITHUB_APP_PRIVATE_KEY;
+  if (inline && inline.trim() !== "") {
+    return inline.replace(/\\n/g, "\n");
+  }
+  return fs.readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8");
+}
+
 export function createAppJwt(): string {
   const appId = process.env.GITHUB_APP_ID!;
-  const privateKeyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH!;
-  const privateKey = fs.readFileSync(privateKeyPath, "utf8");
+  const privateKey = loadAppPrivateKey();
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };

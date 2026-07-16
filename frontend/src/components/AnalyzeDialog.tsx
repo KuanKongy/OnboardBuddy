@@ -42,7 +42,6 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     setError("");
     setConflict(false);
     setConfig({ ...DEFAULT_ANALYZE_CONFIG, role: initialRole ?? "" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset only on open
   }, [open, projectId, initialRole]);
 
   function updateConfig(next: AnalyzeConfig) {

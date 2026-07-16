@@ -1,5 +1,14 @@
 import { expect } from "chai";
-import { deleteAccountTx, type TxClient } from "../../src/api/services/accountDeletion.js";
+import {
+  deleteAccountTx,
+  deleteAuthUser,
+  type AuthAdminLike,
+  type TxClient,
+} from "../../src/api/services/accountDeletion.js";
+
+function fakeAdmin(error: { message: string; status?: number; code?: string } | null): AuthAdminLike {
+  return { auth: { admin: { deleteUser: async () => ({ error }) } } };
+}
 
 describe("deleteAccountTx", () => {
   it("reassigns cross-project RESTRICT refs, then deletes in FK-safe order", async () => {
@@ -36,5 +45,32 @@ describe("deleteAccountTx", () => {
     // Reassignment must happen BEFORE the user delete or RESTRICT FKs abort.
     expect(sql.findIndex((t) => t.includes("public.users"))).to.equal(sql.length - 1);
     for (const c of calls) expect(c.params).to.deep.equal(["user-1"]);
+  });
+});
+
+describe("deleteAuthUser", () => {
+  it("returns 'deleted' on success", async () => {
+    expect(await deleteAuthUser("user-1", fakeAdmin(null))).to.equal("deleted");
+  });
+
+  it("treats a 404 as already gone (stale-session retry loop fix)", async () => {
+    expect(
+      await deleteAuthUser("user-1", fakeAdmin({ message: "User not found", status: 404 })),
+    ).to.equal("already_gone");
+  });
+
+  it("treats the user_not_found code as already gone even without a status", async () => {
+    expect(
+      await deleteAuthUser("user-1", fakeAdmin({ message: "weird wording", code: "user_not_found" })),
+    ).to.equal("already_gone");
+  });
+
+  it("rethrows every other auth error", async () => {
+    try {
+      await deleteAuthUser("user-1", fakeAdmin({ message: "Invalid API key", status: 401 }));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).to.equal("Invalid API key");
+    }
   });
 });

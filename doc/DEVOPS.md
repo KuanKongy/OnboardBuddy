@@ -46,14 +46,30 @@ projects, analysis snapshots, onboarding packages, the code-evidence graph, etc.
 | `VITE_SUPABASE_URL` | `frontend/.env` | Same project URL, exposed to browser via Vite |
 | `VITE_SUPABASE_ANON_KEY` | `frontend/.env` | Publishable anon key (safe to expose, RLS-gated) |
 
-**Dashboard settings the app depends on** (Supabase → Authentication):
+**Dashboard settings the app depends on** (Supabase → Authentication). One
+Supabase project can serve localhost and a Railway deployment at the same
+time — the allow-list accepts multiple entries, so configure both origins
+side by side:
 
-- **URL Configuration → Redirect URLs:** add `http://localhost:5173/reset-password`
-  (and the production origin's `/reset-password`) — required for the
-  "Forgot password?" email flow; Supabase refuses non-allow-listed redirects.
-- **Sign In / Up → Allow manual linking:** enable it — the Account Settings
-  "Unlink GitHub login" button uses `auth.unlinkIdentity`, which errors unless
-  manual linking is on.
+1. **Authentication → URL Configuration → Site URL** — the frontend origin
+   Supabase falls back to when a redirect isn't allow-listed, and the base
+   for links in auth emails. Use the origin users actually open:
+   `http://localhost:5173` while developing locally, `https://<frontend-domain>.up.railway.app`
+   once deployed (switch it when the Railway deployment becomes the primary).
+2. **Authentication → URL Configuration → Redirect URLs** — add **all four**
+   (each origin × each path; Supabase refuses any redirect not listed here):
+
+   | Entry | Used by |
+   |---|---|
+   | `http://localhost:5173/reset-password` | "Forgot password?" email flow (local) |
+   | `http://localhost:5173/auth/callback` | GitHub sign-in + identity linking (local) |
+   | `https://<frontend-domain>.up.railway.app/reset-password` | password reset (Railway) |
+   | `https://<frontend-domain>.up.railway.app/auth/callback` | sign-in + linking (Railway) |
+
+3. **Authentication → Sign In / Providers → Allow manual linking** — enable
+   it. Account Settings uses `auth.linkIdentity` / `auth.unlinkIdentity` for
+   the "Link GitHub account", "Unlink", and "Email Login" buttons; with the
+   toggle off those calls fail with a 4xx and the buttons error out.
 
 ### 2. Upstash Redis
 
@@ -106,6 +122,7 @@ accessible to the connected GitHub user.
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | App client ID |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | App client secret |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` private key file (default: `./github-app.pem`) |
+| `GITHUB_APP_PRIVATE_KEY` | `backend/.env` | Alternative to the path: the full PEM **contents** (for hosts without file mounts, e.g. Railway; takes precedence, `\n`-escaped newlines OK) |
 | `GITHUB_INSTALL_STATE_SECRET` | `backend/.env` | Secret used to sign GitHub App install state; falls back to `TOKEN_ENCRYPTION_KEY` |
 | `FRONTEND_URL` | `backend/.env` | Frontend origin used for GitHub App OAuth/setup redirects, e.g. `http://localhost:5173` |
 
@@ -251,6 +268,7 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | GitHub App client ID | Same page as above |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | GitHub App client secret | Same page as above |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` file | Generate on GitHub App page → download |
+| `GITHUB_APP_PRIVATE_KEY` | `backend/.env` | PEM contents (hosted alternative to the path, e.g. Railway) | Same `.pem` file — paste its contents |
 | `OPENROUTER_API_KEY` | `backend/.env` | OpenRouter API key | openrouter.ai → Keys |
 | `OPENROUTER_BASE_URL` | `backend/.env` | OpenRouter base URL | `https://openrouter.ai/api/v1` (static) |
 | `OPENROUTER_MODEL` | `backend/.env` | LLM model identifier | openrouter.ai → Models |
@@ -347,19 +365,58 @@ so there is no surprise LLM spend. Redeliveries are idempotent (the per-tuple
 concurrency guard skips identical active runs). Note a repo imported by
 several users fans out to one run set per opted-in project.
 
-Setup:
+Setup — the shared part first, then the URL, which depends on where the API
+runs:
 
-1. GitHub App settings → **Webhook**: check **Active**,
-   - **Webhook URL:** `https://<api-host>/api/webhooks/github`
-     (local dev: GitHub can't reach localhost — use a tunnel such as
-     [smee.io](https://smee.io) or `ngrok http 3000` and paste its URL).
-   - **Webhook secret:** generate one
-     (`node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`).
-2. Subscribe to the **Push** event (Permissions & events page).
-3. Add the same value to `backend/.env`: `GITHUB_WEBHOOK_SECRET=<secret>`.
+1. Generate a secret once:
+   `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`.
+2. GitHub App settings ([github.com/settings/apps](https://github.com/settings/apps)
+   → your app → **General**) → **Webhook**: check **Active**, paste the secret
+   into **Webhook secret**, and set the **Webhook URL** per environment (below).
+3. Same page → **Permissions & events → Subscribe to events**: tick **Push**
+   (the events list only appears while the webhook is Active).
+4. Give the backend the same secret: `GITHUB_WEBHOOK_SECRET=<secret>`.
    Deliveries are verified against `X-Hub-Signature-256` (HMAC over the raw
    body); with the env var unset the endpoint answers 503 and does nothing.
-4. Toggle **Settings → Re-analyze on push** in each project that should react.
+5. Toggle **Settings → Re-analyze on push** in each project that should react.
+6. Verify: GitHub App settings → **Advanced → Recent Deliveries** — the
+   `ping` delivery should show a green check and a `{"ok":true,"pong":true}`
+   response body. Redeliver any row from there while testing.
+
+**Webhook URL — local development.** GitHub can't reach `localhost`, so run a
+tunnel and give GitHub the tunnel's public URL:
+
+- **smee.io** (simplest, no account): open [smee.io](https://smee.io) → **Start
+  a new channel** → use the channel URL as the GitHub **Webhook URL**
+  (e.g. `https://smee.io/AbCdEf123`), then forward it to the local API and
+  keep this running while you test:
+
+  ```bash
+  npx smee-client --url https://smee.io/AbCdEf123 \
+    --target http://localhost:3000/api/webhooks/github
+  ```
+
+  smee replays the raw body and headers, so the HMAC signature still
+  verifies. The channel page shows every delivery and lets you replay them.
+- **ngrok** (alternative): `ngrok http 3000`, then set the Webhook URL to
+  `https://<id>.ngrok-free.app/api/webhooks/github`. On the free tier the
+  URL changes every time ngrok restarts — update the GitHub App each time,
+  which is why smee is more convenient for occasional testing.
+- After editing `backend/.env`, restart the API so it picks the secret up
+  (`docker compose up -d backend-api`, or restart `npm run dev:backend`).
+
+**Webhook URL — deployed on Railway.** No tunnel needed; the API service has
+a public domain:
+
+1. Railway → the **API service** → **Settings → Networking → Generate Domain**
+   (if not already done) — say it's `https://onboardbuddy-api.up.railway.app`.
+2. GitHub App **Webhook URL:** `https://onboardbuddy-api.up.railway.app/api/webhooks/github`.
+3. Railway → API service → **Variables**: add `GITHUB_WEBHOOK_SECRET=<secret>`
+   (the worker service doesn't need it — only the API receives deliveries) →
+   redeploy the service.
+4. Confirm via **Recent Deliveries** (step 6 above). A `no_matching_projects`
+   response on pushes just means no project on that repo has the setting ON —
+   signature and routing are already working.
 
 Smoke test without GitHub:
 
@@ -440,6 +497,78 @@ npm run dev:backend    # Backend API + worker only → http://localhost:3000
 | `npm run test` | Mocha (backend) + Vitest (frontend) |
 | `npm run lint` | ESLint across the monorepo |
 | `npm run format` | Prettier check |
+
+---
+
+## Deploying to Railway
+
+Supabase, Upstash, and OpenRouter are already cloud services — deploying
+OnboardBuddy means hosting the three containers from `docker-compose.yml` as
+three Railway services in one Railway project, each built from this repo with
+its own Dockerfile.
+
+### 1. Create the services
+
+In a Railway project, add three services, each **from this GitHub repo**, and
+point each at its Dockerfile (service → **Settings → Build → Dockerfile
+Path**):
+
+| Service | Dockerfile Path | Public domain? |
+|---|---|---|
+| `api` | `backend/Dockerfile.api` | Yes — **Settings → Networking → Generate Domain** |
+| `worker` | `backend/Dockerfile.worker` | No (queue consumer only) |
+| `frontend` | `frontend/Dockerfile` | Yes — Generate Domain |
+
+Railway auto-deploys every push to the connected branch. The API listens on
+`process.env.PORT` (Railway injects it); the frontend's nginx serves on 80 and
+Railway maps it automatically. Scaling workers = raising the worker service's
+replica count (see "Scaling workers" above; same env knobs apply).
+
+### 2. Service variables
+
+**`api`** — everything from `backend/.env`, with these deployment-specific
+differences:
+
+- `GITHUB_APP_PRIVATE_KEY` = the full contents of `github-app.pem` (Railway
+  has no file mounts, so the path variable can't work; the variable editor
+  accepts multi-line values — paste the PEM as is). Leave
+  `GITHUB_APP_PRIVATE_KEY_PATH` unset.
+- `CORS_ORIGIN` = `https://<frontend-domain>.up.railway.app` (without it the
+  API only accepts requests from `http://localhost:5173`).
+- `FRONTEND_URL` = the same frontend origin (GitHub App OAuth/setup redirects
+  land there).
+- `GITHUB_WEBHOOK_SECRET` = see the webhook section above.
+- Do **not** set `PORT` — Railway provides it.
+
+**`worker`** — the same `backend/.env` set minus `CORS_ORIGIN`,
+`FRONTEND_URL`, and `GITHUB_WEBHOOK_SECRET` (it serves no HTTP). It DOES need
+`GITHUB_APP_PRIVATE_KEY` (it downloads repo zipballs).
+
+**`frontend`** — Vite bakes env vars into the static bundle **at build
+time**; Railway exposes service variables during the image build, so set:
+
+- `VITE_API_URL` = `https://<api-domain>.up.railway.app/api`
+- `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` = same values as local.
+
+Changing any `VITE_*` variable requires a redeploy (rebuild) to take effect —
+they are not read at runtime.
+
+### 3. Point the external services at the deployment
+
+| Where | What to change |
+|---|---|
+| Supabase → Authentication → URL Configuration | Site URL → frontend domain; add the two Railway Redirect URLs (see the Supabase section table) |
+| GitHub **App** (repo import) | Either update Homepage/Callback/Setup URLs from `http://localhost:5173` to the frontend domain — or create a **second GitHub App for production** (recommended: keeps local dev working; each environment gets its own App ID/secrets/PEM) |
+| GitHub App → Webhook | URL → `https://<api-domain>.up.railway.app/api/webhooks/github` (see webhook section) |
+| GitHub **OAuth App** (login) | Nothing — its callback is the Supabase URL (`https://<ref>.supabase.co/auth/v1/callback`), which is environment-independent |
+
+### 4. Smoke test
+
+1. `https://<api-domain>.up.railway.app/api/health` → 200.
+2. Open the frontend domain → sign in → import a repo → run an analysis
+   (exercises Supabase, GitHub App, Upstash, and the worker in one pass).
+3. Browser devtools → Network: API calls must go to the Railway API domain
+   (if they hit localhost, `VITE_API_URL` wasn't set at build time).
 
 ---
 
