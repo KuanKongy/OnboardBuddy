@@ -88,8 +88,8 @@ function presentActivity(item: ActivityItem): { text: string; icon: typeof Activ
     if (item.status === "failed")
       return { text: `${what} generation failed${where}`, icon: XCircle, tone: "text-destructive", spin: false };
     if (item.status === "stale")
-      return { text: `${what} generated${where} — now stale`, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400", spin: false };
-    return { text: `${what} generated${where}`, icon: Package, tone: "text-emerald-600 dark:text-emerald-400", spin: false };
+      return { text: `${what} generated${where} — now stale`, icon: AlertTriangle, tone: "text-warning", spin: false };
+    return { text: `${what} generated${where}`, icon: Package, tone: "text-success", spin: false };
   }
 
   const what = item.job_type === "incremental_update" ? "Incremental update" : "Analysis";
@@ -98,10 +98,10 @@ function presentActivity(item: ActivityItem): { text: string; icon: typeof Activ
   if (item.status === "running")
     return { text: `${what} running${where}`, icon: Loader2, tone: "text-primary", spin: true };
   if (item.status === "paused")
-    return { text: `${what} paused${where}`, icon: Clock, tone: "text-amber-600 dark:text-amber-400", spin: false };
+    return { text: `${what} paused${where}`, icon: Clock, tone: "text-warning", spin: false };
   if (item.status === "failed")
     return { text: `${what} failed${where}`, icon: XCircle, tone: "text-destructive", spin: false };
-  return { text: `${what} completed${where}`, icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400", spin: false };
+  return { text: `${what} completed${where}`, icon: CheckCircle2, tone: "text-success", spin: false };
 }
 
 function StatCard({
@@ -135,14 +135,18 @@ export function DashboardPage() {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
-  const [inviteCount, setInviteCount] = useState(0);
+  const [inviteCount, setInviteCount] = useState<number | null>(null);
+  const [inviteCountError, setInviteCountError] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [pendingTour, setPendingTour] = useState(false);
 
   useEffect(() => {
     apiFetch("/invitations")
-      .then((data: { invitations: unknown[] }) => setInviteCount(data.invitations.length))
-      .catch(() => setInviteCount(0));
+      .then((data: { invitations: unknown[] }) => {
+        setInviteCount(data.invitations.length);
+        setInviteCountError(false);
+      })
+      .catch(() => setInviteCountError(true));
   }, []);
 
   // Real event feed (every run + package across projects), kept fresh while
@@ -207,6 +211,7 @@ export function DashboardPage() {
     () => ({
       total: projects.length,
       analyzing: projects.filter((p) => p.status === "analyzing").length,
+      complete: projects.filter((p) => p.status === "complete").length,
       stale: projects.filter((p) => p.stale_count > 0).length,
     }),
     [projects],
@@ -223,7 +228,7 @@ export function DashboardPage() {
               <Link to="/invitations">
                 <Mail className="h-3.5 w-3.5" />
                 Join Project
-                {inviteCount > 0 && (
+                {inviteCount !== null && inviteCount > 0 && (
                   <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
                     {inviteCount}
                   </span>
@@ -264,11 +269,25 @@ export function DashboardPage() {
             {/* "Stale content" only matters when nonzero — otherwise show
                 something informative instead of a permanent 0. */}
             {stats.stale > 0 ? (
-              <StatCard icon={AlertTriangle} label="Stale content" value={stats.stale} tone="text-amber-600 dark:text-amber-400" />
+              <StatCard icon={AlertTriangle} label="Stale content" value={stats.stale} tone="text-warning" />
             ) : (
-              <StatCard icon={CheckCircle2} label="Up to date" value={stats.total - stats.analyzing} tone="text-emerald-600 dark:text-emerald-400" />
+              <StatCard icon={CheckCircle2} label="Up to date" value={stats.complete} tone="text-success" />
             )}
-            <StatCard icon={Mail} label="Pending invites" value={inviteCount} tone="text-foreground" />
+            {inviteCountError ? (
+              <Card>
+                <CardContent className="flex items-center gap-3 p-3">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                    <Mail className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold leading-none text-muted-foreground">—</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Pending invites unavailable</div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <StatCard icon={Mail} label="Pending invites" value={inviteCount ?? 0} tone="text-foreground" />
+            )}
           </div>
 
           <div className="grid gap-5 lg:grid-cols-3">

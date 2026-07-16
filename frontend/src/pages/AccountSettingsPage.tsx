@@ -25,7 +25,11 @@ export function AccountSettingsPage() {
 
   const [appConnected, setAppConnected] = useState(false);
   const [appUsername, setAppUsername] = useState<string | null>(null);
+  const [appConnectionLoading, setAppConnectionLoading] = useState(true);
+  const [appConnectionError, setAppConnectionError] = useState("");
   const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectError, setDisconnectError] = useState("");
+  const [disconnectConfirmOpen, setDisconnectConfirmOpen] = useState(false);
 
   const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
   const githubIdentity = user?.identities?.find((id) => id.provider === "github");
@@ -227,22 +231,29 @@ export function AccountSettingsPage() {
     : "—";
 
   useEffect(() => {
+    setAppConnectionLoading(true);
+    setAppConnectionError("");
     apiFetch("/auth/me")
       .then((data: { user: { github_connected: boolean; github_username: string | null } }) => {
         setAppConnected(data.user.github_connected);
         setAppUsername(data.user.github_username);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        setAppConnectionError(err instanceof Error ? err.message : "Failed to check GitHub App connection");
+      })
+      .finally(() => setAppConnectionLoading(false));
   }, []);
 
   async function handleDisconnect() {
     setDisconnecting(true);
+    setDisconnectError("");
     try {
       await disconnectGithub();
       setAppConnected(false);
       setAppUsername(null);
-    } catch {
-      // swallow
+      setDisconnectConfirmOpen(false);
+    } catch (err: unknown) {
+      setDisconnectError(err instanceof Error ? err.message : "Failed to disconnect the GitHub App");
     } finally {
       setDisconnecting(false);
     }
@@ -457,7 +468,11 @@ export function AccountSettingsPage() {
       <Card className="mb-3">
         <CardContent className="p-3">
           <h2 className="mb-2 text-xs font-medium text-foreground">GitHub App (Repo Import)</h2>
-          {appConnected ? (
+          {appConnectionLoading ? (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Checking connection...
+            </div>
+          ) : appConnected ? (
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs">
                 <Github className="h-3.5 w-3.5 text-foreground" />
@@ -472,7 +487,7 @@ export function AccountSettingsPage() {
                 <Button
                   variant="ghost"
                   size="xs"
-                  onClick={handleDisconnect}
+                  onClick={() => { setDisconnectError(""); setDisconnectConfirmOpen(true); }}
                   disabled={disconnecting}
                 >
                   <Unplug className="h-3 w-3" />
@@ -488,6 +503,11 @@ export function AccountSettingsPage() {
                 Authorize GitHub App
               </Button>
             </div>
+          )}
+          {appConnectionError && (
+            <p className="mt-2 text-[11px] text-destructive">
+              Couldn't check GitHub App connection: {appConnectionError}
+            </p>
           )}
         </CardContent>
       </Card>
@@ -617,6 +637,31 @@ export function AccountSettingsPage() {
               >
                 {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
                 Delete everything
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={disconnectConfirmOpen} onOpenChange={(open) => !disconnecting && setDisconnectConfirmOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Disconnect GitHub App</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Disconnecting removes OnboardBuddy's access to import repositories from{" "}
+              {appUsername ? <>@{appUsername}</> : "this GitHub account"}. Existing projects keep
+              working, but you won't be able to import new repositories until you reconnect.
+            </p>
+            {disconnectError && <p className="text-[11px] text-destructive">{disconnectError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDisconnectConfirmOpen(false)} disabled={disconnecting}>
+                Cancel
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleDisconnect} disabled={disconnecting}>
+                {disconnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                Disconnect
               </Button>
             </div>
           </div>
