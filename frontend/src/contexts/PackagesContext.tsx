@@ -40,6 +40,10 @@ interface PackagesContextValue {
   registerSessionJob: (jobId: string, opts?: { navigateOnDone?: boolean }) => void;
   /** "" or "?package_id=<id>" — append to feature-tab fetches. */
   packageQuery: string;
+  /** True after the most recent packages fetch failed — lets pages distinguish a real fetch error from a legitimate empty/not-yet-analyzed state. */
+  packagesError: boolean;
+  /** Same, for the analysis-status poll. */
+  statusError: boolean;
 }
 
 const PackagesContext = createContext<PackagesContextValue | undefined>(undefined);
@@ -61,6 +65,8 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   const [packages, setPackages] = useState<PackageCard[] | null>(null);
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [packagesError, setPackagesError] = useState(false);
+  const [statusError, setStatusError] = useState(false);
   // Whether selection still needs initializing from localStorage/default once
   // the package list is known.
   const selectionInitialized = useRef(false);
@@ -79,8 +85,11 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
 
   const refreshPackages = useCallback(() => {
     apiFetch(`/projects/${projectId}/onboarding/packages`)
-      .then((data: { packages: PackageCard[] }) => setPackages(data.packages ?? []))
-      .catch(() => {});
+      .then((data: { packages: PackageCard[] }) => {
+        setPackages(data.packages ?? []);
+        setPackagesError(false);
+      })
+      .catch(() => setPackagesError(true));
   }, [projectId]);
 
   const applyStatus = useCallback((data: AnalysisStatus) => {
@@ -130,8 +139,9 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     try {
       const data = (await apiFetch(`/projects/${projectId}/analysis-status`)) as AnalysisStatus;
       applyStatus(data);
+      setStatusError(false);
     } catch {
-      /* transient — next poll retries */
+      setStatusError(true);
     }
   }, [projectId, applyStatus]);
 
@@ -241,9 +251,11 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     activeJobs,
     registerSessionJob,
     packageQuery,
+    packagesError,
+    statusError,
   }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage,
        defaultPackageId, setDefaultPackage, status, refreshStatus, activeJobs,
-       registerSessionJob, packageQuery]);
+       registerSessionJob, packageQuery, packagesError, statusError]);
 
   return <PackagesContext.Provider value={value}>{children}</PackagesContext.Provider>;
 }

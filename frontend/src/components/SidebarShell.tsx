@@ -1,5 +1,5 @@
 import { Menu, X } from "lucide-react";
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 
 interface SidebarCtx {
@@ -65,6 +65,61 @@ export function SidebarToggle({ className }: { className?: string }) {
 
 export function SidebarShell({ children }: { children: ReactNode }) {
   const { open, setOpen, collapsed } = useSidebar();
+  const asideRef = useRef<HTMLElement>(null);
+
+  // The mobile drawer doubles as the desktop's permanently-visible static
+  // sidebar (same DOM node, gated by `lg:` classes), so it can't be a real
+  // Dialog — that would portal/overlay the desktop layout too. Hand-roll the
+  // baseline a Dialog gets for free instead: Escape closes, Tab stays
+  // contained, background scroll locks, and focus lands inside on open.
+  const focusSelector = 'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  useEffect(() => {
+    if (!open) return;
+    const aside = asideRef.current;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const initialFocusables = aside?.querySelectorAll<HTMLElement>(focusSelector) ?? [];
+    initialFocusables[0]?.focus();
+
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const els = Array.from(aside?.querySelectorAll<HTMLElement>(focusSelector) ?? []);
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (!first || !last) return;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = prevOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [open, setOpen, focusSelector]);
+
+  // A resize past the desktop breakpoint turns this element back into the
+  // static sidebar — close the "modal" so the scroll-lock/focus-trap above
+  // don't outlive the overlay they belong to.
+  useEffect(() => {
+    if (!open) return;
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => { if (mq.matches) setOpen(false); };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [open, setOpen]);
 
   return (
     <>
@@ -75,6 +130,10 @@ export function SidebarShell({ children }: { children: ReactNode }) {
         />
       )}
       <aside
+        ref={asideRef}
+        role={open ? "dialog" : undefined}
+        aria-modal={open ? "true" : undefined}
+        aria-label="Sidebar navigation"
         className={`fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-border bg-card transition-transform ${
           open ? "translate-x-0" : "-translate-x-full"
         } ${collapsed ? "lg:hidden" : "lg:static lg:translate-x-0"}`}
