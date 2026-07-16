@@ -20,6 +20,7 @@ export function IntroPage() {
   // signup pages are the ones that bounce a signed-in user to the dashboard.)
   const { user, loading } = useAuth();
 
+
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border">

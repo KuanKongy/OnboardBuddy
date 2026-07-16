@@ -1,4 +1,4 @@
-import { ArrowLeft, Github, Loader2 } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Github, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -14,7 +14,9 @@ export function SignupPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Already signed in → straight to the app.
@@ -25,10 +27,15 @@ export function SignupPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    setInfo("");
     setLoading(true);
     try {
-      await signUp(email, password);
-      navigate("/dashboard");
+      const session = await signUp(email, password);
+      if (session) {
+        navigate("/dashboard");
+      } else {
+        setInfo("Check your email to confirm your account, then sign in.");
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign up failed");
     } finally {
@@ -57,8 +64,13 @@ export function SignupPage() {
         <Card>
           <CardContent className="p-4">
             {error && (
-              <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div role="alert" className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 {error}
+              </div>
+            )}
+            {info && (
+              <div role="status" className="mb-3 rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-xs text-primary">
+                {info}
               </div>
             )}
 
@@ -77,16 +89,28 @@ export function SignupPage() {
               </div>
               <div className="space-y-1">
                 <Label htmlFor="password" className="text-xs">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  required
-                  minLength={8}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="h-8 text-[13px]"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    minLength={8}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="h-8 pr-8 text-[13px]"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2"
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    <span className="sr-only">{showPassword ? "Hide password" : "Show password"}</span>
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">Minimum 8 characters</p>
               </div>
               <Button type="submit" className="w-full" size="sm" disabled={loading}>
