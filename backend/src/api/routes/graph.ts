@@ -1,27 +1,20 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { resolveForRequest } from "../services/packageResolver.js";
 
 export const graphRouter = Router({ mergeParams: true });
 
 const MAX_GRAPH_NODES = 60;
-
-async function latestCompleteSnapshotId(projectId: string | string[] | undefined): Promise<string | null> {
-  const result = await query(
-    `SELECT id FROM analysis_snapshots
-     WHERE project_id = $1 AND status = 'complete'
-     ORDER BY created_at DESC LIMIT 1`,
-    [projectId],
-  );
-  return result.rows.length > 0 ? (result.rows[0].id as string) : null;
-}
 
 graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
     const cluster = req.query.cluster as string | undefined;
 
-    const snapshotId = await latestCompleteSnapshotId(projectId);
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    const snapshotId = ctx?.snapshotId ?? null;
     if (!snapshotId) {
       res.status(404).json({ error: "No completed analysis snapshot found" });
       return;
@@ -127,13 +120,15 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
       return;
     }
 
-    // Filter to a single cluster if requested (matches 2-level directory logic)
+    // Filter to a cluster if requested. Prefix match so breadcrumb
+    // intermediate segments work: cluster "src" also matches files whose
+    // 2-level dir is "src/lib".
     let filteredNodes = allNodes;
     if (cluster) {
       filteredNodes = allNodes.filter((n) => {
         const parts = n.file_path.split('/');
         const dir = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : '.';
-        return dir === cluster;
+        return dir === cluster || dir.startsWith(`${cluster}/`);
       });
     }
 
@@ -197,7 +192,9 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    const snapshotId = await latestCompleteSnapshotId(projectId);
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    const snapshotId = ctx?.snapshotId ?? null;
     if (!snapshotId) {
       res.status(404).json({ error: "No completed analysis snapshot found" });
       return;
@@ -283,7 +280,9 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    const snapshotId = await latestCompleteSnapshotId(projectId);
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    const snapshotId = ctx?.snapshotId ?? null;
     if (!snapshotId) {
       res.status(404).json({ error: "No completed analysis snapshot found" });
       return;
@@ -449,14 +448,16 @@ graphRouter.get("/workflows/:workflowId", requireProjectAccess(), async (req, re
 });
 
 // Node detail: accepts either the graph_nodes UUID or a stable_key (the id
-// the frontend graph views use), scoped to the latest complete snapshot.
+// the frontend graph views use), scoped to the resolved snapshot (selected
+// package → member default → latest complete).
 // Enriched with connected workflows and the critical-ranking score.
 graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
   try {
-    const projectId = req.params.id;
     const nodeId = req.params.nodeId;
 
-    const snapshotId = await latestCompleteSnapshotId(projectId);
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    const snapshotId = ctx?.snapshotId ?? null;
     if (!snapshotId) {
       res.status(404).json({ error: "No completed analysis snapshot found" });
       return;

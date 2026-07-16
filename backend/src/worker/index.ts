@@ -12,7 +12,7 @@ import { Worker, Job } from 'bullmq';
 import { ANALYSIS_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
-import { getCommitSha, downloadZipball, getInstallationToken } from '../lib/github.js';
+import { getCommitSha, downloadZipball, getInstallationToken, getRepo } from '../lib/github.js';
 import { runAnalysis } from './engine/analysisRunner.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
@@ -41,6 +41,7 @@ import { findPreviousSnapshot, runIncrementalDiff } from './incrementalAnalyzer.
 import type { SemanticContext } from './semantic/context.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
+import { recomputeProjectStatus } from '../lib/projectStatus.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -93,6 +94,12 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   }
   const token = await getInstallationToken(Number(project.github_installation_id));
 
+  // Keep the dashboard-card repo metadata fresh while we're here (each run
+  // already holds a token). Fire-and-forget: a metadata hiccup never fails a run.
+  refreshRepoMetadata(projectId, project, token).catch((err) =>
+    console.warn(`[worker] repo metadata refresh failed for ${projectId}:`, err instanceof Error ? err.message : err),
+  );
+
   const zipPath = path.join(tmpDir, 'repo.zip');
   const extractDir = path.join(tmpDir, 'extracted');
   fs.mkdirSync(extractDir);
@@ -108,6 +115,15 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
+}
+
+/** GitHub-side repo metadata shown on dashboard cards (description/language/pushed_at). */
+async function refreshRepoMetadata(projectId: string, project: ProjectRow, token: string): Promise<void> {
+  const repo = await getRepo(token, project.repo_owner, project.repo_name);
+  await query(
+    `UPDATE projects SET repo_description = $1, primary_language = $2, repo_pushed_at = $3 WHERE id = $4`,
+    [repo.description?.slice(0, 350) ?? null, repo.language ?? null, repo.pushed_at ?? null, projectId],
+  );
 }
 
 /** Resolves the job's scope (path prefix); defaults to the whole-repo scope. */
@@ -181,6 +197,45 @@ async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
   }
 }
 
+/**
+ * Insert the generate_package job row and enqueue it. requestedBy is the user
+ * who asked for the ANALYSIS (not the project owner) — their member default
+ * package is set when the generated package completes.
+ */
+async function enqueueSummaryGeneration(opts: {
+  projectId: string;
+  snapshotId: string;
+  requestedBy: string;
+  role?: string | null;
+  branch?: string | null;
+  commitHash?: string | null;
+  scopeId?: string | null;
+}): Promise<string> {
+  const result = await query(
+    `INSERT INTO analysis_jobs
+       (project_id, snapshot_id, requested_by, job_type, status, current_step, role, branch, commit_hash, scope_id)
+     VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4, $5, $6, $7)
+     RETURNING id`,
+    [opts.projectId, opts.snapshotId, opts.requestedBy, opts.role ?? null,
+     opts.branch ?? null, opts.commitHash ?? null, opts.scopeId ?? null],
+  );
+  const summaryJobId = (result.rows[0] as { id: string }).id;
+  await getSummaryQueue().add('generate_summary', {
+    jobId: summaryJobId,
+    snapshotId: opts.snapshotId,
+    projectId: opts.projectId,
+    triggeredBy: opts.requestedBy,
+    role: opts.role ?? undefined,
+    branch: opts.branch ?? undefined,
+  } satisfies SummaryJobData, {
+    attempts: 2,
+    backoff: { type: 'fixed', delay: 3000 },
+    removeOnComplete: { count: 10 },
+    removeOnFail: { count: 10 },
+  });
+  return summaryJobId;
+}
+
 // ─── Analysis job ────────────────────────────────────────────────────────────
 
 async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
@@ -221,6 +276,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     privacy_mode: project.privacy_mode,
   };
   const scope = await resolveScope(projectId, job.data.scopeId);
+  // Attribute the whole run (and the chained package generation) to whoever
+  // requested it — NOT the project owner. Their member default package is
+  // set when the package completes.
+  const requester = ((await query(
+    `SELECT requested_by FROM analysis_jobs WHERE id = $1`, [jobId],
+  )).rows[0] as { requested_by: string | null } | undefined)?.requested_by ?? user_id;
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-${projectId}-`));
 
@@ -236,6 +297,71 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // 2. Download + extract zipball at the requested commit (default: branch head)
     await updateStep('Downloading repository', 15);
     const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
+
+    // 2b. Stamp the resolved identity: head runs only resolve to a commit
+    //     here, and the duplicate guard + run history need the real
+    //     (scope, commit, branch) on the job row.
+    await query(
+      `UPDATE analysis_jobs SET commit_hash = $2, scope_id = $3, branch = $4 WHERE id = $1`,
+      [jobId, commitHash, scope.scopeId, branch],
+    );
+
+    // Concurrent-duplicate guard: two head runs can pass the API's tuple
+    // check and resolve to the same (scope, commit). The older one wins;
+    // this one bows out before touching the shared snapshot row.
+    const twin = await query(
+      `SELECT id FROM analysis_jobs
+       WHERE project_id = $1 AND id <> $2 AND status IN ('queued', 'running')
+         AND job_type IN ('analyze_scope', 'incremental_update')
+         AND scope_id = $3 AND commit_hash = $4
+         AND created_at < (SELECT created_at FROM analysis_jobs WHERE id = $2)
+       LIMIT 1`,
+      [projectId, jobId, scope.scopeId, commitHash],
+    );
+    if (twin.rows.length > 0) {
+      await query(
+        `UPDATE analysis_jobs
+         SET status = 'failed', current_step = 'Duplicate run', finished_at = NOW(),
+             error_message = 'This scope and commit are already being analyzed by another run.'
+         WHERE id = $1`,
+        [jobId],
+      );
+      await recomputeProjectStatus(projectId);
+      return;
+    }
+
+    // 2c. Snapshot reuse: snapshots are content-addressed per (scope, commit)
+    //     while branch is package identity — a branch cut from an analyzed
+    //     head skips re-analysis and jumps straight to generating its own
+    //     package (LLM work would be cache hits anyway). `force` re-analyzes.
+    if (!job.data.force) {
+      const existing = (await query(
+        `SELECT id FROM analysis_snapshots
+         WHERE scope_id = $1 AND commit_hash = $2 AND status = 'complete'`,
+        [scope.scopeId, commitHash],
+      )).rows[0] as { id: string } | undefined;
+      if (existing) {
+        await updateStep('Reusing existing analysis for this commit', 70);
+        await query(
+          `UPDATE analysis_jobs
+           SET status = 'complete', snapshot_id = $1, current_step = 'Complete (analysis reused)',
+               progress_pct = 100, finished_at = NOW(), step_log = step_log || $3::jsonb
+           WHERE id = $2`,
+          [existing.id, jobId,
+           JSON.stringify([{ step: 'Complete (analysis reused)', pct: 100, ts: new Date().toISOString() }])],
+        );
+        // Webhook runs set autoGenerate=false: an already-analyzed commit
+        // (e.g. a redelivered push) must not silently pay for a package.
+        if (job.data.autoGenerate !== false) {
+          await enqueueSummaryGeneration({
+            projectId, snapshotId: existing.id, requestedBy: requester,
+            role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
+          });
+        }
+        await recomputeProjectStatus(projectId);
+        return;
+      }
+    }
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded
@@ -513,7 +639,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         budgetOverrides: project.budget_overrides,
         stopBehavior: project.budget_stop_behavior,
       }).load();
-      const ai = new AiClient({ projectId, snapshotId, privacyMode: privacy_mode, budget, tierConfig });
+      const ai = new AiClient({ projectId, snapshotId, jobId, privacyMode: privacy_mode, budget, tierConfig });
       const semanticCtx: SemanticContext = {
         ai,
         projectId,
@@ -573,10 +699,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
        WHERE id = $2`,
       [snapshotId, jobId, JSON.stringify([{ step: 'Complete', pct: 100, ts: new Date().toISOString() }]), scope.scopeId],
     );
-    await query(
-      `UPDATE projects SET status = 'complete', last_analyzed_at = NOW() WHERE id = $1`,
-      [projectId],
-    );
+    await query(`UPDATE projects SET last_analyzed_at = NOW() WHERE id = $1`, [projectId]);
 
     // Enqueue summary generation. Incremental runs skip this: existing
     // packages were stale-flagged where affected, and stale sections/
@@ -584,26 +707,13 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // paying for a full package rebuild. ai_disabled projects get a
     // deterministic (LLM-free) package — the summary worker picks the path.
     if (!isIncremental) {
-      const summaryJobResult = await query(
-        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step, role)
-         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4)
-         RETURNING id`,
-        [projectId, snapshotId, user_id, job.data.role ?? null],
-      );
-      const summaryDbJobId: string = summaryJobResult.rows[0].id;
-      await getSummaryQueue().add('generate_summary', {
-        jobId: summaryDbJobId,
-        snapshotId,
-        projectId,
-        triggeredBy: user_id,
-        role: job.data.role,
-      } satisfies SummaryJobData, {
-        attempts: 2,
-        backoff: { type: 'fixed', delay: 3000 },
-        removeOnComplete: { count: 10 },
-        removeOnFail: { count: 10 },
+      await enqueueSummaryGeneration({
+        projectId, snapshotId, requestedBy: requester,
+        role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
       });
     }
+    // After the enqueue: a queued generation keeps the project 'analyzing'.
+    await recomputeProjectStatus(projectId);
   } catch (err) {
     if (err instanceof KillSwitchError) {
       // Paused/stopped from the API between steps — the status was already
@@ -618,7 +728,8 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
        WHERE id = $2`,
       [message, jobId, JSON.stringify([{ step: `Failed: ${message.slice(0, 100)}`, pct: 0, ts: new Date().toISOString() }])],
     );
-    await query(`UPDATE projects SET status = 'failed' WHERE id = $1`, [projectId]);
+    // A failing run must not stomp the scalar while a sibling is still live.
+    await recomputeProjectStatus(projectId);
     throw err;
   } finally {
     clearInterval(heartbeat);
@@ -683,12 +794,7 @@ async function reconcileOrphanedJobs(): Promise<void> {
           [row.snapshot_id],
         ).catch(() => {});
       }
-      await query(
-        `UPDATE projects SET status = 'failed'
-         WHERE id = $1 AND status = 'analyzing'
-           AND NOT EXISTS (SELECT 1 FROM analysis_jobs j WHERE j.project_id = $1 AND j.status IN ('queued', 'running'))`,
-        [row.project_id],
-      ).catch(() => {});
+      await recomputeProjectStatus(row.project_id).catch(() => {});
       console.warn(`[worker] reconciled orphaned job ${row.id} (no heartbeat for 3+ minutes)`);
     }
   } catch (err) {

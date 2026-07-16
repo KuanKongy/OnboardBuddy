@@ -14,19 +14,14 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
+import { CodeSnippet, type HighlightRange } from "@/components/CodeSnippet";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { useProject } from "@/contexts/ProjectContext";
+import { usePackages } from "@/contexts/PackagesContext";
 import { apiFetch } from "@/lib/api";
-import { ROLES } from "@/lib/onboardingData";
 import { useProgress } from "@/lib/useProgress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 interface TutorialSummary {
@@ -63,6 +58,19 @@ interface TutorialStep {
 interface TutorialDetail {
   tutorial: TutorialSummary & { unknowns: Array<{ kind: string; detail?: string | null }> };
   steps: TutorialStep[];
+}
+
+type StepReceipt = TutorialStep["receipts"][number];
+
+/** The receipt's absolute line range, when it points into this step's snippet. */
+function hoverRangeFor(step: TutorialStep, receipt: StepReceipt | null): HighlightRange[] | undefined {
+  if (!receipt || receipt.file_path !== step.file_path || receipt.line_start == null) return undefined;
+  const start = receipt.line_start;
+  const end = receipt.line_end ?? receipt.line_start;
+  const stepStart = step.line_start ?? 1;
+  const stepEnd = step.line_end ?? Number.MAX_SAFE_INTEGER;
+  if (end < stepStart || start > stepEnd) return undefined;
+  return [{ start, end }];
 }
 
 /** Deterministic workflow steps: the AI-free fallback walkthrough. */
@@ -156,13 +164,16 @@ function StepLocation({ step }: { step: { file_path: string; symbol_name: string
 export function WalkthroughTab() {
   const { project } = useProject();
   const { id } = useParams<{ id: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
 
   const [tutorials, setTutorials] = useState<TutorialSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  // Hovered "Backed by" receipt → highlighted lines in the step snippet.
+  const [hoveredReceipt, setHoveredReceipt] = useState<StepReceipt | null>(null);
+  useEffect(() => { setHoveredReceipt(null); }, [currentStep, detail?.tutorial.id]);
   const { save: saveProgress } = useProgress(id);
 
   // Remember the reader's step so "Continue tutorial" resumes here.
@@ -178,7 +189,20 @@ export function WalkthroughTab() {
   const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const role = searchParams.get("role") ?? project?.developer_role ?? "general";
+  // ← / → page through whichever walkthrough is open (AI tutorial or the
+  // deterministic workflow fallback share the same step cursor).
+  const stepTotal = detail ? detail.steps.length : selectedWorkflow ? wfSteps.length : 0;
+  useHotkeys(
+    {
+      ArrowRight: () => setCurrentStep((s) => Math.min(s + 1, Math.max(stepTotal - 1, 0))),
+      ArrowLeft: () => setCurrentStep((s) => Math.max(s - 1, 0)),
+    },
+    stepTotal > 1,
+  );
+
+  // Tutorials follow the sidebar package selection (a package implies its
+  // role); with nothing selected the server resolves member default → latest.
+  const { packageQuery, selectedPackageId } = usePackages();
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -186,7 +210,7 @@ export function WalkthroughTab() {
     setDetail(null);
     setCurrentStep(0);
     try {
-      const data = await apiFetch(`/projects/${id}/tutorials?role=${encodeURIComponent(role)}`);
+      const data = await apiFetch(`/projects/${id}/tutorials${packageQuery}`);
       const list: TutorialSummary[] = data.tutorials ?? [];
       setTutorials(list);
       if (list.length === 0) {
@@ -204,7 +228,7 @@ export function WalkthroughTab() {
     } finally {
       setLoading(false);
     }
-  }, [id, role]);
+  }, [id, packageQuery, selectedPackageId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -255,15 +279,7 @@ export function WalkthroughTab() {
       <div data-tour="tutorials-header">
         <PageHeader
           title="Tutorials"
-          subtitle="Real traced flows, step by step — the actual code at each step, with an explanation of what it does."
-          actions={
-            <Select value={role} onValueChange={(next) => setSearchParams((prev) => { prev.set("role", next); return prev; }, { replace: true })}>
-              <SelectTrigger className="h-8 w-[160px] text-[13px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          }
+          subtitle="Real traced flows, step by step — the actual code at each step, with an explanation of what it does. Follows the package selected in the sidebar."
         />
       </div>
 
@@ -352,12 +368,17 @@ export function WalkthroughTab() {
                 </div>
 
                 {/* Code and explanation side by side — the tutorial's whole
-                    point is reading real code with the note next to it. */}
+                    point is reading real code with the note next to it.
+                    Hovering a "Backed by" receipt highlights its exact lines
+                    in the snippet when they fall inside this step's range. */}
                 <div className={cn("grid gap-3", tStep.snippet && "xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
                   {tStep.snippet ? (
-                    <pre className="max-h-80 overflow-auto rounded-md border border-border bg-muted px-3 py-2.5 text-[12px] leading-relaxed text-foreground">
-                      {tStep.snippet}
-                    </pre>
+                    <CodeSnippet
+                      code={tStep.snippet}
+                      startLine={tStep.line_start ?? 1}
+                      maxHeightClass="max-h-80"
+                      highlightRanges={hoverRangeFor(tStep, hoveredReceipt)}
+                    />
                   ) : (
                     <p className="rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-muted-foreground">
                       No snippet was captured for this step — open it in Dependencies to read the code.
@@ -371,12 +392,27 @@ export function WalkthroughTab() {
                     {tStep.receipts.length > 0 && (
                       <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-muted-foreground/70">
                         Backed by:
-                        {tStep.receipts.map((r) => (
-                          <span key={r.id} className="font-mono">
-                            {r.file_path}
-                            {r.line_start ? `:${r.line_start}` : ""}
-                          </span>
-                        ))}
+                        {tStep.receipts.map((r) => {
+                          const highlightable = hoverRangeFor(tStep, r) !== undefined;
+                          return (
+                            <span
+                              key={r.id}
+                              tabIndex={0}
+                              onMouseEnter={() => setHoveredReceipt(r)}
+                              onMouseLeave={() => setHoveredReceipt(null)}
+                              onFocus={() => setHoveredReceipt(r)}
+                              onBlur={() => setHoveredReceipt(null)}
+                              title={highlightable ? "Highlights these lines in the snippet" : undefined}
+                              className={cn(
+                                "cursor-default rounded bg-muted/60 px-1 font-mono",
+                                highlightable && "underline decoration-dotted underline-offset-2 hover:text-foreground",
+                              )}
+                            >
+                              {r.file_path}
+                              {r.line_start ? `:${r.line_start}` : ""}
+                            </span>
+                          );
+                        })}
                       </p>
                     )}
                   </div>

@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fetchClassGraph, type GraphResponse } from "@/lib/graphData";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { useOptionalPackages } from "@/contexts/PackagesContext";
 import type { GraphEdge, GraphNode } from "@/types/graph";
 
 interface ClassGraphSectionProps {
@@ -14,6 +16,7 @@ interface ClassGraphSectionProps {
 }
 
 export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
+  const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -24,13 +27,24 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
     setLoading(true);
     setError("");
     setSelectedNodeId(null);
-    fetchClassGraph(projectId)
+    fetchClassGraph(projectId, selectedPackageId)
       .then(setData)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadClasses(); }, [projectId]);
+  useEffect(() => { loadClasses(); }, [projectId, selectedPackageId]);
+
+  // ← / → cycle class/interface nodes, Esc deselects (mirrors the files view).
+  const cycleIds = useMemo(() => (data?.graph.nodes ?? []).map((n) => n.id), [data]);
+  useHotkeys(
+    {
+      ArrowRight: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") + 1 + cycleIds.length) % cycleIds.length] ?? null),
+      ArrowLeft: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") - 1 + cycleIds.length) % cycleIds.length] ?? null),
+      Escape: () => setSelectedNodeId(null),
+    },
+    !!data && !loading,
+  );
 
   const nodes: GraphNode[] = useMemo(() => {
     if (!data) return [];
@@ -141,7 +155,7 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
 
         {selectedNode && (
           <aside className="graph-canvas overflow-y-auto !bg-card">
-            <NodeInfoPanel node={selectedNode} />
+            <NodeInfoPanel node={selectedNode} onClose={() => setSelectedNodeId(null)} />
           </aside>
         )}
       </div>

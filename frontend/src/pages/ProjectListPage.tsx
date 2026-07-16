@@ -30,7 +30,8 @@ export function ProjectListPage() {
         (p) =>
           p.repo_name.toLowerCase().includes(q) ||
           p.repo_owner.toLowerCase().includes(q) ||
-          p.branch.toLowerCase().includes(q),
+          (p.primary_language ?? "").toLowerCase().includes(q) ||
+          (p.repo_description ?? "").toLowerCase().includes(q),
       );
     }
 
@@ -78,7 +79,7 @@ export function ProjectListPage() {
         <div className="relative flex-1">
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Search projects by name, branch or status..."
+            placeholder="Search projects by name, language or description..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="h-8 pl-8 text-[13px]"

@@ -1,7 +1,7 @@
 import { Settings } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/SidebarShell";
 
@@ -30,6 +30,9 @@ export function AccountCard() {
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
       <Avatar className="size-7">
+        {typeof meta.avatar_url === "string" && meta.avatar_url !== "" && (
+          <AvatarImage src={meta.avatar_url} alt="" />
+        )}
         <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">

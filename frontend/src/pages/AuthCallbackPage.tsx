@@ -32,6 +32,13 @@ export function AuthCallbackPage() {
     } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
 
+      // Password-recovery links must land on the set-new-password form, not
+      // the dashboard (safety net for links pointed at this generic callback).
+      if (event === "PASSWORD_RECOVERY") {
+        navigate("/reset-password", { replace: true });
+        return;
+      }
+
       if (event === "SIGNED_IN" && session) {
         navigate("/dashboard", { replace: true });
         return;

@@ -256,6 +256,52 @@ describe('phase 7 — deterministic section generation (ai_disabled)', () => {
     expect(JSON.parse(context).mode).to.equal('deterministic');
   });
 
+  it('attaches deterministic source_receipts built from graph-node snippets', async () => {
+    const receiptInserts: unknown[][] = [];
+    __setQueryForTests(async (text, params) => {
+      if (text.includes('FROM entrypoints') && text.includes('JOIN graph_nodes')) {
+        return {
+          rows: [{
+            id: 'node-1', stable_key: 'src/rest/Server.ts#addDataset', name: 'addDataset',
+            file_path: 'src/rest/Server.ts', line_start: 42, line_end: 60,
+            snippet: 'function addDataset() {}', trust_level: 'code',
+            trigger_type: 'http_route', method: 'PUT', route_path: '/dataset/:id/:kind',
+          }],
+        } as never;
+      }
+      if (text.includes('FROM entrypoints')) {
+        return { rows: [{ trigger_type: 'http_route', method: 'PUT', route_path: '/dataset/:id/:kind', file_path: 'src/rest/Server.ts', symbol: 'addDataset', workflow_title: null }] } as never;
+      }
+      if (text.startsWith('INSERT INTO package_sections')) {
+        return { rows: [{ id: 'sec-det-3' }] } as never;
+      }
+      if (text.includes('INSERT INTO source_receipts')) {
+        receiptInserts.push(params ?? []);
+        return { rows: [] } as never;
+      }
+      return { rows: [] } as never;
+    });
+
+    const result = await generateDeterministicSection({
+      snapshotId: 'snap-1', packageId: 'pkg-1', role: 'backend',
+      sectionType: 'entry_points', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [] },
+    });
+
+    expect(result.sectionId).to.equal('sec-det-3');
+    expect(receiptInserts, 'receipt inserts').to.have.length(1);
+    const row = receiptInserts[0]!;
+    // (project, snapshot, kind, trust, section_id, node_id, workflow_id,
+    //  stable_key, file_path, symbol, line_start, line_end, snippet, ...)
+    expect(row[0]).to.equal('proj-1');
+    expect(row[4]).to.equal('sec-det-3');
+    expect(row[8]).to.equal('src/rest/Server.ts');
+    expect(row[10]).to.equal(42);
+    expect(row[12]).to.equal('function addDataset() {}');
+    expect(JSON.parse(row[16] as string)).to.deep.equal({ source: 'deterministic' });
+    expect(String(row[14])).to.include('Entry point (http_route): PUT /dataset/:id/:kind');
+  });
+
   it('grades empty evidence low and says so instead of inventing content', async () => {
     let content = '';
     __setQueryForTests(async (text, params) => {

@@ -12,6 +12,7 @@ import { Worker, Job } from 'bullmq';
 import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
+import { recomputeProjectStatus } from '../lib/projectStatus.js';
 import { mapLimit } from '../lib/parallel.js';
 import { AiClient, AiPausedError } from './ai/aiClient.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
@@ -30,6 +31,9 @@ import { generateTutorials } from './generation/tutorialGenerator.js';
 
 interface SnapRow {
   commit_hash: string;
+  /** Provenance only (first analysis that produced this snapshot) — the
+   * package's branch comes from the job data when present. */
+  branch: string;
   project_id: string;
   scope_id: string;
   role: DeveloperRole;
@@ -47,7 +51,7 @@ interface SnapRow {
 
 async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
   const row = (await query(
-    `SELECT s.commit_hash, s.project_id, s.scope_id, s.semantic_depth, s.privacy_mode,
+    `SELECT s.commit_hash, s.branch, s.project_id, s.scope_id, s.semantic_depth, s.privacy_mode,
             COALESCE(ps.privacy_mode, s.privacy_mode) AS effective_privacy_mode,
             COALESCE(ps.default_developer_role, 'general') AS role,
             COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
@@ -64,6 +68,23 @@ async function loadSnapshot(snapshotId: string): Promise<SnapRow> {
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────────
+
+/**
+ * A finished FULL generation becomes the requester's default package — their
+ * sidebar selection follows the package they asked for. Regenerations of an
+ * existing package never change anyone's default. Best-effort: a failed
+ * default write must not fail a finished package.
+ */
+async function setMemberDefaultPackage(projectId: string, userId: string, packageId: string): Promise<void> {
+  try {
+    await query(
+      `UPDATE project_members SET default_package_id = $3 WHERE project_id = $1 AND user_id = $2`,
+      [projectId, userId, packageId],
+    );
+  } catch (err) {
+    console.warn(`[summary-worker] could not set member default package:`, err instanceof Error ? err.message : err);
+  }
+}
 
 async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole, sectionType: regenerateSectionType } = job.data;
@@ -96,25 +117,33 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       .catch(() => {});
   }, 15_000);
 
+  // Hoisted so the failure path can scope its package update to THIS run's
+  // package — concurrent sibling generations must never be marked failed.
+  let failedPackageId: string | null = null;
+
   try {
     await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
     await updateJob('running', 'Loading snapshot', 5);
     const snap = await loadSnapshot(snapshotId);
     const role = (requestedRole as DeveloperRole | undefined) ?? snap.role;
+    // Branch is package identity; the snapshot's branch is only provenance
+    // from whichever run analyzed this (scope, commit) first.
+    const branch = job.data.branch ?? snap.branch;
 
-    // Package row per (scope, role, commit). Regenerate jobs target the
-    // section's existing package (possibly built from an older commit) so a
-    // stale section rebuilt against a newer snapshot lands in place instead
+    // Package row per (scope, role, commit, branch). Regenerate jobs target
+    // the section's existing package (possibly built from an older commit) so
+    // a stale section rebuilt against a newer snapshot lands in place instead
     // of spawning a fresh one-section package for the new commit.
     const packageId = job.data.packageId ?? ((await query(
       `INSERT INTO onboarding_packages
-         (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit)
-       VALUES ($1, $2, $3, $4, 'generating', $5, $6)
-       ON CONFLICT (project_id, scope_id, role, analyzed_commit) DO UPDATE
+         (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit, branch)
+       VALUES ($1, $2, $3, $4, 'generating', $5, $6, $7)
+       ON CONFLICT (project_id, scope_id, role, analyzed_commit, branch) DO UPDATE
          SET snapshot_id = EXCLUDED.snapshot_id, status = 'generating', updated_at = NOW()
        RETURNING id`,
-      [snapshotId, projectId, snap.scope_id, role, triggeredBy, snap.commit_hash],
+      [snapshotId, projectId, snap.scope_id, role, triggeredBy, snap.commit_hash, branch],
     )).rows[0] as { id: string }).id;
+    failedPackageId = packageId;
 
     const deps = await buildSectionDeps(snapshotId, projectId, role);
 
@@ -131,6 +160,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         });
         await settlePackageStaleness(packageId);
         await updateJob('complete', `Regenerated ${regenerateSectionType} (AI disabled)`, 100);
+        await recomputeProjectStatus(projectId);
         return;
       }
       let done = 0;
@@ -145,6 +175,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       await markPhase(snapshotId, 'generation', 'complete', { sections: SECTION_TYPES.length, mode: 'deterministic' });
       await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
       await updateJob('complete', 'Deterministic onboarding package ready (AI disabled)', 100);
+      await setMemberDefaultPackage(projectId, triggeredBy, packageId);
+      await recomputeProjectStatus(projectId);
       return;
     }
     const privacyMode = snap.effective_privacy_mode as 'full_ai' | 'facts_only_ai';
@@ -156,7 +188,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       stopBehavior: snap.budget_stop_behavior,
     }).load();
     const ai = new AiClient({
-      projectId, snapshotId, privacyMode, budget,
+      projectId, snapshotId, jobId, privacyMode, budget,
       tierConfig: resolveTierConfig({
         modelTierOverrides: snap.model_tier_overrides,
         modelFailureBehavior: snap.model_failure_behavior,
@@ -177,6 +209,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       // stale flags resolve once the last stale section is regenerated.
       await settlePackageStaleness(packageId);
       await updateJob('complete', `Regenerated ${regenerateSectionType}`, 100);
+      await recomputeProjectStatus(projectId);
       console.log(`[summary-worker] regenerated ${regenerateSectionType} (section=${result.sectionId}, issues=${result.validation.issues.length})`);
       return;
     }
@@ -233,7 +266,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       await updateJob('running', `Generating sections (0/${pending.length})`, 15);
       let done = 0;
       try {
-        await mapLimit(pending, 4, async (sectionType) => {
+        await mapLimit(pending, Number(process.env.SECTION_CONCURRENCY ?? 4), async (sectionType) => {
           const result = await generateSection({
             ai, snapshotId, projectId, packageId, role, sectionType,
             privacyMode, commitHash: snap.commit_hash, deps,
@@ -293,6 +326,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     // (bug #17).
 
     await updateJob('complete', 'Onboarding package ready', 100);
+    await setMemberDefaultPackage(projectId, triggeredBy, packageId);
+    await recomputeProjectStatus(projectId);
     console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size}`);
   } catch (err) {
     // A failed/paused regenerate must not leave the section stuck in
@@ -311,6 +346,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
       await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]).catch(() => {});
       await updateJob('paused', `Paused: ${message}`, 0).catch(() => {});
+      await recomputeProjectStatus(projectId).catch(() => {});
       console.warn(`[summary-worker] job ${job.id} paused:`, message);
       return; // resumable — a retry would just re-pause
     }
@@ -326,13 +362,15 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     await markPhase(snapshotId, 'generation', 'failed', {}, { errorMessage: message.slice(0, 500) }).catch(() => {});
     await updateJob('failed', 'Failed', 0, message).catch(() => {});
-    await query(
-      `UPDATE onboarding_packages SET status = 'failed', updated_at = NOW()
-       WHERE project_id = $1 AND analyzed_commit = (
-         SELECT commit_hash FROM analysis_snapshots WHERE id = $2
-       )`,
-      [projectId, snapshotId],
-    ).catch(() => {});
+    // Scope the failure to THIS run's package — concurrent sibling packages
+    // at the same commit (other roles/branches) stay untouched.
+    if (failedPackageId) {
+      await query(
+        `UPDATE onboarding_packages SET status = 'failed', updated_at = NOW() WHERE id = $1`,
+        [failedPackageId],
+      ).catch(() => {});
+    }
+    await recomputeProjectStatus(projectId).catch(() => {});
     console.error(`[summary-worker] job ${job.id} failed:`, message);
     throw err;
   } finally {

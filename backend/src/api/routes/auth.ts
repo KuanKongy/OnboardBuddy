@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { supabaseAdmin } from "../../lib/supabase.js";
-import { query } from "../../lib/db.js";
+import { pool, query } from "../../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { deleteAccountTx } from "../services/accountDeletion.js";
 
 export const authRouter = Router();
 
@@ -75,6 +76,40 @@ authRouter.post("/logout", requireAuth, async (req, res) => {
     console.error("Logout error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+/**
+ * Permanent account deletion: application rows first (one transaction), then
+ * the Supabase auth user. If the auth deletion fails after the commit, the
+ * client retries — the row deletes are idempotent and sign-in still works
+ * until the auth user is actually gone.
+ */
+authRouter.delete("/account", requireAuth, async (req, res) => {
+  const userId = req.user!.id;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await deleteAccountTx(client, userId);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    console.error("Account deletion error:", err);
+    res.status(500).json({ error: "Internal server error" });
+    return;
+  } finally {
+    client.release();
+  }
+
+  try {
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    console.error("Auth user deletion failed after data wipe:", err);
+    res.status(500).json({ error: "Account data deleted, but removing the sign-in failed — please retry" });
+    return;
+  }
+
+  res.status(204).send();
 });
 
 authRouter.get("/me", requireAuth, async (req, res) => {

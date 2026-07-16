@@ -1,4 +1,4 @@
-import { LayoutDashboard, List, Mail, Settings } from "lucide-react";
+import { HelpCircle, Keyboard, LayoutDashboard, List, Mail, Settings } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { AccountCard } from "@/components/AccountCard";
@@ -6,14 +6,21 @@ import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarShell, useSidebar } from "@/components/SidebarShell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-const navItems = [
+/** Shell pages in hotkey order ([ / ] cycle, 1..4 jump — see AuthenticatedLayout). */
+export const dashboardNavItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/list", label: "Project list", icon: List },
   { to: "/invitations", label: "Invitations", icon: Mail },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
-export function Sidebar() {
+export function Sidebar({
+  onStartTour,
+  onShowShortcuts,
+}: {
+  onStartTour: () => void;
+  onShowShortcuts: () => void;
+}) {
   const { setOpen } = useSidebar();
 
   return (
@@ -24,7 +31,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">
-        {navItems.map((item) => {
+        {dashboardNavItems.map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
@@ -48,6 +55,23 @@ export function Sidebar() {
 
       <div className="px-2">
         <Separator />
+      </div>
+      <div className="px-2 pt-1.5">
+        <button
+          onClick={() => { setOpen(false); onStartTour(); }}
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          Take a tour
+        </button>
+        <button
+          onClick={onShowShortcuts}
+          title="Also opens with ?"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <Keyboard className="h-3.5 w-3.5" />
+          Keyboard shortcuts
+        </button>
       </div>
       <div className="flex items-center gap-2 px-2 py-2">
         <div className="min-w-0 flex-1">

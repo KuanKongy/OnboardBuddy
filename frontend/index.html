@@ -6,10 +6,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>OnboardBuddy</title>
     <script>
+      // Theme bootstrap before first paint: explicit "light"/"dark" wins;
+      // anything else (or no stored value) follows the browser/OS theme.
       (function () {
         try {
           var stored = localStorage.getItem("onboardbuddy:theme");
-          if (stored !== "light") {
+          var dark =
+            stored === "dark" ||
+            (stored !== "light" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) {
             document.documentElement.classList.add("dark");
           }
         } catch (e) {

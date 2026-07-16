@@ -26,12 +26,17 @@ export const ROLES = [
 
 export async function fetchOnboardingPackage(
   projectId: string,
-  role: string,
+  opts: { role?: string; packageId?: string | null },
 ): Promise<OnboardingPackage | null> {
   try {
-    const data = await apiFetch(
-      `/projects/${projectId}/onboarding?role=${encodeURIComponent(role)}`,
-    );
+    // An explicit package id pins the exact package; role is the legacy
+    // "latest for role" path.
+    const qs = opts.packageId
+      ? `?package_id=${encodeURIComponent(opts.packageId)}`
+      : opts.role
+        ? `?role=${encodeURIComponent(opts.role)}`
+        : "";
+    const data = await apiFetch(`/projects/${projectId}/onboarding${qs}`);
     return (data.package ?? data) as OnboardingPackage;
   } catch {
     // No mock fallback: a failed load shows the honest missing state.

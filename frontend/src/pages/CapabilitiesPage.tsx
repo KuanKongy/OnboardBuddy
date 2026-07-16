@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PageHeader } from "@/components/PageHeader";
+import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
 
 interface StartHereRef {
@@ -58,6 +59,9 @@ function fileOf(stableKey: string): string {
  */
 export function CapabilitiesPage() {
   const { id } = useParams<{ id: string }>();
+  const packagesCtx = useOptionalPackages();
+  const selectedPackageId = packagesCtx?.selectedPackageId ?? null;
+  const packageQuery = packagesCtx?.packageQuery ?? "";
   const [capabilities, setCapabilities] = useState<Capability[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -66,7 +70,7 @@ export function CapabilitiesPage() {
     if (!id) return;
     setLoading(true);
     setError("");
-    apiFetch(`/projects/${id}/capabilities`)
+    apiFetch(`/projects/${id}/capabilities${packageQuery}`)
       .then((data: { capabilities: Capability[] }) =>
         // Snapshots analyzed before the hub fields existed lack them —
         // normalize so the cards degrade gracefully instead of crashing.
@@ -83,7 +87,7 @@ export function CapabilitiesPage() {
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [id, selectedPackageId]);
 
   return (
     <div>

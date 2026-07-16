@@ -248,10 +248,19 @@ Errors: 401 — not authenticated · 500 — server failure
 | GET | `/projects/:id` | member | Project details + settings |
 | PUT | `/projects/:id/settings` | owner/admin | Update analysis/onboarding settings |
 | DELETE | `/projects/:id` | owner | Delete project and related data (CASCADE) |
-| POST | `/projects/:id/analyze` | owner/admin | Queue static analysis worker job |
+| POST | `/projects/:id/analyze` | owner/admin | Queue static analysis worker job (concurrent runs allowed; 409 only for an identical scope+commit) |
 | GET | `/projects/:id/analysis-status` | member | Recent jobs + latest snapshot stats |
+| GET | `/projects/:id/runs` | member | Run history: config, duration, per-job LLM cost, generated-vs-cached sections (`?limit=&before=`) |
+| PUT | `/projects/:id/default-package` | member | Set the CALLER's default package (`{ package_id: uuid \| null }`, per member) |
 | GET | `/projects/:id/summary` | member | Latest onboarding package summary |
 | POST | `/projects/:id/summarize` | owner/admin | Queue AI onboarding generation job |
+
+> **Package selection:** every feature read (`/onboarding`, `/graph/*`, `/capabilities`,
+> `/workflows`, `/tutorials`, `/onboarding/{staleness,validate,export}`, `/ask`) accepts an
+> optional `?package_id=` and resolves what to serve as **explicit package → caller's member
+> default → latest complete snapshot** (`api/services/packageResolver.ts`). Packages are
+> identified by (project, scope, role, commit, **branch**); snapshots stay content-addressed
+> per (scope, commit), so the same commit on two branches shares one analysis.
 
 #### GET /projects
 
@@ -290,10 +299,10 @@ Errors: 401 — not authenticated · 403 — not project owner · 500 — server
 
 #### POST /projects/:id/analyze
 
-Starts static repo analysis: sets project status to `analyzing`, inserts an `analysis_jobs` row, enqueues a BullMQ job for the worker (see [Pipeline.md](./Pipeline.md)).
+Starts static repo analysis: sets project status to `analyzing`, inserts an `analysis_jobs` row, enqueues a BullMQ job for the worker (see [Pipeline.md](./Pipeline.md)). Runs for **different** (scope, commit) tuples execute concurrently; only an identical active run conflicts. If the resolved commit already has a complete snapshot, the worker reuses it and jumps straight to package generation (`force: true` re-analyzes).
 
-Input: no body → 202 `{ analysis: { id, status, mode, branch } }`  
-Errors: 401 — not authenticated · 403 — not owner/admin · 404 — project not found · 409 — analysis already queued or running · 500 — server failure
+Input: `{ scope_id?, scope_path?, branch?, commit?, depth?, role?, force? }` → 202 `{ analysis: { id, status, mode, branch } }`  
+Errors: 401 — not authenticated · 403 — not owner/admin · 404 — project not found · 409 — an identical scope+commit run is already active (`active_job_id`) · 500 — server failure
 
 #### GET /projects/:id/analysis-status
 

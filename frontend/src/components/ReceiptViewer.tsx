@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CodeSnippet } from "@/components/CodeSnippet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SourceReceipt } from "@/types/onboarding";
 
@@ -136,7 +137,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
           )}
 
           {/* Code snippet — capped height so a long function never swallows
-              the whole modal; scrolls both ways. */}
+              the whole modal; line-numbered from the receipt's file range. */}
           {receipt.snippet && (
             <div className="rounded-md border bg-muted/30">
               <div className="border-b px-3 py-1.5">
@@ -144,9 +145,12 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                   Source Evidence
                 </span>
               </div>
-              <pre className="max-h-[40vh] overflow-auto p-3 text-[12px] leading-relaxed text-foreground">
-                <code>{receipt.snippet}</code>
-              </pre>
+              <CodeSnippet
+                code={receipt.snippet}
+                startLine={receipt.lineStart ?? 1}
+                maxHeightClass="max-h-[40vh]"
+                className="rounded-none border-0 bg-transparent"
+              />
             </div>
           )}
 

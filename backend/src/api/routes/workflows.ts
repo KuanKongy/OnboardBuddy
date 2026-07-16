@@ -1,24 +1,19 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { resolveForRequest } from "../services/packageResolver.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
 
 workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
-    const projectId = req.params.id;
-
-    const snapResult = await query(
-      `SELECT id FROM analysis_snapshots
-       WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
-      [projectId],
-    );
-    if (snapResult.rows.length === 0) {
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    if (!ctx) {
       res.json({ workflows: [] });
       return;
     }
-    const snapshotId = snapResult.rows[0].id as string;
+    const snapshotId = ctx.snapshotId;
 
     const wfResult = await query(
       `SELECT w.id, w.title, w.trigger_type, w.purpose,

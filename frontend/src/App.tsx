@@ -1,13 +1,17 @@
-import { Component, type ReactNode } from "react";
-import { Outlet, Route, Routes } from "react-router-dom";
+import { Component, useState, type ReactNode } from "react";
+import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { Sidebar } from "@/components/Sidebar";
+import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
+import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { ProjectLayout } from "@/components/ProjectLayout";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AccountSettingsPage } from "@/pages/AccountSettingsPage";
 import { ArchitecturePage } from "@/pages/ArchitecturePage";
 import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
+import { ForgotPasswordPage } from "@/pages/ForgotPasswordPage";
+import { ResetPasswordPage } from "@/pages/ResetPasswordPage";
 import { DashboardPage } from "@/pages/DashboardPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
@@ -56,14 +60,41 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 function AuthenticatedLayout() {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Shell-wide hotkeys, mirroring the project layout: [ / ] cycle the sidebar
+  // pages, 1..4 jump, ? opens the keymap. Pages outside the nav (e.g. /import)
+  // count as page 1 so [ / ] still land somewhere sensible.
+  const pagePaths = dashboardNavItems.map((item) => item.to);
+  const currentPage = Math.max(0, pagePaths.indexOf(pathname));
+  const goToPage = (index: number) => {
+    const clamped = Math.min(Math.max(index, 0), pagePaths.length - 1);
+    const target = pagePaths[clamped];
+    if (!target || target === pathname) return;
+    navigate(target);
+  };
+  useHotkeys({
+    "[": () => goToPage(currentPage - 1),
+    "]": () => goToPage(currentPage + 1),
+    "?": () => setShortcutsOpen(true),
+    ...Object.fromEntries(pagePaths.map((_, i) => [String(i + 1), () => goToPage(i)])),
+  });
+
+  // The dashboard tour lives on DashboardPage (its anchors do too) — from any
+  // other shell page the sidebar button first navigates there.
+  const startTour = () => navigate("/dashboard", { state: { startTour: Date.now() } });
+
   return (
     <SidebarProvider>
       <div className="flex h-screen">
-        <Sidebar />
+        <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
         <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
           <Outlet />
         </main>
       </div>
+      <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} context="dashboard" />
     </SidebarProvider>
   );
 }
@@ -77,6 +108,8 @@ export default function App() {
           <Route path="/" element={<IntroPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/signup" element={<SignupPage />} />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
           <Route path="/dev/graph/:id" element={<GraphPage />} />

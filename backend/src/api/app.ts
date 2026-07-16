@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { apiRouter } from "./routes/index.js";
+import { githubWebhookRouter } from "./routes/githubWebhook.js";
 
 export function createApp() {
   const app = express();
@@ -12,6 +13,10 @@ export function createApp() {
       credentials: true
     }),
   );
+  // GitHub webhook needs the RAW request bytes for HMAC signature
+  // verification, so it mounts with its own parser before express.json()
+  // (which never sees this path). Auth = the signature, not a bearer token.
+  app.use("/api/webhooks/github", express.raw({ type: "*/*", limit: "2mb" }), githubWebhookRouter);
   app.use(express.json());
 
   app.use("/api", apiRouter);

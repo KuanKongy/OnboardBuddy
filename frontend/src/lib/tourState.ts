@@ -11,6 +11,7 @@ const TOUR_PREFIXES = {
   dashboard: "onboardbuddy:tour-dismissed",
   project: "onboardbuddy:project-tour-dismissed",
   onboardingLifecycle: "onboardbuddy:onboarding-tour-dismissed",
+  onboardingReader: "onboardbuddy:reader-tour-dismissed",
 } as const;
 
 export type TourName = keyof typeof TOUR_PREFIXES;

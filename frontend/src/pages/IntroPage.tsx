@@ -7,18 +7,18 @@ import {
   Shield,
   Users,
 } from "lucide-react";
-import { Link, Navigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
 export function IntroPage() {
+  // Signed-in visitors are NOT auto-redirected — the landing page stays
+  // readable; the header offers the way into the app instead. (The login and
+  // signup pages are the ones that bounce a signed-in user to the dashboard.)
   const { user, loading } = useAuth();
-
-  if (!loading && user) {
-    return <Navigate to="/dashboard" replace />;
-  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -29,12 +29,24 @@ export function IntroPage() {
             <LogoWordmark />
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" asChild>
-              <Link to="/login">Log In</Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link to="/signup">Sign Up</Link>
-            </Button>
+            <ThemeToggle />
+            {!loading && user ? (
+              <Button size="sm" asChild>
+                <Link to="/dashboard">
+                  Go to Dashboard
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
+            ) : (
+              <>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link to="/login">Log In</Link>
+                </Button>
+                <Button size="sm" asChild>
+                  <Link to="/signup">Sign Up</Link>
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>

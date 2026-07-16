@@ -1,0 +1,272 @@
+/**
+ * Deterministic receipts for ai_disabled packages: the SAME kind of evidence
+ * the AI path attaches (file/line/snippet source_receipts, served by
+ * GET /onboarding/sections/:id/receipts), built purely from extracted graph
+ * data — graph_nodes already carry capped snippets with exact line ranges.
+ * Each section cites the code objects its own deterministic query rendered,
+ * so the reader's receipt chips and staleness tracking work identically
+ * whether or not AI narration is on.
+ */
+
+import { query } from '../../lib/db.js';
+import { critical25 } from './roleProjection.js';
+import type { SectionDeps, SectionType } from './sectionSpecs.js';
+
+export interface DeterministicReceiptRow {
+  receiptKind: 'code_snippet' | 'config_snippet' | 'doc_snippet' | 'workflow_step';
+  trustLevel: 'code' | 'config' | 'tests' | 'docs' | 'llm_inference';
+  nodeId?: string | null;
+  workflowId?: string | null;
+  nodeStableKey?: string | null;
+  filePath?: string | null;
+  symbolName?: string | null;
+  lineStart?: number | null;
+  lineEnd?: number | null;
+  snippet?: string | null;
+  detectionExpression?: string | null;
+  claim?: string | null;
+}
+
+interface NodeRow {
+  id: string;
+  stable_key: string;
+  name: string;
+  file_path: string | null;
+  line_start: number | null;
+  line_end: number | null;
+  snippet: string | null;
+  trust_level: 'code' | 'config' | 'tests' | 'docs' | 'llm_inference';
+}
+
+const NODE_FIELDS = `n.id, n.stable_key, n.name, n.file_path, n.line_start, n.line_end, n.snippet, n.trust_level`;
+
+function kindForTrust(trust: NodeRow['trust_level']): DeterministicReceiptRow['receiptKind'] {
+  if (trust === 'config') return 'config_snippet';
+  if (trust === 'docs') return 'doc_snippet';
+  return 'code_snippet';
+}
+
+function fromNode(n: NodeRow, claim: string | null): DeterministicReceiptRow {
+  return {
+    receiptKind: kindForTrust(n.trust_level),
+    trustLevel: n.trust_level,
+    nodeId: n.id,
+    nodeStableKey: n.stable_key,
+    filePath: n.file_path,
+    symbolName: n.name,
+    lineStart: n.line_start,
+    lineEnd: n.line_end,
+    snippet: n.snippet,
+    claim,
+  };
+}
+
+/** Nodes for projection-driven sections; claims come from the projection reasons. */
+async function nodesForProjections(
+  deps: SectionDeps,
+  targets: Array<{ stableKey: string; reasons: string[] }>,
+  cap: number,
+): Promise<DeterministicReceiptRow[]> {
+  const wanted = targets.slice(0, cap);
+  if (wanted.length === 0) return [];
+  const byKey = new Map(wanted.map((t) => [t.stableKey, t]));
+  const rows = (await query(
+    `SELECT ${NODE_FIELDS} FROM graph_nodes n WHERE n.snapshot_id = $1 AND n.stable_key = ANY($2)`,
+    [deps.snapshotId, [...byKey.keys()]],
+  )).rows as NodeRow[];
+  return rows.map((n) => fromNode(n, byKey.get(n.stable_key)?.reasons.slice(0, 2).join('; ') ?? null));
+}
+
+async function entrypointReceipts(deps: SectionDeps, cap: number): Promise<DeterministicReceiptRow[]> {
+  const rows = (await query(
+    `SELECT ${NODE_FIELDS}, e.trigger_type, e.method, e.route_path
+     FROM entrypoints e JOIN graph_nodes n ON n.id = e.node_id
+     WHERE e.snapshot_id = $1 ORDER BY e.trigger_type LIMIT $2`,
+    [deps.snapshotId, cap],
+  )).rows as Array<NodeRow & { trigger_type: string; method: string | null; route_path: string | null }>;
+  return rows.map((r) => fromNode(r, `Entry point (${r.trigger_type})${r.method ? `: ${r.method} ${r.route_path ?? ''}`.trimEnd() : ''}`));
+}
+
+/**
+ * The section's evidence rows. Every query reads only deterministic tables
+ * (graph_nodes, entrypoints, workflows, side_effects, cluster/capability
+ * members) — zero LLM involvement, exactly the ai_disabled contract.
+ */
+export async function collectSectionReceipts(
+  sectionType: SectionType,
+  deps: SectionDeps,
+): Promise<DeterministicReceiptRow[]> {
+  switch (sectionType) {
+    case 'start_here':
+      return entrypointReceipts(deps, 10);
+    case 'entry_points':
+      return entrypointReceipts(deps, 15);
+
+    case 'architecture': {
+      // One representative member per cluster, most-critical clusters first.
+      const rows = (await query(
+        `SELECT DISTINCT ON (c.id) ${NODE_FIELDS}, c.label AS cluster_label, m.membership_reason
+         FROM architecture_clusters c
+         JOIN architecture_cluster_members m ON m.cluster_id = c.id
+         JOIN graph_nodes n ON n.id = m.node_id
+         WHERE c.snapshot_id = $1
+         ORDER BY c.id, n.line_start NULLS LAST`,
+        [deps.snapshotId],
+      )).rows as Array<NodeRow & { cluster_label: string; membership_reason: string }>;
+      return rows.slice(0, 10).map((r) =>
+        fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`));
+    }
+
+    case 'critical_25': {
+      const byType = critical25(deps.projections);
+      const targets = [...byType.entries()]
+        .filter(([type]) => type === 'symbol' || type === 'file')
+        .flatMap(([, list]) => list);
+      return nodesForProjections(deps, targets, 15);
+    }
+
+    case 'role_path':
+      return nodesForProjections(
+        deps,
+        deps.projections.filter((p) => p.targetType === 'symbol' || p.targetType === 'file'),
+        10,
+      );
+
+    case 'capability_map': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS}, c.name AS capability_name
+         FROM capability_members cm
+         JOIN capabilities c ON c.id = cm.capability_id
+         JOIN graph_nodes n ON n.snapshot_id = $1 AND n.stable_key = cm.stable_key
+         WHERE c.snapshot_id = $1 AND cm.member_type = 'node'
+         LIMIT 12`,
+        [deps.snapshotId],
+      )).rows as Array<NodeRow & { capability_name: string }>;
+      if (rows.length > 0) {
+        return rows.map((r) => fromNode(r, `Implements the "${r.capability_name}" capability`));
+      }
+      // ai_disabled has no capabilities — cite the traced workflows' triggers.
+      const triggers = (await query(
+        `SELECT ${NODE_FIELDS}, w.title AS workflow_title, w.id AS workflow_id
+         FROM workflows w
+         JOIN entrypoints e ON e.id = w.entrypoint_id
+         JOIN graph_nodes n ON n.id = e.node_id
+         WHERE w.snapshot_id = $1 LIMIT 12`,
+        [deps.snapshotId],
+      )).rows as Array<NodeRow & { workflow_title: string; workflow_id: string }>;
+      return triggers.map((r) => ({
+        ...fromNode(r, `Triggers the "${r.workflow_title}" workflow`),
+        workflowId: r.workflow_id,
+      }));
+    }
+
+    case 'workflow_guide': {
+      // First and last traced step of each workflow — where a flow enters
+      // and what it ends on, the two lines a reader checks first.
+      const rows = (await query(
+        `SELECT ranked.workflow_id, ranked.title, ranked.step_kind, ranked.deterministic_description,
+                ranked.file_path AS step_file, ranked.symbol_name AS step_symbol,
+                ranked.line_start AS step_line_start, ranked.line_end AS step_line_end,
+                ranked.node_id, n.stable_key, n.snippet, n.trust_level, n.name
+         FROM (
+           SELECT ws.*, w.title,
+                  ROW_NUMBER() OVER (PARTITION BY ws.workflow_id ORDER BY ws.step_order ASC) AS rn_first,
+                  ROW_NUMBER() OVER (PARTITION BY ws.workflow_id ORDER BY ws.step_order DESC) AS rn_last
+           FROM workflow_steps ws JOIN workflows w ON w.id = ws.workflow_id
+           WHERE w.snapshot_id = $1
+         ) ranked
+         LEFT JOIN graph_nodes n ON n.id = ranked.node_id
+         WHERE ranked.rn_first = 1 OR ranked.rn_last = 1
+         LIMIT 15`,
+        [deps.snapshotId],
+      )).rows as Array<{
+        workflow_id: string; title: string; step_kind: string | null; deterministic_description: string | null;
+        step_file: string; step_symbol: string | null; step_line_start: number | null; step_line_end: number | null;
+        node_id: string | null; stable_key: string | null; snippet: string | null;
+        trust_level: NodeRow['trust_level'] | null; name: string | null;
+      }>;
+      return rows.map((r) => ({
+        receiptKind: 'workflow_step' as const,
+        trustLevel: r.trust_level ?? 'code',
+        nodeId: r.node_id,
+        workflowId: r.workflow_id,
+        nodeStableKey: r.stable_key,
+        filePath: r.step_file,
+        symbolName: r.step_symbol ?? r.name,
+        lineStart: r.step_line_start,
+        lineEnd: r.step_line_end,
+        snippet: r.snippet,
+        claim: `"${r.title}"${r.step_kind ? ` ${r.step_kind} step` : ' step'}${r.deterministic_description ? ` — ${r.deterministic_description}` : ''}`,
+      }));
+    }
+
+    case 'data_schema': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS} FROM graph_nodes n
+         WHERE n.snapshot_id = $1 AND n.type = 'schema' LIMIT 15`,
+        [deps.snapshotId],
+      )).rows as NodeRow[];
+      return rows.map((n) => fromNode(n, `Schema object: ${n.name}`));
+    }
+
+    case 'safety_rails': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS}, s.type AS effect_type, s.target, s.evidence
+         FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
+         WHERE s.snapshot_id = $1 ORDER BY s.type LIMIT 12`,
+        [deps.snapshotId],
+      )).rows as Array<NodeRow & { effect_type: string; target: string | null; evidence: string }>;
+      return rows.map((r) => ({
+        ...fromNode(r, `${r.effect_type.replace(/_/g, ' ')}${r.target ? ` → ${r.target}` : ''}`),
+        detectionExpression: r.evidence,
+      }));
+    }
+
+    case 'dependency_graph': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS}, (n.metadata->>'dependentCount')::int AS dependents
+         FROM graph_nodes n
+         WHERE n.snapshot_id = $1 AND (n.metadata->>'dependentCount')::int > 0
+         ORDER BY (n.metadata->>'dependentCount')::int DESC LIMIT 10`,
+        [deps.snapshotId],
+      )).rows as Array<NodeRow & { dependents: number }>;
+      return rows.map((r) => fromNode(r, `${r.dependents} modules depend on this`));
+    }
+
+    case 'doc_health': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS} FROM graph_nodes n
+         WHERE n.snapshot_id = $1 AND n.type = 'doc' LIMIT 8`,
+        [deps.snapshotId],
+      )).rows as NodeRow[];
+      return rows.map((n) => ({ ...fromNode(n, `Documentation file: ${n.file_path ?? n.name}`), receiptKind: 'doc_snippet' as const, trustLevel: 'docs' as const }));
+    }
+
+    default:
+      return [];
+  }
+}
+
+/** Section-owned receipt copies — mirrors the AI path's persistSection insert. */
+export async function insertSectionReceipts(params: {
+  projectId: string;
+  snapshotId: string;
+  sectionId: string;
+  commitHash: string;
+  rows: DeterministicReceiptRow[];
+}): Promise<void> {
+  for (const r of params.rows) {
+    await query(
+      `INSERT INTO source_receipts
+         (project_id, snapshot_id, receipt_kind, trust_level, section_id, node_id, workflow_id,
+          node_stable_key, file_path, symbol_name, line_start, line_end, snippet,
+          detection_expression, claim, commit_hash, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+      [params.projectId, params.snapshotId, r.receiptKind, r.trustLevel, params.sectionId,
+       r.nodeId ?? null, r.workflowId ?? null, r.nodeStableKey ?? null, r.filePath ?? null,
+       r.symbolName ?? null, r.lineStart ?? null, r.lineEnd ?? null, r.snippet ?? null,
+       r.detectionExpression ?? null, r.claim ?? null, params.commitHash,
+       JSON.stringify({ source: 'deterministic' })],
+    );
+  }
+}

@@ -1,6 +1,6 @@
-import { Github, Loader2 } from "lucide-react";
+import { ArrowLeft, Github, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,17 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 export function SignupPage() {
-  const { signUp, signInWithGithub } = useAuth();
+  const { user, loading: authLoading, signUp, signInWithGithub } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Already signed in → straight to the app.
+  if (!authLoading && user) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -108,6 +113,11 @@ export function SignupPage() {
           Already have an account?{" "}
           <Link to="/login" className="font-medium text-primary hover:underline">
             Sign in
+          </Link>
+        </p>
+        <p className="mt-2 text-center">
+          <Link to="/" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-3 w-3" /> Back to home
           </Link>
         </p>
       </div>

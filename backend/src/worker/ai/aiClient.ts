@@ -98,6 +98,8 @@ export interface AiClientStats {
 export interface AiClientOptions {
   projectId: string;
   snapshotId: string;
+  /** analysis_jobs row these calls run under — per-job cost audit. Omit for /ask. */
+  jobId?: string;
   privacyMode: PrivacyMode;
   budget: BudgetEnforcer;
   tierConfig?: TierConfig;
@@ -156,6 +158,7 @@ export class AiClient {
     const identity = (model: string): RunIdentity => ({
       snapshotId: this.options.snapshotId,
       packageId: req.packageId ?? null,
+      jobId: this.options.jobId ?? null,
       targetType: req.targetType,
       targetId: req.targetId ?? null,
       sectionType: req.sectionType ?? null,
@@ -207,6 +210,7 @@ export class AiClient {
     const inputHash = computeInputHash({ promptVersion, model, inputs });
     const identity: RunIdentity = {
       snapshotId: this.options.snapshotId,
+      jobId: this.options.jobId ?? null,
       targetType: opts.targetType ?? 'embedding_batch',
       provider: this.provider.id,
       model,

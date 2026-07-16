@@ -6,14 +6,18 @@ services:
     env_file:
       - backend/.env
     environment:
-      # API + worker pools share Supabase's session-mode pool_size (15):
-      # 4 + 8 stays under the cap (doc/DEVOPS.md "Connection pooling").
-      PG_POOL_MAX: 4
+      # DATABASE_URL is the transaction-mode pooler: clients multiplex, so
+      # each process sizes its pool for its own fan-out
+      # (doc/DEVOPS.md "Connection pooling").
+      PG_POOL_MAX: 10
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
     ports:
       - "3000:3000"
 
+  # Horizontally scalable: `docker compose up -d --scale backend-worker=N`.
+  # BullMQ distributes jobs across replicas; heartbeats and the kill-switch
+  # are per-job row guards, so replicas never fight over a run.
   backend-worker:
     build:
       context: .
@@ -21,7 +25,11 @@ services:
     env_file:
       - backend/.env
     environment:
-      PG_POOL_MAX: 8
+      PG_POOL_MAX: 10
+      # Per-replica knobs (see doc/DEVOPS.md "Scaling workers"):
+      #   WORKER_CONCURRENCY (jobs per process, default 2)
+      #   LLM_MAX_CONCURRENCY (parallel AI calls per run, default 6)
+      #   SECTION_CONCURRENCY (parallel package sections, default 4)
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
 

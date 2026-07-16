@@ -79,3 +79,12 @@ describe("GET /api/auth/me", () => {
     expect(res.body).to.have.property("error");
   });
 });
+
+describe("DELETE /api/auth/account", () => {
+  it("returns 401 when unauthenticated", async () => {
+    const res = await request(app).delete("/api/auth/account");
+
+    expect(res.status).to.equal(401);
+    expect(res.body).to.have.property("error");
+  });
+});

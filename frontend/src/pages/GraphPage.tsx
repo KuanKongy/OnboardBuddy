@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
@@ -15,6 +15,8 @@ import {
   type NodeDetail,
 } from "@/lib/graphData";
 import { useOptionalProject } from "@/contexts/ProjectContext";
+import { useOptionalPackages } from "@/contexts/PackagesContext";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
@@ -34,6 +36,8 @@ export function GraphPage() {
   // of throwing.
   const projectCtx = useOptionalProject();
   const project = projectCtx?.project ?? null;
+  // Same story for the package selection (absent on the standalone route).
+  const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
   const githubRepo =
     project?.repo_owner && project?.repo_name && project?.branch
       ? { owner: project.repo_owner, repo: project.repo_name, branch: project.branch }
@@ -52,13 +56,47 @@ export function GraphPage() {
     setLoading(true);
     setError("");
     setSelectedNodeId(null);
-    fetchDependencyGraph(id, cluster)
+    fetchDependencyGraph(id, cluster, selectedPackageId)
       .then(setData)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadGraph(); }, [id]);
+  // Switching packages reloads from the top — a drill path from another
+  // snapshot's directory layout may not exist in this one.
+  useEffect(() => {
+    setActiveCluster(null);
+    loadGraph();
+  }, [id, selectedPackageId]);
+
+  /** One level up the cluster path; root (null) when at the first level. */
+  function drillUp() {
+    const segments = (activeCluster ?? "").split("/").filter(Boolean);
+    const parent = segments.slice(0, -1).join("/") || null;
+    setActiveCluster(parent);
+    loadGraph(parent ?? undefined);
+  }
+
+  // ← / → cycle the selectable (non-cluster) nodes; Esc deselects — paired
+  // with ViewportFocus, cycling glides the camera node to node.
+  const cycleIds = useMemo(
+    () => (data?.graph.nodes ?? []).map((n) => n.id).filter((nid) => !nid.startsWith("cluster:")),
+    [data],
+  );
+  const cycleNode = (delta: number) => {
+    if (cycleIds.length === 0) return;
+    const idx = selectedNodeId ? cycleIds.indexOf(selectedNodeId) : -1;
+    const next = cycleIds[(idx + delta + cycleIds.length) % cycleIds.length];
+    setSelectedNodeId(next ?? null);
+  };
+  useHotkeys(
+    {
+      ArrowRight: () => cycleNode(1),
+      ArrowLeft: () => cycleNode(-1),
+      Escape: () => setSelectedNodeId(null),
+    },
+    view === "files" && !!data && !loading,
+  );
 
   // Deep link from other tabs (?focus=<file path>): select the node so the
   // symbol doc panel opens on arrival.
@@ -74,11 +112,11 @@ export function GraphPage() {
     setSelectedNodeDetail(null);
     if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
     let cancelled = false;
-    fetchNodeDetail(id, selectedNodeId).then((detail) => {
+    fetchNodeDetail(id, selectedNodeId, selectedPackageId).then((detail) => {
       if (!cancelled) setSelectedNodeDetail(detail);
     });
     return () => { cancelled = true; };
-  }, [id, selectedNodeId]);
+  }, [id, selectedNodeId, selectedPackageId]);
 
   const nodes: GraphNode[] = useMemo(() => {
     if (!data) return [];
@@ -160,17 +198,37 @@ export function GraphPage() {
       <PageHeader
         title={
           // Stable breadcrumb: "Dependencies" never moves — drilling into a
-          // cluster appends a suffix, and clicking the root text goes back.
+          // cluster appends its path segments, each clickable to drill back
+          // up to that level; the root text goes back to all groups.
           activeCluster ? (
-            <span className="flex items-baseline gap-1.5">
+            <span className="flex flex-wrap items-baseline gap-1.5">
               <button
                 className="transition-colors hover:text-primary"
                 onClick={() => { setActiveCluster(null); loadGraph(); }}
-                title="Back to all clusters"
+                title="Back to all groups"
               >
                 Dependencies
               </button>
-              <span className="text-sm font-normal text-muted-foreground">/ {activeCluster}</span>
+              {activeCluster.split("/").map((segment, i, segments) => {
+                const prefix = segments.slice(0, i + 1).join("/");
+                const isLast = i === segments.length - 1;
+                return (
+                  <span key={prefix} className="flex items-baseline gap-1.5 text-sm font-normal text-muted-foreground">
+                    <span>/</span>
+                    {isLast ? (
+                      <span className="text-foreground">{segment}</span>
+                    ) : (
+                      <button
+                        className="transition-colors hover:text-primary"
+                        onClick={() => { setActiveCluster(prefix); loadGraph(prefix); }}
+                        title={`Drill up to ${prefix}`}
+                      >
+                        {segment}
+                      </button>
+                    )}
+                  </span>
+                );
+              })}
             </span>
           ) : (
             "Dependencies"
@@ -179,6 +237,12 @@ export function GraphPage() {
         subtitle="Which files depend on which — follow the arrows to see how changes ripple."
         actions={
           <>
+            {view === "files" && activeCluster && (
+              <Button variant="outline" size="xs" onClick={drillUp} title="Drill up one level">
+                <CornerLeftUp className="mr-1 h-3 w-3" />
+                Up one level
+              </Button>
+            )}
             {view === "files" && data && (
               <>
                 <Badge variant="outline" className="text-[11px] tabular-nums">
@@ -277,7 +341,12 @@ export function GraphPage() {
 
             {showPanel && (
               <aside className="graph-canvas overflow-y-auto !bg-card">
-                <NodeInfoPanel node={selectedNode} detail={selectedNodeDetail} githubRepo={githubRepo} />
+                <NodeInfoPanel
+                  node={selectedNode}
+                  detail={selectedNodeDetail}
+                  githubRepo={githubRepo}
+                  onClose={() => setSelectedNodeId(null)}
+                />
               </aside>
             )}
           </div>
