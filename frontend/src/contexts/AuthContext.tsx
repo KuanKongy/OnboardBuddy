@@ -17,7 +17,7 @@ interface AuthContextValue {
   signUp: (email: string, password: string) => Promise<Session | null>;
   signOut: () => Promise<void>;
   signInWithGithub: () => Promise<void>;
-  connectGithub: () => Promise<void>;
+  connectGithub: (preserveAfterOAuthFlag?: boolean) => Promise<void>;
   disconnectGithub: () => Promise<void>;
 }
 
@@ -79,8 +79,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  async function connectGithub() {
-    sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+  async function connectGithub(preserveAfterOAuthFlag = false) {
+    // Callers that just set the flag themselves (e.g. ImportPage staging an
+    // "install" continuation right before this call) pass true so their
+    // flag survives; everyone else gets the defensive clear of any stale
+    // flag left behind by a previous, abandoned OAuth attempt.
+    if (!preserveAfterOAuthFlag) sessionStorage.removeItem("onboardbuddy.github.after_oauth");
     const { authorization_url } = await apiFetch("/github/oauth/start") as {
       authorization_url: string;
     };

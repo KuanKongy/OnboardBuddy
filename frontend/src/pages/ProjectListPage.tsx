@@ -5,15 +5,17 @@ import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useProjects } from "@/lib/useProjects";
 
-type Filter = "all" | "active" | "stale" | "completed";
+type Filter = "all" | "active" | "stale" | "completed" | "failed";
 
 const filters: { value: Filter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "active", label: "Active" },
   { value: "stale", label: "Stale" },
   { value: "completed", label: "Completed" },
+  { value: "failed", label: "Failed" },
 ];
 
 export function ProjectListPage() {
@@ -47,6 +49,9 @@ export function ProjectListPage() {
       case "completed":
         result = result.filter((p) => p.status === "complete");
         break;
+      case "failed":
+        result = result.filter((p) => p.status === "failed");
+        break;
     }
 
     return result;
@@ -77,8 +82,10 @@ export function ProjectListPage() {
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="relative flex-1">
+          <Label htmlFor="project-search" className="sr-only">Search projects</Label>
           <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
+            id="project-search"
             placeholder="Search projects by name, language or description..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -90,6 +97,7 @@ export function ProjectListPage() {
             <button
               key={f.value}
               type="button"
+              aria-pressed={filter === f.value}
               onClick={() => setFilter(f.value)}
               className={`shrink-0 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
                 filter === f.value

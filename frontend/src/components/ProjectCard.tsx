@@ -11,6 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,8 +62,8 @@ const statusConfig = {
   complete: {
     label: "Complete",
     progress: 100,
-    tone: "text-emerald-700 dark:text-emerald-400",
-    bar: "bg-emerald-500",
+    tone: "text-success",
+    bar: "bg-success",
     icon: CheckCircle2,
     hint: "The repository has been parsed and its onboarding content generated.",
   },
@@ -77,7 +78,7 @@ const statusConfig = {
 };
 
 const tierColors: Record<string, string> = {
-  owner: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  owner: "bg-warning-soft text-warning border-warning/30",
   admin: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
   contributor: "bg-muted text-muted-foreground border-border",
   developer: "bg-muted text-muted-foreground border-border",
@@ -150,12 +151,22 @@ export function ProjectCard({
     ? `${live.stageLabel ? `${live.stageLabel.split(" — ")[0]} ${live.pct}%` : `Analyzing ${live.pct}%`}${extraActiveRuns > 0 ? ` (+${extraActiveRuns} more run${extraActiveRuns > 1 ? "s" : ""})` : ""}`
     : "";
 
-  async function handleDelete() {
-    if (!confirm(`Delete ${project.repo_owner}/${project.repo_name}? This cannot be undone.`)) return;
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
+  async function confirmDelete() {
+    setDeleting(true);
+    setDeleteError("");
     try {
       await apiFetch(`/projects/${project.id}`, { method: "DELETE" });
       onDeleted?.(project.id);
-    } catch { /* noop */ }
+      setDeleteDialogOpen(false);
+    } catch (err: unknown) {
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete the project");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const openProject = () => navigate(`/projects/${project.id}`);
@@ -163,8 +174,9 @@ export function ProjectCard({
   const languageDot = project.primary_language ? languageColors[project.primary_language] : undefined;
 
   return (
-    // The whole card opens the project (like a GitHub repo card); inner
-    // controls (menu, delete) stop propagation so managing still works.
+    <>
+    {/* The whole card opens the project (like a GitHub repo card); inner
+        controls (menu, delete) stop propagation so managing still works. */}
     <Card
       role="link"
       tabIndex={0}
@@ -202,7 +214,7 @@ export function ProjectCard({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(); }}>
+                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteError(""); setDeleteDialogOpen(true); }}>
                     <Trash2 className="h-3 w-3" />
                     Delete project
                   </DropdownMenuItem>
@@ -246,7 +258,7 @@ export function ProjectCard({
               </span>
             )}
             <span className="shrink-0 text-muted-foreground">
-              STALE <span className={project.stale_count > 0 ? "font-semibold text-amber-700 dark:text-amber-400" : "font-semibold text-foreground"}>{project.stale_count}</span>
+              STALE <span className={project.stale_count > 0 ? "font-semibold text-warning" : "font-semibold text-foreground"}>{project.stale_count}</span>
             </span>
           </div>
           {updatedAt && (
@@ -255,5 +267,30 @@ export function ProjectCard({
         </div>
       </CardContent>
     </Card>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => !deleting && setDeleteDialogOpen(open)}>
+        <DialogContent className="sm:max-w-sm" onClick={(e) => e.stopPropagation()}>
+          <DialogHeader>
+            <DialogTitle className="text-sm">Delete project</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Delete <strong className="text-foreground">{project.repo_owner}/{project.repo_name}</strong>?
+              This removes all analyses and onboarding content and cannot be undone.
+            </p>
+            {deleteError && <p className="text-[11px] text-destructive">{deleteError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>
+                Cancel
+              </Button>
+              <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                Delete
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
