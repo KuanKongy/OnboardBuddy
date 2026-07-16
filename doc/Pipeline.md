@@ -167,8 +167,8 @@ Two LLM tiers plus embeddings, each a configurable model list (currently one mod
 
 | Tier | Used for | Default env |
 | --- | --- | --- |
-| `cheap` | symbol-level semantic pass | `OPENROUTER_MODEL_CHEAP` (e.g. `openai/gpt-4o-mini`) |
-| `strong` | synthesis, capabilities, refinement, critique, reranking, sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (e.g. `anthropic/claude-sonnet-4.5`) |
+| `cheap` | symbol-level semantic pass, file-record synthesis, claim critique | `OPENROUTER_MODEL_CHEAP` (default `openai/gpt-4o-mini`) |
+| `strong` | synthesis, capabilities, refinement, reranking, sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (default `openai/gpt-4o-mini`; set e.g. `anthropic/claude-sonnet-4.5` for premium quality) |
 | `embedding` | multi-view embeddings | `EMBEDDINGS_MODEL` (default `text-embedding-3-small`, 1536 dims) |
 
 On model failure/rate-limit, behavior is configurable per tier (`project_settings.model_failure_behavior`), analogous to budget stop behavior:

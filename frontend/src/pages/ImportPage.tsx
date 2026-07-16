@@ -4,6 +4,7 @@ import {
   Loader2,
   Rocket,
   Shield,
+  Sparkles,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -21,7 +22,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import {
+  AnalyzeConfigForm,
+  DEFAULT_ANALYZE_CONFIG,
+  analyzeRequestBody,
+  type AnalyzeConfig,
+} from "@/components/AnalyzeConfigForm";
+import { AppTour, type TourStep } from "@/components/AppTour";
 import { BackLink } from "@/components/BackLink";
+import { PageHeader } from "@/components/PageHeader";
+import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 
@@ -49,11 +59,40 @@ const developerRoles = [
   { value: "general", label: "General" },
 ];
 
+const IMPORT_TOUR_DISMISSED_KEY = "onboardbuddy:import-tour-dismissed";
+
+/** First-visit walkthrough of the configure step (wizard step 2). */
+const IMPORT_TOUR_STEPS: TourStep[] = [
+  {
+    target: "import-config-form",
+    title: "Configure the first analysis",
+    body: "Nothing runs yet. Pick the branch and commit to analyze (no SHA hunting — recent commits are listed), narrow the scope to a directory like backend/, and choose depth and the first package's role.",
+  },
+  {
+    target: "import-preview",
+    title: "Preview before you spend",
+    body: "The preview scans the repo and shows file counts, estimated AI calls, cost tier, and exactly what would be sent to the AI provider — before any tokens are used.",
+  },
+  {
+    target: "import-start",
+    title: "Start when you're ready",
+    body: "Analysis only starts when you click this. You can also skip and run it later from the project's Analyze button.",
+  },
+];
+
 export function ImportPage() {
   const navigate = useNavigate();
   const { connectGithub } = useAuth();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+
+  // Wizard: step 1 imports the repo (creates the project, nothing analyzed);
+  // step 2 configures and explicitly starts the first analysis.
+  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+  const [analyzeConfig, setAnalyzeConfig] = useState<AnalyzeConfig>(DEFAULT_ANALYZE_CONFIG);
+  const [startingAnalysis, setStartingAnalysis] = useState(false);
+  const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(createdProjectId ?? "");
+  const [tourOpen, setTourOpen] = useState(false);
 
   const [installUrl, setInstallUrl] = useState("");
   const [appName, setAppName] = useState("GitHub App");
@@ -205,24 +244,125 @@ export function ImportPage() {
         body: JSON.stringify(settings),
       });
 
-      await apiFetch(`/projects/${project.id}/analyze`, { method: "POST" });
-      navigate("/dashboard");
+      // Import ≠ analyze: move to the configuration step, where the first
+      // run is configured (branch/commit/scope/depth/role), optionally
+      // previewed, and only starts on an explicit click.
+      setCreatedProjectId(project.id);
+      setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: selectedBranch });
+      try {
+        if (localStorage.getItem(IMPORT_TOUR_DISMISSED_KEY) !== "1") setTourOpen(true);
+      } catch { /* storage unavailable */ }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create project");
+    } finally {
       setCreating(false);
     }
   }
 
-  return (
-    <div className="mx-auto max-w-lg">
-      <BackLink className="mb-3" />
-      <Card>
-        <CardContent className="p-4">
-          <h1 className="text-lg font-semibold text-foreground">Import a repository</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Connect a GitHub repository so OnboardBuddy can analyze it.
-          </p>
+  function dismissImportTour() {
+    setTourOpen(false);
+    try {
+      localStorage.setItem(IMPORT_TOUR_DISMISSED_KEY, "1");
+    } catch { /* storage unavailable */ }
+  }
 
+  async function handleStartAnalysis() {
+    if (!createdProjectId) return;
+    setStartingAnalysis(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${createdProjectId}/analyze`, {
+        method: "POST",
+        body: JSON.stringify(analyzeRequestBody(analyzeConfig)),
+      });
+      navigate(`/projects/${createdProjectId}`);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to start analysis");
+      setStartingAnalysis(false);
+    }
+  }
+
+  // ── Step 2: configure + explicitly start the first analysis ───────────────
+  if (createdProjectId && repo) {
+    return (
+      <>
+        <PageHeader
+          title="Configure the first analysis"
+          subtitle={`Step 2 of 2 — ${repo.full_name} is imported; nothing runs until you press Start.`}
+          actions={<BackLink />}
+        />
+        <div className="mx-auto max-w-lg">
+          <Card>
+            <CardContent className="space-y-3 p-4">
+              {(error || previewError) && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {error || previewError}
+                </div>
+              )}
+
+              <div data-tour="import-config-form">
+                <AnalyzeConfigForm
+                  projectId={createdProjectId}
+                  repoOwner={repo.owner}
+                  repoName={repo.name}
+                  installationId={selectedInstallation}
+                  defaultBranch={selectedBranch}
+                  config={analyzeConfig}
+                  onChange={(c) => {
+                    setAnalyzeConfig(c);
+                    resetPreflight();
+                  }}
+                />
+              </div>
+
+              {previewing && (
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                  Building the analysis preview — scanning files and estimating cost…
+                </div>
+              )}
+              {preview && <PreflightPreviewCard preview={preview} />}
+
+              <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${createdProjectId}`)}>
+                  Skip for now
+                </Button>
+                {!preview && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    data-tour="import-preview"
+                    onClick={() => runPreflight(analyzeRequestBody(analyzeConfig))}
+                    disabled={previewing}
+                  >
+                    {previewing ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                    Preview first
+                  </Button>
+                )}
+                <Button size="sm" data-tour="import-start" onClick={handleStartAnalysis} disabled={startingAnalysis}>
+                  {startingAnalysis ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                  Start analysis
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        {tourOpen && <AppTour steps={IMPORT_TOUR_STEPS} onDone={dismissImportTour} />}
+      </>
+    );
+  }
+
+  // ── Step 1: pick the repository (creates the project, analyzes nothing) ───
+  return (
+    <>
+      <PageHeader
+        title="Import a repository"
+        subtitle="Step 1 of 2 — connect a GitHub repository. The analysis is configured in the next step."
+        actions={<BackLink />}
+      />
+      <div className="mx-auto max-w-lg">
+        <Card>
+          <CardContent className="p-4">
           {error && (
             <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
@@ -464,11 +604,16 @@ export function ImportPage() {
               ) : (
                 <Rocket className="h-3 w-3" />
               )}
-              Start analysis
+              {creating ? "Importing…" : "Import repository"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
-    </div>
+          <p className="mt-2 text-right text-[11px] text-muted-foreground">
+            Nothing is analyzed yet — the next step configures the first run
+            (branch, commit, scope, depth) with a cost preview before anything starts.
+          </p>
+          </CardContent>
+        </Card>
+      </div>
+    </>
   );
 }

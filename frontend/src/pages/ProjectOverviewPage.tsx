@@ -4,15 +4,17 @@ import {
   BookOpen,
   CheckCircle2,
   FileText,
-  GitBranch,
   Loader2,
+  PauseCircle,
   Play,
   RefreshCw,
   RotateCcw,
+  Square,
   User,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,6 +24,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 import { pipelineProgress } from "@/lib/pipelineProgress";
+import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AnalysisRunPanel } from "@/components/AnalysisRunPanel";
 
@@ -52,10 +55,23 @@ interface AnalysisJob {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  /** Worker liveness: stamped every ~15s while the run is genuinely alive. */
+  last_heartbeat_at: string | null;
+  /** Delivery attempt (>1 = the queue retried this run). */
+  attempt: number;
+  /** Running but silent for 2+ minutes — presumed dead until reconciled. */
+  stalled: boolean;
+  /** Per-run configuration as requested (null = project default). */
+  requested_branch: string | null;
+  requested_commit: string | null;
+  requested_depth: string | null;
+  requested_role: string | null;
+  scope_path: string | null;
   file_count: number | null;
   symbol_count: number | null;
   workflow_count: number | null;
   commit_hash: string | null;
+  branch: string | null;
 }
 
 interface AnalysisStatus {
@@ -66,8 +82,22 @@ interface AnalysisStatus {
     symbol_count: number;
     workflow_count: number;
     commit_hash: string;
+    branch: string;
+    semantic_depth: string;
     created_at: string;
   } | null;
+}
+
+/** Human summary of one run's configuration for the config chips row. */
+function runConfigParts(job: AnalysisJob | undefined, defaultBranch: string): string[] {
+  if (!job) return [];
+  const parts = [
+    `branch ${job.branch ?? job.requested_branch ?? defaultBranch}`,
+    `commit ${job.commit_hash?.slice(0, 7) ?? job.requested_commit?.slice(0, 7) ?? "head"}`,
+  ];
+  if (job.scope_path) parts.push(`scope ${job.scope_path}/`);
+  if (job.requested_depth) parts.push(`${job.requested_depth} depth`);
+  return parts;
 }
 
 export function ProjectOverviewPage() {
@@ -78,6 +108,18 @@ export function ProjectOverviewPage() {
   const [rolePackages, setRolePackages] = useState<Array<{ role: string; status: string }>>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wasActiveRef = useRef(false);
+
+  // Per-user resume markers: the Continue cards deep-link to the exact
+  // section/step the user last read (falling back to the plain tabs).
+  const { items: progressItems } = useProgress(id);
+  const onboardingProgress = progressItems.find((p) => p.kind === "onboarding" && p.still_exists);
+  const tutorialProgress = progressItems.find((p) => p.kind === "tutorial" && p.still_exists);
+  const onboardingResumeLink = onboardingProgress
+    ? `/projects/${id}/onboarding?view=reader&role=${(onboardingProgress.position.role as string) ?? ""}&section=${(onboardingProgress.position.sectionType as string) ?? ""}`
+    : `/projects/${id}/onboarding`;
+  const tutorialResumeLink = tutorialProgress
+    ? `/projects/${id}/walkthrough?tutorial=${tutorialProgress.ref_id}&step=${(tutorialProgress.position.stepOrder as number) ?? 1}`
+    : `/projects/${id}/walkthrough`;
 
   useEffect(() => {
     if (!id) return;
@@ -128,11 +170,51 @@ export function ProjectOverviewPage() {
       .catch(() => setRolePackages([]));
   }, [id, project?.status]);
 
+  // Live "last worker activity" ticker while a run is active.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const job = analysisStatus?.jobs[0];
+    const active = job?.status === "queued" || job?.status === "running";
+    if (!active) return;
+    const t = window.setInterval(() => setNowTs(Date.now()), 5000);
+    return () => window.clearInterval(t);
+  }, [analysisStatus]);
+
+  const [controlBusy, setControlBusy] = useState(false);
+  const [controlError, setControlError] = useState("");
+
   if (!project) return null;
 
   const latestJob = analysisStatus?.jobs[0];
   const snap = analysisStatus?.latestSnapshot;
   const isActive = latestJob?.status === "queued" || latestJob?.status === "running";
+  const heartbeatAgoSec = latestJob?.last_heartbeat_at
+    ? Math.max(0, Math.round((nowTs - new Date(latestJob.last_heartbeat_at).getTime()) / 1000))
+    : null;
+  // The worker resumes analyze/generate jobs from their checkpoints; section
+  // regenerations and previews restart from their own buttons instead.
+  const resumable = latestJob != null &&
+    ["analyze_scope", "incremental_update", "generate_package"].includes(latestJob.job_type);
+
+  async function jobControl(action: "pause" | "stop" | "resume") {
+    if (!id || !latestJob) return;
+    setControlBusy(true);
+    setControlError("");
+    try {
+      await apiFetch(`/projects/${id}/analysis-jobs/${latestJob.id}/${action}`, { method: "POST" });
+      if (action === "resume") {
+        handleAnalysisStarted();
+      } else {
+        const data = await apiFetch(`/projects/${id}/analysis-status`) as AnalysisStatus;
+        setAnalysisStatus(data);
+        refetch();
+      }
+    } catch (err: unknown) {
+      setControlError(err instanceof Error ? err.message : "Action failed");
+    } finally {
+      setControlBusy(false);
+    }
+  }
 
   // Shared combined pipeline bar (analysis 0-70%, generation 70-100%) —
   // the dashboard project cards use the same helper, so both surfaces
@@ -163,76 +245,76 @@ export function ProjectOverviewPage() {
 
   return (
     <div>
-      {/* Breadcrumb row */}
-      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-x-auto text-xs text-muted-foreground">
-        <span>{project.repo_owner}</span>
-        <span>/</span>
-        <span className="font-medium text-foreground">{project.repo_name}</span>
-        <span className="text-border">|</span>
-        <span className="inline-flex items-center gap-1"><GitBranch className="h-3 w-3" />{project.branch}</span>
-        <span className="text-border">|</span>
-        <Badge variant="outline" className="text-[11px] capitalize">{project.developer_role}</Badge>
-      </div>
+      <PageHeader
+        title="Overview"
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-medium text-foreground">{project.repo_owner}/{project.repo_name}</span>
+            <Badge variant="outline" className="text-[10px] capitalize">{project.developer_role}</Badge>
+          </span>
+        }
+        actions={
+          canManage && (
+            <Button
+              size="sm"
+              onClick={() => setAnalyzeOpen(true)}
+              disabled={isActive || project.status === "analyzing"}
+              data-tour="analyze-button"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Analyze
+            </Button>
+          )
+        }
+      />
 
-      <div className="mb-3 flex items-start justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Overview</h1>
-          <p className="text-xs text-muted-foreground">
-            Health and analysis summary for this repository.
-          </p>
-        </div>
-        {canManage && (
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => setAnalyzeOpen(true)}
-            disabled={isActive || project.status === "analyzing"}
-            data-tour="analyze-button"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Analyze…
-          </Button>
-        )}
-      </div>
-
-      {/* Quick actions */}
+      {/* Quick actions: flat rows — icon left, text right */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-primary/10">
-              <BookOpen className="h-3.5 w-3.5 text-primary" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
+              <BookOpen className="h-4 w-4 text-primary" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">Pick up where you left off</p>
-            <Link to={`/projects/${id}/onboarding`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              Resume <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
+              <Link to={onboardingResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
+                {onboardingProgress
+                  ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
+                  : "Start reading"}
+                <ArrowRight className="h-3 w-3 shrink-0" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-blue-500/10">
-              <Play className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10">
+              <Play className="h-4 w-4 text-blue-600 dark:text-blue-400" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">Walk through key workflows</p>
-            <Link to={`/projects/${id}/walkthrough`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              Resume <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
+              <Link to={tutorialResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
+                {tutorialProgress
+                  ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
+                  : "Start a tutorial"}
+                <ArrowRight className="h-3 w-3 shrink-0" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
 
         <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="p-3">
-            <div className="mb-2 flex h-7 w-7 items-center justify-center rounded-md bg-amber-500/10">
-              <User className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+          <CardContent className="flex items-center gap-3 p-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-500/10">
+              <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
             </div>
-            <h3 className="text-[13px] font-medium text-foreground">Your role</h3>
-            <p className="mt-0.5 text-xs capitalize text-muted-foreground">{project.developer_role}</p>
-            <Link to={`/projects/${id}/team`} className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-              View team <ArrowRight className="h-3 w-3" />
-            </Link>
+            <div className="min-w-0">
+              <h3 className="text-[13px] font-medium capitalize text-foreground">{project.developer_role} role</h3>
+              <Link to={`/projects/${id}/team`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
+                View team <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -242,14 +324,51 @@ export function ProjectOverviewPage() {
         <Card>
           <CardContent className="p-3">
             <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-[13px] font-medium text-foreground">Analysis status</h3>
-              {latestJob?.status === "failed" && canManage && (
-                <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
-                  <RotateCcw className="mr-1 h-3 w-3" />
-                  Retry
-                </Button>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                <h3 className="text-[13px] font-medium text-foreground">Analysis status</h3>
+                {runConfigParts(latestJob, project.branch).map((part) => (
+                  <Badge key={part} variant="outline" className="font-mono text-[10px]">{part}</Badge>
+                ))}
+              </div>
+              {canManage && latestJob && (
+                <div className="flex items-center gap-1.5">
+                  {isActive && (
+                    <>
+                      <Button variant="outline" size="xs" onClick={() => jobControl("pause")} disabled={controlBusy} title="Worker pauses at the next step — completed work is checkpointed">
+                        <PauseCircle className="mr-1 h-3 w-3" />
+                        Pause
+                      </Button>
+                      <Button variant="outline" size="xs" className="text-destructive hover:text-destructive" onClick={() => jobControl("stop")} disabled={controlBusy} title="Stops the run; completed phases stay cached">
+                        <Square className="mr-1 h-3 w-3" />
+                        Stop
+                      </Button>
+                    </>
+                  )}
+                  {latestJob.status === "paused" && resumable && (
+                    <Button variant="outline" size="xs" onClick={() => jobControl("resume")} disabled={controlBusy}>
+                      <Play className="mr-1 h-3 w-3" />
+                      Resume
+                    </Button>
+                  )}
+                  {latestJob.status === "failed" && resumable && (
+                    <Button variant="outline" size="xs" onClick={() => jobControl("resume")} disabled={controlBusy} title="Re-runs this job — checkpointed phases and cached AI work are skipped">
+                      <RotateCcw className="mr-1 h-3 w-3" />
+                      Resume run
+                    </Button>
+                  )}
+                  {latestJob.status === "failed" && (
+                    <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
+                      <RefreshCw className="mr-1 h-3 w-3" />
+                      New run…
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
+
+            {controlError && (
+              <p className="mb-1.5 text-xs text-destructive">{controlError}</p>
+            )}
 
             {/* Live step display */}
             <div className="mb-1.5 flex items-center justify-between text-xs">
@@ -278,14 +397,35 @@ export function ProjectOverviewPage() {
                         : "This repository hasn't been analyzed yet."}
                 </TooltipContent>
               </Tooltip>
-              <Badge
-                variant={latestJob?.status === "complete" ? "default" : latestJob?.status === "failed" ? "destructive" : "secondary"}
-                className="text-[11px]"
-              >
-                {latestJob?.status ?? project.status}
-              </Badge>
+              <span className="flex items-center gap-1.5">
+                {latestJob && latestJob.attempt > 1 && (
+                  <Badge variant="outline" className="text-[10px] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
+                    attempt #{latestJob.attempt}
+                  </Badge>
+                )}
+                {latestJob?.stalled && (
+                  <Badge variant="destructive" className="text-[10px]" title="Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it">
+                    stalled
+                  </Badge>
+                )}
+                <Badge
+                  variant={latestJob?.status === "complete" ? "default" : latestJob?.status === "failed" ? "destructive" : "secondary"}
+                  className="text-[11px]"
+                >
+                  {latestJob?.status ?? project.status}
+                </Badge>
+              </span>
             </div>
             <Progress value={pipelinePct} className="mb-2 h-1.5" />
+
+            {/* Worker liveness: the honest "is anything actually happening?" signal. */}
+            {isActive && (
+              <p className={`mb-2 text-[11px] tabular-nums ${latestJob?.stalled ? "text-destructive" : "text-muted-foreground"}`}>
+                {heartbeatAgoSec === null
+                  ? "Waiting for the worker's first signal…"
+                  : `Last worker activity ${heartbeatAgoSec < 5 ? "just now" : `${heartbeatAgoSec}s ago`}`}
+              </p>
+            )}
 
             {/* Error message */}
             {latestJob?.status === "failed" && latestJob.error_message && (
@@ -373,7 +513,14 @@ export function ProjectOverviewPage() {
 
         <Card>
           <CardContent className="p-3">
-            <h3 className="mb-2 text-[13px] font-medium text-foreground">Role packages</h3>
+            <h3 className="mb-1 text-[13px] font-medium text-foreground">Role packages</h3>
+            {/* One package per role, all sharing the analyzed snapshot's
+                config — the shared repo config lives in the header line. */}
+            {snap && (
+              <p className="mb-2 font-mono text-[10px] text-muted-foreground">
+                {snap.branch} @ {snap.commit_hash.slice(0, 7)} · {snap.semantic_depth}
+              </p>
+            )}
             <div className="space-y-1.5">
               {rolesList.map((role) => {
                 const pkg = rolePackages.find((p) => p.role === role.key);
@@ -405,14 +552,12 @@ export function ProjectOverviewPage() {
 
       <Separator />
 
-      {id && (
-        <AnalyzeDialog
-          projectId={id}
-          open={analyzeOpen}
-          onOpenChange={setAnalyzeOpen}
-          onStarted={handleAnalysisStarted}
-        />
-      )}
+      <AnalyzeDialog
+        project={project}
+        open={analyzeOpen}
+        onOpenChange={setAnalyzeOpen}
+        onStarted={handleAnalysisStarted}
+      />
     </div>
   );
 }

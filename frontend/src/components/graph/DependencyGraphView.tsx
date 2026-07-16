@@ -16,6 +16,7 @@ import { GraphLegend } from "@/components/graph/GraphLegend";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import type { PositionedNode } from "@/lib/graphLayout";
+import { inferNodeType } from "@/lib/graphNodeType";
 import type { GraphEdge } from "@/types/graph";
 
 // Wraps ModuleNode with an entry-point marker rather than editing
@@ -44,7 +45,6 @@ interface DependencyGraphViewProps {
   entryPoints: string[];
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
-  edgeFilter: "imports" | "exports";
 }
 
 export function DependencyGraphView({
@@ -53,10 +53,15 @@ export function DependencyGraphView({
   entryPoints,
   selectedNodeId,
   onSelectNode,
-  edgeFilter,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
+
+  // Legend shows only kinds that actually occur on this canvas.
+  const presentKinds = useMemo(
+    () => [...new Set(nodes.map((n) => inferNodeType(n.id, n.metadata.exportedSymbols).type))],
+    [nodes],
+  );
 
   const neighborIds = useMemo(() => {
     if (!selectedNodeId) return null;
@@ -67,13 +72,6 @@ export function DependencyGraphView({
     }
     return neighbors;
   }, [edges, selectedNodeId]);
-
-  const visibleEdges = useMemo(() => {
-    if (edgeFilter === "exports") {
-      return edges.filter((e) => e.target === selectedNodeId || e.source === selectedNodeId || !selectedNodeId);
-    }
-    return edges;
-  }, [edges, edgeFilter, selectedNodeId]);
 
   const flowNodes: Node<ModuleNodeData>[] = useMemo(
     () =>
@@ -87,6 +85,7 @@ export function DependencyGraphView({
           filePath: node.id,
           exportedSymbols: node.metadata.exportedSymbols,
           importCount: node.metadata.importCount,
+          externalImportCount: node.metadata.externalImportCount ?? 0,
           dependentCount: node.metadata.dependentCount,
           symbolCount: node.metadata.exportedSymbols.length,
           isEntryPoint: entryPointSet.has(node.id),
@@ -99,7 +98,7 @@ export function DependencyGraphView({
 
   const flowEdges: Edge[] = useMemo(
     () =>
-      visibleEdges.map((edge) => {
+      edges.map((edge) => {
         const isActive =
           neighborIds !== null &&
           (edge.source === selectedNodeId || edge.target === selectedNodeId);
@@ -107,7 +106,7 @@ export function DependencyGraphView({
         let label: string | undefined;
         if (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId)) {
           if (edge.kind === "imports" || edge.kind === "dependency") {
-            label = edge.source === selectedNodeId ? "IMPORTS" : "USED BY";
+            label = edge.source === selectedNodeId ? "IMPORTS" : "IMPORTED BY";
           } else {
             label = edge.kind.toUpperCase();
           }
@@ -130,7 +129,7 @@ export function DependencyGraphView({
           },
         };
       }),
-    [visibleEdges, neighborIds, selectedNodeId, isDark],
+    [edges, neighborIds, selectedNodeId, isDark],
   );
 
   return (
@@ -162,7 +161,7 @@ export function DependencyGraphView({
           maskColor={isDark ? "oklch(0.17 0 0 / 0.7)" : "oklch(0.95 0 0 / 0.7)"}
         />
         <Panel position="top-left">
-          <GraphLegend />
+          <GraphLegend presentKinds={presentKinds} />
         </Panel>
         <Panel position="top-center">
           <GraphFirstVisitHint />

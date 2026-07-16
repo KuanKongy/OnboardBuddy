@@ -2,8 +2,11 @@ import pg from "pg";
 
 export const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  // Semantic passes fan out (mapLimit) — parallel record writes need headroom.
-  max: Number(process.env.PG_POOL_MAX ?? 20),
+  // Supabase's session-mode pooler caps the whole user at pool_size (15 by
+  // default) and BOTH processes (API + worker) hold clients from that cap, so
+  // the per-process default must leave headroom: set PG_POOL_MAX per service
+  // (recommended: API=4, worker=8 — see doc/DEVOPS.md "Connection pooling").
+  max: Number(process.env.PG_POOL_MAX ?? 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,
 });

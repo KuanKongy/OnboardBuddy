@@ -8,7 +8,11 @@ export interface ModuleNodeData {
   kind: string;
   filePath: string;
   exportedSymbols: string[];
+  /** Distinct internal files this file imports (matches drawn edges). */
   importCount: number;
+  /** Distinct third-party imports — not drawn as edges. */
+  externalImportCount?: number;
+  /** Distinct internal files importing this file (matches drawn edges). */
   dependentCount: number;
   symbolCount: number;
   isEntryPoint: boolean;
@@ -61,12 +65,21 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </div>
       )} */}
 
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <span>{data.exportedSymbols.length} exports</span>
-        <span className="text-border">·</span>
+      <div
+        className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+        title={`Imports ${data.importCount} project file${data.importCount === 1 ? "" : "s"}${
+          data.externalImportCount ? ` (+${data.externalImportCount} external)` : ""
+        }; imported by ${data.dependentCount}`}
+      >
         <span>{data.importCount} imports</span>
         <span className="text-border">·</span>
-        <span>{data.dependentCount} used by</span>
+        <span>{data.dependentCount} imported by</span>
+        {data.externalImportCount ? (
+          <>
+            <span className="text-border">·</span>
+            <span>{data.externalImportCount} external</span>
+          </>
+        ) : null}
       </div>
     </div>
   );

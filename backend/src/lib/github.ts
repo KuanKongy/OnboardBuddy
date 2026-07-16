@@ -25,6 +25,14 @@ export interface Branch {
   commit: { sha: string };
 }
 
+export interface Commit {
+  sha: string;
+  shortSha: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
 export interface GitHubUser {
   id: number;
   login: string;
@@ -286,6 +294,64 @@ export async function listBranches(
   }
 
   return (await res.json()) as Branch[];
+}
+
+/** Repo metadata — used to default a new project's branch to the repo default. */
+export async function getRepo(
+  token: string,
+  owner: string,
+  repo: string,
+): Promise<Repo> {
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API error (${res.status}): ${body}`);
+  }
+
+  return (await res.json()) as Repo;
+}
+
+/** Recent commits on a branch, newest first — feeds the analyze commit picker. */
+export async function listCommits(
+  token: string,
+  owner: string,
+  repo: string,
+  branch: string,
+  perPage = 20,
+): Promise<Commit[]> {
+  const params = new URLSearchParams({ sha: branch, per_page: String(perPage) });
+  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/commits?${params}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GitHub API error (${res.status}): ${body}`);
+  }
+
+  const raw = (await res.json()) as Array<{
+    sha: string;
+    commit: { message: string; author?: { name?: string; date?: string } | null };
+    author?: { login?: string } | null;
+  }>;
+  return raw.map((c) => ({
+    sha: c.sha,
+    shortSha: c.sha.slice(0, 7),
+    message: c.commit.message.split("\n")[0] ?? "",
+    author: c.author?.login ?? c.commit.author?.name ?? "unknown",
+    date: c.commit.author?.date ?? "",
+  }));
 }
 
 export async function getCommitSha(

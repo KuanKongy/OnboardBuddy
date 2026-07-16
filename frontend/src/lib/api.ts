@@ -2,6 +2,20 @@ import { supabase } from "./supabase";
 
 const API_URL = import.meta.env.VITE_API_URL;
 
+/** Error carrying the HTTP status + response body so callers can branch
+ * on conflicts (e.g. 409 "analysis already running" with active_job_id). */
+export class ApiError extends Error {
+  status: number;
+  body: Record<string, unknown>;
+
+  constructor(message: string, status: number, body: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function getAccessToken(): Promise<string | null> {
   const {
     data: { session },
@@ -33,7 +47,7 @@ export async function apiFetch(
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `API error ${res.status}`);
+    throw new ApiError(body.error || `API error ${res.status}`, res.status, body);
   }
   return res.json();
 }

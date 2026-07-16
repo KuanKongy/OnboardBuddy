@@ -1,6 +1,7 @@
 import { Loader2, Mail, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,32 +53,26 @@ export function ProjectListPage() {
 
   return (
     <div>
-      <div className="mb-0.5 text-xs text-muted-foreground">
-        Overview &gt; Project list
-      </div>
-
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Project list</h1>
-          <p className="text-xs text-muted-foreground">
-            Every project you have access to, in one searchable list.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/invitations">
-              <Mail className="h-3.5 w-3.5" />
-              Join Project
-            </Link>
-          </Button>
-          <Button size="sm" asChild>
-            <Link to="/import">
-              <Plus className="h-3.5 w-3.5" />
-              Add Project
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Project list"
+        subtitle="Every project you have access to, in one searchable list."
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/invitations">
+                <Mail className="h-3.5 w-3.5" />
+                Join Project
+              </Link>
+            </Button>
+            <Button size="sm" asChild>
+              <Link to="/import">
+                <Plus className="h-3.5 w-3.5" />
+                Add Project
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="relative flex-1">
@@ -135,12 +130,31 @@ export function ProjectListPage() {
       )}
 
       {!loading && !error && projects.length > 0 && (
-        <>
-          {filteredProjects.length === 0 && (
-            <div className="rounded-lg border border-dashed border-border py-10 text-center text-[13px] text-muted-foreground">
-              No projects match your search.
+        filteredProjects.length === 0 ? (
+          // One combined empty state: message + actions in a single box, so a
+          // filter with no matches never shows a lonely "Add repository" tile
+          // next to a separate "no matches" box.
+          <div className="rounded-lg border border-dashed border-border py-10 text-center">
+            <p className="text-[13px] text-muted-foreground">
+              No projects match your {search ? "search" : "filter"}.
+            </p>
+            <div className="mt-3 flex items-center justify-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setSearch(""); setFilter("all"); }}
+              >
+                Clear filters
+              </Button>
+              <Button size="sm" asChild>
+                <Link to="/import">
+                  <Plus className="h-3.5 w-3.5" />
+                  Add New Repository
+                </Link>
+              </Button>
             </div>
-          )}
+          </div>
+        ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {filteredProjects.map((project) => (
               <ProjectCard
@@ -167,7 +181,7 @@ export function ProjectListPage() {
               </p>
             </Link>
           </div>
-        </>
+        )
       )}
     </div>
   );

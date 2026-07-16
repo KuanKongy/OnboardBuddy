@@ -2,7 +2,7 @@ import { Component, type ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router-dom";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Sidebar } from "@/components/Sidebar";
-import { SidebarProvider, SidebarToggle } from "@/components/SidebarShell";
+import { SidebarProvider } from "@/components/SidebarShell";
 import { ProjectLayout } from "@/components/ProjectLayout";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { AccountSettingsPage } from "@/pages/AccountSettingsPage";
@@ -61,9 +61,6 @@ function AuthenticatedLayout() {
       <div className="flex h-screen">
         <Sidebar />
         <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
-          <div className="mb-2 lg:hidden">
-            <SidebarToggle />
-          </div>
           <Outlet />
         </main>
       </div>

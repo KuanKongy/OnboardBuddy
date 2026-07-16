@@ -1,8 +1,10 @@
 /**
- * Capability extraction (doc/Pipeline.md "capability-extraction-v1"):
+ * Capability extraction (doc/Pipeline.md "capability-extraction"; prompt v2):
  * groups workflows/modules into business capabilities ("repo analysis",
  * "team management"), stored as first-class capabilities rows with member
- * links plus a capability-level semantic record each.
+ * links plus a capability-level semantic record each. v2 adds the feature-map
+ * hub fields: user_value, per-member reasons, and grounded where_to_start
+ * entry points picked from the deterministic candidate ranking.
  */
 
 import { query } from '../../lib/db.js';
@@ -16,14 +18,33 @@ export interface CapabilityPassResult {
   cacheHit: boolean;
 }
 
+interface MemberRef {
+  key: string;
+  reason: string;
+}
+
 interface RawCapability {
   name: string;
   description: string;
   user_value: string;
-  involved_workflow_keys: string[];
-  involved_module_keys: string[];
+  involved_workflows: MemberRef[];
+  involved_modules: MemberRef[];
+  where_to_start: MemberRef[];
   confidence: RecordConfidence;
 }
+
+const MEMBER_REF_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['key', 'reason'],
+    properties: {
+      key: { type: 'string' },
+      reason: { type: 'string' },
+    },
+  },
+};
 
 const CAPABILITIES_SCHEMA = {
   type: 'object',
@@ -35,13 +56,14 @@ const CAPABILITIES_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['name', 'description', 'user_value', 'involved_workflow_keys', 'involved_module_keys', 'confidence'],
+        required: ['name', 'description', 'user_value', 'involved_workflows', 'involved_modules', 'where_to_start', 'confidence'],
         properties: {
           name: { type: 'string' },
           description: { type: 'string' },
           user_value: { type: 'string' },
-          involved_workflow_keys: { type: 'array', items: { type: 'string' } },
-          involved_module_keys: { type: 'array', items: { type: 'string' } },
+          involved_workflows: MEMBER_REF_SCHEMA,
+          involved_modules: MEMBER_REF_SCHEMA,
+          where_to_start: MEMBER_REF_SCHEMA,
           confidence: { enum: ['high', 'medium', 'low'] },
         },
       },
@@ -62,11 +84,25 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
     }
   }
 
+  // Grounded "start here" candidates: top-ranked files/symbols from the
+  // deterministic candidate ranking (never let the model invent paths).
+  const startCandidates = ctx.rankings
+    .filter((r) => r.targetType === 'file' || r.targetType === 'symbol')
+    .slice(0, 25);
+
   const prompt = [
-    'Extract the business capabilities of this system: user-meaningful groups of functionality (e.g. "repo analysis", "team management"). Group the workflows and modules below into 2-8 capabilities. Use involved_workflow_keys / involved_module_keys with the exact stable keys given.',
+    'Extract the business capabilities of this system: user-meaningful groups of functionality (e.g. "repo analysis", "team management"). Group the workflows and modules below into 2-8 capabilities. This feeds an onboarding hub a new developer uses to decide what to read first, so write for someone who has never seen the codebase.',
+    [
+      'For each capability produce:',
+      '- description: 1-2 sentences in plain product language — what a user of the system gets from it. No file names, no jargon.',
+      '- user_value: one sentence on when a developer would need to touch this capability (what kind of task or bug leads here).',
+      '- involved_workflows / involved_modules: the exact stable keys given below, each with a one-line reason saying what that member does FOR this capability.',
+      '- where_to_start: 1-3 entries chosen ONLY from the "Start-here candidates" list, each with a one-line reason why reading it first pays off.',
+    ].join('\n'),
     OUTPUT_RULES,
     `Workflows:\n${ctx.workflows.map((w) => `- ${w.stableKey}: ${w.title} — ${w.purpose}`).join('\n') || '(none traced)'}`,
     `Modules:\n${moduleRecords.map((m) => `- ${m.stableKey}: ${m.summary.slice(0, 200)}`).join('\n') || '(none)'}`,
+    `Start-here candidates (files/symbols, most critical first):\n${startCandidates.map((r) => `- ${r.stableKey}`).join('\n') || '(none)'}`,
     `Aggregated business concepts: ${[...concepts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([c, n]) => `${c} (${n})`).join(', ') || '(none)'}`,
   ].join('\n\n');
 
@@ -133,43 +169,50 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
   await mapToSnapshot(ctx.snapshotId, aggregate, null);
 
   // Persist snapshot-scoped capability rows + members.
+  const validStartKeys = new Set(startCandidates.map((r) => r.stableKey));
   let written = 0;
   for (const cap of rawCapabilities) {
     const stableKey = `capability:${slugify(cap.name)}`;
+    // Honest links only: drop where_to_start entries the model invented.
+    const whereToStart = (cap.where_to_start ?? [])
+      .filter((s) => validStartKeys.has(s.key))
+      .slice(0, 3)
+      .map((s) => ({ stable_key: s.key, reason: s.reason }));
     const capResult = await query(
       `INSERT INTO capabilities (snapshot_id, stable_key, name, description, record_id, confidence, metadata)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (snapshot_id, stable_key) DO UPDATE
          SET name = EXCLUDED.name, description = EXCLUDED.description,
-             record_id = EXCLUDED.record_id, confidence = EXCLUDED.confidence
+             record_id = EXCLUDED.record_id, confidence = EXCLUDED.confidence,
+             metadata = EXCLUDED.metadata
        RETURNING id`,
       [ctx.snapshotId, stableKey, cap.name, cap.description, aggregate.id, cap.confidence,
-       JSON.stringify({ userValue: cap.user_value })],
+       JSON.stringify({ user_value: cap.user_value, where_to_start: whereToStart })],
     );
     const capabilityId = (capResult.rows[0] as { id: string }).id;
-    for (const wfKey of cap.involved_workflow_keys) {
-      const workflowId = ctx.workflowIdMap.get(wfKey);
+    for (const wf of cap.involved_workflows ?? []) {
+      const workflowId = ctx.workflowIdMap.get(wf.key);
       if (!workflowId) continue;
       await query(
         `INSERT INTO capability_members (capability_id, member_type, member_id, stable_key, membership_reason)
-         VALUES ($1, 'workflow', $2, $3, 'named by capability extraction')
+         VALUES ($1, 'workflow', $2, $3, $4)
          ON CONFLICT DO NOTHING`,
-        [capabilityId, workflowId, wfKey],
+        [capabilityId, workflowId, wf.key, wf.reason || 'named by capability extraction'],
       );
     }
-    for (const moduleKey of cap.involved_module_keys) {
-      if (!synthesis.moduleRecords.has(moduleKey)) continue;
+    for (const mod of cap.involved_modules ?? []) {
+      if (!synthesis.moduleRecords.has(mod.key)) continue;
       const clusterRow = await query(
         `SELECT id FROM architecture_clusters WHERE snapshot_id = $1 AND stable_key = $2`,
-        [ctx.snapshotId, moduleKey],
+        [ctx.snapshotId, mod.key],
       );
       const clusterId = (clusterRow.rows[0] as { id: string } | undefined)?.id;
       if (!clusterId) continue;
       await query(
         `INSERT INTO capability_members (capability_id, member_type, member_id, stable_key, membership_reason)
-         VALUES ($1, 'cluster', $2, $3, 'named by capability extraction')
+         VALUES ($1, 'cluster', $2, $3, $4)
          ON CONFLICT DO NOTHING`,
-        [capabilityId, clusterId, moduleKey],
+        [capabilityId, clusterId, mod.key, mod.reason || 'named by capability extraction'],
       );
     }
     written += 1;

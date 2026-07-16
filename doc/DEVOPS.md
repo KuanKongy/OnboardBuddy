@@ -110,7 +110,34 @@ so the `openai` npm package works directly.
 |---|---|---|
 | `OPENROUTER_API_KEY` | `backend/.env` | API key from openrouter.ai |
 | `OPENROUTER_BASE_URL` | `backend/.env` | `https://openrouter.ai/api/v1` |
-| `OPENROUTER_MODEL` | `backend/.env` | Model identifier (e.g. `openai/gpt-4o-mini`) |
+| `OPENROUTER_MODEL` | `backend/.env` | Legacy alias for the cheap-tier model |
+
+#### LLM models & cost — where to change the models
+
+The pipeline uses two chat tiers (**cheap** for bulk symbol/file work and
+claim verification, **strong** for synthesis, ranking, tutorials and the
+onboarding sections) plus an **embedding** tier. **Both chat tiers default to
+`openai/gpt-4o-mini`** — a full standard-depth analysis of a small/medium
+repo costs cents. Change them in either of two places:
+
+1. **Server-wide (env, `backend/.env`)** — any OpenRouter model id:
+
+   ```bash
+   OPENROUTER_MODEL_CHEAP=openai/gpt-4o-mini
+   OPENROUTER_MODEL_STRONG=openai/gpt-4o-mini    # e.g. anthropic/claude-sonnet-4.5 for premium quality (~20x price)
+   EMBEDDINGS_MODEL=text-embedding-3-small
+   ```
+
+2. **Per project (DB/API)** — `project_settings.model_tier_overrides`, e.g.
+   `{"strong": ["anthropic/claude-sonnet-4.5", "openai/gpt-4o"]}` via
+   `PUT /api/projects/:id/settings` (later list entries are degrade
+   fallbacks). Failure behavior per tier lives in
+   `project_settings.model_failure_behavior`.
+
+Defaults live in `backend/src/worker/ai/modelTiers.ts`
+(`defaultTierModels()`); the coarse per-tier price table used for the cost
+UI is in the same file — update the `strong` row if you point that tier at
+a premium model.
 
 ### 6. OpenAI Embeddings (for RAG)
 
@@ -139,6 +166,33 @@ Upstash Redis cost:
 **Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
 to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
 plan ($10/month) for unlimited commands.
+
+### 8. Connection pooling (Supabase session mode)
+
+`DATABASE_URL` points at Supabase's Supavisor pooler in **session mode**
+(port 5432). In session mode every client connection pins a server connection
+for its whole lifetime, and the pooler caps the whole database user at
+`pool_size` connections (**15** by default) — shared by every process.
+
+OnboardBuddy runs **two** Node processes (API + worker), each with its own
+`pg.Pool` sized by `PG_POOL_MAX` (default 10, `backend/src/lib/db.ts`). If the
+two pools together exceed the pooler cap, analysis runs fail with
+`(EMAXCONNSESSION) max clients reached in session mode`.
+
+Recommended settings (set per service, e.g. in `docker-compose.yml` or the
+service's environment):
+
+| Process | `PG_POOL_MAX` | Why |
+|---|---|---|
+| API | `4` | Request handlers hold clients briefly; a few short transactions |
+| Worker | `8` | Semantic passes fan out DB lookups (`mapLimit ≤ 8`) |
+
+4 + 8 = 12 stays under the 15-connection cap with headroom for Supabase's own
+tooling. If you raise `pool_size` in Supabase (Settings → Database → Connection
+pooling), you can raise these proportionally. Alternative: point `DATABASE_URL`
+at the **transaction-mode** pooler (port 6543) — but prepared statements and
+session state don't survive it, so session mode + right-sized pools is the
+supported setup.
 
 ---
 
@@ -353,16 +407,17 @@ creation is needed.
 
 ### Schema overview
 
-The database has the following table groups:
+The database has the following table groups (see
+`backend/supabase/migrations/001_initial_schema.sql` for the full definitions):
 
-- **Users & Auth:** `users`, `github_connections`
-- **Projects:** `projects`, `project_members`, `project_invitations`, `project_settings`
-- **Analysis:** `analysis_snapshots`, `analysis_jobs`
-- **Code Evidence Graph:** `graph_nodes`, `graph_edges`
-- **Workflows:** `workflows`, `workflow_steps`, `workflow_scores`
-- **Onboarding Packages:** `onboarding_packages`, `package_sections`, `source_receipts`
-- **Documentation Health:** `doc_links`, `stale_flags`
-- **Role Paths:** `role_paths`
+- **Users & Auth:** `users`, `github_connections`, `github_installations`
+- **Projects:** `projects` (identified by `user + repo`; branch is per-run), `project_members`, `project_invitations`, `project_settings`, `project_llm_keys`, `ranking_weight_configs`
+- **Analysis:** `analysis_scopes`, `analysis_snapshots`, `snapshot_phases`, `analysis_jobs`
+- **Code Evidence Graph:** `repository_files`, `graph_nodes`, `graph_edges`, `entrypoints`, `side_effects`
+- **Workflows & Ranking:** `workflows`, `workflow_steps`, `criticality_scores`, `architecture_clusters` (+ `_members`, `_edges`)
+- **Semantic Layer:** `semantic_records`, `snapshot_semantic_records`, `capabilities`, `capability_members`, `embeddings`
+- **Onboarding Packages:** `onboarding_packages`, `ai_generation_runs`, `package_sections`, `tutorials`, `tutorial_steps`, `source_receipts`, `stale_flags`
+- **Per-user Progress:** `user_progress` (resume onboarding/tutorial position)
 
 ---
 

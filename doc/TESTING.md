@@ -12,7 +12,7 @@ docker compose -f docker-compose.test.yml run --rm test   # needs only Docker
 npm install && npm test
 ```
 
-Both run the exact same suites. **Expected: backend `302 passing`, frontend `21 passed`.** Non-zero exit code on any failure. No `.env`, no cloud services, no running stack — the suites are fully self-contained (see "Test layers" below).
+Both run the exact same suites. **Expected: backend `321 passing`, frontend `25 passed`.** Non-zero exit code on any failure. No `.env`, no cloud services, no running stack — the suites are fully self-contained (see "Test layers" below).
 
 Supporting commands (local, optional):
 

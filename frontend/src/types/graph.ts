@@ -45,7 +45,11 @@ export interface FileAnalysis {
 
 export interface GraphNodeMetadata {
   exportedSymbols: string[];
+  /** Distinct internal files this file imports (deduped edges). */
   importCount: number;
+  /** Distinct third-party/boundary imports (not drawn as edges). */
+  externalImportCount?: number;
+  /** Distinct internal files importing this file (deduped edges). */
   dependentCount: number;
 }
 
@@ -61,6 +65,8 @@ export interface GraphEdge {
   source: string;
   target: string;
   kind: string;
+  /** Edge strength (repeat import statements); drives the "strongest edges" cap. */
+  weight?: number;
 }
 
 export interface DependencyGraph {

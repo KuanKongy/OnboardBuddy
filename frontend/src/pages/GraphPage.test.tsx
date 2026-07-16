@@ -89,7 +89,7 @@ describe("GraphPage", () => {
     expect(screen.getByText("strings")).toBeInTheDocument();
     expect(screen.getByText("logger")).toBeInTheDocument();
     expect(screen.getByText("userService")).toBeInTheDocument();
-    expect(screen.getByText("4 / 4 modules")).toBeInTheDocument();
+    expect(screen.getByText("4 / 4 files")).toBeInTheDocument();
   });
 
   it("filters nodes by search and updates the count", async () => {
@@ -103,7 +103,7 @@ describe("GraphPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("1 / 4 modules")).toBeInTheDocument();
+      expect(screen.getByText("1 / 4 files")).toBeInTheDocument();
     });
     expect(screen.getByText("logger")).toBeInTheDocument();
     expect(screen.queryByText("strings")).not.toBeInTheDocument();

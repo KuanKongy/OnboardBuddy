@@ -70,9 +70,11 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
   }
 
   // LLM targets: resolve cache hits (parallel — one round trip each against
-  // remote Postgres), then batch the misses per file.
+  // remote Postgres), then batch the misses per file. Fan-out stays below the
+  // per-process pg pool cap (PG_POOL_MAX, default 10) so cache lookups can't
+  // exhaust the session-mode pooler.
   const misses: SymbolTarget[] = [];
-  const lookups = await mapLimit(llmKeys, 12, async (key) => {
+  const lookups = await mapLimit(llmKeys, 8, async (key) => {
     const node = nodesByKey.get(key);
     if (!node) return null;
     const evidenceHash = evidenceHashForSymbol(node, ctx.graph, ctx.sideEffects);

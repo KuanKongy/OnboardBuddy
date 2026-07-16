@@ -14,7 +14,7 @@ import type { DeveloperRole } from '../semantic/projections.js';
 import type { ProjectedTarget } from './roleProjection.js';
 import { workflowDiagramKind, workflowSequenceDiagram, workflowDataflowDiagram, type DiagramStep } from './diagrams.js';
 
-export const TUTORIAL_PROMPT_VERSION = 'tutorial-v1';
+export const TUTORIAL_PROMPT_VERSION = 'tutorial-v2';
 const DEFAULT_MAX_TUTORIALS = 4;
 const SNIPPET_CAP = 1_200;
 
@@ -61,8 +61,9 @@ interface StepRow {
 const TUTORIAL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['title', 'summary', 'confidence', 'steps'],
+  required: ['goal', 'title', 'summary', 'confidence', 'steps'],
   properties: {
+    goal: { type: 'string' },
     title: { type: 'string' },
     summary: { type: 'string' },
     confidence: { enum: ['high', 'medium', 'low'] },
@@ -141,12 +142,19 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
   ].filter(Boolean).join('\n'));
 
   const prompt = [
-    `Write a request-flow tutorial for the workflow "${workflow.title}" (${workflow.trigger_type}; purpose: ${workflow.purpose}). For EACH traced step below, explain: what happens, why it matters, and what to look at in the code. Explanations must stay grounded in the step's snippet and deterministic description (its receipt) — never invent behavior. Also produce a title and 2-3 sentence summary.`,
-    'Use only the provided evidence; say "unknown" rather than guessing.',
+    `You are writing a code-reading tutorial for a developer new to this repo. The tutorial walks the workflow "${workflow.title}" (${workflow.trigger_type}; purpose: ${workflow.purpose}) step by step, with the reader looking at each step's code alongside your explanation.`,
+    [
+      'Produce:',
+      '- goal: ONE sentence of the form "After this tutorial, you can …" naming the concrete skill the reader gains (trace / change / debug this specific flow).',
+      '- title: imperative and specific to this flow, at most 8 words (e.g. "Trace a login request to the database").',
+      '- summary: 1-2 plain-language sentences on what the flow does end to end.',
+      '- steps: for EACH traced step, an explanation of AT MOST 3 short sentences that (1) names identifiers actually visible in the snippet (function, route, table, queue), (2) says what this step contributes to the flow — why it sits between its neighbors, and (3) if non-obvious, points at the one line or branch worth reading closely.',
+    ].join('\n'),
+    'Hard rules: the reader sees the code next to your text, so never restate it line by line. No filler ("this is important", "as we can see", "simply", "essentially"). No sentence that could apply to any codebase. Stay grounded in the snippet and deterministic description (the receipt); write "unknown" rather than guessing.',
     stepSections.join('\n\n'),
   ].join('\n\n');
 
-  const response = await params.ai.call<{ title: string; summary: string; confidence: 'high' | 'medium' | 'low'; steps: Array<{ step_order: number; explanation: string }> }>({
+  const response = await params.ai.call<{ goal: string; title: string; summary: string; confidence: 'high' | 'medium' | 'low'; steps: Array<{ step_order: number; explanation: string }> }>({
     tier: 'strong',
     targetType: 'tutorial',
     packageId: params.packageId,
@@ -189,7 +197,7 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
     [params.snapshotId, params.packageId, workflow.id, response.runId, stableKey,
      output.title || workflow.title, output.summary ?? '', diagramKind, mermaid,
      confidence, JSON.stringify(unknowns),
-     JSON.stringify({ prompt_version: TUTORIAL_PROMPT_VERSION, workflow: workflow.stable_key })],
+     JSON.stringify({ prompt_version: TUTORIAL_PROMPT_VERSION, workflow: workflow.stable_key, goal: output.goal ?? '' })],
   )).rows[0] as { id: string }).id;
 
   for (const step of steps) {

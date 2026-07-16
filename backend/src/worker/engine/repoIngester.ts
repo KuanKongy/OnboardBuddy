@@ -225,8 +225,16 @@ export async function scanRepositoryFiles(
         const content = await fs.promises.readFile(absPath, 'utf8');
         hash = sha256(content);
         lineCount = content.split('\n').length;
+      } else if (sizeBytes <= MAX_HASH_FILE_BYTES) {
+        // Binary files hash their bytes — the old `rel:size:mtime` formula
+        // used the zipball EXTRACTION time, so every PDF "changed" on every
+        // run and polluted incremental diffs with false churn.
+        const bytes = await fs.promises.readFile(absPath);
+        hash = sha256(bytes.toString('latin1'));
       } else {
-        hash = sha256(`${rel}:${sizeBytes}:${stat.mtimeMs}`);
+        // Oversized: never include mtime (extraction time) — path+size is
+        // stable across runs; a same-size content swap is the accepted miss.
+        hash = sha256(`${rel}:${sizeBytes}`);
       }
     } catch {
       continue;
