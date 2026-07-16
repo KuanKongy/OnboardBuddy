@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink, Sparkles } from "lucide-react";
+import { Check, Copy, ExternalLink, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,8 @@ interface NodeInfoPanelProps {
   node: GraphNode;
   detail?: NodeDetail | null;
   githubRepo?: GithubRepoRef;
+  /** Deselects the node (also reachable via Esc / clicking empty canvas). */
+  onClose?: () => void;
 }
 
 function buildGithubBlobUrl(repo: GithubRepoRef, filePath: string): string {
@@ -54,7 +56,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * (doc/Pipeline.md): one-line summary, signature/params/returns, a real
  * call-site example, then importance and receipts.
  */
-export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) {
+export function NodeInfoPanel({ node, detail, githubRepo, onClose }: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
   const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
   const doc = detail?.doc;
@@ -99,6 +101,16 @@ export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) 
             </TooltipTrigger>
             <TooltipContent side="top">Copy the file path</TooltipContent>
           </Tooltip>
+          {onClose && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close details">
+                  <X className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Close (Esc)</TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </div>
 

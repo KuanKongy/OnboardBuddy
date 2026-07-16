@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { resolveForRequest } from "../services/packageResolver.js";
 
 export const capabilitiesRouter = Router({ mergeParams: true });
 
@@ -11,18 +12,13 @@ export const capabilitiesRouter = Router({ mergeParams: true });
  */
 capabilitiesRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
-    const projectId = req.params.id;
-    const snapResult = await query(
-      `SELECT id FROM analysis_snapshots
-       WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
-      [projectId],
-    );
-    if (snapResult.rows.length === 0) {
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    if (!ctx) {
       res.json({ capabilities: [], snapshotId: null });
       return;
     }
-    const snapshotId = snapResult.rows[0].id as string;
+    const snapshotId = ctx.snapshotId;
 
     const capsResult = await query(
       `SELECT c.id, c.stable_key, c.name, c.description, c.confidence, c.metadata,
@@ -119,7 +115,7 @@ capabilitiesRouter.get("/", requireProjectAccess(), async (req, res) => {
       };
     });
 
-    res.json({ capabilities, snapshotId });
+    res.json({ capabilities, snapshotId, packageId: ctx.packageId });
   } catch (err) {
     console.error("Capabilities list error:", err);
     res.status(500).json({ error: "Internal server error" });

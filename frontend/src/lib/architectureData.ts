@@ -58,6 +58,7 @@ export const CLUSTER_KIND_LABELS: Record<string, string> = {
   other: "Other",
 };
 
-export async function fetchArchitecture(projectId: string): Promise<ArchitectureResponse> {
-  return (await apiFetch(`/projects/${projectId}/graph/architecture`)) as ArchitectureResponse;
+export async function fetchArchitecture(projectId: string, packageId?: string | null): Promise<ArchitectureResponse> {
+  const qs = packageId ? `?package_id=${encodeURIComponent(packageId)}` : "";
+  return (await apiFetch(`/projects/${projectId}/graph/architecture${qs}`)) as ArchitectureResponse;
 }

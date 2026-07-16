@@ -14,6 +14,8 @@ import ReactFlow, {
   type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { ViewportFocus } from "@/components/graph/ViewportFocus";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,6 +27,7 @@ import {
 import { layoutGraph } from "@/lib/graphLayout";
 import { fetchNodeDetail, type NodeDetail } from "@/lib/graphData";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
+import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { cn } from "@/lib/utils";
 
 /** Step kind → palette token: what each stage of the flow *does*. */
@@ -92,6 +95,7 @@ const nodeTypes = { step: StepNode };
 export function WorkflowsPage() {
   const { id } = useParams<{ id: string }>();
   const isDark = useIsDarkMode();
+  const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
   // Deep link from the capabilities hub: ?workflow=<id> preselects a flow.
   const [searchParams] = useSearchParams();
   const [workflows, setWorkflows] = useState<WorkflowSummary[] | null>(null);
@@ -108,7 +112,7 @@ export function WorkflowsPage() {
     if (!id) return;
     setLoadingList(true);
     setError("");
-    fetchWorkflowsList(id)
+    fetchWorkflowsList(id, selectedPackageId)
       .then((list) => {
         setWorkflows(list);
         if (list.length > 0) setSelectedWorkflowId((prev) => prev || list[0]!.id);
@@ -117,7 +121,10 @@ export function WorkflowsPage() {
       .finally(() => setLoadingList(false));
   }
 
-  useEffect(() => { loadWorkflows(); }, [id]);
+  useEffect(() => { loadWorkflows(); }, [id, selectedPackageId]);
+
+  // Esc closes the step details panel (pairs with the animated fit-out).
+  useHotkeys({ Escape: () => setSelectedNodeId(null) }, selectedNodeId !== null);
 
   useEffect(() => {
     if (!id || !selectedWorkflowId) return;
@@ -187,11 +194,11 @@ export function WorkflowsPage() {
     setStepDetail(null);
     if (!id || !selectedStep?.nodeId) return;
     let cancelled = false;
-    fetchNodeDetail(id, selectedStep.nodeId).then((d) => {
+    fetchNodeDetail(id, selectedStep.nodeId, selectedPackageId).then((d) => {
       if (!cancelled) setStepDetail(d);
     });
     return () => { cancelled = true; };
-  }, [id, selectedStep?.nodeId]);
+  }, [id, selectedStep?.nodeId, selectedPackageId]);
 
   const selectedSummary = workflows?.find((w) => w.id === selectedWorkflowId) ?? null;
 
@@ -297,6 +304,7 @@ export function WorkflowsPage() {
                   minZoom={0.2}
                   proOptions={{ hideAttribution: true }}
                 >
+                  <ViewportFocus selectedNodeId={selectedNodeId} fitPadding={0.15} />
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
                   <Controls className="!border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
                 </ReactFlow>

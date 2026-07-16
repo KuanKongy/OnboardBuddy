@@ -6,6 +6,8 @@ import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
 import { getRepo } from "../../lib/github.js";
+import { recomputeProjectStatus } from "../../lib/projectStatus.js";
+import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
 
 const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
 const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -24,6 +26,7 @@ projectsRouter.get("/", async (req, res) => {
     const result = await query(
       `SELECT p.id, p.repo_owner, p.repo_name, p.branch, p.status,
               p.created_at, p.last_analyzed_at,
+              p.repo_description, p.primary_language, p.repo_pushed_at,
               pm.permission_tier, pm.developer_role,
               COALESCE(stale.stale_count, 0) AS stale_count
        FROM projects p
@@ -44,6 +47,63 @@ projectsRouter.get("/", async (req, res) => {
     res.json({ projects: result.rows });
   } catch (err) {
     console.error("List projects error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Cross-project activity feed for the dashboard: every analysis run and every
+ * onboarding package across the caller's projects, newest first. Generation
+ * runs are represented by their package row (a generate_package job always
+ * creates one), so the jobs query keeps only repo-analysis work — no event
+ * shows up twice. Registered before /:id so "activity" never parses as an id.
+ */
+projectsRouter.get("/activity", async (req, res) => {
+  try {
+    const userId = req.user!.id;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 50);
+
+    const [runs, packages] = await Promise.all([
+      query(
+        `SELECT aj.id, aj.project_id, p.repo_owner, p.repo_name,
+                aj.status, aj.job_type, aj.branch, aj.role,
+                COALESCE(s.display_name, NULLIF(s.path_prefix, ''), 'Whole repository') AS scope,
+                COALESCE(aj.finished_at, aj.started_at, aj.created_at) AS at
+         FROM analysis_jobs aj
+         JOIN projects p ON p.id = aj.project_id
+         JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+         LEFT JOIN analysis_scopes s ON s.id = aj.scope_id
+         WHERE aj.job_type IN ('analyze_scope', 'incremental_update')
+         ORDER BY COALESCE(aj.finished_at, aj.started_at, aj.created_at) DESC
+         LIMIT $2`,
+        [userId, limit],
+      ),
+      query(
+        `SELECT op.id, op.project_id, p.repo_owner, p.repo_name,
+                op.status, op.role, op.branch,
+                COALESCE(s.display_name, NULLIF(s.path_prefix, ''), 'Whole repository') AS scope,
+                op.updated_at AS at
+         FROM onboarding_packages op
+         JOIN projects p ON p.id = op.project_id
+         JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
+         LEFT JOIN analysis_scopes s ON s.id = op.scope_id
+         ORDER BY op.updated_at DESC
+         LIMIT $2`,
+        [userId, limit],
+      ),
+    ]);
+
+    const eventTime = (row: Record<string, unknown>) => new Date(row.at as string | Date).getTime();
+    const activity = [
+      ...(runs.rows as Array<Record<string, unknown>>).map((row) => ({ kind: "analysis", ...row })),
+      ...(packages.rows as Array<Record<string, unknown>>).map((row) => ({ kind: "package", ...row })),
+    ]
+      .sort((a, b) => eventTime(b) - eventTime(a))
+      .slice(0, limit);
+
+    res.json({ activity });
+  } catch (err) {
+    console.error("Activity feed error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -80,14 +140,25 @@ projectsRouter.post("/", async (req, res) => {
     }
 
     // Branch is only the default for new analysis runs (project identity is the
-    // repo). When omitted, use the repo's default branch from GitHub.
+    // repo). When omitted, use the repo's default branch from GitHub. The same
+    // fetch supplies the card metadata (description/language/pushed_at) — that
+    // part is best-effort: only a missing branch makes the fetch load-bearing.
     let defaultBranch = branch;
     let repoDefaultBranch: string | null = null;
-    if (!defaultBranch) {
+    let repoDescription: string | null = null;
+    let primaryLanguage: string | null = null;
+    let repoPushedAt: string | null = null;
+    try {
       const installationToken = await getInstallationTokenForUser(userId, installationId);
       const repoInfo = await getRepo(installationToken, repo_owner, repo_name);
       repoDefaultBranch = repoInfo.default_branch;
-      defaultBranch = repoInfo.default_branch;
+      defaultBranch ??= repoInfo.default_branch;
+      repoDescription = repoInfo.description?.slice(0, 350) ?? null;
+      primaryLanguage = repoInfo.language ?? null;
+      repoPushedAt = repoInfo.pushed_at ?? null;
+    } catch (err) {
+      if (!defaultBranch) throw err;
+      console.warn("Repo metadata fetch failed (project created without it):", err instanceof Error ? err.message : err);
     }
 
     client = await pool.connect();
@@ -103,10 +174,12 @@ projectsRouter.post("/", async (req, res) => {
     );
 
     const projectResult = await client.query(
-      `INSERT INTO projects (user_id, repo_owner, repo_name, branch, default_branch, github_installation_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO projects (user_id, repo_owner, repo_name, branch, default_branch, github_installation_id,
+                             repo_description, primary_language, repo_pushed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [userId, repo_owner, repo_name, defaultBranch, repoDefaultBranch, github_installation_id],
+      [userId, repo_owner, repo_name, defaultBranch, repoDefaultBranch, github_installation_id,
+       repoDescription, primaryLanguage, repoPushedAt],
     );
     const project = projectResult.rows[0];
 
@@ -167,10 +240,49 @@ projectsRouter.get("/:id", requireProjectAccess(), async (req, res) => {
         ...project,
         permission_tier: member.permission_tier,
         developer_role: member.developer_role,
+        // Per-member: the caller's own default package (sidebar selection).
+        default_package_id: member.default_package_id,
       },
     });
   } catch (err) {
     console.error("Get project error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Set the CALLER's default package — the one their sidebar selection starts
+ * on. Per member, not per project: each developer pins their own context.
+ * null clears it back to "latest analysis".
+ */
+projectsRouter.put("/:id/default-package", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const userId = req.user!.id;
+    const { package_id } = (req.body ?? {}) as { package_id?: string | null };
+
+    if (package_id !== null && package_id !== undefined) {
+      if (typeof package_id !== "string" || !/^[0-9a-f-]{36}$/i.test(package_id)) {
+        res.status(400).json({ error: "package_id must be a UUID or null" });
+        return;
+      }
+      const pkg = await query(
+        `SELECT id FROM onboarding_packages WHERE id = $1 AND project_id = $2`,
+        [package_id, projectId],
+      );
+      if (pkg.rows.length === 0) {
+        res.status(404).json({ error: "Package not found" });
+        return;
+      }
+    }
+
+    await query(
+      `UPDATE project_members SET default_package_id = $3 WHERE project_id = $1 AND user_id = $2`,
+      [projectId, userId, package_id ?? null],
+    );
+    res.json({ default_package_id: package_id ?? null });
+  } catch (err) {
+    console.error("Set default package error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -181,6 +293,7 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
     const {
       ignored_paths, privacy_mode, analysis_depth, default_developer_role, file_limit, loc_limit,
       budget_overrides, budget_stop_behavior, model_failure_behavior, model_tier_overrides,
+      auto_reanalyze_on_push,
     } = req.body as {
         ignored_paths?: string[];
         privacy_mode?: string;
@@ -192,10 +305,15 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
         budget_stop_behavior?: string;
         model_failure_behavior?: Record<string, unknown>;
         model_tier_overrides?: Record<string, unknown>;
+        auto_reanalyze_on_push?: boolean;
       };
 
     if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
       res.status(400).json({ error: "Invalid privacy_mode" });
+      return;
+    }
+    if (auto_reanalyze_on_push !== undefined && typeof auto_reanalyze_on_push !== 'boolean') {
+      res.status(400).json({ error: "auto_reanalyze_on_push must be a boolean" });
       return;
     }
     if (analysis_depth !== undefined && !['cheap', 'standard', 'full'].includes(analysis_depth)) {
@@ -285,6 +403,10 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
     if (model_tier_overrides !== undefined) {
       setClauses.push(`model_tier_overrides = $${paramIndex++}`);
       values.push(JSON.stringify(model_tier_overrides));
+    }
+    if (auto_reanalyze_on_push !== undefined) {
+      setClauses.push(`auto_reanalyze_on_push = $${paramIndex++}`);
+      values.push(auto_reanalyze_on_push);
     }
 
     if (setClauses.length === 0) {
@@ -382,7 +504,7 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     // ai_disabled does not block generation: the worker reads the project's
     // current privacy mode and builds a deterministic (LLM-free) package.
     const snapResult = await query(
-      `SELECT id, commit_hash FROM analysis_snapshots
+      `SELECT id, commit_hash, branch, scope_id FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
        ORDER BY created_at DESC LIMIT 1`,
       [projectId],
@@ -391,13 +513,28 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
       res.status(409).json({ error: "No completed analysis snapshot found — run analysis first" });
       return;
     }
-    const snap = snapResult.rows[0] as { id: string; commit_hash: string };
+    const snap = snapResult.rows[0] as { id: string; commit_hash: string; branch: string | null; scope_id: string | null };
+
+    // Same-package guard: only an identical (snapshot, default-role, branch)
+    // generation conflicts; anything else runs in parallel.
+    const active = await query(
+      `SELECT id FROM analysis_jobs
+       WHERE project_id = $1 AND job_type = 'generate_package' AND snapshot_id = $2
+         AND role IS NULL AND COALESCE(branch, '') = COALESCE($3, '')
+         AND status IN ('queued', 'running')
+       LIMIT 1`,
+      [projectId, snap.id, snap.branch],
+    );
+    if (active.rows.length > 0) {
+      res.status(409).json({ error: "This package is already being generated", active_job_id: active.rows[0].id });
+      return;
+    }
 
     const jobResult = await query(
-      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step, branch, commit_hash, scope_id)
+       VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4, $5, $6)
        RETURNING id`,
-      [projectId, snap.id, userId],
+      [projectId, snap.id, userId, snap.branch, snap.commit_hash, snap.scope_id],
     );
     const dbJobId: string = jobResult.rows[0].id;
 
@@ -406,6 +543,7 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
       snapshotId: snap.id,
       projectId,
       triggeredBy: userId,
+      branch: snap.branch ?? undefined,
     } satisfies SummaryJobData, {
       attempts: 2,
       backoff: { type: 'fixed', delay: 3000 },
@@ -500,6 +638,112 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
   }
 });
 
+/**
+ * Run history: every job (newest first) with its resolved config, duration,
+ * per-job LLM cost (SUM over ai_generation_runs.job_id), which sections were
+ * generated vs served from cache, and the package it produced. Kept separate
+ * from /analysis-status, which is a hot 5s poll — cost aggregation does not
+ * belong on that path. Cursor pagination via ?before=<ISO timestamp>.
+ */
+projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 50);
+    const beforeRaw = req.query.before as string | undefined;
+    const before = beforeRaw && !Number.isNaN(Date.parse(beforeRaw)) ? new Date(beforeRaw).toISOString() : null;
+
+    const rows = (await query(
+      `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step, aj.error_message,
+              aj.snapshot_id, aj.role, aj.branch AS requested_branch, aj.commit_hash AS requested_commit,
+              aj.semantic_depth AS requested_depth, aj.created_at, aj.started_at, aj.finished_at,
+              aj.attempt, aj.step_log, aj.checkpoint->>'sectionType' AS section_type,
+              CASE WHEN aj.finished_at IS NOT NULL AND aj.started_at IS NOT NULL
+                   THEN (EXTRACT(EPOCH FROM (aj.finished_at - aj.started_at)) * 1000)::bigint
+                   ELSE NULL END AS duration_ms,
+              u.email AS requested_by_email,
+              s.branch AS snapshot_branch, s.commit_hash AS snapshot_commit,
+              sc.path_prefix AS scope_path, sc.display_name AS scope_name,
+              cost.llm_calls, cost.cached_calls, cost.input_tokens, cost.output_tokens, cost.estimated_cost_usd,
+              pkg.id AS package_id, pkg.role AS package_role, pkg.branch AS package_branch, pkg.status AS package_status,
+              sections.generated_sections, sections.cached_sections
+       FROM analysis_jobs aj
+       LEFT JOIN users u ON u.id = aj.requested_by
+       LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       LEFT JOIN analysis_scopes sc ON sc.id = COALESCE(aj.scope_id, s.scope_id)
+       LEFT JOIN LATERAL (
+         SELECT COUNT(*) FILTER (WHERE r.status = 'complete')::int AS llm_calls,
+                COUNT(*) FILTER (WHERE r.status = 'skipped_cached')::int AS cached_calls,
+                COALESCE(SUM((r.token_usage->>'inputTokens')::bigint) FILTER (WHERE r.status = 'complete'), 0)::bigint AS input_tokens,
+                COALESCE(SUM((r.token_usage->>'outputTokens')::bigint) FILTER (WHERE r.status = 'complete'), 0)::bigint AS output_tokens,
+                COALESCE(SUM(r.estimated_cost_usd), 0)::numeric AS estimated_cost_usd
+         FROM ai_generation_runs r WHERE r.job_id = aj.id
+       ) cost ON true
+       LEFT JOIN LATERAL (
+         SELECT array_agg(DISTINCT r.section_type) FILTER (WHERE r.status = 'complete' AND r.target_type = 'section') AS generated_sections,
+                array_agg(DISTINCT r.section_type) FILTER (WHERE r.status = 'skipped_cached' AND r.target_type = 'section') AS cached_sections
+         FROM ai_generation_runs r WHERE r.job_id = aj.id
+       ) sections ON true
+       LEFT JOIN LATERAL (
+         SELECT op.id, op.role, op.branch, op.status FROM onboarding_packages op
+         WHERE aj.job_type IN ('generate_package', 'regenerate_section')
+           AND op.snapshot_id = aj.snapshot_id
+           AND (aj.role IS NULL OR op.role = aj.role)
+           AND (aj.branch IS NULL OR op.branch = aj.branch)
+         ORDER BY op.created_at DESC LIMIT 1
+       ) pkg ON true
+       WHERE aj.project_id = $1 AND ($2::timestamptz IS NULL OR aj.created_at < $2)
+       ORDER BY aj.created_at DESC
+       LIMIT $3`,
+      [projectId, before, limit],
+    )).rows as Array<Record<string, unknown>>;
+
+    const runs = rows.map((r) => ({
+      id: r.id,
+      job_type: r.job_type,
+      status: r.status,
+      progress_pct: r.progress_pct,
+      current_step: r.current_step,
+      error_message: r.error_message,
+      snapshot_id: r.snapshot_id,
+      section_type: r.section_type ?? null,
+      config: {
+        branch: (r.snapshot_branch as string | null) ?? (r.requested_branch as string | null),
+        commit: (r.snapshot_commit as string | null) ?? (r.requested_commit as string | null),
+        scope_path: r.scope_path,
+        scope_name: r.scope_name,
+        depth: r.requested_depth,
+        role: r.role,
+      },
+      requested_by_email: r.requested_by_email,
+      created_at: r.created_at,
+      started_at: r.started_at,
+      finished_at: r.finished_at,
+      duration_ms: r.duration_ms === null ? null : Number(r.duration_ms),
+      attempt: r.attempt,
+      step_log: r.step_log ?? [],
+      package: r.package_id
+        ? { id: r.package_id, role: r.package_role, branch: r.package_branch, status: r.package_status }
+        : null,
+      cost: {
+        estimated_cost_usd: Number(r.estimated_cost_usd ?? 0),
+        llm_calls: Number(r.llm_calls ?? 0),
+        cached_calls: Number(r.cached_calls ?? 0),
+        input_tokens: Number(r.input_tokens ?? 0),
+        output_tokens: Number(r.output_tokens ?? 0),
+      },
+      sections: {
+        generated: (r.generated_sections as string[] | null) ?? [],
+        cached: (r.cached_sections as string[] | null) ?? [],
+      },
+    }));
+
+    res.json({ runs });
+  } catch (err) {
+    console.error("Run history error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ── Run controls: pause / stop / resume ─────────────────────────────────────
 // Workers obey at the next step or AI-batch boundary (kill switch): progress
 // updates on a paused/stopped job fail their status guard and the worker
@@ -507,16 +751,6 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
 // content-addressed record cache make resume cheap — completed work is
 // never re-paid.
 
-/** Project status once no run is active: complete if anything ever finished, else idle. */
-async function settleProjectStatus(projectId: string): Promise<void> {
-  await query(
-    `UPDATE projects SET status = (
-       CASE WHEN EXISTS (SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND status = 'complete')
-            THEN 'complete' ELSE 'idle' END)
-     WHERE id = $1 AND status = 'analyzing'`,
-    [projectId],
-  );
-}
 
 projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
@@ -532,7 +766,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("own
       res.status(409).json({ error: "Job is not queued or running" });
       return;
     }
-    await settleProjectStatus(projectId);
+    await recomputeProjectStatus(projectId);
     res.json({ job: { id: jobId, status: "paused" } });
   } catch (err) {
     console.error("Pause job error:", err);
@@ -557,7 +791,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owne
       res.status(409).json({ error: "Job is not active" });
       return;
     }
-    await settleProjectStatus(projectId);
+    await recomputeProjectStatus(projectId);
     res.json({ job: { id: jobId, status: "failed" } });
   } catch (err) {
     console.error("Stop job error:", err);
@@ -599,12 +833,29 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("ow
       res.status(409).json({ error: "Preflight previews are not resumable — run a new preview" });
       return;
     }
-    const active = await query(
-      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
-      [projectId],
-    );
+    // Per-tuple guard, mirroring POST /analyze: only an identical active run
+    // blocks the resume; unrelated runs proceed in parallel.
+    const active = row.job_type === "generate_package"
+      ? await query(
+          `SELECT id FROM analysis_jobs
+           WHERE project_id = $1 AND id <> $2 AND status IN ('queued', 'running')
+             AND job_type = 'generate_package' AND snapshot_id = $3
+             AND COALESCE(role, '') = COALESCE($4, '') AND COALESCE(branch, '') = COALESCE($5, '')
+           LIMIT 1`,
+          [projectId, jobId, row.snapshot_id, row.role, row.branch],
+        )
+      : await query(
+          `SELECT id FROM analysis_jobs
+           WHERE project_id = $1 AND id <> $2 AND status IN ('queued', 'running')
+             AND job_type IN ('analyze_scope', 'incremental_update')
+             AND COALESCE(scope_id::text, '') = COALESCE($3::text, '')
+             AND COALESCE(commit_hash, 'head:' || COALESCE(branch, ''))
+                 = COALESCE($4, 'head:' || COALESCE($5, ''))
+           LIMIT 1`,
+          [projectId, jobId, row.scope_id, row.snapshot_commit ?? row.commit_hash, row.branch],
+        );
     if (active.rows.length > 0) {
-      res.status(409).json({ error: "Another run is already active for this project", active_job_id: active.rows[0].id });
+      res.status(409).json({ error: "An identical run is already active", active_job_id: active.rows[0].id });
       return;
     }
 
@@ -627,6 +878,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("ow
         projectId,
         triggeredBy: req.user!.id,
         role: row.role ?? undefined,
+        branch: row.branch ?? undefined,
       } satisfies SummaryJobData, {
         attempts: 2,
         backoff: { type: "fixed", delay: 3000 },
@@ -644,6 +896,9 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("ow
         branch: row.branch ?? undefined,
         depth: (row.semantic_depth ?? undefined) as AnalysisJobData["depth"],
         role: row.role ?? undefined,
+        // A resume must actually finish the interrupted pipeline — never
+        // short-circuit onto the possibly half-semantic existing snapshot.
+        force: true,
       } satisfies AnalysisJobData, {
         attempts: 2,
         backoff: { type: "fixed", delay: 5000 },
@@ -846,13 +1101,15 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { scope_id, scope_path, branch, commit, depth, role } = (req.body ?? {}) as {
+    const { scope_id, scope_path, branch, commit, depth, role, force } = (req.body ?? {}) as {
       scope_id?: string;
       scope_path?: string;
       branch?: string;
       commit?: string;
       depth?: string;
       role?: string;
+      /** Re-analyze even if this (scope, commit) already has a complete snapshot. */
+      force?: boolean;
     };
     if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
       res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
@@ -879,19 +1136,6 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       return;
     }
 
-    const activeJob = await client.query(
-      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
-      [projectId],
-    );
-    if (activeJob.rows.length > 0) {
-      await client.query("ROLLBACK");
-      res.status(409).json({
-        error: "Analysis already in progress for this project",
-        active_job_id: activeJob.rows[0].id,
-      });
-      return;
-    }
-
     const project = projectResult.rows[0] as { id: string; branch: string };
 
     await client.query(
@@ -900,17 +1144,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     );
 
     let effectiveScopeId = scope_id ?? null;
-    if (effectiveScopeId) {
-      const scopeCheck = await client.query(
-        `SELECT id FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
-        [effectiveScopeId, projectId],
-      );
-      if (scopeCheck.rows.length === 0) {
-        await client.query("ROLLBACK");
-        res.status(404).json({ error: "Scope not found" });
-        return;
-      }
-    } else if (scope_path !== undefined && normalizeScopePath(scope_path) !== "") {
+    if (!effectiveScopeId && scope_path !== undefined && normalizeScopePath(scope_path) !== "") {
       const prefix = normalizeScopePath(scope_path);
       const scopeResult = await client.query(
         `INSERT INTO analysis_scopes (project_id, path_prefix, display_name, kind, detected_from, created_by)
@@ -922,51 +1156,49 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       effectiveScopeId = scopeResult.rows[0].id as string;
     }
 
-    // Re-analyzing an already-analyzed scope is an incremental update (spec
-    // job type): the worker diffs against the previous snapshot and flags
-    // stale artifacts instead of regenerating everything.
-    const previousSnapshot = await client.query(
-      effectiveScopeId
-        ? `SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND scope_id = $2 AND status = 'complete' LIMIT 1`
-        : `SELECT 1 FROM analysis_snapshots s
-           JOIN analysis_scopes sc ON sc.id = s.scope_id
-           WHERE s.project_id = $1 AND sc.path_prefix = '' AND s.status = 'complete' LIMIT 1`,
-      effectiveScopeId ? [projectId, effectiveScopeId] : [projectId],
-    );
-    const jobType = previousSnapshot.rows.length > 0 ? 'incremental_update' : 'analyze_scope';
-
-    const jobResult = await client.query(
-      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step,
-                                  role, branch, commit_hash, semantic_depth)
-       VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker', $5, $6, $7, $8)
-       RETURNING id, status`,
-      [projectId, effectiveScopeId, userId, jobType,
-       role ?? null, branch ?? null, commit ?? null, depth ?? null],
-    );
+    // Scope validation, incremental-vs-initial probe, per-tuple concurrency
+    // guard, and the job INSERT — shared with the GitHub push webhook.
+    const prepared = await prepareAnalysisRun(client, {
+      projectId,
+      requestedBy: userId,
+      projectDefaultBranch: project.branch,
+      scopeId: effectiveScopeId,
+      branch: branch ?? null,
+      commit: commit ?? null,
+      depth: depth ?? null,
+      role: role ?? null,
+    });
+    if (!prepared.ok) {
+      await client.query("ROLLBACK");
+      if (prepared.reason === "scope_not_found") {
+        res.status(404).json({ error: "Scope not found" });
+      } else {
+        res.status(409).json({
+          error: "This scope and commit are already being analyzed",
+          active_job_id: prepared.activeJobId,
+        });
+      }
+      return;
+    }
 
     await client.query("COMMIT");
 
-    const dbJobId: string = jobResult.rows[0].id;
-
-    await getAnalysisQueue().add('analyze_scope', {
-      jobId: dbJobId,
+    await enqueueAnalysisRun(prepared.jobId, {
+      jobId: prepared.jobId,
       projectId,
       scopeId: effectiveScopeId ?? undefined,
       commit,
       branch,
       depth: depth as AnalysisJobData['depth'],
       role,
-    } satisfies AnalysisJobData, {
-      jobId: dbJobId,
-      attempts: 2,
-      backoff: { type: 'fixed', delay: 5000 },
-    });
+      force: force === true,
+    } satisfies AnalysisJobData);
 
     res.status(202).json({
       analysis: {
-        id: dbJobId,
-        status: jobResult.rows[0].status,
-        mode: jobType === 'incremental_update' ? "incremental" : "initial",
+        id: prepared.jobId,
+        status: prepared.jobStatus,
+        mode: prepared.jobType === 'incremental_update' ? "incremental" : "initial",
         branch: branch ?? project.branch,
       },
     });

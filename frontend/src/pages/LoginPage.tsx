@@ -1,6 +1,6 @@
-import { Github, Loader2 } from "lucide-react";
+import { ArrowLeft, Github, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
@@ -10,12 +10,18 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 export function LoginPage() {
-  const { signIn, signInWithGithub } = useAuth();
+  const { user, loading: authLoading, signIn, signInWithGithub } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // Already signed in → straight to the app (the intro page never redirects;
+  // this page is the "I want in" signal).
+  if (!authLoading && user) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -71,7 +77,12 @@ export function LoginPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label htmlFor="password" className="text-xs">Password</Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password" className="text-xs">Password</Label>
+                  <Link to="/forgot-password" className="text-[11px] font-medium text-primary hover:underline">
+                    Forgot password?
+                  </Link>
+                </div>
                 <Input
                   id="password"
                   type="password"
@@ -106,6 +117,11 @@ export function LoginPage() {
           Don&apos;t have an account?{" "}
           <Link to="/signup" className="font-medium text-primary hover:underline">
             Sign up
+          </Link>
+        </p>
+        <p className="mt-2 text-center">
+          <Link to="/" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="h-3 w-3" /> Back to home
           </Link>
         </p>
       </div>

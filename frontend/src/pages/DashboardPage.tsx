@@ -4,14 +4,14 @@ import {
   CheckCircle2,
   Clock,
   FolderGit2,
-  HelpCircle,
   Loader2,
   Mail,
+  Package,
   Plus,
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard, type Project } from "@/components/ProjectCard";
@@ -24,7 +24,6 @@ import { dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 
 const RECENT_LIMIT = 6;
-const ACTIVITY_LIMIT = 8;
 
 
 const TOUR_STEPS: TourStep[] = [
@@ -51,7 +50,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "recent-activity",
     title: "What's changed recently",
-    body: "A quick feed of analysis runs and stale-doc alerts across your projects, so you know what needs attention first.",
+    body: "A live feed of every analysis run and generated package across your projects — what ran, on which branch, and when.",
   },
 ];
 
@@ -60,39 +59,49 @@ function activityTime(p: Project): number {
   return p.last_analyzed_at ? new Date(p.last_analyzed_at).getTime() : 0;
 }
 
+/** One event from GET /projects/activity — an analysis run or a package. */
 type ActivityItem = {
+  kind: "analysis" | "package";
   id: string;
-  projectId: string;
-  repo: string;
-  text: string;
+  project_id: string;
+  repo_owner: string;
+  repo_name: string;
+  status: string;
+  job_type?: string;
+  role?: string | null;
+  branch?: string | null;
+  scope?: string | null;
   at: string | null;
-  icon: typeof Activity;
-  tone: string;
 };
 
-/** Derive an activity feed from project state (no dedicated activity endpoint yet). */
-function buildActivity(projects: Project[]): ActivityItem[] {
-  return [...projects]
-    .sort((a, b) => activityTime(b) - activityTime(a))
-    .map((p): ActivityItem => {
-      const repo = `${p.repo_owner}/${p.repo_name}`;
-      const base = { id: p.id, projectId: p.id, repo, at: p.last_analyzed_at };
-      if (p.status === "failed")
-        return { ...base, text: "Analysis failed", icon: XCircle, tone: "text-destructive" };
-      if (p.status === "analyzing")
-        return { ...base, text: "Analysis in progress", icon: Loader2, tone: "text-primary" };
-      if (p.stale_count > 0)
-        return {
-          ...base,
-          text: `${p.stale_count} section${p.stale_count === 1 ? "" : "s"} need review`,
-          icon: AlertTriangle,
-          tone: "text-amber-600 dark:text-amber-400",
-        };
-      if (p.status === "complete")
-        return { ...base, text: "Analysis completed", icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400" };
-      return { ...base, text: "Created — not analyzed yet", icon: Clock, tone: "text-muted-foreground" };
-    })
-    .slice(0, ACTIVITY_LIMIT);
+/** Row text + icon for an activity event. */
+function presentActivity(item: ActivityItem): { text: string; icon: typeof Activity; tone: string; spin: boolean } {
+  const branch = item.branch ? ` · ${item.branch}` : "";
+  const scope = item.scope && item.scope !== "Whole repository" ? ` · ${item.scope}` : "";
+  const where = `${branch}${scope}`;
+
+  if (item.kind === "package") {
+    const role = item.role ? item.role[0]!.toUpperCase() + item.role.slice(1) : "";
+    const what = role ? `${role} package` : "Package";
+    if (item.status === "generating")
+      return { text: `${what} generating${where}`, icon: Loader2, tone: "text-primary", spin: true };
+    if (item.status === "failed")
+      return { text: `${what} generation failed${where}`, icon: XCircle, tone: "text-destructive", spin: false };
+    if (item.status === "stale")
+      return { text: `${what} generated${where} — now stale`, icon: AlertTriangle, tone: "text-amber-600 dark:text-amber-400", spin: false };
+    return { text: `${what} generated${where}`, icon: Package, tone: "text-emerald-600 dark:text-emerald-400", spin: false };
+  }
+
+  const what = item.job_type === "incremental_update" ? "Incremental update" : "Analysis";
+  if (item.status === "queued")
+    return { text: `${what} queued${where}`, icon: Clock, tone: "text-muted-foreground", spin: false };
+  if (item.status === "running")
+    return { text: `${what} running${where}`, icon: Loader2, tone: "text-primary", spin: true };
+  if (item.status === "paused")
+    return { text: `${what} paused${where}`, icon: Clock, tone: "text-amber-600 dark:text-amber-400", spin: false };
+  if (item.status === "failed")
+    return { text: `${what} failed${where}`, icon: XCircle, tone: "text-destructive", spin: false };
+  return { text: `${what} completed${where}`, icon: CheckCircle2, tone: "text-emerald-600 dark:text-emerald-400", spin: false };
 }
 
 function StatCard({
@@ -124,13 +133,35 @@ function StatCard({
 export function DashboardPage() {
   const { projects, setProjects, loading, error } = useProjects();
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [inviteCount, setInviteCount] = useState(0);
   const [tourOpen, setTourOpen] = useState(false);
+  const [pendingTour, setPendingTour] = useState(false);
 
   useEffect(() => {
     apiFetch("/invitations")
       .then((data: { invitations: unknown[] }) => setInviteCount(data.invitations.length))
       .catch(() => setInviteCount(0));
+  }, []);
+
+  // Real event feed (every run + package across projects), kept fresh while
+  // the dashboard is open so in-progress runs tick over to completed.
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      apiFetch("/projects/activity")
+        .then((data: { activity: ActivityItem[] }) => {
+          if (!cancelled) setActivity(data.activity);
+        })
+        .catch(() => {});
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   // First-run tour: auto-start once the dashboard has finished its initial
@@ -140,6 +171,22 @@ export function DashboardPage() {
     if (tourDismissed("dashboard", user.id)) return;
     setTourOpen(true);
   }, [loading, user]);
+
+  // The sidebar's "Take a tour" navigates here with startTour state (it may be
+  // clicked from any shell page). Consume the state immediately so refresh or
+  // back never replays it, then wait for the data before spotlighting.
+  useEffect(() => {
+    const state = location.state as { startTour?: number } | null;
+    if (!state?.startTour) return;
+    setPendingTour(true);
+    navigate("/dashboard", { replace: true, state: null });
+  }, [location.state, navigate]);
+
+  useEffect(() => {
+    if (!pendingTour || loading) return;
+    setPendingTour(false);
+    startTour();
+  });
 
   function finishTour() {
     if (user) dismissTour("dashboard", user.id);
@@ -155,7 +202,6 @@ export function DashboardPage() {
     () => [...projects].sort((a, b) => activityTime(b) - activityTime(a)).slice(0, RECENT_LIMIT),
     [projects],
   );
-  const activity = useMemo(() => buildActivity(projects), [projects]);
 
   const stats = useMemo(
     () => ({
@@ -173,10 +219,6 @@ export function DashboardPage() {
         subtitle="All your connected repositories and their analysis status in one place."
         actions={
           <>
-            <Button variant="ghost" size="xs" onClick={startTour}>
-              <HelpCircle className="h-3.5 w-3.5" />
-              Take a tour
-            </Button>
             <Button variant="outline" size="sm" asChild>
               <Link to="/invitations">
                 <Mail className="h-3.5 w-3.5" />
@@ -274,19 +316,21 @@ export function DashboardPage() {
                       No activity yet — it appears once your first repository is imported and analyzed.
                     </p>
                   )}
-                  <ul className="divide-y divide-border">
+                  <ul className="max-h-[26rem] divide-y divide-border overflow-y-auto">
                     {activity.map((item) => {
-                      const Icon = item.icon;
+                      const pres = presentActivity(item);
+                      const Icon = pres.icon;
+                      const repo = `${item.repo_owner}/${item.repo_name}`;
                       return (
-                        <li key={item.id}>
+                        <li key={`${item.kind}-${item.id}`}>
                           <Link
-                            to={`/projects/${item.projectId}`}
+                            to={`/projects/${item.project_id}`}
                             className="flex items-start gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-accent/50"
                           >
-                            <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${item.tone}`} />
+                            <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${pres.tone} ${pres.spin ? "animate-spin" : ""}`} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[13px] text-foreground" title={item.repo}>{item.repo}</p>
-                              <p className="text-xs text-muted-foreground">{item.text}</p>
+                              <p className="truncate text-[13px] text-foreground" title={repo}>{repo}</p>
+                              <p className="text-xs text-muted-foreground">{pres.text}</p>
                             </div>
                             <span className="shrink-0 text-[11px] text-muted-foreground">
                               {timeAgo(item.at)}

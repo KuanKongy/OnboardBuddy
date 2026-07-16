@@ -83,6 +83,11 @@ create table if not exists public.projects (
   branch varchar not null,
   default_branch varchar,
   github_installation_id text,
+  -- GitHub repo metadata for dashboard cards (fetched at import, refreshed on
+  -- every analysis run; null until first fetched).
+  repo_description text,
+  primary_language varchar,
+  repo_pushed_at timestamptz,
   repo_full_name varchar generated always as (repo_owner || '/' || repo_name) stored,
   status varchar not null default 'idle' check (status in ('idle', 'analyzing', 'complete', 'failed')),
   created_at timestamptz not null default now(),
@@ -149,7 +154,12 @@ create table if not exists public.project_settings (
   model_failure_behavior jsonb not null default '{}',
   -- Per-tier model list overrides, e.g.
   -- {"cheap": ["openai/gpt-4o-mini"], "strong": ["anthropic/claude-sonnet-4.5"]}
-  model_tier_overrides jsonb not null default '{}'
+  model_tier_overrides jsonb not null default '{}',
+  -- GitHub App push webhook: when true, a push to a branch that has
+  -- onboarding packages triggers an incremental re-analysis per affected
+  -- scope (stale-flags sections; never rebuilds packages). Requires the
+  -- App webhook + GITHUB_WEBHOOK_SECRET to be configured (doc/DEVOPS.md).
+  auto_reanalyze_on_push boolean not null default false
 );
 
 -- Per-project LLM API key override (BYO key). Encrypted with the same
@@ -617,7 +627,7 @@ create table if not exists public.embeddings (
 );
 
 -- ============================================================
--- Onboarding Packages (scope + role + commit)
+-- Onboarding Packages (scope + role + commit + branch)
 -- ============================================================
 
 create table if not exists public.onboarding_packages (
@@ -630,10 +640,23 @@ create table if not exists public.onboarding_packages (
     check (status in ('generating', 'draft', 'approved', 'stale', 'failed')),
   generated_by uuid not null references public.users(id) on delete restrict,
   analyzed_commit varchar not null,
+  -- Branch is part of PACKAGE identity (what users pick and generate per
+  -- branch), while snapshots stay content-addressed at (scope, commit) — the
+  -- same SHA on two branches shares one analysis but gets one package each.
+  branch text not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (project_id, scope_id, role, analyzed_commit)
+  constraint onboarding_packages_identity_key
+    unique (project_id, scope_id, role, analyzed_commit, branch)
 );
+
+-- Per-member default package (the sidebar selection default; a finished
+-- generation sets the requester's default to the new package). NULL = "latest
+-- complete" behavior. Added post-hoc because project_members is created
+-- before onboarding_packages.
+alter table public.project_members
+  add column if not exists default_package_id uuid
+  references public.onboarding_packages(id) on delete set null;
 
 -- ============================================================
 -- AI Generation Audit Trail
@@ -643,6 +666,9 @@ create table if not exists public.ai_generation_runs (
   id uuid primary key default gen_random_uuid(),
   snapshot_id uuid not null references public.analysis_snapshots(id) on delete cascade,
   package_id uuid references public.onboarding_packages(id) on delete cascade,
+  -- The analysis_jobs row this call ran under (per-job cost rollups). NULL
+  -- for calls with no job context (e.g. /ask Q&A) and pre-migration rows.
+  job_id uuid references public.analysis_jobs(id) on delete set null,
   -- 'symbol_record', 'file_record', 'module_record', 'service_record',
   -- 'system_record', 'capability_record', 'workflow_record', 'refinement',
   -- 'critique', 'rerank', 'section', 'tutorial', 'qa_answer', 'embedding_batch'
@@ -950,6 +976,7 @@ create index if not exists idx_onboarding_packages_project_role on public.onboar
 create index if not exists idx_onboarding_packages_scope on public.onboarding_packages(scope_id);
 create index if not exists idx_ai_generation_runs_snapshot on public.ai_generation_runs(snapshot_id);
 create index if not exists idx_ai_generation_runs_input_hash on public.ai_generation_runs(snapshot_id, input_hash);
+create index if not exists idx_ai_generation_runs_job on public.ai_generation_runs(job_id);
 create index if not exists idx_package_sections_snapshot_id on public.package_sections(snapshot_id);
 create index if not exists idx_package_sections_package_id on public.package_sections(package_id);
 create index if not exists idx_tutorials_snapshot on public.tutorials(snapshot_id);

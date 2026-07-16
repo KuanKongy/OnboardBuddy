@@ -41,9 +41,19 @@ projects, analysis snapshots, onboarding packages, the code-evidence graph, etc.
 |---|---|---|
 | `SUPABASE_URL` | `backend/.env` | Project API URL (`https://<ref>.supabase.co`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | Secret service-role key (full DB access, never expose to browser) |
-| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Session mode) |
+| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Transaction mode, port 6543) |
+| `DIRECT_DATABASE_URL` | `backend/.env` | Session-mode string (port 5432) — DDL/migrations only |
 | `VITE_SUPABASE_URL` | `frontend/.env` | Same project URL, exposed to browser via Vite |
 | `VITE_SUPABASE_ANON_KEY` | `frontend/.env` | Publishable anon key (safe to expose, RLS-gated) |
+
+**Dashboard settings the app depends on** (Supabase → Authentication):
+
+- **URL Configuration → Redirect URLs:** add `http://localhost:5173/reset-password`
+  (and the production origin's `/reset-password`) — required for the
+  "Forgot password?" email flow; Supabase refuses non-allow-listed redirects.
+- **Sign In / Up → Allow manual linking:** enable it — the Account Settings
+  "Unlink GitHub login" button uses `auth.unlinkIdentity`, which errors unless
+  manual linking is on.
 
 ### 2. Upstash Redis
 
@@ -92,6 +102,7 @@ accessible to the connected GitHub user.
 | Env var | `.env` file | Description |
 |---|---|---|
 | `GITHUB_APP_ID` | `backend/.env` | Numeric App ID |
+| `GITHUB_WEBHOOK_SECRET` | `backend/.env` | Optional push-webhook HMAC secret (unset = webhook disabled) |
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | App client ID |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | App client secret |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` private key file (default: `./github-app.pem`) |
@@ -162,37 +173,61 @@ Upstash Redis cost:
 |---|---|---|
 | `WORKER_POLL_INTERVAL_MS` | `30000` | BullMQ `drainDelay`: how long to wait between idle polls. Jobs still picked up instantly via ZSET signal. |
 | `WORKER_CONCURRENCY` | `2` | Max parallel jobs per worker process |
+| `LLM_MAX_CONCURRENCY` | `6` | Parallel AI calls per run (per `AiClient` semaphore) |
+| `SECTION_CONCURRENCY` | `4` | Package sections generated in parallel per run |
 
 **Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
 to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
 plan ($10/month) for unlimited commands.
 
-### 8. Connection pooling (Supabase session mode)
+### 8. Connection pooling (Supabase transaction mode)
 
-`DATABASE_URL` points at Supabase's Supavisor pooler in **session mode**
-(port 5432). In session mode every client connection pins a server connection
-for its whole lifetime, and the pooler caps the whole database user at
-`pool_size` connections (**15** by default) — shared by every process.
+`DATABASE_URL` points at Supabase's Supavisor pooler in **transaction mode**
+(port **6543**). Clients multiplex over the pooler's backend pool: a connection
+is borrowed per transaction/statement and returned immediately, so the API and
+any number of worker replicas can each run a full-size `pg.Pool` without
+exhausting a user-wide session cap.
 
-OnboardBuddy runs **two** Node processes (API + worker), each with its own
-`pg.Pool` sized by `PG_POOL_MAX` (default 10, `backend/src/lib/db.ts`). If the
-two pools together exceed the pooler cap, analysis runs fail with
-`(EMAXCONNSESSION) max clients reached in session mode`.
+This is safe for OnboardBuddy because the backend uses **no session-scoped
+Postgres features**: no advisory locks, no LISTEN/NOTIFY, no `SET
+SESSION`/`set_config`, no cursors, and node-postgres only issues *unnamed*
+prepared statements (supported by Supavisor transaction mode). All multi-step
+transactions run on a single checked-out client between `BEGIN` and `COMMIT`,
+which transaction mode pins to one backend connection. **Keep it that way** —
+if you ever need a session feature, take a dedicated client from the pool and
+document it here.
 
-Recommended settings (set per service, e.g. in `docker-compose.yml` or the
-service's environment):
+Two URLs, two jobs:
 
-| Process | `PG_POOL_MAX` | Why |
+| Env var | Port | Used for |
 |---|---|---|
-| API | `4` | Request handlers hold clients briefly; a few short transactions |
-| Worker | `8` | Semantic passes fan out DB lookups (`mapLimit ≤ 8`) |
+| `DATABASE_URL` | `6543` (transaction) | All application traffic (API + workers) |
+| `DIRECT_DATABASE_URL` | `5432` (session) | DDL only: `psql -f` migrations and manual `ALTER`s |
 
-4 + 8 = 12 stays under the 15-connection cap with headroom for Supabase's own
-tooling. If you raise `pool_size` in Supabase (Settings → Database → Connection
-pooling), you can raise these proportionally. Alternative: point `DATABASE_URL`
-at the **transaction-mode** pooler (port 6543) — but prepared statements and
-session state don't survive it, so session mode + right-sized pools is the
-supported setup.
+Per-process `PG_POOL_MAX` (default 10, `backend/src/lib/db.ts`) now sizes for
+the process's own fan-out, not a shared cap: `10` for the API and `10` per
+worker replica are good defaults. Under heavy parallel load the failure mode is
+no longer `EMAXCONNSESSION` but pooler queue wait (slow queries) — if that
+shows up, raise `default_pool_size` in Supabase (Settings → Database →
+Connection pooling).
+
+### 9. Scaling workers (parallel analyses)
+
+Runs for different (scope, commit) tuples execute concurrently. To add
+throughput, scale worker replicas:
+
+```bash
+docker compose up -d --scale backend-worker=3
+```
+
+BullMQ distributes jobs across replicas; per-job heartbeats, checkpoints, and
+the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
+
+- Total parallel **jobs** = replicas × `WORKER_CONCURRENCY`.
+- Total parallel **AI calls** ≈ replicas × `WORKER_CONCURRENCY` ×
+  `LLM_MAX_CONCURRENCY` — keep this under your OpenRouter/OpenAI rate limits.
+- Prefer more replicas over a higher `WORKER_CONCURRENCY`: repo parsing is
+  CPU/RAM-heavy per job, and replicas isolate failures.
 
 ---
 
@@ -205,12 +240,14 @@ supported setup.
 | `CORS_ORIGIN` | `backend/.env` | Allowed origin (e.g. `http://localhost:5173`) | Set manually |
 | `SUPABASE_URL` | `backend/.env` | Supabase project URL | Supabase → Settings → Data API |
 | `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | Service-role secret key | Supabase → Settings → API Keys → create Secret key |
-| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Session mode) | Supabase → Settings → Database → Connection string |
+| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Transaction mode, port 6543) | Supabase → Settings → Database → Connection string |
+| `DIRECT_DATABASE_URL` | `backend/.env` | Session-mode string (port 5432), DDL/migrations only | Same page, Session mode |
 | `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string | Upstash Console → Database → Details |
 | `WORKER_POLL_INTERVAL_MS` | `backend/.env` | Worker poll interval in ms (default `5000`) | Set manually |
 | `GITHUB_CLIENT_ID` | `backend/.env` | GitHub OAuth App client ID | github.com → Settings → Developer settings → OAuth Apps |
 | `GITHUB_CLIENT_SECRET` | `backend/.env` | GitHub OAuth App client secret | Same page as above |
 | `GITHUB_APP_ID` | `backend/.env` | GitHub App numeric ID | github.com → Settings → Developer settings → GitHub Apps |
+| `GITHUB_WEBHOOK_SECRET` | `backend/.env` | Push-webhook HMAC secret (optional) | Same page → Webhook secret |
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | GitHub App client ID | Same page as above |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | GitHub App client secret | Same page as above |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` file | Generate on GitHub App page → download |
@@ -234,8 +271,9 @@ supported setup.
 3. **Settings → API Keys**:
    - Copy the **Publishable key** (`sb_publishable_...`) → paste into `VITE_SUPABASE_ANON_KEY`.
    - Create (or reveal) the **Secret key** (`sb_secret_...`) → paste into `SUPABASE_SERVICE_ROLE_KEY`.
-4. **Settings → Database** → copy the **Connection string** (select **Session mode**).
-   - Paste into `DATABASE_URL`.
+4. **Settings → Database** → copy the **Connection string** twice:
+   - **Transaction mode** (port 6543) → paste into `DATABASE_URL`.
+   - **Session mode** (port 5432) → paste into `DIRECT_DATABASE_URL` (DDL/migrations only).
 5. **Authentication → Sign In / Providers → GitHub** → enable the provider.
    - Copy the **Callback URL** shown — you'll need it for the GitHub OAuth App.
 6. Run the database migration:
@@ -243,7 +281,7 @@ supported setup.
      `backend/supabase/migrations/001_initial_schema.sql` → Run.
    - **Option B:** From your terminal:
      ```bash
-     psql "$DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
+     psql "$DIRECT_DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
      ```
 
 ### GitHub OAuth App (for login)
@@ -276,10 +314,13 @@ supported setup.
    - **Homepage URL:** `http://localhost:5173`
    - **Callback URL:** `http://localhost:5173/github/oauth/callback`
    - **Setup URL:** `http://localhost:5173/github/setup`
-   - **Webhook:** uncheck "Active" (we don't need webhooks)
+   - **Webhook:** check **Active** if you want push-triggered re-analysis
+     (optional — see "GitHub App webhook (auto re-analysis)" below). Otherwise
+     uncheck it.
 3. Under **Permissions → Repository permissions**:
    - **Contents:** Read-only
    - **Metadata:** Read-only
+   - Under **Subscribe to events**, tick **Push** (only if the webhook is Active).
 4. Click **Create GitHub App**.
 5. On the app's settings page:
    - Copy **App ID** → `GITHUB_APP_ID`
@@ -291,6 +332,44 @@ supported setup.
 7. **Install the App** on your GitHub account:
    - From the app settings page → **Install App** → select your account → choose
      "All repositories" or select specific ones.
+
+### GitHub App webhook (auto re-analysis)
+
+Optional: pushes can trigger an **incremental** re-analysis automatically.
+Off by default — each project opts in via Settings → "Re-analyze on push"
+(`project_settings.auto_reanalyze_on_push`).
+
+Behavior: a push to branch X re-analyzes each scope that has onboarding
+packages on X (one `incremental_update` job per scope, attributed to the
+project owner). Pushes to branches without packages are ignored. Incremental
+runs **stale-flag** affected sections/tutorials — they never rebuild packages,
+so there is no surprise LLM spend. Redeliveries are idempotent (the per-tuple
+concurrency guard skips identical active runs). Note a repo imported by
+several users fans out to one run set per opted-in project.
+
+Setup:
+
+1. GitHub App settings → **Webhook**: check **Active**,
+   - **Webhook URL:** `https://<api-host>/api/webhooks/github`
+     (local dev: GitHub can't reach localhost — use a tunnel such as
+     [smee.io](https://smee.io) or `ngrok http 3000` and paste its URL).
+   - **Webhook secret:** generate one
+     (`node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`).
+2. Subscribe to the **Push** event (Permissions & events page).
+3. Add the same value to `backend/.env`: `GITHUB_WEBHOOK_SECRET=<secret>`.
+   Deliveries are verified against `X-Hub-Signature-256` (HMAC over the raw
+   body); with the env var unset the endpoint answers 503 and does nothing.
+4. Toggle **Settings → Re-analyze on push** in each project that should react.
+
+Smoke test without GitHub:
+
+```bash
+BODY='{"ref":"refs/heads/main","after":"<40-hex sha>","deleted":false,"repository":{"name":"<repo>","owner":{"login":"<owner>"}},"installation":{"id":123}}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" -hex | sed 's/^.*= //')"
+curl -i -X POST http://localhost:3000/api/webhooks/github \
+  -H "Content-Type: application/json" -H "X-GitHub-Event: push" \
+  -H "X-Hub-Signature-256: $SIG" -d "$BODY"
+```
 
 ### OpenRouter (AI)
 
@@ -381,7 +460,7 @@ it's safe to re-run after adding new tables or columns.
 **Via psql:**
 
 ```bash
-psql "$DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
+psql "$DIRECT_DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
 ```
 
 ### Nuclear reset
@@ -390,10 +469,10 @@ If you need to wipe everything and start fresh:
 
 ```bash
 # Step 1: Drop all tables, functions, triggers, and extensions
-psql "$DATABASE_URL" -f backend/supabase/migrations/000_drop_all.sql
+psql "$DIRECT_DATABASE_URL" -f backend/supabase/migrations/000_drop_all.sql
 
 # Step 2: Re-create everything
-psql "$DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
+psql "$DIRECT_DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
 ```
 
 Or paste each file into the SQL Editor in order.

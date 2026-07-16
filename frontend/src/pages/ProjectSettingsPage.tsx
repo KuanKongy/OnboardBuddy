@@ -2,6 +2,7 @@ import { AlertTriangle, GitBranch, Loader2, RefreshCw, Save, Shield, Sparkles, T
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
+import { usePackages } from "@/contexts/PackagesContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -68,6 +69,7 @@ interface RoleWeights {
 
 export function ProjectSettingsPage() {
   const { project, refetch } = useProject();
+  const { registerSessionJob } = usePackages();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
@@ -80,6 +82,7 @@ export function ProjectSettingsPage() {
   const [budgetCalls, setBudgetCalls] = useState<string>("");
   const [budgetTokens, setBudgetTokens] = useState<string>("");
   const [stopBehavior, setStopBehavior] = useState("pause");
+  const [autoReanalyze, setAutoReanalyze] = useState(false);
   const [saving, setSaving] = useState(false);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const analyzing = project?.status === "analyzing";
@@ -114,6 +117,7 @@ export function ProjectSettingsPage() {
       setBudgetCalls(budgets.max_llm_calls ? String(budgets.max_llm_calls) : "");
       setBudgetTokens(budgets.max_input_tokens ? String(budgets.max_input_tokens) : "");
       setStopBehavior((project.settings as { budget_stop_behavior?: string }).budget_stop_behavior ?? "pause");
+      setAutoReanalyze((project.settings as { auto_reanalyze_on_push?: boolean }).auto_reanalyze_on_push ?? false);
     }
   }, [project]);
 
@@ -142,6 +146,7 @@ export function ProjectSettingsPage() {
           loc_limit: locLimit,
           budget_overrides,
           budget_stop_behavior: stopBehavior,
+          auto_reanalyze_on_push: autoReanalyze,
         }),
       });
       setSaved(true);
@@ -409,6 +414,40 @@ export function ProjectSettingsPage() {
 
         <Card>
           <CardContent className="p-3">
+            <h3 className="mb-1 text-xs font-medium text-foreground">Automation</h3>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[13px] font-medium text-foreground">Re-analyze on push</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  When GitHub pushes to a branch that has onboarding packages, run an incremental
+                  re-analysis per affected scope. Changed sections get stale badges — packages are
+                  never rebuilt automatically, so there's no surprise AI spend. Requires the GitHub
+                  App webhook to be configured (see the DevOps guide).
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoReanalyze}
+                aria-label="Re-analyze on push"
+                disabled={!canEdit}
+                onClick={() => setAutoReanalyze((v) => !v)}
+                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                  autoReanalyze ? "bg-primary" : "bg-muted-foreground/30"
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-all ${
+                    autoReanalyze ? "left-[18px]" : "left-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-3">
             <h3 className="mb-1 text-xs font-medium text-foreground">Project LLM API key</h3>
             <p className="mb-2 text-[11px] text-muted-foreground">
               Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
@@ -591,7 +630,10 @@ export function ProjectSettingsPage() {
         project={project}
         open={analyzeOpen}
         onOpenChange={setAnalyzeOpen}
-        onStarted={() => refetch()}
+        onStarted={(jobId) => {
+          registerSessionJob(jobId, { navigateOnDone: true });
+          refetch();
+        }}
       />
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

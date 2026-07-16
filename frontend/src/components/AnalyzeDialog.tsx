@@ -16,8 +16,8 @@ interface AnalyzeDialogProps {
   project: ProjectData;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Fired after the analysis job is accepted, so callers can start polling. */
-  onStarted: () => void;
+  /** Fired with the accepted job's id, so callers can watch it to completion. */
+  onStarted: (jobId: string) => void;
   /** Pre-selects the package role (e.g. regenerating a specific package at a new commit). */
   initialRole?: string;
 }
@@ -49,6 +49,9 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     setConfig(next);
     // The preview describes one exact configuration; invalidate it on change.
     resetPreflight();
+    // A tuple conflict is config-specific too — editing the config may
+    // resolve it (different branch/commit/scope runs in parallel).
+    setConflict(false);
   }
 
   async function startAnalysis() {
@@ -56,12 +59,12 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     setError("");
     setConflict(false);
     try {
-      await apiFetch(`/projects/${projectId}/analyze`, {
+      const data = (await apiFetch(`/projects/${projectId}/analyze`, {
         method: "POST",
         body: JSON.stringify(analyzeRequestBody(config)),
-      });
+      })) as { analysis: { id: string } };
       onOpenChange(false);
-      onStarted();
+      onStarted(data.analysis.id);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
         setConflict(true);
@@ -96,8 +99,9 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
             <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
             <span>
-              An analysis is already running for this project — its progress is on the
-              Project Overview. Wait for it to finish before starting another run.
+              This exact scope and commit are already being analyzed — that run's progress
+              is on the Project Overview. Change the branch, commit, or scope to start
+              another run in parallel.
             </span>
           </div>
         )}

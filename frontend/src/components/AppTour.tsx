@@ -48,7 +48,14 @@ interface AppTourProps {
  * an empty-state dashboard has no stats row) are skipped automatically.
  */
 export function AppTour({ steps, onDone }: AppTourProps) {
-  const [available] = useState(() => steps.filter((s) => getTargetEl(s.target) !== null));
+  // Filter on visibility, not just existence: `hidden lg:block` asides exist
+  // in the DOM on mobile with a zero rect, which would spotlight nothing.
+  const [available] = useState(() =>
+    steps.filter((s) => {
+      const el = getTargetEl(s.target);
+      return el !== null && el.offsetParent !== null;
+    }),
+  );
   const [index, setIndex] = useState(0);
   const [rect, setRect] = useState<Rect | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -165,7 +172,7 @@ export function AppTour({ steps, onDone }: AppTourProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-[60]">
+    <div className="fixed inset-0 z-[60]" data-tour-overlay>
       {rect ? (
         <div
           aria-hidden="true"

@@ -72,12 +72,14 @@ export interface OnboardingPackage {
   sections: OnboardingSection[];
 }
 
-/** One onboarding package card: (scope, role, commit) with status rollups. */
+/** One onboarding package card: (scope, role, commit, branch) with status rollups. */
 export interface PackageCard {
   id: string;
+  snapshot_id: string;
   role: string;
   status: PackageStatus;
   analyzed_commit: string;
+  branch: string;
   created_at: string;
   updated_at: string;
   scope_name: string;

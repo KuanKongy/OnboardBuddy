@@ -18,6 +18,10 @@ export interface Repo {
   owner: { login: string };
   private: boolean;
   default_branch: string;
+  /** Repo metadata shown on dashboard cards (GitHub caps descriptions at 350 chars). */
+  description?: string | null;
+  language?: string | null;
+  pushed_at?: string | null;
 }
 
 export interface Branch {

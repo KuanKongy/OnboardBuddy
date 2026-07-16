@@ -4,6 +4,7 @@ import { answerQuestion, NoSnapshotError } from "../../qa/askService.js";
 import { AiDisabledError } from "../../worker/ai/privacy.js";
 import { BudgetExceededError } from "../../worker/ai/budgetEnforcer.js";
 import type { DeveloperRole } from "../../worker/semantic/projections.js";
+import { BadPackageParamError, PackageNotFoundError, readPackageParam, resolvePackageContext } from "../services/packageResolver.js";
 
 /**
  * Grounded Q&A evaluation endpoint (doc/Pipeline.md) — a dev tool for
@@ -17,11 +18,12 @@ const ROLES = new Set(["backend", "frontend", "devops", "qa", "general"]);
 askRouter.post("/", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = String(req.params.id);
-    const { question, scope_id, role, snapshot_id } = (req.body ?? {}) as {
+    const { question, scope_id, role, snapshot_id, package_id } = (req.body ?? {}) as {
       question?: string;
       scope_id?: string;
       role?: string;
       snapshot_id?: string;
+      package_id?: string;
     };
 
     if (typeof question !== "string" || question.trim().length < 3) {
@@ -33,12 +35,36 @@ askRouter.post("/", requireProjectAccess(), async (req, res) => {
       return;
     }
 
+    // package_id (the sidebar selection) grounds the answer in that
+    // package's snapshot; explicit snapshot_id/scope_id still win.
+    let effectiveSnapshotId = snapshot_id;
+    if (!effectiveSnapshotId && package_id !== undefined) {
+      try {
+        const ctx = await resolvePackageContext({
+          projectId,
+          userId: req.user?.id ?? null,
+          packageId: readPackageParam(package_id),
+        });
+        effectiveSnapshotId = ctx?.snapshotId;
+      } catch (err) {
+        if (err instanceof BadPackageParamError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
+        if (err instanceof PackageNotFoundError) {
+          res.status(404).json({ error: "Package not found" });
+          return;
+        }
+        throw err;
+      }
+    }
+
     const answer = await answerQuestion({
       projectId,
       question: question.trim(),
       scopeId: scope_id,
       role: role as DeveloperRole | undefined,
-      snapshotId: snapshot_id,
+      snapshotId: effectiveSnapshotId,
     });
     res.json({ answer });
   } catch (err) {

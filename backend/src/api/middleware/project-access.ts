@@ -13,7 +13,7 @@ export function requireProjectAccess(...allowedTiers: string[]) {
       }
 
       const result = await query(
-        `SELECT project_id, user_id, permission_tier, developer_role
+        `SELECT project_id, user_id, permission_tier, developer_role, default_package_id
          FROM project_members
          WHERE project_id = $1 AND user_id = $2`,
         [projectId, userId],
@@ -29,6 +29,7 @@ export function requireProjectAccess(...allowedTiers: string[]) {
         user_id: string;
         permission_tier: string;
         developer_role: string;
+        default_package_id: string | null;
       };
 
       if (allowedTiers.length > 0 && !allowedTiers.includes(member.permission_tier)) {

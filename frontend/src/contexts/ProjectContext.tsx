@@ -22,6 +22,8 @@ export interface ProjectData {
   last_analyzed_at: string | null;
   permission_tier: string;
   developer_role: string;
+  /** The CALLER's default package (per member) — the sidebar selection default. */
+  default_package_id: string | null;
   settings: {
     ignored_paths: string[];
     privacy_mode: "full_ai" | "facts_only_ai" | "ai_disabled";

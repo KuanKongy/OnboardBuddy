@@ -3,6 +3,7 @@ import {
   Boxes,
   GitBranch,
   HelpCircle,
+  Keyboard,
   LayoutDashboard,
   Loader2,
   Map,
@@ -13,10 +14,12 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, NavLink, Outlet, useLocation, useParams } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { useAuth } from "@/contexts/AuthContext";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
+import { PackagesProvider } from "@/contexts/PackagesContext";
+import { PackageSelector } from "@/components/PackageSelector";
 import { dismissTour, tourDismissed } from "@/lib/tourState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +28,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AccountCard } from "@/components/AccountCard";
 import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarProvider, SidebarShell, useSidebar } from "@/components/SidebarShell";
+import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { useHotkeys } from "@/hooks/useHotkeys";
 
 const projectNavItems = [
   {
@@ -103,7 +108,12 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-overview",
     title: "Start at the overview",
-    body: "Analysis status, live pipeline metrics, and what changed. The Analyze… button here lets you pick a scope and preview cost before anything runs.",
+    body: "Active runs, your packages across branches and commits, and the full run history with costs. The Analyze… button lets you pick a branch, commit, and scope — and preview cost before anything runs.",
+  },
+  {
+    target: "package-selector",
+    title: "Pick which package you're viewing",
+    body: "Every tab follows this selection — branch, commit, scope, and role. Star one to make it your personal default; a generation you start selects its new package automatically when it finishes.",
   },
   {
     target: "nav-onboarding",
@@ -152,7 +162,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   },
 ];
 
-function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
+function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => void; onShowShortcuts: () => void }) {
   const { project, loading } = useProject();
   const { id } = useParams<{ id: string }>();
   const { setOpen } = useSidebar();
@@ -181,6 +191,7 @@ function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
               <GitBranch className="h-2.5 w-2.5" />
               {project.branch}
             </Badge>
+            <PackageSelector />
           </div>
         ) : null}
       </div>
@@ -232,6 +243,14 @@ function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
           <HelpCircle className="h-3.5 w-3.5" />
           Take a tour
         </button>
+        <button
+          onClick={onShowShortcuts}
+          title="Also opens with ?"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <Keyboard className="h-3.5 w-3.5" />
+          Keyboard shortcuts
+        </button>
       </div>
       <div className="flex items-center gap-2 px-2 py-2">
         <div className="min-w-0 flex-1">
@@ -246,7 +265,28 @@ function ProjectSidebar({ onStartTour }: { onStartTour: () => void }) {
 function ProjectLayoutContent() {
   const { loading, error } = useProject();
   const { user } = useAuth();
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [tourOpen, setTourOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // Project-wide hotkeys: [ / ] cycle tabs, 1..9 jump, ? opens the keymap.
+  // Per-page arrows/Esc live in the pages themselves (hooks/useHotkeys.ts).
+  const tabPaths = projectNavItems.map((item) => item.to);
+  const currentSegment = pathname.replace(/\/+$/, "").split(`/projects/${id}`)[1]?.replace(/^\//, "").split("/")[0] ?? "";
+  const currentTab = Math.max(0, tabPaths.indexOf(currentSegment));
+  const goToTab = (index: number) => {
+    const clamped = Math.min(Math.max(index, 0), tabPaths.length - 1);
+    if (clamped === currentTab) return;
+    navigate(`/projects/${id}/${tabPaths[clamped]}`);
+  };
+  useHotkeys({
+    "[": () => goToTab(currentTab - 1),
+    "]": () => goToTab(currentTab + 1),
+    "?": () => setShortcutsOpen(true),
+    ...Object.fromEntries(tabPaths.slice(0, 9).map((_, i) => [String(i + 1), () => goToTab(i)])),
+  });
 
   // First visit to any project: walk through what each tab is for. Waits for
   // the project to load so the tour never spotlights a spinner.
@@ -264,7 +304,7 @@ function ProjectLayoutContent() {
   if (error) {
     return (
       <div className="flex h-screen">
-        <ProjectSidebar onStartTour={() => setTourOpen(true)} />
+        <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
         <main className="flex flex-1 items-center justify-center bg-background p-4">
           <div className="text-center">
             <p className="text-sm text-destructive">{error}</p>
@@ -279,7 +319,7 @@ function ProjectLayoutContent() {
 
   return (
     <div className="flex h-screen">
-      <ProjectSidebar onStartTour={() => setTourOpen(true)} />
+      <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
       <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
         {loading ? (
           <div className="flex items-center justify-center py-16">
@@ -290,6 +330,7 @@ function ProjectLayoutContent() {
         )}
       </main>
       {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={handleTourDone} />}
+      <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }
@@ -300,9 +341,11 @@ export function ProjectLayout() {
 
   return (
     <ProjectProvider projectId={id}>
-      <SidebarProvider>
-        <ProjectLayoutContent />
-      </SidebarProvider>
+      <PackagesProvider projectId={id}>
+        <SidebarProvider>
+          <ProjectLayoutContent />
+        </SidebarProvider>
+      </PackagesProvider>
     </ProjectProvider>
   );
 }

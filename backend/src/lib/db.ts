@@ -2,10 +2,12 @@ import pg from "pg";
 
 export const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL,
-  // Supabase's session-mode pooler caps the whole user at pool_size (15 by
-  // default) and BOTH processes (API + worker) hold clients from that cap, so
-  // the per-process default must leave headroom: set PG_POOL_MAX per service
-  // (recommended: API=4, worker=8 — see doc/DEVOPS.md "Connection pooling").
+  // DATABASE_URL points at Supabase's TRANSACTION-mode pooler (port 6543):
+  // clients multiplex over the pooler's backend pool, so per-process caps can
+  // be sized for the process's own fan-out rather than a shared user-wide
+  // session cap. DDL/migrations go through DIRECT_DATABASE_URL instead — see
+  // doc/DEVOPS.md "Connection pooling". No session state may be assumed here
+  // (no advisory locks, LISTEN/NOTIFY, SET SESSION, named prepared statements).
   max: Number(process.env.PG_POOL_MAX ?? 10),
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,

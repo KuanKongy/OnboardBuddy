@@ -23,10 +23,12 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
+import { useHotkeys } from "@/hooks/useHotkeys";
 import { PageHeader } from "@/components/PageHeader";
 import { SidebarToggle } from "@/components/SidebarShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
+import { usePackages } from "@/contexts/PackagesContext";
 import { apiFetch } from "@/lib/api";
 import { dismissTour, tourDismissed } from "@/lib/tourState";
 import { useProgress } from "@/lib/useProgress";
@@ -34,7 +36,6 @@ import {
   ROLES,
   SECTION_NAV_ORDER,
   fetchOnboardingPackage,
-  fetchPackageCards,
   regenerateSection,
 } from "@/lib/onboardingData";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
@@ -135,6 +136,25 @@ const LIFECYCLE_TOUR_STEPS: TourStep[] = [
     target: "onboarding-filters",
     title: "Privacy decides HOW, not WHETHER",
     body: "The AI & privacy setting applies to the very next generation — no re-analysis needed. Full AI narrates with code snippets, facts-only sends no code to the model, and AI-disabled builds deterministic fact sheets with zero LLM calls.",
+  },
+];
+
+/** First visit to the READER: how to move through and track a package. */
+const READER_TOUR_STEPS: TourStep[] = [
+  {
+    target: "reader-sections",
+    title: "Your reading path",
+    body: "Sections are ordered for onboarding — work top-down (or use ← / →). A warning icon means a section went stale after a newer analysis; a red dot means low confidence.",
+  },
+  {
+    target: "reader-review",
+    title: "Track what you've read",
+    body: "Mark each section reviewed as you finish it — that's your progress tracker AND a signal to teammates that the content was checked. If a regeneration changes a section, it drops back to draft so you know to re-read it.",
+  },
+  {
+    target: "reader-actions",
+    title: "Export or refresh",
+    body: "Download the whole package as Markdown here. Owners and admins can also rebuild a single section against the newest analysis with 'Regenerate section'.",
   },
 ];
 
@@ -297,7 +317,7 @@ function SectionView({
 
 // ── package cards ─────────────────────────────────────────────────────────────
 
-function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageCard; onOpen: () => void; onRegenerate?: () => void }) {
+export function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageCard; onOpen: () => void; onRegenerate?: () => void }) {
   return (
     // A div-with-role instead of <button> so the nested Regenerate button
     // stays valid HTML.
@@ -328,13 +348,13 @@ function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageCard; on
 
       <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
         <GitCommitHorizontal className="h-3 w-3" />
-        <span className="font-mono">{card.analyzed_commit.slice(0, 7)}</span>
+        <span className="truncate font-mono">{card.branch}@{card.analyzed_commit.slice(0, 7)}</span>
         {card.is_latest_commit ? (
           <span className="text-success">latest</span>
         ) : (
           <span className="text-warning">behind latest</span>
         )}
-        <span className="ml-auto">{new Date(card.updated_at).toLocaleDateString()}</span>
+        <span className="ml-auto shrink-0">{new Date(card.updated_at).toLocaleDateString()}</span>
       </div>
 
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2.5 text-[11.5px] tabular-nums text-muted-foreground">
@@ -378,12 +398,15 @@ export function OnboardingPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { project, refetch } = useProject();
+  const { packages: cards, refreshPackages, selectPackage, registerSessionJob } = usePackages();
 
   const view = searchParams.get("view") ?? "cards";
   const selectedRole = searchParams.get("role") ?? project?.developer_role ?? "general";
+  // ?package=<id> pins the reader to one exact package (set when opening a
+  // card); legacy ?role= links keep the old "latest for role" behavior.
+  const selectedPackageParam = searchParams.get("package");
 
-  const [cards, setCards] = useState<PackageCard[] | null>(null);
-  const [cardsLoading, setCardsLoading] = useState(true);
+  const cardsLoading = cards === null;
   const [roleFilter, setRoleFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [freshFilter, setFreshFilter] = useState("all");
@@ -414,8 +437,12 @@ export function OnboardingPage() {
   // Remember where the reader is so "Continue onboarding" resumes here.
   useEffect(() => {
     if (view !== "reader" || !pkg?.id || pkg.status === "missing") return;
-    saveProgress("onboarding", pkg.id, { sectionType: activeSectionId, role: selectedRole });
-  }, [view, pkg?.id, pkg?.status, activeSectionId, selectedRole, saveProgress]);
+    saveProgress("onboarding", pkg.id, {
+      sectionType: activeSectionId,
+      role: pkg.role ?? selectedRole,
+      packageId: pkg.id,
+    });
+  }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, saveProgress]);
 
   function setParams(next: Record<string, string | null>) {
     setSearchParams((prev) => {
@@ -427,27 +454,20 @@ export function OnboardingPage() {
     }, { replace: true });
   }
 
-  function loadCards() {
-    if (!id) return;
-    setCardsLoading(true);
-    fetchPackageCards(id)
-      .then(setCards)
-      .catch(() => setCards([]))
-      .finally(() => setCardsLoading(false));
-  }
-
-  useEffect(() => { loadCards(); }, [id, project?.status]);
+  // Package list + its while-generating refresh live in PackagesContext (the
+  // one shared poll); this page only re-requests on explicit actions.
+  const loadCards = refreshPackages;
 
   useEffect(() => {
     if (!id || view !== "reader") return;
     fetchAbortRef.current?.abort();
     const controller = new AbortController();
     fetchAbortRef.current = controller;
-    fetchOnboardingPackage(id, selectedRole)
+    fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
       .then((data) => { if (!controller.signal.aborted) setPkg(data); })
       .catch(() => {});
     return () => { controller.abort(); };
-  }, [id, selectedRole, view]);
+  }, [id, selectedRole, selectedPackageParam, view]);
 
   useEffect(() => {
     setGenerating(project?.status === "analyzing");
@@ -459,7 +479,7 @@ export function OnboardingPage() {
     if (!id || view !== "reader") return;
     if (pkg?.status !== "generating" && !generating) return;
     const timer = window.setInterval(() => {
-      fetchOnboardingPackage(id, selectedRole)
+      fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
         .then((data) => {
           if (!data) return;
           setPkg(data);
@@ -468,16 +488,7 @@ export function OnboardingPage() {
         .catch(() => {});
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [id, view, selectedRole, pkg?.status, generating]);
-
-  // Card grid: keep statuses fresh while anything is still generating.
-  useEffect(() => {
-    if (view !== "cards") return;
-    const busy = project?.status === "analyzing" || (cards ?? []).some((c) => c.status === "generating");
-    if (!busy) return;
-    const timer = window.setInterval(loadCards, 8000);
-    return () => window.clearInterval(timer);
-  }, [view, project?.status, cards]);
+  }, [id, view, selectedRole, selectedPackageParam, pkg?.status, generating]);
 
   // First visit to the package grid: auto-run the "How packages work" tour —
   // but only after the project-level tour was dismissed, so two spotlight
@@ -500,26 +511,58 @@ export function OnboardingPage() {
   const activeSection = sections.find((s) => s.id === activeSectionId);
   const markedReviewed = activeSection?.reviewStatus === "approved";
 
+  // First reader visit: a 3-step coach mark (reading path → mark reviewed →
+  // export/regenerate). Only after the project tour, and only with content.
+  const [readerTourOpen, setReaderTourOpen] = useState(false);
+  useEffect(() => {
+    if (view !== "reader" || isMissing || sections.length === 0 || !user) return;
+    if (!tourDismissed("project", user.id)) return;
+    if (tourDismissed("onboardingReader", user.id)) return;
+    setReaderTourOpen(true);
+  }, [view, isMissing, sections.length, user]);
+  function finishReaderTour() {
+    if (user) dismissTour("onboardingReader", user.id);
+    setReaderTourOpen(false);
+  }
+
+  // ← / → move through the present sections while reading.
+  const presentSectionIds = SECTION_NAV_ORDER.filter((navId) => sections.some((s) => s.id === navId));
+  const moveSection = (delta: number) => {
+    const idx = presentSectionIds.indexOf(activeSectionId);
+    const next = presentSectionIds[Math.min(Math.max((idx === -1 ? 0 : idx) + delta, 0), presentSectionIds.length - 1)];
+    if (next && next !== activeSectionId) setActiveSectionId(next);
+  };
+  useHotkeys(
+    {
+      ArrowRight: () => moveSection(1),
+      ArrowLeft: () => moveSection(-1),
+    },
+    view === "reader" && !isMissing && presentSectionIds.length > 0,
+  );
+
   // Full re-analysis goes through the guarded AnalyzeDialog (config +
   // preview + explicit start) — never a bare POST that silently re-runs
-  // the whole pipeline.
-  function handleAnalysisStarted() {
+  // the whole pipeline. Watching the job makes its finished package the
+  // user's selection and returns them to the overview.
+  function handleAnalysisStarted(jobId: string) {
     setGenerating(true);
+    registerSessionJob(jobId, { navigateOnDone: true });
     refetch();
   }
 
-  // Whole-package regeneration from a card: rebuilds this role's package
-  // against the latest complete snapshot (no repo re-analysis; unchanged
+  // Whole-package regeneration from a card: rebuilds THAT package in place
+  // (same snapshot, branch, and role — no repo re-analysis; unchanged
   // content is served from the content-addressed cache).
   async function handleRegeneratePackage() {
     if (!id || !regenCard) return;
     setRegenBusy(true);
     setRegenError("");
     try {
-      await apiFetch(`/projects/${id}/onboarding/generate`, {
+      const data = (await apiFetch(`/projects/${id}/onboarding/generate`, {
         method: "POST",
-        body: JSON.stringify({ role: regenCard.role }),
-      });
+        body: JSON.stringify({ role: regenCard.role, package_id: regenCard.id }),
+      })) as { job?: { id: string } };
+      if (data.job?.id) registerSessionJob(data.job.id, { navigateOnDone: false });
       setRegenCard(null);
       loadCards();
     } catch (err: unknown) {
@@ -529,24 +572,33 @@ export function OnboardingPage() {
     }
   }
 
-  // On-demand per-role generation: reuses the latest analysis snapshot, so
-  // only this role's package is paid for — no repo re-analysis, no fan-out.
+  // On-demand per-role generation against the selected package's snapshot
+  // (falls back to the latest analysis), so only this role's package is paid
+  // for — no repo re-analysis, no fan-out.
   async function handleGenerateRole() {
     if (!id) return;
     setGenerating(true);
     setActionError("");
     try {
-      await apiFetch(`/projects/${id}/onboarding/generate`, {
+      const data = (await apiFetch(`/projects/${id}/onboarding/generate`, {
         method: "POST",
-        body: JSON.stringify({ role: selectedRole }),
-      });
+        body: JSON.stringify({
+          role: selectedRole,
+          package_id: selectedPackageParam ?? undefined,
+        }),
+      })) as { job?: { id: string } };
+      if (data.job?.id) registerSessionJob(data.job.id, { navigateOnDone: false });
       const started = Date.now();
       const poll = window.setInterval(async () => {
-        const data = await fetchOnboardingPackage(id, selectedRole);
-        if ((data && data.status !== "missing") || Date.now() - started > 300_000) {
+        const polled = await fetchOnboardingPackage(id, { role: selectedRole });
+        if ((polled && polled.status !== "missing") || Date.now() - started > 300_000) {
           window.clearInterval(poll);
           setGenerating(false);
-          if (data) setPkg(data);
+          if (polled) {
+            setPkg(polled);
+            // Pin the reader to the package that just landed.
+            if (polled.id) setParams({ package: polled.id });
+          }
           loadCards();
         }
       }, 5000);
@@ -566,7 +618,7 @@ export function OnboardingPage() {
       const oldId = activeSection.sectionId;
       const started = Date.now();
       const poll = window.setInterval(async () => {
-        const data = await fetchOnboardingPackage(id, selectedRole);
+        const data = await fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole });
         const fresh = data?.sections.find((s) => s.id === activeSectionId);
         if (fresh && fresh.sectionId !== oldId) {
           window.clearInterval(poll);
@@ -593,7 +645,8 @@ export function OnboardingPage() {
         method: "PATCH",
         body: JSON.stringify({ review_status: newStatus }),
       });
-      fetchOnboardingPackage(id, selectedRole).then((data) => { if (data) setPkg(data); });
+      fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
+        .then((data) => { if (data) setPkg(data); });
     } catch (err) {
       console.error("Review update error:", err);
     }
@@ -602,8 +655,11 @@ export function OnboardingPage() {
   async function handleExport() {
     if (!id) return;
     try {
+      const exportQs = selectedPackageParam
+        ? `package_id=${encodeURIComponent(selectedPackageParam)}`
+        : `role=${encodeURIComponent(selectedRole)}`;
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/projects/${id}/onboarding/export?role=${encodeURIComponent(selectedRole)}`,
+        `${import.meta.env.VITE_API_URL}/projects/${id}/onboarding/export?${exportQs}`,
         {
           headers: {
             Authorization: `Bearer ${(await (await import("@/lib/supabase")).supabase.auth.getSession()).data.session?.access_token}`,
@@ -615,7 +671,7 @@ export function OnboardingPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `onboarding-${selectedRole}.md`;
+      a.download = `onboarding-${pkg?.role ?? selectedRole}.md`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -733,7 +789,12 @@ export function OnboardingPage() {
               <PackageCardView
                 key={card.id}
                 card={card}
-                onOpen={() => setParams({ view: "reader", role: card.role })}
+                onOpen={() => {
+                  // Opening a card pins the reader to that exact package and
+                  // makes it the sidebar selection so every tab follows.
+                  selectPackage(card.id);
+                  setParams({ view: "reader", package: card.id, role: card.role });
+                }}
                 onRegenerate={() => {
                   setRegenError("");
                   setRegenCard(card);
@@ -830,7 +891,7 @@ export function OnboardingPage() {
       {/* compact top bar: navigation + role + actions in one row */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
         <SidebarToggle />
-        <Button variant="ghost" size="xs" onClick={() => setParams({ view: null })} className="gap-1">
+        <Button variant="ghost" size="xs" onClick={() => setParams({ view: null, package: null })} className="gap-1">
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
         </Button>
         <div className="min-w-0">
@@ -840,12 +901,19 @@ export function OnboardingPage() {
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
-          <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
-            <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          {selectedPackageParam ? (
+            // Pinned to one exact package — role is part of its identity.
+            <Badge variant="outline" className="h-7 px-2 text-xs">
+              {ROLES.find((r) => r.key === (pkg?.role ?? selectedRole))?.label ?? (pkg?.role ?? selectedRole)}
+            </Badge>
+          ) : (
+            <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
+              <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
           {!isMissing && (
             <>
               {/* Always-visible per-section regeneration (owner/admin — the
@@ -866,8 +934,14 @@ export function OnboardingPage() {
               )}
               <Button
                 size="xs"
-                variant={markedReviewed ? "secondary" : "outline"}
-                className={cn("gap-1.5", markedReviewed && "border-success/40 bg-success-soft text-success")}
+                variant={markedReviewed ? "secondary" : "default"}
+                data-tour="reader-review"
+                className={cn(
+                  "gap-1.5",
+                  markedReviewed
+                    ? "border-success/40 bg-success-soft text-success"
+                    : "ring-2 ring-primary/30",
+                )}
                 onClick={handleToggleReview}
               >
                 {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
@@ -875,7 +949,7 @@ export function OnboardingPage() {
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="xs" variant="outline" className="gap-1">
+                  <Button size="xs" variant="outline" className="gap-1" data-tour="reader-actions">
                     <Download className="h-3 w-3" />
                     <ChevronDown className="h-3 w-3" />
                   </Button>
@@ -933,7 +1007,7 @@ export function OnboardingPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
-        <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block">
+        <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
           <nav className="space-y-0.5">
             {SECTION_NAV_ORDER
@@ -1017,6 +1091,7 @@ export function OnboardingPage() {
       </div>
 
       {receiptModal && <ReceiptViewer receipt={receiptModal} onClose={() => setReceiptModal(null)} />}
+      {readerTourOpen && <AppTour steps={READER_TOUR_STEPS} onDone={finishReaderTour} />}
     </div>
   );
 }

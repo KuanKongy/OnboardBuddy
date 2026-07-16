@@ -25,7 +25,7 @@ Actions to take on the GitHub Issues tracker:
 | **File (Open)** | #37 | GitHub sign-up provider error — file Open; close once the Supabase GitHub provider config is fixed and sign-up verified. |
 | **File + Close** | #38–#45 | Found during the first real M3 end-to-end run (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
 | **File + Close** | #46–#48 | Found testing CourseInsights (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
-| **File + Close** | #49–#51 | Found during M3 polish testing (2026-07-11/12), fixed same day — file with the bodies below, close with the fix notes. |
+| **File + Close** | #49–#52 | Found during M3 polish testing (2026-07-11/12), fixed same day — file with the bodies below, close with the fix notes. |
 | **Update** | #2, #12, #16, #20, #21, #23 | Already Closed on GitHub — verify and leave as-is. |
 
 **Close comment for #18:**
@@ -90,6 +90,7 @@ Actions to take on the GitHub Issues tracker:
 | 49 | Tours never re-appear for new accounts; package/lifecycle tour never auto-starts | P3 | Closed | Fixed (M3) |
 | 50 | Runs are untrustworthy: phantom phase durations, dead workers look alive, no pause/stop/resume | P1 | Closed | Fixed (M3) |
 | 51 | Receipt UX: unbounded snippets, no symbol explanation, reviewer shown as UUID | P3 | Closed | Fixed (M3) |
+| 52 | Incremental re-analysis: doc changes never stale anything; binary files false-churn; short SHAs fork snapshots | P2 | Closed | Fixed (M3) |
 
 ### What has been fixed
 
@@ -1669,3 +1670,35 @@ A long function snippet stretched the receipt modal to the full page height; rec
 ## Notes during fixing
 
 Fixed (2026-07-11): snippet capped at 40vh with two-way scrolling inside a wider modal (markdown code fences in sections capped too); receipts carry the cited symbol's semantic-record summary ("What this does", JSDoc fallback); reviewer shows the user's email; doc_health bundles attach the snapshot's doc nodes as citable doc-trust receipts — verified low → high on a live regeneration with zero validation issues.
+
+---
+
+## [P2][Closed] Bug 52: Incremental re-analysis — doc changes never stale anything; binary files false-churn; short SHAs fork snapshots
+
+**Bug #52**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-12 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | worker/incrementalAnalyzer.ts, engine/repoIngester.ts, worker/index.ts, AnalysisRunPanel.tsx |
+
+## Expected behavior
+
+Re-analyzing after a new commit stale-flags the content the change actually affects, and the run visibly reports what it concluded.
+
+## Actual behavior
+
+A docs-only commit (README + two PDFs) produced zero staleness and zero visible outcome: staleness only matched code receipts, so doc-derived sections (doc_health, start_here) never went stale for doc edits; the diff row in the run panel showed no diff numbers, so "nothing stale" looked like "nothing happened"; the tour promised a new card that incremental runs never create. Two latent bugs surfaced during diagnosis: binary files hashed `path:size:mtime` where mtime is the zipball EXTRACTION time — every PDF "changed" on every run (false churn in all diffs); and a requested short SHA was recorded verbatim, forking the (scope, commit) snapshot identity so diffs compared the wrong pair.
+
+## Notes during fixing
+
+Fixed (2026-07-12):
+- Doc staleness: changed doc files now stale sections citing doc receipts (`doc:<path>#…` prefix match), always stale `doc_health`, and stale `start_here` when the README changed.
+- Binary files ≤2MB hash their bytes; oversized files hash path+size — mtime is never used. (One transitional "changed" wave for binaries on the first re-analysis after deploy.)
+- Requested commits are resolved to the full 40-char SHA before snapshotting.
+- The run panel's diff row now shows "N files changed · N symbols changed · N sections stale"; the lifecycle tour copy matches reality (a new card appears when you generate at the new commit; incremental runs stale-flag in place).
+
+Verified live end-to-end on a real project: symbol-hash change → `symbolsChanged: 1`, the section citing it stale-flagged; README change → start_here + doc_health stale; package marked stale with flags feeding the staleness view and the card badge.

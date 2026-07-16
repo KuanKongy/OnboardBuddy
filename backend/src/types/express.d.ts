@@ -6,6 +6,7 @@ declare namespace Express {
       user_id: string;
       permission_tier: string;
       developer_role: string;
+      default_package_id: string | null;
     };
   }
 }

@@ -84,13 +84,19 @@ export interface WorkflowGraphResponse {
   graph: GraphResponse["graph"];
 }
 
+/** Builds "?a=1&b=2" from present params — feature tabs pass the selected package through this. */
+function queryString(params: Record<string, string | undefined>): string {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== "") as Array<[string, string]>;
+  if (entries.length === 0) return "";
+  return `?${entries.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
+}
+
 export async function fetchDependencyGraph(
   projectId: string,
   cluster?: string,
+  packageId?: string | null,
 ): Promise<GraphResponse> {
-  const url = cluster
-    ? `/projects/${projectId}/graph/dependencies?cluster=${encodeURIComponent(cluster)}`
-    : `/projects/${projectId}/graph/dependencies`;
+  const url = `/projects/${projectId}/graph/dependencies${queryString({ cluster, package_id: packageId ?? undefined })}`;
   try {
     return (await apiFetch(url)) as GraphResponse;
   } catch {
@@ -99,17 +105,21 @@ export async function fetchDependencyGraph(
   }
 }
 
-export async function fetchClassGraph(projectId: string): Promise<GraphResponse> {
+export async function fetchClassGraph(projectId: string, packageId?: string | null): Promise<GraphResponse> {
   try {
-    return (await apiFetch(`/projects/${projectId}/graph/classes`)) as GraphResponse;
+    return (await apiFetch(
+      `/projects/${projectId}/graph/classes${queryString({ package_id: packageId ?? undefined })}`,
+    )) as GraphResponse;
   } catch {
     throw new Error("Failed to load class graph data");
   }
 }
 
-export async function fetchWorkflowsList(projectId: string): Promise<WorkflowSummary[]> {
+export async function fetchWorkflowsList(projectId: string, packageId?: string | null): Promise<WorkflowSummary[]> {
   try {
-    const res = (await apiFetch(`/projects/${projectId}/workflows`)) as { workflows: WorkflowSummary[] };
+    const res = (await apiFetch(
+      `/projects/${projectId}/workflows${queryString({ package_id: packageId ?? undefined })}`,
+    )) as { workflows: WorkflowSummary[] };
     return res.workflows ?? [];
   } catch {
     throw new Error("Failed to load workflows");
@@ -134,10 +144,11 @@ export async function fetchWorkflowGraph(
 export async function fetchNodeDetail(
   projectId: string,
   nodeKey: string,
+  packageId?: string | null,
 ): Promise<NodeDetail | null> {
   try {
     const res = (await apiFetch(
-      `/projects/${projectId}/graph/nodes/${encodeURIComponent(nodeKey)}`,
+      `/projects/${projectId}/graph/nodes/${encodeURIComponent(nodeKey)}${queryString({ package_id: packageId ?? undefined })}`,
     )) as { node: NodeDetail };
     return res.node ?? null;
   } catch {

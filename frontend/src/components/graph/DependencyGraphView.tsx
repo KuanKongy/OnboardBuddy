@@ -13,6 +13,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
 import { GraphLegend } from "@/components/graph/GraphLegend";
+import { ViewportFocus } from "@/components/graph/ViewportFocus";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import type { PositionedNode } from "@/lib/graphLayout";
@@ -144,6 +145,7 @@ export function DependencyGraphView({
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
       >
+        <ViewportFocus selectedNodeId={selectedNodeId} />
 
         <Background
           variant={BackgroundVariant.Dots}

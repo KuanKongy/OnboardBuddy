@@ -71,6 +71,17 @@ export interface AnalysisJobData {
   depth?: 'cheap' | 'standard' | 'full';
   /** Role for the auto-generated package — omitted = project default role. */
   role?: string;
+  /**
+   * Re-analyze even when a complete snapshot for the resolved (scope, commit)
+   * already exists. Default false = reuse it and jump straight to generation.
+   */
+  force?: boolean;
+  /**
+   * Whether a snapshot-reuse short-circuit may enqueue package generation
+   * (default true — a user who clicked Analyze wants a package). Webhook runs
+   * set false: they only stale-flag, never spend on generation.
+   */
+  autoGenerate?: boolean;
 }
 
 export interface SummaryJobData {
@@ -79,6 +90,12 @@ export interface SummaryJobData {
   projectId: string;
   triggeredBy: string;
   role?: string;
+  /**
+   * Branch this package belongs to. Part of package identity (a snapshot is
+   * content-addressed per (scope, commit) and may serve several branches).
+   * Omitted = the snapshot's provenance branch.
+   */
+  branch?: string;
   /** Set for regenerate_section jobs: regenerate only this section type. */
   sectionType?: string;
   /**

@@ -12,6 +12,9 @@ import ReactFlow, {
   type Node,
 } from "reactflow";
 import "reactflow/dist/style.css";
+import { ViewportFocus } from "@/components/graph/ViewportFocus";
+import { useHotkeys } from "@/hooks/useHotkeys";
+import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { ClusterNode, type ClusterNodeData } from "@/components/graph/ClusterNode";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +33,7 @@ const nodeTypes = { cluster: ClusterNode };
 export function ArchitecturePage() {
   const { id } = useParams<{ id: string }>();
   const isDark = useIsDarkMode();
+  const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
   const [data, setData] = useState<ArchitectureResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -41,13 +45,16 @@ export function ArchitecturePage() {
     setLoading(true);
     setError("");
     setSelectedId(null);
-    fetchArchitecture(id)
+    fetchArchitecture(id, selectedPackageId)
       .then(setData)
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [id, selectedPackageId]);
+
+  // Esc closes the component details panel (pairs with the animated fit-out).
+  useHotkeys({ Escape: () => setSelectedId(null) }, selectedId !== null);
 
   // Deep link from the capabilities hub: ?cluster=<stable_key> preselects
   // that component (cluster ids are stable keys).
@@ -227,6 +234,7 @@ export function ArchitecturePage() {
                   minZoom={0.2}
                   proOptions={{ hideAttribution: true }}
                 >
+                  <ViewportFocus selectedNodeId={selectedId} fitPadding={0.15} />
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
                   <Controls className="!border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
                   <MiniMap

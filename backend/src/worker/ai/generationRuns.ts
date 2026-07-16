@@ -39,6 +39,8 @@ export function computeOutputHash(output: string): string {
 export interface RunIdentity {
   snapshotId: string;
   packageId?: string | null;
+  /** analysis_jobs row this call ran under — per-job cost rollups. Null for /ask. */
+  jobId?: string | null;
   targetType: string; // symbol_record | section | tutorial | embedding_batch | ...
   targetId?: string | null;
   sectionType?: string | null;
@@ -61,13 +63,13 @@ export async function hasCompleteRun(snapshotId: string, inputHash: string): Pro
 export async function startRun(identity: RunIdentity): Promise<string> {
   const result = await query(
     `INSERT INTO ai_generation_runs
-       (snapshot_id, package_id, target_type, target_id, section_type, provider, model,
+       (snapshot_id, package_id, job_id, target_type, target_id, section_type, provider, model,
         model_tier, key_source, prompt_version, input_hash, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'running')
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'running')
      RETURNING id`,
-    [identity.snapshotId, identity.packageId ?? null, identity.targetType, identity.targetId ?? null,
-     identity.sectionType ?? null, identity.provider, identity.model, identity.modelTier,
-     identity.keySource, identity.promptVersion, identity.inputHash],
+    [identity.snapshotId, identity.packageId ?? null, identity.jobId ?? null, identity.targetType,
+     identity.targetId ?? null, identity.sectionType ?? null, identity.provider, identity.model,
+     identity.modelTier, identity.keySource, identity.promptVersion, identity.inputHash],
   );
   return (result.rows[0] as { id: string }).id;
 }
@@ -95,13 +97,13 @@ export async function finishRun(runId: string, outcome: {
 export async function recordSkippedCached(identity: RunIdentity): Promise<string> {
   const result = await query(
     `INSERT INTO ai_generation_runs
-       (snapshot_id, package_id, target_type, target_id, section_type, provider, model,
+       (snapshot_id, package_id, job_id, target_type, target_id, section_type, provider, model,
         model_tier, key_source, prompt_version, input_hash, status, finished_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'skipped_cached', NOW())
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'skipped_cached', NOW())
      RETURNING id`,
-    [identity.snapshotId, identity.packageId ?? null, identity.targetType, identity.targetId ?? null,
-     identity.sectionType ?? null, identity.provider, identity.model, identity.modelTier,
-     identity.keySource, identity.promptVersion, identity.inputHash],
+    [identity.snapshotId, identity.packageId ?? null, identity.jobId ?? null, identity.targetType,
+     identity.targetId ?? null, identity.sectionType ?? null, identity.provider, identity.model,
+     identity.modelTier, identity.keySource, identity.promptVersion, identity.inputHash],
   );
   return (result.rows[0] as { id: string }).id;
 }
