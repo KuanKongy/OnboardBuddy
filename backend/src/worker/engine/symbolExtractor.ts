@@ -376,7 +376,11 @@ function extractRouteRegistrations(
         routes.push({
           method,
           routePath,
-          ...(target ? { handlerSymbolName: target.targetName, handlerRelativePath: target.targetRelativePath } : {}),
+          ...(target ? {
+            handlerSymbolName: target.targetName,
+            handlerRelativePath: target.targetRelativePath,
+            ...(target.targetParentName ? { handlerParentName: target.targetParentName } : {}),
+          } : {}),
           line,
         });
       } else {
@@ -496,6 +500,8 @@ function extractClass(
 
   const properties: PropertyInfo[] = node.members
     .filter(ts.isPropertyDeclaration)
+    // Function-valued properties are extracted as methods below, not data.
+    .filter((prop) => !(prop.initializer && (ts.isArrowFunction(prop.initializer) || ts.isFunctionExpression(prop.initializer))))
     .map((prop) => ({
       name: prop.name.getText(sf),
       type: prop.type?.getText(sf) ?? 'any',
@@ -532,6 +538,39 @@ function extractClass(
         isTrivial: isTrivialBody(m.body, mCalls.length) || /^(get|set)[A-Z_]/.test(name),
       };
     });
+
+  // Arrow-function class properties (`private addDataset = async (req, res) =>
+  // {...}`) ARE methods for evidence purposes — Express handlers are commonly
+  // declared this way (CourseInsights shape). Without this, such handlers had
+  // no symbol node, no calls edges, and route entrypoints couldn't seed.
+  for (const prop of node.members.filter(ts.isPropertyDeclaration)) {
+    const init = prop.initializer;
+    if (!init || !(ts.isArrowFunction(init) || ts.isFunctionExpression(init))) continue;
+    const params = extractParameters(init.parameters, sf);
+    const retType = init.type?.getText(sf) ?? 'void';
+    const mLoc = getNodeLocation(prop, sf);
+    const mCalls = extractCallSymbols(init.body, sf);
+    const mResolved = extractResolvedCalls(init.body, sf, ctx);
+    const signature = buildSignature(params, retType);
+    const name = prop.name.getText(sf);
+    methods.push({
+      name,
+      signature,
+      parameters: params,
+      returnType: retType,
+      accessibility: getAccessibility(prop),
+      static: hasModifier(prop, ts.SyntaxKind.StaticKeyword),
+      isAsync: hasModifier(init, ts.SyntaxKind.AsyncKeyword),
+      lineStart: mLoc.start.line,
+      lineEnd: mLoc.end.line,
+      ...(mCalls.length > 0 ? { callsSymbols: mCalls } : {}),
+      ...(mResolved.length > 0 ? { resolvedCalls: mResolved } : {}),
+      signatureHash: sha256(signature),
+      bodyHash: hashBody(prop.getText(sf)),
+      snippet: snippetOf(prop, sf),
+      isTrivial: isTrivialBody(init.body, mCalls.length) || /^(get|set)[A-Z_]/.test(name),
+    });
+  }
 
   return {
     name: node.name.text,

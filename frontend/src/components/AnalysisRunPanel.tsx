@@ -70,6 +70,13 @@ function durationOf(p: PhaseRow): string {
   return `${Math.floor(secs / 60)}m ${secs % 60}s`;
 }
 
+/** Ticking elapsed for the phase still running. */
+function liveElapsed(startedAt: string, nowTs: number): string {
+  const secs = Math.max(0, Math.round((nowTs - new Date(startedAt).getTime()) / 1000));
+  if (secs < 60) return `${secs}s`;
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+}
+
 /** Pick the metrics worth a glance per phase; the full JSON stays a tooltip. */
 function keyMetrics(m: Record<string, unknown>): string {
   const parts: string[] = [];
@@ -78,6 +85,11 @@ function keyMetrics(m: Record<string, unknown>): string {
   };
   take("files", "files");
   take("symbols", "symbols");
+  // Incremental diff outcome: without these the diff row was blank and a
+  // "nothing went stale" run looked like nothing happened at all.
+  take("filesChanged", "files changed");
+  take("symbolsChanged", "symbols changed");
+  take("staleSections", "sections stale");
   take("nodes", "nodes");
   take("edges", "edges");
   take("workflows", "workflows");
@@ -110,6 +122,15 @@ export function AnalysisRunPanel({
   stepLog: StepLogEntry[];
 }) {
   const [data, setData] = useState<MetricsResponse | null>(null);
+
+  // Ticking clock for the running phase's live elapsed time — a frozen
+  // "22:48:59…" gave no clue whether anything was still happening.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isActive) return;
+    const t = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, [isActive]);
 
   useEffect(() => {
     if (!snapshotId) {
@@ -160,6 +181,7 @@ export function AnalysisRunPanel({
                   <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
                     {p?.started_at ? `${timeOf(p.started_at)}${p.finished_at ? ` → ${timeOf(p.finished_at)}` : "…"}` : ""}
                     {p && durationOf(p) ? ` (${durationOf(p)})` : ""}
+                    {running && p?.started_at && !p.finished_at ? ` (${liveElapsed(p.started_at, nowTs)})` : ""}
                   </span>
                 </li>
               );

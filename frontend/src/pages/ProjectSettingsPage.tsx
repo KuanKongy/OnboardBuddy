@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 
 const PRIVACY_MODES = [
@@ -30,7 +32,32 @@ const PRIVACY_MODES = [
   { key: "ai_disabled", label: "AI disabled", hint: "No LLM calls at all; deterministic outputs only." },
 ];
 
-const WEIGHT_VIEWS = ["runtime", "business", "onboarding", "change_risk", "architecture", "workflow"] as const;
+// Must match the backend's SEMANTIC_VIEWS keys exactly — the old short names
+// ("runtime") never matched the API's "critical_for_runtime" keys, so every
+// slider showed 0 and saves were rejected.
+const WEIGHT_VIEWS = [
+  "critical_for_runtime", "critical_for_business", "critical_for_onboarding",
+  "critical_for_role", "critical_for_change_risk", "critical_for_architecture",
+  "critical_for_workflow",
+] as const;
+
+// Mirrors backend DEPTH_BUDGETS (engine/budgets.ts) so the inputs show the
+// real defaults instead of an opaque "depth default" placeholder.
+const DEPTH_BUDGET_DEFAULTS: Record<string, { calls: number; tokens: number }> = {
+  cheap: { calls: 100, tokens: 1_000_000 },
+  standard: { calls: 300, tokens: 4_000_000 },
+  full: { calls: 1_500, tokens: 20_000_000 },
+};
+
+const WEIGHT_LABELS: Record<string, string> = {
+  critical_for_runtime: "Runtime",
+  critical_for_business: "Business",
+  critical_for_onboarding: "Onboarding",
+  critical_for_role: "Role relevance",
+  critical_for_change_risk: "Change risk",
+  critical_for_architecture: "Architecture",
+  critical_for_workflow: "Workflows",
+};
 
 interface RoleWeights {
   role: string;
@@ -54,7 +81,8 @@ export function ProjectSettingsPage() {
   const [budgetTokens, setBudgetTokens] = useState<string>("");
   const [stopBehavior, setStopBehavior] = useState("pause");
   const [saving, setSaving] = useState(false);
-  const [analyzing, setAnalyzing] = useState(false);
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const analyzing = project?.status === "analyzing";
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -195,19 +223,6 @@ export function ProjectSettingsPage() {
     }
   }
 
-  async function handleReanalyze() {
-    setAnalyzing(true);
-    setError("");
-    try {
-      await apiFetch(`/projects/${id}/analyze`, { method: "POST" });
-      refetch();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to start analysis");
-    } finally {
-      setAnalyzing(false);
-    }
-  }
-
   async function handleDelete() {
     setDeleting(true);
     try {
@@ -222,16 +237,12 @@ export function ProjectSettingsPage() {
   if (!project) return null;
 
   return (
-    <div className="max-w-5xl">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Project settings</h1>
-          <p className="page-subtitle">
-            Analysis, privacy, budgets, and ranking configuration for this project.
-          </p>
-        </div>
-        <Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>
-      </div>
+    <div className="mx-auto max-w-3xl">
+      <PageHeader
+        title="Project settings"
+        subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
+        actions={<Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>}
+      />
 
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -239,7 +250,7 @@ export function ProjectSettingsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-3">
         <Card>
           <CardContent className="p-3">
             <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
@@ -328,10 +339,10 @@ export function ProjectSettingsPage() {
               ))}
             </div>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label className="text-xs">Analysis depth</Label>
                 <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
                     <SelectItem value="standard">Standard — balanced</SelectItem>
@@ -360,7 +371,7 @@ export function ProjectSettingsPage() {
                   type="number"
                   value={budgetCalls}
                   onChange={(e) => setBudgetCalls(e.target.value)}
-                  placeholder="depth default"
+                  placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -371,15 +382,15 @@ export function ProjectSettingsPage() {
                   type="number"
                   value={budgetTokens}
                   onChange={(e) => setBudgetTokens(e.target.value)}
-                  placeholder="depth default"
+                  placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000}M`}
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
               </div>
-              <div className="space-y-1">
+              <div className="min-w-0 space-y-1">
                 <Label className="text-xs">When exceeded</Label>
                 <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 text-[13px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pause">Pause — resume later</SelectItem>
                     <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
@@ -389,7 +400,9 @@ export function ProjectSettingsPage() {
               </div>
             </div>
             <p className="mt-1.5 text-[11px] text-muted-foreground">
-              Empty fields use the depth's built-in limits. Live spend shows in the analysis status.
+              Empty fields use the {analysisDepth} depth's built-in limits
+              ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
+              Live spend shows in the analysis status.
             </p>
           </CardContent>
         </Card>
@@ -456,8 +469,8 @@ export function ProjectSettingsPage() {
               <div className="space-y-2">
                 {WEIGHT_VIEWS.map((view) => (
                   <div key={view} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-[11.5px] capitalize text-muted-foreground">
-                      {view.replace(/_/g, " ")}
+                    <span className="w-28 shrink-0 text-[11.5px] text-muted-foreground">
+                      {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
                     </span>
                     <input
                       type="range"
@@ -468,13 +481,21 @@ export function ProjectSettingsPage() {
                       onChange={(e) => setWeight(view, Number(e.target.value))}
                       disabled={!canEdit}
                       className="h-1.5 flex-1 accent-[var(--primary)]"
-                      aria-label={`${view} weight`}
+                      aria-label={`${WEIGHT_LABELS[view] ?? view} weight`}
                     />
                     <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-foreground">
-                      {(activeWeights.weights[view] ?? 0).toFixed(2)}
+                      {Math.round((activeWeights.weights[view] ?? 0) * 100)}%
                     </span>
                   </div>
                 ))}
+                {(() => {
+                  const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
+                  return (
+                    <p className={`text-right text-[11px] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
+                      Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
+                    </p>
+                  );
+                })()}
                 {canEdit && (
                   <div className="flex justify-end gap-2 pt-1">
                     <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
@@ -498,11 +519,11 @@ export function ProjectSettingsPage() {
                 <Button
                   variant="outline"
                   size="xs"
-                  onClick={handleReanalyze}
+                  onClick={() => setAnalyzeOpen(true)}
                   disabled={analyzing || project.status === "analyzing"}
                 >
                   <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
-                  Re-analyze
+                  Re-analyze…
                 </Button>
               )}
             </div>
@@ -565,6 +586,13 @@ export function ProjectSettingsPage() {
           </Button>
         </div>
       )}
+
+      <AnalyzeDialog
+        project={project}
+        open={analyzeOpen}
+        onOpenChange={setAnalyzeOpen}
+        onStarted={() => refetch()}
+      />
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-md">

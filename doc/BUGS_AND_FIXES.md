@@ -23,6 +23,9 @@ Actions to take on the GitHub Issues tracker:
 | **File + Close** | #35 | Fixed same day — file then close with fix note. |
 | **File (Open)** | #36 | Known open item — file and leave Open (P5 future work). |
 | **File (Open)** | #37 | GitHub sign-up provider error — file Open; close once the Supabase GitHub provider config is fixed and sign-up verified. |
+| **File + Close** | #38–#45 | Found during the first real M3 end-to-end run (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
+| **File + Close** | #46–#48 | Found testing CourseInsights (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
+| **File + Close** | #49–#51 | Found during M3 polish testing (2026-07-11/12), fixed same day — file with the bodies below, close with the fix notes. |
 | **Update** | #2, #12, #16, #20, #21, #23 | Already Closed on GitHub — verify and leave as-is. |
 
 **Close comment for #18:**
@@ -73,6 +76,20 @@ Actions to take on the GitHub Issues tracker:
 | 35 | Inline code in onboarding markdown shows decorative backticks | P4 | Closed | Fixed (M3) |
 | 36 | Stale tutorials cannot be regenerated individually | P5 | Open | — |
 | 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Open | Frontend part fixed; Supabase config pending |
+| 38 | Semantic analysis extremely slow (23 min analyze + 10 min generate) and ~$2/run | P1 | Closed | Fixed (M3) |
+| 39 | Workflow extraction finds 0 workflows on real repos (alias imports + fake route entrypoints) | P1 | Closed | Fixed (M3) |
+| 40 | Onboarding section titles not standardized (raw type strings / LLM-invented) | P3 | Closed | Fixed (M3) |
+| 41 | Sections invisible until the whole generation finishes | P3 | Closed | Fixed (M3) |
+| 42 | Dashboard project card shows hardcoded 45% while analyzing | P2 | Closed | Fixed (M3) |
+| 43 | Ranking-weight sliders always show 0; budget defaults opaque | P2 | Closed | Fixed (M3) |
+| 44 | Section confidence used worst-case rule — sections almost always "low" | P2 | Closed | Fixed (M3) |
+| 45 | Receipts cited by raw UUIDs — small models mangle them, causing citation failures | P2 | Closed | Fixed (M3) |
+| 46 | Class-method route handlers yield 0 workflows (CourseInsights) | P1 | Closed | Fixed (M3) |
+| 47 | AI & privacy setting changes ignored by generation; ai_disabled blocks packages entirely | P2 | Closed | Fixed (M3) |
+| 48 | Regenerate failures invisible: silent UI catch, sections stuck in regenerate_requested | P2 | Closed | Fixed (M3) |
+| 49 | Tours never re-appear for new accounts; package/lifecycle tour never auto-starts | P3 | Closed | Fixed (M3) |
+| 50 | Runs are untrustworthy: phantom phase durations, dead workers look alive, no pause/stop/resume | P1 | Closed | Fixed (M3) |
+| 51 | Receipt UX: unbounded snippets, no symbol explanation, reviewer shown as UUID | P3 | Closed | Fixed (M3) |
 
 ### What has been fixed
 
@@ -1247,3 +1264,408 @@ Two independent problems:
    - The OAuth App client secret in the Supabase dashboard was rotated/mistyped.
 
    Fix: in Supabase → Authentication → Providers → GitHub, make sure the Client ID/Secret belong to the login **OAuth App** from DEVOPS.md "GitHub OAuth App (for login)" (create one if missing). If the team intentionally reuses the GitHub App for login instead, grant it "Email addresses: Read-only" under Account permissions and have users re-authorize. Email/password signup is unaffected either way.
+
+---
+
+## [P1][Closed] Bug 38: Semantic analysis extremely slow and expensive (~33 min, ~$2 per run)
+
+**Bug #38**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | backend/src/worker/semantic/*, generation/*, ai/aiClient.ts |
+
+## Expected behavior
+
+A small-to-medium repo analyzes in minutes for well under a dollar.
+
+## Actual behavior
+
+Whole-repo run: analyze scope 23 min, generation 10 min, ~$1.74. Phase timings from the real run: synthesis 627s, refinement 198s, symbols 176s, critique 150s, reranking 144s, generation 601s.
+
+## Steps to reproduce
+
+Import a ~100-file repo, run a standard-depth analysis, watch snapshot_phases timings and ai_generation_runs costs.
+
+## Notes during fixing
+
+Fixed (2026-07-11). Three root causes:
+
+1. **Everything was serial.** Every pass awaited one LLM call at a time even though AiClient already had a concurrency semaphore. Now all passes fan out via `mapLimit` (symbol batches, file/module/service/workflow synthesis, critique batches, refinement, reranking, embeddings, sections, tutorials); `LLM_MAX_CONCURRENCY` default raised 4→6, `PG_POOL_MAX` 10→20.
+2. **Bulk work ran on the strong tier.** File records (26 calls, $0.30) and critique (every pending record, $0.22) moved to the cheap tier; refinement is depth-gated (0/5/10 for cheap/standard/full).
+3. **Thousands of sequential round trips to remote Postgres.** Cache lookups parallelized; embeddings write one multi-row INSERT per batch instead of one INSERT per vector; critique fetches a batch's receipts in one query.
+
+Expected effect on the same run: analysis LLM phases ~23 min → ~4 min, generation ~10 min → ~3 min, cost ~$1.74 → ~$1.05 (sections stay on the strong tier — that's the user-facing artifact). Re-runs stay near-free via the content-addressed cache.
+
+---
+
+## [P1][Closed] Bug 39: Workflow extraction finds 0 workflows on real repos
+
+**Bug #39**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | engine/astParser.ts, evidenceGraphBuilder.ts, entrypointDetector.ts, symbolExtractor.ts, new tsconfigPaths.ts |
+
+## Expected behavior
+
+Real repos produce traced workflows (Workflows tab, tutorials, workflow records) with correct titles.
+
+## Actual behavior
+
+A whole-repo run produced **0 workflows** despite 9 HTTP entrypoints and 11 side effects — only 19 `calls` edges existed in a 437-node graph, so no trace ever reached an effect. Tutorials: 0. Most sections: low confidence (starved of evidence).
+
+## Steps to reproduce
+
+Analyze any monorepo using tsconfig path aliases (`@/components/x`); check `graph_edges` type counts and the workflows table.
+
+## Notes during fixing
+
+Fixed (2026-07-11). Compound root cause:
+
+1. **Path aliases resolved as fake packages.** The worker analyzes a zipball with no node_modules and often no root tsconfig.json; the TS program fell back to Node10 resolution with no `paths`, and our own import resolver treated `@/lib` as a scoped npm package. New `tsconfigPaths.ts` merges `paths` from every workspace tsconfig, rebased to the repo root; the program now uses Bundler resolution with those paths, and `resolveImport` tries aliases before classifying imports external.
+2. **Route entrypoints were name-matched garbage.** Any `*.get(...)` call (`map.get`, `headers.get`) counted as an HTTP route — 285 fake entrypoints on this repo, with wrong seeds producing titles like "GET runSynthesisPass". Route registrations are now AST-detected (`router.get('/x', handler)` with a string path), inline handlers become synthesized symbols (named `GET /x`) with real bodies/hashes/resolved calls, and titles use the actual route pattern.
+3. **Frontend components were invisible to the call graph.** JSX usage (`<UserCard/>`) now resolves as a call edge, and exported page components under `pages/` are `ui_route` entrypoints — frontend repos get UI flows.
+
+Verified on this repo (clean copy, no node_modules): calls edges 19-equivalent → **1057**, imports 442 → 707, entrypoints 285 → 90 (real kinds), workflows 0 → **76** with titles like "POST /installations/link" and "Page: GraphPage". All 302 backend tests pass.
+
+---
+
+## [P3][Closed] Bug 40: Onboarding section titles not standardized
+
+**Bug #40**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | generation/sectionSpecs.ts, sectionGenerator.ts |
+
+## Expected behavior
+
+Every package shows the same set of section titles.
+
+## Actual behavior
+
+Half the sections showed raw type strings ("entry_points", "role_path"), the rest LLM-invented titles ("Start Here: OnboardBuddy Platform Orientation").
+
+## Notes during fixing
+
+Fixed (2026-07-11): canonical `SECTION_TITLES` map (Design.md package structure) — the LLM's title suggestion is ignored on persist.
+
+---
+
+## [P3][Closed] Bug 41: Sections invisible until the whole generation finishes
+
+**Bug #41**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | frontend OnboardingPage.tsx |
+
+## Expected behavior
+
+Sections appear in the reader as each one is generated.
+
+## Actual behavior
+
+The worker persists each section immediately, and the API serves them — but the reader fetched once and never refreshed, so nothing showed until the run finished.
+
+## Notes during fixing
+
+Fixed (2026-07-11): the reader polls every 5s while the package is generating (with a "sections appear as each one finishes (N/11)" banner); the card grid refreshes while anything is generating. Sections also now generate 4 at a time, so the first ones land within seconds.
+
+---
+
+## [P2][Closed] Bug 42: Dashboard project card shows hardcoded 45% while analyzing
+
+**Bug #42**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend ProjectCard.tsx, lib/pipelineProgress.ts |
+
+## Expected behavior
+
+The dashboard card and the project overview show the same progress.
+
+## Actual behavior
+
+The card showed a fixed "Analyzing 45%" regardless of actual progress.
+
+## Notes during fixing
+
+Fixed (2026-07-11): the combined pipeline progress (analysis 0–70%, generation 70–100%, stage-labeled) was extracted into shared `pipelineProgress()`; analyzing cards poll `/analysis-status` and render the identical number and stage as the overview.
+
+---
+
+## [P2][Closed] Bug 43: Ranking-weight sliders always show 0; budget defaults opaque
+
+**Bug #43**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | frontend ProjectSettingsPage.tsx |
+
+## Expected behavior
+
+Weight sliders show each role's real defaults (summing to 100%); budget inputs show the actual depth defaults.
+
+## Actual behavior
+
+The sliders used short view keys ("runtime") that never matched the API's `critical_for_runtime` keys — every slider showed 0, and saves sent keys the backend rejects. Budget inputs said only "depth default".
+
+## Notes during fixing
+
+Fixed (2026-07-11): sliders use the API's `critical_for_*` keys with readable labels, display percentages, and show a "Total: N%" line (defaults sum to 100%). Budget inputs show the real per-depth defaults (e.g. standard: 300 calls, 4M input tokens).
+
+---
+
+## [P2][Closed] Bug 44: Section confidence used a worst-case rule — sections almost always "low"
+
+**Bug #44**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | generation/citationValidator.ts |
+
+## Expected behavior
+
+Section confidence reflects how well-supported the section is overall.
+
+## Actual behavior
+
+Section confidence was the MINIMUM over all claims — one uncited claim among twenty branded the whole section low, so 8 of 11 sections in the first real run were "low" regardless of quality.
+
+## Notes during fixing
+
+Fixed (2026-07-11): distribution-based grade — >30% weak claims → low; ≥60% high with no lows → high; otherwise medium — capped by the model's own self-assessment. Individual weak claims keep their downgrade and unknowns entry, so per-claim honesty is unchanged; only the section-level grade is calibrated.
+
+---
+
+## [P2][Closed] Bug 45: Receipts cited by raw UUIDs — small models mangle them
+
+**Bug #45**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | generation/sectionGenerator.ts |
+
+## Expected behavior
+
+Models can cite evidence reliably regardless of tier.
+
+## Actual behavior
+
+Section prompts identified receipts by full UUIDs. Small models (now the default tier) reproduce UUIDs imperfectly → "unknown receipt id" validation failures, stricter-prompt retries (extra cost), and dropped citations that dragged confidence down.
+
+## Notes during fixing
+
+Fixed (2026-07-11): receipts are aliased r1, r2, … in the prompt and mapped back to UUIDs before validation; unknown aliases still count as unknown for the validator. Shorter prompts, near-zero citation mangling.
+
+
+---
+
+## [P1][Closed] Bug 46: Class-method route handlers yield 0 workflows (CourseInsights)
+
+**Bug #46**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | engine/symbolExtractor.ts, entrypointDetector.ts, workflowExtractor.ts, evidenceGraphBuilder.ts, behaviorSignals.ts |
+
+## Expected behavior
+
+A repo whose Express handlers are class methods passed by reference (`this.express.put('/dataset/:id/:kind', facade.addDataset)`) produces traced workflows and tutorials like any other repo.
+
+## Actual behavior
+
+CourseInsights (classic InsightFacade shape) analyzed with 5 real HTTP routes and a complete call graph (`InsightFacade.addDataset → DatasetProcessor.processAddDataset → DatasetPersister.persistWriteDataset`) but **0 workflows** and 0 tutorials; snapshot honestly recorded `no_workflows_found`. Workflow-adjacent sections stayed low confidence no matter how often they were regenerated (starved evidence bundles — regeneration re-retrieves the same evidence, so "keeps being low" was deterministic, not random).
+
+## Steps to reproduce
+
+Import any repo registering routes as `app.get('/x', Class.method)` or `app.put('/x', instance.method)`; analyze; Workflows tab is empty.
+
+## Notes during fixing
+
+Fixed (2026-07-11). Compound root cause, follow-up to #39:
+
+1. **Unqualified handler keys.** `resolveCallTarget` returned the bare method name (`addDataset`) and dropped the declaring class, so the entrypoint's `symbolStableKey` (`file#addDataset`) never matched the method node (`file#InsightFacade.addDataset`). Seeds fell back to the file node, whose only child is the class node (no traversal edges) → every trace died at 1 step. Same mismatch also silently disabled all `handles_route` edges. `RouteRegistration` now carries `handlerParentName`; the detector builds class-qualified keys.
+2. **File-fallback couldn't see into classes.** `seedsForEntrypoint` only considered direct file children; a class-based route file produced the class node as its only (dead-end) candidate. The fallback now descends one level into classes, and an unambiguous `file#Class.member` suffix match rescues bare-name keys.
+3. **Method nodes had no behavior signals.** Signals (response_output, database_read, …) were only stamped on top-level symbols, so class methods could never count as effect steps. Methods are now signaled individually from their own calls/snippets.
+4. **Test files as entrypoints.** `test/controller/*.spec.ts` matched the `/controller/i` convention and minted junk http_route entrypoints; test files are now excluded from convention-based detection.
+5. **Tie-break.** When a route-registered seed and a convention seed trace the same steps, the AST-detected route (real method + pattern) now wins duplicate suppression.
+
+Verified live on CourseInsights: re-analysis at the same commit went from 0 → **3 workflows** ("HTTP InsightFacade.addDataset" 20 steps high, "removeDataset" 7 steps high, "GET /echo/:msg" 3 steps medium); `no_workflows_found` gone. Regression fixture `worker/fixtures/classServer` + 4 tests added. All 320 backend tests pass.
+
+---
+
+## [P2][Closed] Bug 47: AI & privacy setting changes ignored by generation; ai_disabled blocks packages entirely
+
+**Bug #47**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | worker/summaryWorker.ts, new generation/deterministicSectionGenerator.ts, api/routes/onboarding.ts, api/routes/projects.ts |
+
+## Expected behavior
+
+Changing Settings → AI & privacy changes how the next generation/regeneration runs (spec: ai_disabled = "deterministic-only outputs", not "no outputs"). Every project setting is applicable at the point it claims to act.
+
+## Actual behavior
+
+Generation used the privacy mode **copied onto the snapshot at analysis time**, so flipping the setting after an analysis changed nothing — the pipeline kept generating "the same full AI" content. The gates were also inconsistent: `/generate` checked the snapshot's mode, `/regenerate` and `/summarize` checked current settings, and all three refused with 403 under ai_disabled, while the worker skipped generation entirely — an ai_disabled project either kept its old full-AI package (misleading) or got nothing.
+
+## Steps to reproduce
+
+Analyze with full_ai → switch to facts_only_ai → regenerate a section: prompt still contains snippets. Switch to ai_disabled → regenerate: 403, nothing happens.
+
+## Notes during fixing
+
+Fixed (2026-07-11):
+
+- The summary worker now resolves the **effective privacy mode from current `project_settings`** (snapshot mode is the fallback/audit record); facts_only/full switches apply to the very next generation with no re-analysis.
+- ai_disabled no longer blocks: new `deterministicSectionGenerator` renders each section's deterministic query result (the same facts the LLM would get as authoritative context) into readable markdown with the section's Mermaid diagrams, zero LLM calls, `generation_run_id NULL`, an explicit "AI explanations are off" banner, and an `ai_disabled` unknown. The 403 gates on `/generate`, `/sections/:id/regenerate`, and `/summarize` are removed — the mode decides HOW, never WHETHER.
+- Settings audit: budgets, stop behavior, model tiers/failure behavior, and ranking weights were already read live at job time; ignored paths, file/LOC limits, and analysis depth correctly apply at the next analysis (copied onto the snapshot per spec).
+
+## [P2][Closed] Bug 48: Regenerate failures invisible: silent UI catch, sections stuck in regenerate_requested
+
+**Bug #48**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P2 |
+| State | Closed |
+| File / area | pages/OnboardingPage.tsx, worker/summaryWorker.ts |
+
+## Expected behavior
+
+Clicking Regenerate either visibly starts a job or visibly tells you why it can't; a failed job never leaves a section in a dead state.
+
+## Actual behavior
+
+"Sometimes it doesn't even regenerate": `handleRegenerateSection` and `handleGenerateRole` swallowed every error (`catch { setRegenerating(false) }`), so a 403 (privacy gate, permission tier) or timeout looked like a no-op — job logs show users double-clicking Regenerate 49s apart. On the worker side, `review_status='regenerate_requested'` was write-only: a failed/paused regenerate job left the section stuck there forever.
+
+## Notes during fixing
+
+Fixed (2026-07-11): reader shows a dismissible error banner with the API's message for generate/regenerate failures and a note when polling times out; the worker's failure path resets `regenerate_requested` sections to `stale` so old content stays visible and the Regenerate button returns.
+
+---
+
+## [P3][Closed] Bug 49: Tours never re-appear for new accounts; lifecycle tour never auto-starts
+
+**Bug #49**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | frontend lib/tourState.ts (new), DashboardPage.tsx, ProjectLayout.tsx, OnboardingPage.tsx |
+
+## Expected behavior
+
+A brand-new account (even after a full DB wipe + GitHub token revocation) sees the first-run tours; the "How packages work" tour introduces itself on first visit.
+
+## Actual behavior
+
+Tour dismissal lived in browser-global localStorage keys, which survive DB wipes, account deletion, and Docker restarts — a "new" user on the same browser never saw a tour again. The package-lifecycle tour existed only behind a button nobody knew to click.
+
+## Notes during fixing
+
+Fixed (2026-07-11): dismissal keys are per-account (`…:<userId>`, shared helper `lib/tourState.ts`); the lifecycle tour auto-runs on first visit to the package grid, sequenced after the project tour so two spotlight overlays never stack. Existing accounts see each tour once more (keys migrated).
+
+## [P1][Closed] Bug 50: Runs are untrustworthy — phantom phase durations, dead workers look alive, no pause/stop/resume
+
+**Bug #50**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-12 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P1 |
+| State | Closed |
+| File / area | worker/ai/checkpoints.ts, worker/index.ts, worker/summaryWorker.ts, lib/queue.ts, api/routes/projects.ts, migration 002, ProjectOverviewPage.tsx, AnalysisRunPanel.tsx |
+
+## Expected behavior
+
+Phase timings reflect the actual run; a "running" job means a worker is actually working; users can pause, stop, and resume runs.
+
+## Actual behavior
+
+Three compounding failures. (1) `snapshot_phases` upserts never reset `started_at`, so re-running the same commit showed first-run-start → latest-finish spans (observed: 507-minute "Download & inventory"). (2) A worker whose blocking Redis connection died — or that was restarted mid-job — left the DB row "running" forever; the progress bar animated over nothing and BullMQ retries silently shifted timings with no indication. (3) There was no way to intervene: no pause, stop, or resume, despite the worker-side kill switch and checkpoint machinery already existing.
+
+## Notes during fixing
+
+Fixed (2026-07-12):
+- `markPhase` restarts the phase clock whenever a phase begins a new run (re-marked running, or re-marked after a terminal state).
+- Migration 002 adds `last_heartbeat_at` + `attempt`; workers stamp a heartbeat every ~15s and record the delivery attempt. `analysis-status` flags running jobs silent >2min as `stalled`; the worker reconciles them to failed (with an honest message) on boot and every 2 minutes. Redis connections reconnect forever with keep-alive; worker connection errors are logged.
+- New endpoints `POST /projects/:id/analysis-jobs/:jobId/{pause,stop,resume}`: pause/stop flip the job status (workers honor it at the next step or AI-batch boundary via a status guard that also prevents progress updates from stomping the user's choice); resume re-enqueues the SAME job row so phase checkpoints and the content-addressed cache skip all completed work. Overview gains Pause/Stop/Resume buttons, a ticking "last worker activity Xs ago" line, stalled + attempt badges, and a live elapsed timer on the running phase.
+- Bonus: ai_disabled analyses now auto-enqueue their deterministic package (previously only manual generation).
+
+Verified live: paused a run mid-download → worker logged "stopped by kill switch (status: paused)" and exited without stomping the status; resume re-enqueued and completed from checkpoints.
+
+## [P3][Closed] Bug 51: Receipt UX — unbounded snippets, no symbol explanation, reviewer shown as UUID
+
+**Bug #51**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-11 |
+| Reported by | OnboardBuddies (Team 15) |
+| Priority | P3 |
+| State | Closed |
+| File / area | ReceiptViewer.tsx, OnboardingPage.tsx, api/routes/onboarding.ts, retrieval/retrievalService.ts |
+
+## Expected behavior
+
+Receipts explain what the cited code does and stay readable at any snippet length; reviewers are named readably.
+
+## Actual behavior
+
+A long function snippet stretched the receipt modal to the full page height; receipts showed code with no summary of what the function does; "Reviewed by @<uuid>" was meaningless; doc_health claims could never cite documentation (record receipts are code-first), so the section was systematically low-confidence.
+
+## Notes during fixing
+
+Fixed (2026-07-11): snippet capped at 40vh with two-way scrolling inside a wider modal (markdown code fences in sections capped too); receipts carry the cited symbol's semantic-record summary ("What this does", JSDoc fallback); reviewer shows the user's email; doc_health bundles attach the snapshot's doc nodes as citable doc-trust receipts — verified low → high on a live regeneration with zero validation issues.

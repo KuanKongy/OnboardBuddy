@@ -56,7 +56,7 @@ export const PROMPT_VERSIONS = {
   module: 'module-synthesis-v1',
   service: 'service-synthesis-v1',
   system: 'system-synthesis-v1',
-  capability: 'capability-extraction-v1',
+  capability: 'capability-extraction-v2',
   refinement: 'refinement-v1',
   critique: 'critique-v1',
   workflow: 'workflow-record-v1',

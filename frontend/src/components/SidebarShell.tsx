@@ -3,11 +3,20 @@ import { createContext, useContext, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 
 interface SidebarCtx {
+  /** Mobile drawer open state. */
   open: boolean;
   setOpen: (v: boolean) => void;
+  /** Desktop collapse state (persisted). */
+  collapsed: boolean;
+  setCollapsed: (v: boolean) => void;
 }
 
-const Ctx = createContext<SidebarCtx>({ open: false, setOpen: () => {} });
+const Ctx = createContext<SidebarCtx>({
+  open: false, setOpen: () => {},
+  collapsed: false, setCollapsed: () => {},
+});
+
+const COLLAPSED_KEY = "onboardbuddy:sidebar-collapsed";
 
 export function useSidebar() {
   return useContext(Ctx);
@@ -15,25 +24,47 @@ export function useSidebar() {
 
 export function SidebarProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  return <Ctx.Provider value={{ open, setOpen }}>{children}</Ctx.Provider>;
+  const [collapsed, setCollapsedState] = useState(() => {
+    try {
+      return localStorage.getItem(COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedState(v);
+    try {
+      if (v) localStorage.setItem(COLLAPSED_KEY, "1");
+      else localStorage.removeItem(COLLAPSED_KEY);
+    } catch { /* storage unavailable */ }
+  };
+  return <Ctx.Provider value={{ open, setOpen, collapsed, setCollapsed }}>{children}</Ctx.Provider>;
 }
 
-export function SidebarToggle() {
-  const { open, setOpen } = useSidebar();
+/**
+ * One toggle for every viewport: opens/closes the drawer on small screens,
+ * collapses/expands the docked sidebar on desktop. Lives inline in each
+ * page's header row (via PageHeader) instead of its own row, so it never
+ * shifts content down.
+ */
+export function SidebarToggle({ className }: { className?: string }) {
+  const { open, setOpen, collapsed, setCollapsed } = useSidebar();
+  const toggle = () => {
+    if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
+      setCollapsed(!collapsed);
+    } else {
+      setOpen(!open);
+    }
+  };
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      className="lg:hidden"
-      onClick={() => setOpen(!open)}
-    >
+    <Button variant="ghost" size="icon-sm" className={className} onClick={toggle} aria-label="Toggle sidebar">
       {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
     </Button>
   );
 }
 
 export function SidebarShell({ children }: { children: ReactNode }) {
-  const { open, setOpen } = useSidebar();
+  const { open, setOpen, collapsed } = useSidebar();
 
   return (
     <>
@@ -44,9 +75,9 @@ export function SidebarShell({ children }: { children: ReactNode }) {
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-border bg-card transition-transform lg:static lg:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-56 flex-col border-r border-border bg-card transition-transform ${
           open ? "translate-x-0" : "-translate-x-full"
-        }`}
+        } ${collapsed ? "lg:hidden" : "lg:static lg:translate-x-0"}`}
       >
         {children}
       </aside>

@@ -1,6 +1,7 @@
-import { AlertTriangle, Loader2, RefreshCw, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Loader2, RefreshCw, Sparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import ReactFlow, {
   Background,
   BackgroundVariant,
@@ -22,6 +23,7 @@ import {
   type WorkflowSummary,
 } from "@/lib/graphData";
 import { layoutGraph } from "@/lib/graphLayout";
+import { fetchNodeDetail, type NodeDetail } from "@/lib/graphData";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import { cn } from "@/lib/utils";
 
@@ -90,8 +92,12 @@ const nodeTypes = { step: StepNode };
 export function WorkflowsPage() {
   const { id } = useParams<{ id: string }>();
   const isDark = useIsDarkMode();
+  // Deep link from the capabilities hub: ?workflow=<id> preselects a flow.
+  const [searchParams] = useSearchParams();
   const [workflows, setWorkflows] = useState<WorkflowSummary[] | null>(null);
-  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>("");
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
+    () => searchParams.get("workflow") ?? "",
+  );
   const [detail, setDetail] = useState<WorkflowGraphResponse | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingGraph, setLoadingGraph] = useState(false);
@@ -174,21 +180,34 @@ export function WorkflowsPage() {
 
   const selectedStep = detail?.steps.find((s) => s.nodeId === selectedNodeId) ?? null;
 
+  // Enrich the selected step with its symbol doc (AI summary, snippet,
+  // side effects) — the deterministic description alone is thin.
+  const [stepDetail, setStepDetail] = useState<NodeDetail | null>(null);
+  useEffect(() => {
+    setStepDetail(null);
+    if (!id || !selectedStep?.nodeId) return;
+    let cancelled = false;
+    fetchNodeDetail(id, selectedStep.nodeId).then((d) => {
+      if (!cancelled) setStepDetail(d);
+    });
+    return () => { cancelled = true; };
+  }, [id, selectedStep?.nodeId]);
+
+  const selectedSummary = workflows?.find((w) => w.id === selectedWorkflowId) ?? null;
+
   return (
     <div style={{ "--graph-chrome": "170px" } as React.CSSProperties}>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Workflows</h1>
-          <p className="page-subtitle">
-            Traced request flows — from the entry point through every function to its side effects.
-          </p>
-        </div>
-        {detail && (
-          <Badge variant="outline" className="text-[11px]">
-            {detail.workflow.trigger_type} · {detail.workflow.confidence} confidence
-          </Badge>
-        )}
-      </div>
+      <PageHeader
+        title="Workflows"
+        subtitle="Traced request flows — from the entry point through every function to its side effects, ranked by how critical they are."
+        actions={
+          detail ? (
+            <Badge variant="outline" className="text-[11px]">
+              {detail.workflow.trigger_type} · {detail.workflow.confidence} confidence
+            </Badge>
+          ) : undefined
+        }
+      />
 
       {loadingList && (
         <div className="flex items-center justify-center py-20">
@@ -215,11 +234,11 @@ export function WorkflowsPage() {
 
       {!loadingList && workflows && workflows.length > 0 && (
         <div className="grid gap-3 lg:grid-cols-[250px_1fr]">
-          {/* workflow rail */}
+          {/* workflow rail — ranked most-critical first */}
           <div className="graph-canvas overflow-y-auto !bg-card p-2" data-tour="workflow-list">
-            <p className="section-label px-2 pb-1.5 pt-1">Traced flows ({workflows.length})</p>
+            <p className="section-label px-2 pb-1.5 pt-1">Traced flows ({workflows.length}) — most critical first</p>
             <div className="space-y-0.5">
-              {workflows.map((wf) => (
+              {workflows.map((wf, rank) => (
                 <button
                   key={wf.id}
                   onClick={() => setSelectedWorkflowId(wf.id)}
@@ -230,6 +249,7 @@ export function WorkflowsPage() {
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
+                  <span className="mt-0.5 w-4 shrink-0 text-right text-[10px] tabular-nums opacity-50">{rank + 1}</span>
                   <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                   <span className="min-w-0">
                     <span className="block truncate text-[12.5px] font-medium" title={wf.title}>{wf.title}</span>
@@ -243,6 +263,21 @@ export function WorkflowsPage() {
           </div>
 
           {/* flow graph + step detail */}
+          <div>
+            {/* Why this flow matters — plain-language ranking reasons */}
+            {selectedSummary && (selectedSummary.purpose || (selectedSummary.reasons?.length ?? 0) > 0) && (
+              <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[12px]">
+                {selectedSummary.purpose && (
+                  <p className="text-foreground">{selectedSummary.purpose}</p>
+                )}
+                {(selectedSummary.reasons?.length ?? 0) > 0 && (
+                  <p className="mt-0.5 text-muted-foreground">
+                    <span className="font-medium text-foreground">Why it matters:</span>{" "}
+                    {selectedSummary.reasons!.slice(0, 3).join(" · ")}
+                  </p>
+                )}
+              </div>
+            )}
           <div className={selectedStep ? "grid gap-3 xl:grid-cols-[1fr_300px]" : ""}>
             <div className="graph-canvas relative">
               {loadingGraph && (
@@ -280,8 +315,36 @@ export function WorkflowsPage() {
                 </p>
                 <Badge variant="secondary" className="mt-2 text-[10px] uppercase">{selectedStep.stepKind.replace(/_/g, " ")}</Badge>
                 <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">{selectedStep.description}</p>
+
+                {stepDetail?.doc?.summary && (
+                  <p className="mt-3 text-[12.5px] leading-relaxed text-foreground">
+                    <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
+                    {stepDetail.doc.summary}
+                  </p>
+                )}
+                {(stepDetail?.side_effects?.length ?? 0) > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {stepDetail!.side_effects!.map((se, i) => (
+                      <Badge key={i} variant="outline" className="h-5 px-1.5 text-[10px]" title={se.target ?? undefined}>
+                        {se.type.replace(/_/g, " ")}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                {stepDetail?.doc?.signature && (
+                  <pre className="mt-3 overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
+                    {stepDetail.doc.signature}
+                  </pre>
+                )}
+                <Link
+                  to={`/projects/${id}/dependencies?focus=${encodeURIComponent(selectedStep.filePath)}`}
+                  className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                >
+                  Open in Dependencies <ArrowRight className="h-3 w-3" />
+                </Link>
               </aside>
             )}
+          </div>
           </div>
         </div>
       )}

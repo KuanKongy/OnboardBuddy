@@ -18,7 +18,7 @@ Or, with Node 22 instead of Docker:
 npm install && npm test
 ```
 
-Either way this runs **every automated test** — backend (Mocha/Chai/Supertest) and frontend (Vitest/Testing Library). **Expected output:** backend `302 passing`, frontend `21 passed`; non-zero exit code on any failure. No `.env`, no cloud services, no running stack needed — the suites are self-contained (DB stubbed, API booted in-process, fixture repo shipped in-tree). The first Docker run builds the image (~1–2 min); repeats are cached.
+Either way this runs **every automated test** — backend (Mocha/Chai/Supertest) and frontend (Vitest/Testing Library). **Expected output:** backend `321 passing`, frontend `25 passed`; non-zero exit code on any failure. No `.env`, no cloud services, no running stack needed — the suites are self-contained (DB stubbed, API booted in-process, fixture repo shipped in-tree). The first Docker run builds the image (~1–2 min); repeats are cached.
 
 What each suite covers, layer by layer and file by file, is documented in [TESTING.md](./TESTING.md) — including the optional Playwright UI regression suite (21 tests rendering every tab in dark + light themes).
 
@@ -87,7 +87,7 @@ For a repo to analyze, fork https://github.com/KuanKongy/CourseInsights (a CPSC 
 | 2 | Step through with the pager/arrows | Each step shows file/lines/kind + snippet + explanation |
 | 3 | If no tutorials exist for the role | Deterministic workflow walkthrough shows instead, with an honest notice |
 
-### 3.6 Incremental re-analysis & staleness (M3)
+### 3.6 Incremental re-analysis (M3)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -105,11 +105,7 @@ For a repo to analyze, fork https://github.com/KuanKongy/CourseInsights (a CPSC 
 | 3 | Add a project OpenRouter key | Shows "Key configured by <email>" — the key value is never displayed again |
 | 4 | Ranking weights → move a slider → Save | Saves instantly; **Revert to defaults** restores |
 
-### 3.8 Q&A evaluation endpoint (stretch, dev-only)
-
-With the stack running and `INTERNAL_CHAT_ENABLED=1` (or non-production), open http://localhost:3000/api/internal/chat, paste a bearer token (from the browser's Supabase session) and a project id, and ask e.g. *"What does the auth service do?"* — expect a receipt-cited answer with confidence and intent shown.
-
-### 3.9 First-timer tour & themes
+### 3.8 First-timer tour & themes
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|

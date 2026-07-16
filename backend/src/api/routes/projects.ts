@@ -4,7 +4,16 @@ import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
-import { userCanAccessInstallation } from "../../lib/github-connection.js";
+import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
+import { getRepo } from "../../lib/github.js";
+
+const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
+const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
+
+/** "backend/", "/backend" → "backend"; "" stays "" (whole repo). */
+function normalizeScopePath(path: string): string {
+  return path.trim().replace(/^\/+|\/+$/g, "");
+}
 
 export const projectsRouter = Router();
 
@@ -46,13 +55,14 @@ projectsRouter.post("/", async (req, res) => {
     const { repo_owner, repo_name, branch, github_installation_id, default_developer_role } = req.body as {
       repo_owner: string;
       repo_name: string;
-      branch: string;
+      /** Optional: default branch for new runs. Omitted = the repo's default branch. */
+      branch?: string;
       github_installation_id?: string;
       default_developer_role?: string;
     };
 
-    if (!repo_owner || !repo_name || !branch || !github_installation_id) {
-      res.status(400).json({ error: "repo_owner, repo_name, branch, and github_installation_id are required" });
+    if (!repo_owner || !repo_name || !github_installation_id) {
+      res.status(400).json({ error: "repo_owner, repo_name, and github_installation_id are required" });
       return;
     }
 
@@ -69,6 +79,17 @@ projectsRouter.post("/", async (req, res) => {
       return;
     }
 
+    // Branch is only the default for new analysis runs (project identity is the
+    // repo). When omitted, use the repo's default branch from GitHub.
+    let defaultBranch = branch;
+    let repoDefaultBranch: string | null = null;
+    if (!defaultBranch) {
+      const installationToken = await getInstallationTokenForUser(userId, installationId);
+      const repoInfo = await getRepo(installationToken, repo_owner, repo_name);
+      repoDefaultBranch = repoInfo.default_branch;
+      defaultBranch = repoInfo.default_branch;
+    }
+
     client = await pool.connect();
 
     await client.query("BEGIN");
@@ -82,10 +103,10 @@ projectsRouter.post("/", async (req, res) => {
     );
 
     const projectResult = await client.query(
-      `INSERT INTO projects (user_id, repo_owner, repo_name, branch, github_installation_id)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO projects (user_id, repo_owner, repo_name, branch, default_branch, github_installation_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [userId, repo_owner, repo_name, branch, github_installation_id],
+      [userId, repo_owner, repo_name, defaultBranch, repoDefaultBranch, github_installation_id],
     );
     const project = projectResult.rows[0];
 
@@ -112,7 +133,7 @@ projectsRouter.post("/", async (req, res) => {
       err instanceof Error &&
       err.message.includes("duplicate key")
     ) {
-      res.status(409).json({ error: "Project already exists for this repo/branch" });
+      res.status(409).json({ error: "Project already exists for this repo" });
       return;
     }
     console.error("Create project error:", err);
@@ -358,15 +379,8 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     const projectId = req.params.id as string;
     const userId = req.user!.id;
 
-    const settingsResult = await query(
-      `SELECT privacy_mode FROM project_settings WHERE project_id = $1`,
-      [projectId],
-    );
-    if (settingsResult.rows.length > 0 && settingsResult.rows[0].privacy_mode === 'ai_disabled') {
-      res.status(403).json({ error: "AI features are disabled for this project" });
-      return;
-    }
-
+    // ai_disabled does not block generation: the worker reads the project's
+    // current privacy mode and builds a deterministic (LLM-free) package.
     const snapResult = await query(
       `SELECT id, commit_hash FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
@@ -451,9 +465,17 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     const jobResult = await query(
       `SELECT aj.id, aj.job_type, aj.status, aj.progress_pct, aj.current_step, aj.snapshot_id,
               aj.checkpoint, aj.step_log, aj.error_message, aj.created_at, aj.started_at, aj.finished_at,
-              s.file_count, s.symbol_count, s.workflow_count, s.commit_hash
+              aj.last_heartbeat_at, aj.attempt,
+              (aj.status = 'running'
+                AND COALESCE(aj.last_heartbeat_at, aj.started_at, aj.created_at) < NOW() - INTERVAL '2 minutes'
+              ) AS stalled,
+              aj.branch AS requested_branch, aj.commit_hash AS requested_commit,
+              aj.semantic_depth AS requested_depth, aj.role AS requested_role,
+              s.file_count, s.symbol_count, s.workflow_count, s.commit_hash, s.branch,
+              sc.path_prefix AS scope_path
        FROM analysis_jobs aj
        LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       LEFT JOIN analysis_scopes sc ON sc.id = aj.scope_id
        WHERE aj.project_id = $1
        ORDER BY (aj.status IN ('queued', 'running')) DESC, aj.created_at DESC
        LIMIT 5`,
@@ -461,7 +483,7 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     );
 
     const latestSnapshot = await query(
-      `SELECT id, file_count, symbol_count, workflow_count, commit_hash, created_at
+      `SELECT id, file_count, symbol_count, workflow_count, commit_hash, branch, semantic_depth, created_at
        FROM analysis_snapshots
        WHERE project_id = $1 AND status = 'complete'
        ORDER BY created_at DESC LIMIT 1`,
@@ -474,6 +496,163 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
     });
   } catch (err) {
     console.error("Analysis status error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ── Run controls: pause / stop / resume ─────────────────────────────────────
+// Workers obey at the next step or AI-batch boundary (kill switch): progress
+// updates on a paused/stopped job fail their status guard and the worker
+// exits without stomping the user's choice. Phase checkpoints and the
+// content-addressed record cache make resume cheap — completed work is
+// never re-paid.
+
+/** Project status once no run is active: complete if anything ever finished, else idle. */
+async function settleProjectStatus(projectId: string): Promise<void> {
+  await query(
+    `UPDATE projects SET status = (
+       CASE WHEN EXISTS (SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND status = 'complete')
+            THEN 'complete' ELSE 'idle' END)
+     WHERE id = $1 AND status = 'analyzing'`,
+    [projectId],
+  );
+}
+
+projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const result = await query(
+      `UPDATE analysis_jobs SET status = 'paused', current_step = 'Paused by user'
+       WHERE id = $1 AND project_id = $2 AND status IN ('queued', 'running')
+       RETURNING id`,
+      [jobId, projectId],
+    );
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Job is not queued or running" });
+      return;
+    }
+    await settleProjectStatus(projectId);
+    res.json({ job: { id: jobId, status: "paused" } });
+  } catch (err) {
+    console.error("Pause job error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const result = await query(
+      `UPDATE analysis_jobs
+       SET status = 'failed', current_step = 'Stopped by user',
+           error_message = 'Stopped by user — completed phases stay checkpointed; Resume or a new Analyze… picks up from cache.',
+           finished_at = NOW()
+       WHERE id = $1 AND project_id = $2 AND status IN ('queued', 'running', 'paused')
+       RETURNING id`,
+      [jobId, projectId],
+    );
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Job is not active" });
+      return;
+    }
+    await settleProjectStatus(projectId);
+    res.json({ job: { id: jobId, status: "failed" } });
+  } catch (err) {
+    console.error("Stop job error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Resume a paused run — or retry a failed/stalled one — on the SAME job row:
+// checkpoints live there, so the worker skips everything already persisted.
+projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = req.params.id as string;
+    const jobId = String(req.params.jobId);
+    const row = (await query(
+      `SELECT aj.status, aj.job_type, aj.scope_id, aj.branch, aj.commit_hash, aj.semantic_depth,
+              aj.role, aj.snapshot_id, s.commit_hash AS snapshot_commit
+       FROM analysis_jobs aj
+       LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       WHERE aj.id = $1 AND aj.project_id = $2`,
+      [jobId, projectId],
+    )).rows[0] as {
+      status: string; job_type: string; scope_id: string | null; branch: string | null;
+      commit_hash: string | null; semantic_depth: string | null; role: string | null;
+      snapshot_id: string | null; snapshot_commit: string | null;
+    } | undefined;
+    if (!row) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    if (!["paused", "failed"].includes(row.status)) {
+      res.status(409).json({ error: "Only paused or failed runs can be resumed" });
+      return;
+    }
+    if (row.job_type === "regenerate_section") {
+      res.status(409).json({ error: "Regenerations restart from the section — use its Regenerate button" });
+      return;
+    }
+    if (row.job_type === "preflight") {
+      res.status(409).json({ error: "Preflight previews are not resumable — run a new preview" });
+      return;
+    }
+    const active = await query(
+      `SELECT id FROM analysis_jobs WHERE project_id = $1 AND status IN ('queued', 'running') LIMIT 1`,
+      [projectId],
+    );
+    if (active.rows.length > 0) {
+      res.status(409).json({ error: "Another run is already active for this project", active_job_id: active.rows[0].id });
+      return;
+    }
+
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'queued', current_step = 'Waiting for worker (resume)',
+           error_message = NULL, finished_at = NULL, last_heartbeat_at = NULL
+       WHERE id = $1`,
+      [jobId],
+    );
+
+    if (row.job_type === "generate_package") {
+      if (!row.snapshot_id) {
+        res.status(409).json({ error: "This generation has no snapshot to resume against" });
+        return;
+      }
+      await getSummaryQueue().add(`generate_summary_${row.role ?? "general"}`, {
+        jobId,
+        snapshotId: row.snapshot_id,
+        projectId,
+        triggeredBy: req.user!.id,
+        role: row.role ?? undefined,
+      } satisfies SummaryJobData, {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 3000 },
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 10 },
+      });
+    } else {
+      await query(`UPDATE projects SET status = 'analyzing' WHERE id = $1`, [projectId]);
+      await getAnalysisQueue().add("analyze_scope", {
+        jobId,
+        projectId,
+        scopeId: row.scope_id ?? undefined,
+        // Resume the exact commit that was being analyzed, not a moved branch head.
+        commit: row.snapshot_commit ?? row.commit_hash ?? undefined,
+        branch: row.branch ?? undefined,
+        depth: (row.semantic_depth ?? undefined) as AnalysisJobData["depth"],
+        role: row.role ?? undefined,
+      } satisfies AnalysisJobData, {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 5000 },
+      });
+    }
+
+    res.status(202).json({ job: { id: jobId, status: "queued" } });
+  } catch (err) {
+    console.error("Resume job error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -594,24 +773,50 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { scope_id } = (req.body ?? {}) as { scope_id?: string };
+    const { scope_id, scope_path, branch, commit, depth } = (req.body ?? {}) as {
+      scope_id?: string;
+      scope_path?: string;
+      branch?: string;
+      commit?: string;
+      depth?: string;
+    };
+    if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
+      res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
+      return;
+    }
+    if (depth !== undefined && !VALID_DEPTHS.includes(depth as typeof VALID_DEPTHS[number])) {
+      res.status(400).json({ error: "depth must be one of: cheap, standard, full" });
+      return;
+    }
 
-    if (scope_id) {
+    let effectiveScopeId = scope_id ?? null;
+    if (effectiveScopeId) {
       const scopeCheck = await query(
         `SELECT id FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
-        [scope_id, projectId],
+        [effectiveScopeId, projectId],
       );
       if (scopeCheck.rows.length === 0) {
         res.status(404).json({ error: "Scope not found" });
         return;
       }
+    } else if (scope_path !== undefined && normalizeScopePath(scope_path) !== "") {
+      const prefix = normalizeScopePath(scope_path);
+      const scopeResult = await query(
+        `INSERT INTO analysis_scopes (project_id, path_prefix, display_name, kind, detected_from, created_by)
+         VALUES ($1, $2, $2, 'manual', 'user_manual', $3)
+         ON CONFLICT (project_id, path_prefix) DO UPDATE SET updated_at = now()
+         RETURNING id`,
+        [projectId, prefix, userId],
+      );
+      effectiveScopeId = scopeResult.rows[0].id as string;
     }
 
     const jobResult = await query(
-      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, 'preflight', 'queued', 'Waiting for worker')
+      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step,
+                                  branch, commit_hash, semantic_depth)
+       VALUES ($1, $2, $3, 'preflight', 'queued', 'Waiting for worker', $4, $5, $6)
        RETURNING id, status`,
-      [projectId, scope_id ?? null, userId],
+      [projectId, effectiveScopeId, userId, branch ?? null, commit ?? null, depth ?? null],
     );
     const dbJobId: string = jobResult.rows[0].id;
 
@@ -619,7 +824,10 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
       jobId: dbJobId,
       projectId,
       task: 'preflight',
-      scopeId: scope_id,
+      scopeId: effectiveScopeId ?? undefined,
+      branch,
+      commit,
+      depth: depth as AnalysisJobData['depth'],
     } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,
@@ -638,9 +846,24 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { scope_id, commit } = (req.body ?? {}) as { scope_id?: string; commit?: string };
+    const { scope_id, scope_path, branch, commit, depth, role } = (req.body ?? {}) as {
+      scope_id?: string;
+      scope_path?: string;
+      branch?: string;
+      commit?: string;
+      depth?: string;
+      role?: string;
+    };
     if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
       res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
+      return;
+    }
+    if (depth !== undefined && !VALID_DEPTHS.includes(depth as typeof VALID_DEPTHS[number])) {
+      res.status(400).json({ error: "depth must be one of: cheap, standard, full" });
+      return;
+    }
+    if (role !== undefined && !VALID_ROLES.includes(role as typeof VALID_ROLES[number])) {
+      res.status(400).json({ error: "role must be one of: backend, frontend, devops, qa, general" });
       return;
     }
 
@@ -662,7 +885,10 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     );
     if (activeJob.rows.length > 0) {
       await client.query("ROLLBACK");
-      res.status(409).json({ error: "Analysis already in progress for this project" });
+      res.status(409).json({
+        error: "Analysis already in progress for this project",
+        active_job_id: activeJob.rows[0].id,
+      });
       return;
     }
 
@@ -673,36 +899,49 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       [projectId],
     );
 
-    if (scope_id) {
+    let effectiveScopeId = scope_id ?? null;
+    if (effectiveScopeId) {
       const scopeCheck = await client.query(
         `SELECT id FROM analysis_scopes WHERE id = $1 AND project_id = $2`,
-        [scope_id, projectId],
+        [effectiveScopeId, projectId],
       );
       if (scopeCheck.rows.length === 0) {
         await client.query("ROLLBACK");
         res.status(404).json({ error: "Scope not found" });
         return;
       }
+    } else if (scope_path !== undefined && normalizeScopePath(scope_path) !== "") {
+      const prefix = normalizeScopePath(scope_path);
+      const scopeResult = await client.query(
+        `INSERT INTO analysis_scopes (project_id, path_prefix, display_name, kind, detected_from, created_by)
+         VALUES ($1, $2, $2, 'manual', 'user_manual', $3)
+         ON CONFLICT (project_id, path_prefix) DO UPDATE SET updated_at = now()
+         RETURNING id`,
+        [projectId, prefix, userId],
+      );
+      effectiveScopeId = scopeResult.rows[0].id as string;
     }
 
     // Re-analyzing an already-analyzed scope is an incremental update (spec
     // job type): the worker diffs against the previous snapshot and flags
     // stale artifacts instead of regenerating everything.
     const previousSnapshot = await client.query(
-      scope_id
+      effectiveScopeId
         ? `SELECT 1 FROM analysis_snapshots WHERE project_id = $1 AND scope_id = $2 AND status = 'complete' LIMIT 1`
         : `SELECT 1 FROM analysis_snapshots s
            JOIN analysis_scopes sc ON sc.id = s.scope_id
            WHERE s.project_id = $1 AND sc.path_prefix = '' AND s.status = 'complete' LIMIT 1`,
-      scope_id ? [projectId, scope_id] : [projectId],
+      effectiveScopeId ? [projectId, effectiveScopeId] : [projectId],
     );
     const jobType = previousSnapshot.rows.length > 0 ? 'incremental_update' : 'analyze_scope';
 
     const jobResult = await client.query(
-      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step)
-       VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker')
+      `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step,
+                                  role, branch, commit_hash, semantic_depth)
+       VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker', $5, $6, $7, $8)
        RETURNING id, status`,
-      [projectId, scope_id ?? null, userId, jobType],
+      [projectId, effectiveScopeId, userId, jobType,
+       role ?? null, branch ?? null, commit ?? null, depth ?? null],
     );
 
     await client.query("COMMIT");
@@ -712,8 +951,11 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     await getAnalysisQueue().add('analyze_scope', {
       jobId: dbJobId,
       projectId,
-      scopeId: scope_id,
+      scopeId: effectiveScopeId ?? undefined,
       commit,
+      branch,
+      depth: depth as AnalysisJobData['depth'],
+      role,
     } satisfies AnalysisJobData, {
       jobId: dbJobId,
       attempts: 2,
@@ -725,7 +967,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
         id: dbJobId,
         status: jobResult.rows[0].status,
         mode: jobType === 'incremental_update' ? "incremental" : "initial",
-        branch: project.branch,
+        branch: branch ?? project.branch,
       },
     });
   } catch (err) {

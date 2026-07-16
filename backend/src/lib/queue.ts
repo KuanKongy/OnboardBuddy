@@ -1,5 +1,18 @@
 import { Queue, QueueOptions } from 'bullmq';
 
+// Resilience against cloud Redis (Upstash) dropping idle/blocking sockets: a
+// worker whose blocking connection dies silently sits "listening" forever
+// while jobs pile up in 'waiting' (observed live — regenerations that never
+// started until the worker restarted). Reconnect forever with capped backoff
+// and keep the TCP socket warm.
+const RESILIENCE = {
+  maxRetriesPerRequest: null,     // required by BullMQ for blocking connections
+  enableReadyCheck: false,
+  retryStrategy: (times: number) => Math.min(times * 1_000, 15_000),
+  keepAlive: 15_000,
+  reconnectOnError: () => true,   // e.g. Upstash READONLY/connection-reset errors
+};
+
 export function buildConnection() {
   const url = process.env.REDIS_URL;
   if (url) {
@@ -9,12 +22,14 @@ export function buildConnection() {
       port: Number(parsed.port) || 6379,
       password: parsed.password || undefined,
       tls: parsed.protocol === 'rediss:' ? {} : undefined,
+      ...RESILIENCE,
     };
   }
   return {
     host: process.env.REDIS_HOST ?? 'localhost',
     port: Number(process.env.REDIS_PORT ?? 6379),
     password: process.env.REDIS_PASSWORD,
+    ...RESILIENCE,
   };
 }
 
@@ -50,6 +65,12 @@ export interface AnalysisJobData {
   scopeId?: string;
   /** Exact commit SHA to analyze — omitted = branch head. */
   commit?: string;
+  /** Branch to analyze — omitted = the project's default branch. */
+  branch?: string;
+  /** Per-run depth override — omitted = project_settings.analysis_depth. */
+  depth?: 'cheap' | 'standard' | 'full';
+  /** Role for the auto-generated package — omitted = project default role. */
+  role?: string;
 }
 
 export interface SummaryJobData {

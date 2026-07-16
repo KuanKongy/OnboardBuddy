@@ -1,11 +1,13 @@
 import { Github, LogOut, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { BackLink } from "@/components/BackLink";
+import { PageHeader } from "@/components/PageHeader";
 
 export function AccountSettingsPage() {
   const { user, signOut, connectGithub, disconnectGithub } = useAuth();
@@ -52,15 +54,21 @@ export function AccountSettingsPage() {
     }
   }
 
+  // Back returns to wherever the settings gear was clicked (carried in
+  // location.state by AccountCard); direct visits fall back to the dashboard.
+  const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
+
   return (
-    <div className="max-w-xl">
-      <BackLink className="mb-3" />
-      <div className="mb-4">
-        <h1 className="text-lg font-semibold text-foreground">Account Settings</h1>
-        <p className="text-xs text-muted-foreground">
-          Your profile, GitHub connection, and account access.
-        </p>
-      </div>
+    <div>
+      {/* Header spans the full page like every other tab; only the card
+          column below is centered and narrow. */}
+      <PageHeader
+        title="Account Settings"
+        subtitle="Your profile, GitHub connection, and account access."
+        actions={<BackLink to={from ?? "/dashboard"} label={from ? "Back" : "Back to dashboard"} />}
+      />
+      <div className="mx-auto max-w-xl">
 
       <Card className="mb-3">
         <CardContent className="p-3">
@@ -147,6 +155,7 @@ export function AccountSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

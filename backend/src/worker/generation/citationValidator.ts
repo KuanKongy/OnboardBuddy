@@ -132,12 +132,21 @@ export async function validateGeneratedOutput(params: {
     adjustedClaims.push({ ...claim, receiptIds: cited, confidence });
   }
 
-  // 7. section confidence = min reasonable confidence of major claims
-  let confidence = output.confidence;
-  for (const claim of adjustedClaims) {
-    if (CONFIDENCE_RANK[claim.confidence] < CONFIDENCE_RANK[confidence]) confidence = claim.confidence;
+  // 7. section confidence: distribution of claim confidences, capped by the
+  // model's own self-assessment. The old rule took the MINIMUM over all
+  // claims — one uncited claim among twenty branded the whole section low,
+  // so every section read "low" regardless of quality. Weak claims keep
+  // their individual downgrade and unknowns entry above; the section grade
+  // now reflects how much of the section is well-supported.
+  let confidence: 'high' | 'medium' | 'low';
+  if (adjustedClaims.length === 0) {
+    confidence = 'low';
+  } else {
+    const lowShare = adjustedClaims.filter((c) => c.confidence === 'low').length / adjustedClaims.length;
+    const highShare = adjustedClaims.filter((c) => c.confidence === 'high').length / adjustedClaims.length;
+    confidence = lowShare > 0.3 ? 'low' : highShare >= 0.6 && lowShare === 0 ? 'high' : 'medium';
+    if (CONFIDENCE_RANK[output.confidence] < CONFIDENCE_RANK[confidence]) confidence = output.confidence;
   }
-  if (adjustedClaims.length === 0) confidence = 'low';
 
   const hardFailure =
     unresolvableChains > 0 ||

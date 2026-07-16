@@ -18,6 +18,7 @@ tutorialsRouter.get("/", requireProjectAccess(), async (req, res) => {
     const rows = (await query(
       `SELECT t.id, t.stable_key, t.title, t.summary, t.status, t.confidence,
               t.unknowns, t.created_at, t.workflow_id,
+              t.generation_context->>'goal' AS goal,
               w.trigger_type, w.purpose,
               op.role AS package_role, op.analyzed_commit,
               (SELECT count(*)::int FROM tutorial_steps ts WHERE ts.tutorial_id = t.id) AS step_count
@@ -53,7 +54,9 @@ tutorialsRouter.get("/:tutorialId", requireProjectAccess(), async (req, res) => 
 
     const tutResult = await query(
       `SELECT t.id, t.stable_key, t.title, t.summary, t.status, t.confidence,
-              t.unknowns, t.workflow_id, w.trigger_type, w.purpose,
+              t.unknowns, t.workflow_id,
+              t.generation_context->>'goal' AS goal,
+              w.trigger_type, w.purpose,
               op.role AS package_role, op.analyzed_commit
        FROM tutorials t
        LEFT JOIN workflows w ON w.id = t.workflow_id

@@ -35,20 +35,20 @@ describe("POST /api/projects/:id/members/invitations", () => {
   });
 });
 
-describe("PATCH /api/projects/:id/members/members/:userId", () => {
+describe("PATCH /api/projects/:id/members/:userId", () => {
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app)
-      .patch(`/api/projects/${PROJECT_ID}/members/members/some-user-id`)
+      .patch(`/api/projects/${PROJECT_ID}/members/some-user-id`)
       .send({ developer_role: "frontend" });
 
     expect(res.status).to.equal(401);
   });
 });
 
-describe("DELETE /api/projects/:id/members/members/:userId", () => {
+describe("DELETE /api/projects/:id/members/:userId", () => {
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).delete(
-      `/api/projects/${PROJECT_ID}/members/members/some-user-id`,
+      `/api/projects/${PROJECT_ID}/members/some-user-id`,
     );
 
     expect(res.status).to.equal(401);

@@ -1,6 +1,7 @@
-import { Loader2, Mail, Settings2, Trash2, UserPlus, X } from "lucide-react";
+import { CalendarDays, FileCheck2, Github, Loader2, Mail, Trash2, UserPlus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,8 @@ interface Member {
   permission_tier: string;
   developer_role: string;
   joined_at: string;
+  github_username: string | null;
+  sections_reviewed: number;
 }
 
 interface PendingInvitation {
@@ -161,7 +164,7 @@ export function TeamPage() {
     setSavingMember(true);
     setError("");
     try {
-      await apiFetch(`/projects/${id}/members/members/${manageMember.user_id}`, {
+      await apiFetch(`/projects/${id}/members/${manageMember.user_id}`, {
         method: "PATCH",
         body: JSON.stringify({ permission_tier: editTier, developer_role: editRole }),
       });
@@ -180,10 +183,11 @@ export function TeamPage() {
     }
   }
 
-  async function handleRemove(userId: string) {
+  async function handleRemove(member: Member) {
+    if (!window.confirm(`Remove ${member.email} from this project?`)) return;
     try {
-      await apiFetch(`/projects/${id}/members/members/${userId}`, { method: "DELETE" });
-      setMembers((prev) => prev.filter((m) => m.user_id !== userId));
+      await apiFetch(`/projects/${id}/members/${member.user_id}`, { method: "DELETE" });
+      setMembers((prev) => prev.filter((m) => m.user_id !== member.user_id));
       setManageMember(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to remove member");
@@ -200,22 +204,23 @@ export function TeamPage() {
 
   return (
     <div>
-      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Team</h1>
-          <p className="text-xs text-muted-foreground">
-            Who has access to {project.repo_name} and their permissions
-            {!loading && ` · ${members.length} member${members.length !== 1 ? "s" : ""}`}
-          </p>
-        </div>
-        {canManage && (
+      <PageHeader
+        title="Team"
+        subtitle={`Who has access to ${project.repo_name} and their permissions${
+          !loading ? ` · ${members.length} member${members.length !== 1 ? "s" : ""}` : ""
+        }`}
+        actions={
+          canManage && (
+            <Button size="sm" onClick={() => setInviteOpen(true)}>
+              <UserPlus className="h-3.5 w-3.5" />
+              Invite
+            </Button>
+          )
+        }
+      />
+
+      {canManage && (
           <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-            <DialogTrigger asChild>
-              <Button size="sm">
-                <UserPlus className="h-3.5 w-3.5" />
-                Invite
-              </Button>
-            </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle className="text-sm">Invite a team member</DialogTitle>
@@ -269,7 +274,6 @@ export function TeamPage() {
             </DialogContent>
           </Dialog>
         )}
-      </div>
 
       {error && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -284,44 +288,43 @@ export function TeamPage() {
       ) : (
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
           {members.map((member) => (
-            <Card key={member.user_id} className="group relative">
-              <CardContent className="flex flex-col items-center p-3 text-center">
-                {canManageMember(member) && (
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    className="absolute right-1 top-1 text-muted-foreground opacity-0 group-hover:opacity-100"
-                    onClick={() => openManage(member)}
-                    aria-label="Manage member"
+            // Every member opens the detail modal — management controls
+            // inside are permission-gated, viewing details is not.
+            <button
+              key={member.user_id}
+              type="button"
+              onClick={() => openManage(member)}
+              className="text-left"
+              aria-label={`View ${member.email}`}
+            >
+              <Card className="h-full transition-colors hover:border-primary/40">
+                <CardContent className="flex flex-col items-center p-3 text-center">
+                  <Avatar className="mb-1.5 h-8 w-8">
+                    <AvatarFallback className={`${getAvatarColor(member.email)} text-xs font-medium text-white`}>
+                      {getInitials(member.email)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <p
+                    className="w-full truncate text-xs font-medium text-foreground"
+                    title={member.email.split("@")[0]}
                   >
-                    <Settings2 className="h-3 w-3" />
-                  </Button>
-                )}
-                <Avatar className="mb-1.5 h-8 w-8">
-                  <AvatarFallback className={`${getAvatarColor(member.email)} text-xs font-medium text-white`}>
-                    {getInitials(member.email)}
-                  </AvatarFallback>
-                </Avatar>
-                <p
-                  className="w-full truncate text-xs font-medium text-foreground"
-                  title={member.email.split("@")[0]}
-                >
-                  {member.email.split("@")[0]}
-                </p>
-                <p
-                  className="w-full truncate text-xs capitalize text-muted-foreground"
-                  title={member.developer_role}
-                >
-                  {member.developer_role}
-                </p>
-                <Badge
-                  variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
-                  className="mt-1.5 text-[11px] capitalize"
-                >
-                  {member.permission_tier}
-                </Badge>
-              </CardContent>
-            </Card>
+                    {member.email.split("@")[0]}
+                  </p>
+                  <p
+                    className="w-full truncate text-xs capitalize text-muted-foreground"
+                    title={member.developer_role}
+                  >
+                    {member.developer_role}
+                  </p>
+                  <Badge
+                    variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
+                    className="mt-1.5 text-[11px] capitalize"
+                  >
+                    {member.permission_tier}
+                  </Badge>
+                </CardContent>
+              </Card>
+            </button>
           ))}
         </div>
       )}
@@ -368,65 +371,125 @@ export function TeamPage() {
         </div>
       )}
 
-      {/* Manage member dialog */}
+      {/* Member detail dialog: profile info for everyone, management
+          controls only when the caller may manage this member. */}
       <Dialog open={manageMember !== null} onOpenChange={(open) => !open && setManageMember(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-sm">
-              Manage {manageMember?.email.split("@")[0]}
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <Avatar className="h-7 w-7">
+                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[11px] font-medium text-white`}>
+                  {getInitials(manageMember?.email ?? "")}
+                </AvatarFallback>
+              </Avatar>
+              {manageMember?.email.split("@")[0]}
+              <Badge
+                variant={tierBadgeVariant[manageMember?.permission_tier ?? ""] ?? "outline"}
+                className="text-[10px] capitalize"
+              >
+                {manageMember?.permission_tier}
+              </Badge>
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 pt-1">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label className="text-xs">Permission tier</Label>
-                <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
-                  <SelectTrigger className="h-8 text-[13px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="admin">Admin</SelectItem>
-                    <SelectItem value="developer">Developer</SelectItem>
-                  </SelectContent>
-                </Select>
-                {!isOwner && (
-                  <p className="text-[11px] text-muted-foreground">Only the owner can change tiers.</p>
+          {manageMember && (
+            <div className="space-y-3 pt-1">
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Mail className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate text-foreground" title={manageMember.email}>{manageMember.email}</span>
+                </div>
+                {manageMember.github_username && (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Github className="h-3.5 w-3.5 shrink-0" />
+                    <a
+                      href={`https://github.com/${manageMember.github_username}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-foreground hover:underline"
+                    >
+                      @{manageMember.github_username}
+                    </a>
+                  </div>
                 )}
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Joined{" "}
+                    {new Date(manageMember.joined_at).toLocaleDateString(undefined, {
+                      year: "numeric", month: "long", day: "numeric",
+                    })}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {manageMember.sections_reviewed} onboarding section{manageMember.sections_reviewed === 1 ? "" : "s"} reviewed
+                  </span>
+                </div>
               </div>
-              <div className="space-y-1">
-                <Label className="text-xs">Developer role</Label>
-                <Select value={editRole} onValueChange={setEditRole}>
-                  <SelectTrigger className="h-8 text-[13px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {roleOptions.map((r) => (
-                      <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+
+              {canManageMember(manageMember) ? (
+                <>
+                  <Separator />
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Permission tier</Label>
+                      <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
+                        <SelectTrigger className="h-8 w-full text-[13px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="developer">Developer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {!isOwner && (
+                        <p className="text-[11px] text-muted-foreground">Only the owner can change tiers.</p>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Developer role</Label>
+                      <Select value={editRole} onValueChange={setEditRole}>
+                        <SelectTrigger className="h-8 w-full text-[13px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {roleOptions.map((r) => (
+                            <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Separator />
+                  <div className="flex items-center justify-between">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => handleRemove(manageMember)}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      Remove
+                    </Button>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => setManageMember(null)}>Cancel</Button>
+                      <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
+                        {savingMember && <Loader2 className="h-3 w-3 animate-spin" />}
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  {manageMember.permission_tier === "owner"
+                    ? "The project owner can't be modified."
+                    : "You don't have permission to manage this member."}
+                </p>
+              )}
             </div>
-            <Separator />
-            <div className="flex items-center justify-between">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive"
-                onClick={() => manageMember && handleRemove(manageMember.user_id)}
-              >
-                <Trash2 className="h-3 w-3" />
-                Remove
-              </Button>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setManageMember(null)}>Cancel</Button>
-                <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
-                  {savingMember && <Loader2 className="h-3 w-3 animate-spin" />}
-                  Save
-                </Button>
-              </div>
-            </div>
-          </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>

@@ -245,6 +245,36 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
       }>
     : [];
 
+  // doc_health claims are ABOUT documentation, but record receipts are
+  // code-first — without doc evidence in the bundle, claims naming README.md
+  // could never cite anything and the section was downgraded across the
+  // board. Attach the snapshot's doc nodes as citable doc-trust receipts.
+  const docReceipts: typeof receiptRows = [];
+  if (input.sectionType === 'doc_health') {
+    const docRows = (await query(
+      `SELECT stable_key, file_path, snippet, line_start, line_end FROM graph_nodes
+       WHERE snapshot_id = $1 AND type = 'doc'
+       ORDER BY (file_path ILIKE '%readme%') DESC, file_path
+       LIMIT 12`,
+      [input.snapshotId],
+    )).rows as Array<{ stable_key: string; file_path: string | null; snippet: string | null; line_start: number | null; line_end: number | null }>;
+    for (const d of docRows) {
+      docReceipts.push({
+        id: `docnode:${d.stable_key}`,
+        receipt_kind: 'doc_snippet',
+        trust_level: 'docs',
+        node_stable_key: d.stable_key,
+        file_path: d.file_path,
+        symbol_name: null,
+        line_start: d.line_start,
+        line_end: d.line_end,
+        snippet: d.snippet,
+        detection_expression: null,
+        referenced_record_id: null,
+      });
+    }
+  }
+
   const factsOnlyMode = input.privacyMode === 'facts_only_ai';
   if (factsOnlyMode) {
     unknowns.push({ kind: 'facts_only_privacy', detail: 'code snippets withheld by project privacy settings' });
@@ -273,7 +303,7 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
       receiptIds: c.receiptIds,
       retrieval: { score: round4(c.score), seededByView: c.seededByView, hop: c.hop },
     })),
-    receipts: receiptRows.map((r) => ({
+    receipts: [...receiptRows, ...docReceipts].map((r) => ({
       receiptId: r.id,
       receiptKind: r.receipt_kind,
       trustLevel: r.trust_level,

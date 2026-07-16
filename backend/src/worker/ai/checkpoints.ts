@@ -33,6 +33,17 @@ export async function markPhase(
              $4, COALESCE($5::jsonb, '{}'::jsonb), $6)
      ON CONFLICT (snapshot_id, phase) DO UPDATE
        SET status = EXCLUDED.status,
+           -- Re-analyzing the same commit upserts the same snapshot row, so a
+           -- phase marked 'running' again — or marked anything after a
+           -- terminal state — is a NEW run of that phase: restart its clock.
+           -- Keeping the original started_at timed phases from the first run
+           -- ever to the latest finish (hours-long phantom durations).
+           started_at = CASE
+             WHEN EXCLUDED.status = 'running'
+               OR snapshot_phases.status IN ('complete', 'failed', 'skipped')
+             THEN NOW()
+             ELSE snapshot_phases.started_at
+           END,
            finished_at = EXCLUDED.finished_at,
            metrics = snapshot_phases.metrics || EXCLUDED.metrics,
            checkpoint = CASE WHEN $5::jsonb IS NULL THEN snapshot_phases.checkpoint ELSE EXCLUDED.checkpoint END,

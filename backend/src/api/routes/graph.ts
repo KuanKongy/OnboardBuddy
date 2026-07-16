@@ -36,7 +36,8 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
         [snapshotId],
       ),
       query(
-        `SELECT e.id, e.source_node_id, e.target_node_id, e.type
+        `SELECT e.id, e.source_node_id, e.target_node_id, e.type,
+                COALESCE((e.metadata->>'weight')::numeric, 1) AS weight
          FROM graph_edges e
          WHERE e.snapshot_id = $1 AND e.type NOT IN ('extends', 'implements')`,
         [snapshotId],
@@ -44,7 +45,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
     ]);
 
     type NodeRow = { id: string; stable_key: string; type: string; name: string; file_path: string; metadata: Record<string, unknown> };
-    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; type: string };
+    type EdgeRow = { id: string; source_node_id: string; target_node_id: string; type: string; weight: string | number };
 
     const allNodes = nodesResult.rows as NodeRow[];
     const allEdges = edgesResult.rows as EdgeRow[];
@@ -152,6 +153,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
       metadata: {
         exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
         importCount: (n.metadata?.importCount as number) ?? 0,
+        externalImportCount: (n.metadata?.externalImportCount as number) ?? 0,
         dependentCount: (n.metadata?.dependentCount as number) ?? 0,
       },
     }));
@@ -162,6 +164,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
         source: nodeIdToKey.get(e.source_node_id) ?? '',
         target: nodeIdToKey.get(e.target_node_id) ?? '',
         kind: e.type,
+        weight: Number(e.weight ?? 1),
       }))
       .filter((e) => e.source && e.target && cappedKeySet.has(e.source) && cappedKeySet.has(e.target));
 
@@ -367,7 +370,7 @@ graphRouter.get("/workflows/:workflowId", requireProjectAccess(), async (req, re
 
     const stepsResult = await query(
       `SELECT ws.step_order, ws.file_path, ws.symbol_name, ws.line_start, ws.line_end,
-              ws.step_kind, ws.deterministic_description, n.stable_key
+              ws.step_kind, ws.deterministic_description, ws.metadata, n.stable_key
        FROM workflow_steps ws
        LEFT JOIN graph_nodes n ON n.id = ws.node_id
        WHERE ws.workflow_id = $1
@@ -378,24 +381,34 @@ graphRouter.get("/workflows/:workflowId", requireProjectAccess(), async (req, re
     type StepRow = {
       step_order: number; file_path: string; symbol_name: string | null;
       line_start: number | null; line_end: number | null;
-      step_kind: string; deterministic_description: string; stable_key: string | null;
+      step_kind: string; deterministic_description: string;
+      metadata: { syntheticReturn?: boolean } | null; stable_key: string | null;
     };
     const steps = stepsResult.rows as StepRow[];
 
     // One node per distinct file on the path; directed edges between
-    // consecutive steps
+    // consecutive steps. A syntheticReturn step re-references the trigger
+    // symbol, so it gets its own terminal node — otherwise the final edge
+    // would loop back to the first node.
+    const graphNodeId = (step: StepRow) => {
+      const base = step.stable_key ?? step.file_path;
+      return step.metadata?.syntheticReturn ? `${base}::return` : base;
+    };
     const nodeMap = new Map<string, { id: string; label: string; kind: string; filePath: string; metadata: { exportedSymbols: string[]; importCount: number; dependentCount: number } }>();
     const edges: Array<{ id: string; source: string; target: string; kind: string }> = [];
     const edgeSet = new Set<string>();
     let previousId: string | null = null;
 
     for (const step of steps) {
-      const nodeId = step.stable_key ?? step.file_path;
+      const nodeId = graphNodeId(step);
       if (!nodeMap.has(nodeId)) {
         const base = step.file_path.split('/').pop() ?? step.file_path;
+        const label = step.metadata?.syntheticReturn
+          ? `Response from ${step.symbol_name ?? base}`
+          : step.symbol_name ?? base;
         nodeMap.set(nodeId, {
           id: nodeId,
-          label: step.symbol_name ?? base,
+          label,
           kind: step.step_kind,
           filePath: step.file_path,
           metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
@@ -425,7 +438,7 @@ graphRouter.get("/workflows/:workflowId", requireProjectAccess(), async (req, re
         lineEnd: s.line_end,
         stepKind: s.step_kind,
         description: s.deterministic_description,
-        nodeId: s.stable_key ?? s.file_path,
+        nodeId: graphNodeId(s),
       })),
       graph: { nodes, edges, entryPoints: firstNode },
     });
@@ -462,8 +475,14 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
     }
     const node = result.rows[0] as { id: string } & Record<string, unknown>;
 
-    const nodeRow = node as unknown as { id: string; stable_key: string; metadata: Record<string, unknown> };
-    const [workflowsResult, rankingResult, recordResult, callerResult, receiptsResult] = await Promise.all([
+    const nodeRow = node as unknown as { id: string; stable_key: string; type: string; metadata: Record<string, unknown> };
+    // Relationship semantics match the on-node badges: file/module nodes
+    // relate via imports, symbol nodes via calls. Mixing both double-counted
+    // dependencies that are imported AND called.
+    const isFileNode = nodeRow.type === 'module' || nodeRow.type === 'file';
+    const relationEdgeTypes = isFileNode ? ['imports'] : ['calls'];
+    const [workflowsResult, rankingResult, recordResult, callerResult, receiptsResult,
+           callersResult, calleesResult, effectsResult, clusterResult] = await Promise.all([
       query(
         `SELECT DISTINCT w.id, w.title, w.trigger_type
          FROM workflow_steps ws
@@ -510,6 +529,32 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
          LIMIT 6`,
         [snapshotId, nodeRow.stable_key],
       ),
+      // Deterministic relationships — every node has these even when it has
+      // no LLM record, so the detail panel is never empty.
+      query(
+        `SELECT gn.stable_key, gn.name, gn.file_path
+         FROM graph_edges e JOIN graph_nodes gn ON gn.id = e.source_node_id
+         WHERE e.snapshot_id = $1 AND e.target_node_id = $2 AND e.type = ANY($3)
+         ORDER BY gn.name LIMIT 8`,
+        [snapshotId, node.id, relationEdgeTypes],
+      ),
+      query(
+        `SELECT gn.stable_key, gn.name, gn.file_path
+         FROM graph_edges e JOIN graph_nodes gn ON gn.id = e.target_node_id
+         WHERE e.snapshot_id = $1 AND e.source_node_id = $2 AND e.type = ANY($3)
+         ORDER BY gn.name LIMIT 8`,
+        [snapshotId, node.id, relationEdgeTypes],
+      ),
+      query(
+        `SELECT type, target FROM side_effects WHERE snapshot_id = $1 AND node_id = $2 LIMIT 8`,
+        [snapshotId, node.id],
+      ),
+      query(
+        `SELECT c.stable_key, c.label
+         FROM architecture_cluster_members m JOIN architecture_clusters c ON c.id = m.cluster_id
+         WHERE c.snapshot_id = $1 AND m.node_id = $2 LIMIT 1`,
+        [snapshotId, node.id],
+      ),
     ]);
 
     const ranking = rankingResult.rows[0] as
@@ -531,6 +576,14 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         connected_workflows: workflowsResult.rows,
         composite_score: ranking ? Number(ranking.composite_score) : null,
         ranking_reasons: ranking?.ranking_reasons ?? [],
+        callers: callersResult.rows,
+        callees: calleesResult.rows,
+        // Panel labels matching the relationship semantics above.
+        relation_labels: isFileNode
+          ? { inbound: "Imported by", outbound: "Imports" }
+          : { inbound: "Called by", outbound: "Calls" },
+        side_effects: effectsResult.rows,
+        cluster: clusterResult.rows[0] ?? null,
         doc: {
           summary: record ? record.summary.split(/(?<=[.!?])\s/)[0] : null,
           summaryConfidence: record?.confidence ?? null,

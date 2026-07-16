@@ -31,7 +31,10 @@ const PURPOSE_RULES: Array<{ signal: string; pattern: RegExp }> = [
   { signal: 'configuration', pattern: /config|setting|env/i },
 ];
 
-export function deriveBehaviorSignals(symbol: SymbolInfo): string[] {
+/** Accepts top-level symbols and class methods alike — both carry calls + snippet. */
+type SignalSource = Pick<SymbolInfo, 'callsSymbols' | 'initializer' | 'snippet' | 'methods'>;
+
+export function deriveBehaviorSignals(symbol: SignalSource): string[] {
   const haystack = [
     ...(symbol.callsSymbols ?? []),
     ...(symbol.methods?.flatMap((m) => m.callsSymbols ?? []) ?? []),
@@ -48,7 +51,7 @@ export function deriveBehaviorSignals(symbol: SymbolInfo): string[] {
   return signals;
 }
 
-export function derivePurposeSignals(relativePath: string, symbol: SymbolInfo): string[] {
+export function derivePurposeSignals(relativePath: string, symbol: Pick<SymbolInfo, 'name'>): string[] {
   const haystack = `${relativePath} ${symbol.name}`;
   return PURPOSE_RULES.filter((r) => r.pattern.test(haystack)).map((r) => r.signal);
 }

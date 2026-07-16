@@ -13,43 +13,19 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
+import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard, type Project } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
+import { dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 
 const RECENT_LIMIT = 6;
 const ACTIVITY_LIMIT = 8;
 
-const TOUR_DISMISSED_KEY = "onboardbuddy:tour-dismissed";
-
-function readTourDismissed(): boolean {
-  try {
-    return localStorage.getItem(TOUR_DISMISSED_KEY) === "1";
-  } catch {
-    // localStorage unavailable (private browsing, disabled storage) — never
-    // auto-start in that case rather than crash or loop.
-    return true;
-  }
-}
-
-function persistTourDismissed(): void {
-  try {
-    localStorage.setItem(TOUR_DISMISSED_KEY, "1");
-  } catch {
-    // Best-effort only; nothing to fall back to.
-  }
-}
-
-function clearTourDismissed(): void {
-  try {
-    localStorage.removeItem(TOUR_DISMISSED_KEY);
-  } catch {
-    // Best-effort only.
-  }
-}
 
 const TOUR_STEPS: TourStep[] = [
   {
@@ -147,6 +123,7 @@ function StatCard({
 
 export function DashboardPage() {
   const { projects, setProjects, loading, error } = useProjects();
+  const { user } = useAuth();
   const [inviteCount, setInviteCount] = useState(0);
   const [tourOpen, setTourOpen] = useState(false);
 
@@ -157,20 +134,20 @@ export function DashboardPage() {
   }, []);
 
   // First-run tour: auto-start once the dashboard has finished its initial
-  // load (never spotlight loading skeletons) and the user hasn't seen it yet.
+  // load (never spotlight loading skeletons) and THIS account hasn't seen it.
   useEffect(() => {
-    if (loading) return;
-    if (readTourDismissed()) return;
+    if (loading || !user) return;
+    if (tourDismissed("dashboard", user.id)) return;
     setTourOpen(true);
-  }, [loading]);
+  }, [loading, user]);
 
   function finishTour() {
-    persistTourDismissed();
+    if (user) dismissTour("dashboard", user.id);
     setTourOpen(false);
   }
 
   function startTour() {
-    clearTourDismissed();
+    if (user) resetTour("dashboard", user.id);
     setTourOpen(true);
   }
 
@@ -191,39 +168,35 @@ export function DashboardPage() {
 
   return (
     <div>
-      <div className="mb-0.5 text-xs text-muted-foreground">Overview &gt; Dashboard</div>
-
-      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Dashboard</h1>
-          <p className="text-xs text-muted-foreground">
-            All your connected repositories and their analysis status in one place.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="xs" onClick={startTour}>
-            <HelpCircle className="h-3.5 w-3.5" />
-            Take a tour
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to="/invitations">
-              <Mail className="h-3.5 w-3.5" />
-              Join Project
-              {inviteCount > 0 && (
-                <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
-                  {inviteCount}
-                </span>
-              )}
-            </Link>
-          </Button>
-          <Button size="sm" data-tour="import-repo" asChild>
-            <Link to="/import">
-              <Plus className="h-3.5 w-3.5" />
-              Add Project
-            </Link>
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Dashboard"
+        subtitle="All your connected repositories and their analysis status in one place."
+        actions={
+          <>
+            <Button variant="ghost" size="xs" onClick={startTour}>
+              <HelpCircle className="h-3.5 w-3.5" />
+              Take a tour
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/invitations">
+                <Mail className="h-3.5 w-3.5" />
+                Join Project
+                {inviteCount > 0 && (
+                  <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
+                    {inviteCount}
+                  </span>
+                )}
+              </Link>
+            </Button>
+            <Button size="sm" data-tour="import-repo" asChild>
+              <Link to="/import">
+                <Plus className="h-3.5 w-3.5" />
+                Add Project
+              </Link>
+            </Button>
+          </>
+        }
+      />
 
       {loading && (
         <div className="flex items-center justify-center py-16">
@@ -237,27 +210,22 @@ export function DashboardPage() {
         </div>
       )}
 
-      {!loading && !error && projects.length === 0 && (
-        <div className="rounded-lg border border-dashed border-border py-12 text-center">
-          <p className="text-sm text-foreground">No projects yet.</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Import a repository to get started.
-          </p>
-          <Button size="sm" className="mt-3" asChild>
-            <Link to="/import">
-              <Plus className="h-3.5 w-3.5" />
-              Import Repository
-            </Link>
-          </Button>
-        </div>
-      )}
-
-      {!loading && !error && projects.length > 0 && (
+      {/* The empty dashboard keeps the exact same frame as a populated one —
+          stats at 0, an import CTA where the project grid goes — so nothing
+          jumps when the first project arrives and the tour anchors exist
+          from the very first visit. */}
+      {!loading && !error && (
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-tour="stats-row">
             <StatCard icon={FolderGit2} label="Projects" value={stats.total} tone="text-foreground" />
             <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" />
-            <StatCard icon={AlertTriangle} label="Need review" value={stats.stale} tone="text-amber-600 dark:text-amber-400" />
+            {/* "Stale content" only matters when nonzero — otherwise show
+                something informative instead of a permanent 0. */}
+            {stats.stale > 0 ? (
+              <StatCard icon={AlertTriangle} label="Stale content" value={stats.stale} tone="text-amber-600 dark:text-amber-400" />
+            ) : (
+              <StatCard icon={CheckCircle2} label="Up to date" value={stats.total - stats.analyzing} tone="text-emerald-600 dark:text-emerald-400" />
+            )}
             <StatCard icon={Mail} label="Pending invites" value={inviteCount} tone="text-foreground" />
           </div>
 
@@ -269,23 +237,43 @@ export function DashboardPage() {
                   View all
                 </Link>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {recentProjects.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    onDeleted={(id) =>
-                      setProjects((prev) => prev.filter((p) => p.id !== id))
-                    }
-                  />
-                ))}
-              </div>
+              {recentProjects.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-border py-12 text-center">
+                  <p className="text-sm text-foreground">No projects yet.</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Import a repository to get started.
+                  </p>
+                  <Button size="sm" className="mt-3" asChild>
+                    <Link to="/import">
+                      <Plus className="h-3.5 w-3.5" />
+                      Import Repository
+                    </Link>
+                  </Button>
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {recentProjects.map((project) => (
+                    <ProjectCard
+                      key={project.id}
+                      project={project}
+                      onDeleted={(id) =>
+                        setProjects((prev) => prev.filter((p) => p.id !== id))
+                      }
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             <div data-tour="recent-activity">
               <h2 className="mb-2 text-sm font-semibold text-foreground">Recent activity</h2>
               <Card>
                 <CardContent className="p-2">
+                  {activity.length === 0 && (
+                    <p className="px-2 py-8 text-center text-xs text-muted-foreground">
+                      No activity yet — it appears once your first repository is imported and analyzed.
+                    </p>
+                  )}
                   <ul className="divide-y divide-border">
                     {activity.map((item) => {
                       const Icon = item.icon;

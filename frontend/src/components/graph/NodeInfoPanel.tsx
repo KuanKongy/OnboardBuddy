@@ -175,6 +175,69 @@ export function NodeInfoPanel({ node, detail, githubRepo }: NodeInfoPanelProps) 
           </div>
         )}
 
+        {/* Deterministic relationships — every node has these, so the panel
+            has substance even when no AI record exists for the symbol. */}
+        {detail && ((detail.callers?.length ?? 0) > 0 || (detail.callees?.length ?? 0) > 0) && (
+          <div>
+            <Separator className="mb-3" />
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {(detail.callers?.length ?? 0) > 0 && (
+                <div>
+                  <p className="section-label mb-1.5">
+                    {detail.relation_labels?.inbound ?? "Used by"} ({detail.callers!.length})
+                  </p>
+                  <ul className="space-y-0.5">
+                    {detail.callers!.map((c) => (
+                      <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>
+                        {c.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {(detail.callees?.length ?? 0) > 0 && (
+                <div>
+                  <p className="section-label mb-1.5">
+                    {detail.relation_labels?.outbound ?? "Uses"} ({detail.callees!.length})
+                  </p>
+                  <ul className="space-y-0.5">
+                    {detail.callees!.map((c) => (
+                      <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>
+                        {c.name}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Side effects + owning cluster */}
+        {detail && ((detail.side_effects?.length ?? 0) > 0 || detail.cluster) && (
+          <div>
+            <Separator className="mb-3" />
+            {(detail.side_effects?.length ?? 0) > 0 && (
+              <div className="mb-2">
+                <p className="section-label mb-1.5">Side effects</p>
+                <div className="flex flex-wrap gap-1">
+                  {detail.side_effects!.map((se, i) => (
+                    <Badge key={i} variant="outline" className="h-5 px-1.5 text-[10px]" title={se.target ?? undefined}>
+                      {se.type.replace(/_/g, " ")}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+            {detail.cluster && (
+              <p className="text-[11.5px] text-muted-foreground">
+                Part of the <span className="font-medium text-foreground">{detail.cluster.label}</span> component
+                — see the Architecture tab.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Connected workflows */}
         {detail && detail.connected_workflows.length > 0 && (
           <div>

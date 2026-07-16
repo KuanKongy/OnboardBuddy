@@ -47,7 +47,7 @@ One command runs **every automated test** (backend + frontend). No local Node/np
 docker compose -f docker-compose.test.yml run --rm test
 ```
 
-(With Node 22 installed, `npm install && npm test` runs the same suites locally.) Expected: backend `302 passing`, frontend `21 passed`. Details: [doc/TESTPLAN.md](doc/TESTPLAN.md) and [doc/TESTING.md](doc/TESTING.md).
+(With Node 22 installed, `npm install && npm test` runs the same suites locally.) Expected: backend `321 passing`, frontend `25 passed`. Details: [doc/TESTPLAN.md](doc/TESTPLAN.md) and [doc/TESTING.md](doc/TESTING.md).
 
 ## Milestones
 
@@ -72,7 +72,7 @@ The same codebase produces different onboarding paths depending on the developer
 ### Architecture, Dependency, Workflow and Capability Graphs
 Four interactive graph tabs, each on its own data: **Architecture** (server-side deterministic clusters with AI or deterministic summaries and criticality bars), **Dependencies** (searchable file map with a classes/interfaces view and the standard symbol doc on click — summary, signature, real call-site example, receipts), **Workflows** (traced request flows from entry point to side effects), and **Capabilities** (business capabilities linked to the workflows and components that deliver them). Layouts use layered (dagre) graph drawing; Mermaid diagrams additionally render inside onboarding sections.
 
-### Incremental Re-analysis
+### Incremental Re-analysis-
 Fully wired: re-analyzing a repo at a new commit diffs files and symbols against the previous snapshot, invalidates only semantic records whose evidence actually changed (whitespace-only edits invalidate nothing), marks affected sections/tutorials/packages stale with `stale_flags`, and regenerates stale sections on request against the newest snapshot. Unchanged symbols are never re-summarized — the content-addressed record cache guarantees it.
 
 ## Tech Stack

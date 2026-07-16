@@ -13,7 +13,10 @@ export interface ProjectData {
   id: string;
   repo_owner: string;
   repo_name: string;
+  /** Default branch for new analysis runs; each run can override it. */
   branch: string;
+  default_branch: string | null;
+  github_installation_id: string | null;
   status: "idle" | "analyzing" | "complete" | "failed";
   created_at: string;
   last_analyzed_at: string | null;

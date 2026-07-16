@@ -84,9 +84,10 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
 /**
  * Downloads and extracts the repo zipball; returns the extracted repo root.
  * `requestedCommit` pins the analysis to an exact SHA (the GitHub zipball
- * API accepts any ref); omitted = branch head.
+ * API accepts any ref); omitted = head of `requestedBranch` (per-run choice),
+ * falling back to the project's default branch.
  */
-async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
+async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: string, requestedCommit?: string, requestedBranch?: string): Promise<{ repoRoot: string; commitHash: string; token: string }> {
   if (!project.github_installation_id) {
     throw new Error(`No GitHub App installation linked to project: ${projectId}. Re-import the repo.`);
   }
@@ -96,9 +97,14 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
   const extractDir = path.join(tmpDir, 'extracted');
   fs.mkdirSync(extractDir);
 
-  const commitHash = requestedCommit
-    ?? (await getCommitSha(token, project.repo_owner, project.repo_name, project.branch)).trim();
-  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? project.branch, zipPath);
+  const branch = requestedBranch ?? project.branch;
+  // Always record the full 40-char SHA: a short requested SHA stored verbatim
+  // forks the (scope, commit) snapshot identity — the same commit gets two
+  // snapshot rows and incremental diffs compare the wrong pair.
+  const commitHash = requestedCommit && /^[0-9a-f]{40}$/i.test(requestedCommit)
+    ? requestedCommit
+    : (await getCommitSha(token, project.repo_owner, project.repo_name, requestedCommit ?? branch)).trim();
+  await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
@@ -145,13 +151,13 @@ async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
     const scope = scopeId ? await resolveScope(projectId, scopeId) : { scopeId: null, pathPrefix: '' };
 
     await update('Downloading repository', 30);
-    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir);
+    const { repoRoot, commitHash } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
 
     await update('Building analysis preview', 70);
     const preview = await runPreflight(repoRoot, {
       pathPrefix: scope.pathPrefix,
       ignoredPaths: project.ignored_paths ?? undefined,
-      depth: project.analysis_depth,
+      depth: job.data.depth ?? project.analysis_depth,
       privacyMode: project.privacy_mode,
     });
 
@@ -180,37 +186,56 @@ async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
 async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   const { jobId, projectId } = job.data;
 
-  const updateStep = (step: string, pct = 0) =>
-    query(
+  const updateStep = async (step: string, pct = 0) => {
+    const result = await query(
       `UPDATE analysis_jobs
        SET current_step = $1,
            progress_pct = $2,
            status = 'running',
            started_at = COALESCE(started_at, NOW()),
+           last_heartbeat_at = NOW(),
            step_log = step_log || $4::jsonb
-       WHERE id = $3`,
+       WHERE id = $3 AND status NOT IN ('paused', 'failed')
+       RETURNING id`,
       [step, pct, jobId, JSON.stringify([{ step, pct, ts: new Date().toISOString() }])],
     );
+    // Paused/stopped from the API between steps: honor it instead of
+    // stomping the user's status back to 'running'.
+    if (result.rows.length === 0) {
+      const row = (await query(`SELECT status FROM analysis_jobs WHERE id = $1`, [jobId])).rows[0] as { status?: string } | undefined;
+      throw new KillSwitchError(row?.status === 'paused' ? 'paused' : 'failed');
+    }
+  };
 
-  // 1. Look up project + settings + scope
+  // 1. Look up project + settings + scope. Branch and depth are per-run
+  //    choices (job.data) falling back to project defaults.
+  await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
   await updateStep('Loading project', 5);
   const project = await loadProject(projectId);
   const { user_id, branch, ignored_paths, file_limit, analysis_depth, privacy_mode } = {
     user_id: project.user_id,
-    branch: project.branch,
+    branch: job.data.branch ?? project.branch,
     ignored_paths: project.ignored_paths,
     file_limit: project.file_limit,
-    analysis_depth: project.analysis_depth,
+    analysis_depth: job.data.depth ?? project.analysis_depth,
     privacy_mode: project.privacy_mode,
   };
   const scope = await resolveScope(projectId, job.data.scopeId);
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `onboardbuddy-${projectId}-`));
 
+  // Liveness: a running job with a stale heartbeat is presumed dead and gets
+  // reconciled — stamp it independently of step progress (LLM phases can sit
+  // on one step for minutes).
+  const heartbeat = setInterval(() => {
+    query(`UPDATE analysis_jobs SET last_heartbeat_at = NOW() WHERE id = $1 AND status = 'running'`, [jobId])
+      .catch(() => {});
+  }, 15_000);
+
   try {
     // 2. Download + extract zipball at the requested commit (default: branch head)
     await updateStep('Downloading repository', 15);
-    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit);
+    const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded
@@ -553,16 +578,17 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       [projectId],
     );
 
-    // Enqueue summary generation job (only if AI is enabled). Incremental
-    // runs skip this: existing packages were stale-flagged where affected,
-    // and stale sections/tutorials are regenerated on request against this
-    // snapshot instead of paying for a full package rebuild.
-    if (privacy_mode !== 'ai_disabled' && !isIncremental) {
+    // Enqueue summary generation. Incremental runs skip this: existing
+    // packages were stale-flagged where affected, and stale sections/
+    // tutorials are regenerated on request against this snapshot instead of
+    // paying for a full package rebuild. ai_disabled projects get a
+    // deterministic (LLM-free) package — the summary worker picks the path.
+    if (!isIncremental) {
       const summaryJobResult = await query(
-        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step)
-         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker')
+        `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, status, current_step, role)
+         VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4)
          RETURNING id`,
-        [projectId, snapshotId, user_id],
+        [projectId, snapshotId, user_id, job.data.role ?? null],
       );
       const summaryDbJobId: string = summaryJobResult.rows[0].id;
       await getSummaryQueue().add('generate_summary', {
@@ -570,6 +596,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         snapshotId,
         projectId,
         triggeredBy: user_id,
+        role: job.data.role,
       } satisfies SummaryJobData, {
         attempts: 2,
         backoff: { type: 'fixed', delay: 3000 },
@@ -578,6 +605,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       });
     }
   } catch (err) {
+    if (err instanceof KillSwitchError) {
+      // Paused/stopped from the API between steps — the status was already
+      // set there; leaving quietly keeps it (and the checkpoints) intact.
+      console.warn(`[worker] job ${jobId} stopped by kill switch (status: ${err.jobStatus})`);
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     await query(
       `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW(),
@@ -588,6 +621,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     await query(`UPDATE projects SET status = 'failed' WHERE id = $1`, [projectId]);
     throw err;
   } finally {
+    clearInterval(heartbeat);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
@@ -619,5 +653,49 @@ worker.on('completed', (job: Job<AnalysisJobData>) => {
 worker.on('failed', (job: Job<AnalysisJobData> | undefined, err: Error) => {
   console.error(`[worker] job ${job?.id} failed (project=${job?.data.projectId}):`, err.message);
 });
+
+// Connection-level errors were invisible — a dead blocking socket looked like
+// an idle worker. Log them so "listening but deaf" is diagnosable.
+worker.on('error', (err: Error) => {
+  console.error('[worker] worker error:', err.message);
+});
+
+/**
+ * Orphan reconciliation: a DB job stuck 'running' whose worker died (restart,
+ * crash, lost Redis connection) would show a progress bar over nothing,
+ * forever. Heartbeats stamp every ~15s, so 3 minutes of silence means the
+ * run is dead — mark it honestly and free the project for a retry.
+ */
+async function reconcileOrphanedJobs(): Promise<void> {
+  try {
+    const orphans = (await query(
+      `UPDATE analysis_jobs
+       SET status = 'failed', finished_at = NOW(),
+           error_message = 'Worker lost this run (restart or crash). Completed phases are checkpointed — run Analyze… again to resume from cache.'
+       WHERE status = 'running'
+         AND COALESCE(last_heartbeat_at, started_at, created_at) < NOW() - INTERVAL '3 minutes'
+       RETURNING id, project_id, snapshot_id`,
+    )).rows as Array<{ id: string; project_id: string; snapshot_id: string | null }>;
+    for (const row of orphans) {
+      if (row.snapshot_id) {
+        await query(
+          `UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1 AND status IN ('running', 'pending')`,
+          [row.snapshot_id],
+        ).catch(() => {});
+      }
+      await query(
+        `UPDATE projects SET status = 'failed'
+         WHERE id = $1 AND status = 'analyzing'
+           AND NOT EXISTS (SELECT 1 FROM analysis_jobs j WHERE j.project_id = $1 AND j.status IN ('queued', 'running'))`,
+        [row.project_id],
+      ).catch(() => {});
+      console.warn(`[worker] reconciled orphaned job ${row.id} (no heartbeat for 3+ minutes)`);
+    }
+  } catch (err) {
+    console.error('[worker] orphan reconciliation failed:', err instanceof Error ? err.message : err);
+  }
+}
+void reconcileOrphanedJobs();
+setInterval(() => void reconcileOrphanedJobs(), 120_000);
 
 console.log(`[worker] listening on queue "${ANALYSIS_QUEUE}"`);

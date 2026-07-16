@@ -52,7 +52,6 @@ export interface BuildEvidenceGraphInput {
 export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGraph {
   const nodes = new Map<string, EvidenceNode>();
   const edges: EvidenceEdge[] = [];
-  const edgeSeen = new Set<string>();
 
   const recordByPath = new Map(input.fileRecords.map((r) => [r.relativePath, r]));
   const parsedPaths = new Set(input.fileAnalyses.map((fa) => normalizePath(fa.relativePath)));
@@ -62,12 +61,27 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     if (!nodes.has(n.stableKey)) nodes.set(n.stableKey, n);
     return nodes.get(n.stableKey)!;
   };
-  const addEdge = (e: EvidenceEdge) => {
+  const edgeByKey = new Map<string, EvidenceEdge>();
+  /**
+   * Returns true when a new edge was inserted (counts key on this, so
+   * repeated import statements don't inflate them). Duplicate `imports`
+   * edges instead strengthen the existing edge's weight — the UI's
+   * "strongest edges" filter sorts on it.
+   */
+  const addEdge = (e: EvidenceEdge): boolean => {
     const key = `${e.sourceKey}→${e.targetKey}:${e.type}`;
-    if (edgeSeen.has(key)) return;
-    if (e.sourceKey === e.targetKey) return;
-    edgeSeen.add(key);
+    if (e.sourceKey === e.targetKey) return false;
+    const existing = edgeByKey.get(key);
+    if (existing) {
+      if (e.type === 'imports') {
+        existing.metadata.weight = Number(existing.metadata.weight ?? 1) + 1;
+      }
+      return false;
+    }
+    if (e.type === 'imports') e.metadata.weight = 1;
+    edgeByKey.set(key, e);
     edges.push(e);
+    return true;
   };
 
   // ── 1. File nodes (+ symbol/method nodes + contains edges) ────────────────
@@ -91,8 +105,9 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
       trustLevel: fileTrust,
       metadata: {
         exportedSymbols: [...new Set(exportedSymbols)],
-        importCount: fa.imports.length,
-        dependentCount: 0, // filled below from import edges
+        importCount: 0, // distinct internal imports, filled below from deduped edges
+        externalImportCount: 0, // distinct third-party/boundary imports, filled below
+        dependentCount: 0, // distinct internal importers, filled below
         lineCount: record?.lineCount ?? null,
         category: record?.category ?? 'source',
       },
@@ -136,20 +151,28 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
   }
 
   // ── 2. Import edges (file -> file) + external boundary nodes ──────────────
+  // Counts are distinct-file counts keyed on deduped edges: two import
+  // statements from A to B (e.g. a value import + `import type`) are one
+  // dependency, not two "used by".
   const dependentCount = new Map<string, number>();
+  const internalImportCount = new Map<string, number>();
+  const externalImportCount = new Map<string, number>();
   for (const fa of input.fileAnalyses) {
     const relPath = normalizePath(fa.relativePath);
     for (const imp of fa.imports) {
       const resolved = resolveImport(relPath, imp.toSpecifier, parsedPaths, aliases);
       if (resolved.kind === 'internal') {
-        addEdge({
+        const inserted = addEdge({
           sourceKey: relPath,
           targetKey: resolved.target,
           type: 'imports',
           confidence: 'high',
           metadata: { specifier: imp.toSpecifier },
         });
-        dependentCount.set(resolved.target, (dependentCount.get(resolved.target) ?? 0) + 1);
+        if (inserted) {
+          dependentCount.set(resolved.target, (dependentCount.get(resolved.target) ?? 0) + 1);
+          internalImportCount.set(relPath, (internalImportCount.get(relPath) ?? 0) + 1);
+        }
 
         // Test files -> tests edges onto the files they import.
         if (recordByPath.get(relPath)?.category === 'test') {
@@ -167,19 +190,30 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
           trustLevel: 'code',
           metadata: { specifier: imp.toSpecifier, boundary: resolved.boundary },
         });
-        addEdge({
+        const inserted = addEdge({
           sourceKey: relPath,
           targetKey: extKey,
           type: 'references_external',
           confidence: 'high',
           metadata: { specifier: imp.toSpecifier },
         });
+        if (inserted) {
+          externalImportCount.set(relPath, (externalImportCount.get(relPath) ?? 0) + 1);
+        }
       }
     }
   }
   for (const [target, count] of dependentCount) {
     const node = nodes.get(target);
     if (node) node.metadata.dependentCount = count;
+  }
+  for (const [source, count] of internalImportCount) {
+    const node = nodes.get(source);
+    if (node) node.metadata.importCount = count;
+  }
+  for (const [source, count] of externalImportCount) {
+    const node = nodes.get(source);
+    if (node) node.metadata.externalImportCount = count;
   }
 
   // ── 3. Calls edges (symbol -> symbol, TypeChecker-resolved) ──────────────
@@ -279,15 +313,26 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
   }
 
   // ── 8. Behavior/purpose signals stamped into symbol metadata ──────────────
+  const stampSignals = (key: string, source: Parameters<typeof deriveBehaviorSignals>[0], relPath: string, name: string): void => {
+    const node = nodes.get(key);
+    if (!node) return;
+    const behavior = deriveBehaviorSignals(source);
+    const purpose = derivePurposeSignals(relPath, { name });
+    if (behavior.length > 0) node.metadata.behaviorSignals = behavior;
+    if (purpose.length > 0) node.metadata.purposeSignals = purpose;
+  };
   for (const fa of input.fileAnalyses) {
     const relPath = normalizePath(fa.relativePath);
     for (const sym of fa.symbols) {
-      const node = nodes.get(sym.stableKey ?? symbolKey(relPath, sym.name));
-      if (!node) continue;
-      const behavior = deriveBehaviorSignals(sym);
-      const purpose = derivePurposeSignals(relPath, sym);
-      if (behavior.length > 0) node.metadata.behaviorSignals = behavior;
-      if (purpose.length > 0) node.metadata.purposeSignals = purpose;
+      stampSignals(sym.stableKey ?? symbolKey(relPath, sym.name), sym, relPath, sym.name);
+      // Method nodes carry their own calls/snippet — signal them individually
+      // so workflow traces classify `Server.echo` by what echo does, not by
+      // what the whole class does.
+      if (sym.kind === 'class' && sym.methods) {
+        for (const m of sym.methods) {
+          stampSignals(symbolKey(relPath, m.name, sym.name), m, relPath, m.name);
+        }
+      }
     }
   }
 
