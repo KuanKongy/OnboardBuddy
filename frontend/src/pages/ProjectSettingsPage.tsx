@@ -1,5 +1,5 @@
 import { AlertTriangle, GitBranch, Loader2, RefreshCw, Save, Shield, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -77,8 +77,8 @@ export function ProjectSettingsPage() {
   const [defaultRole, setDefaultRole] = useState("general");
   const [privacyMode, setPrivacyMode] = useState("full_ai");
   const [analysisDepth, setAnalysisDepth] = useState("standard");
-  const [fileLimit, setFileLimit] = useState(5000);
-  const [locLimit, setLocLimit] = useState(250000);
+  const [fileLimit, setFileLimit] = useState<string>("");
+  const [locLimit, setLocLimit] = useState<string>("");
   const [budgetCalls, setBudgetCalls] = useState<string>("");
   const [budgetTokens, setBudgetTokens] = useState<string>("");
   const [stopBehavior, setStopBehavior] = useState("pause");
@@ -101,6 +101,8 @@ export function ProjectSettingsPage() {
   const [weightRoles, setWeightRoles] = useState<RoleWeights[] | null>(null);
   const [weightRole, setWeightRole] = useState("backend");
   const [weightsSaving, setWeightsSaving] = useState(false);
+  const errorRef = useRef<HTMLDivElement>(null);
+  const radioRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   const canEdit =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
@@ -111,8 +113,8 @@ export function ProjectSettingsPage() {
       setDefaultRole(project.settings.default_developer_role);
       setPrivacyMode(project.settings.privacy_mode ?? "full_ai");
       setAnalysisDepth((project.settings as { analysis_depth?: string }).analysis_depth ?? "standard");
-      setFileLimit(project.settings.file_limit);
-      setLocLimit(project.settings.loc_limit);
+      setFileLimit(project.settings.file_limit != null ? String(project.settings.file_limit) : "");
+      setLocLimit(project.settings.loc_limit != null ? String(project.settings.loc_limit) : "");
       const budgets = (project.settings as { budget_overrides?: Record<string, number> }).budget_overrides ?? {};
       setBudgetCalls(budgets.max_llm_calls ? String(budgets.max_llm_calls) : "");
       setBudgetTokens(budgets.max_input_tokens ? String(budgets.max_input_tokens) : "");
@@ -120,6 +122,13 @@ export function ProjectSettingsPage() {
       setAutoReanalyze((project.settings as { auto_reanalyze_on_push?: boolean }).auto_reanalyze_on_push ?? false);
     }
   }, [project]);
+
+  // Surface a save/delete/etc. failure wherever the user currently is on
+  // this long page — the banner renders right under the header, easy to
+  // miss from a bottom-of-page action.
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [error]);
 
   useEffect(() => {
     if (!id) return;
@@ -135,19 +144,24 @@ export function ProjectSettingsPage() {
       const budget_overrides: Record<string, number> = {};
       if (budgetCalls && Number(budgetCalls) > 0) budget_overrides.max_llm_calls = Number(budgetCalls);
       if (budgetTokens && Number(budgetTokens) > 0) budget_overrides.max_input_tokens = Number(budgetTokens);
+      const settingsBody: Record<string, unknown> = {
+        ignored_paths: ignoredPaths.split("\n").map((p) => p.trim()).filter(Boolean),
+        default_developer_role: defaultRole,
+        privacy_mode: privacyMode,
+        analysis_depth: analysisDepth,
+        budget_overrides,
+        budget_stop_behavior: stopBehavior,
+        auto_reanalyze_on_push: autoReanalyze,
+      };
+      // file_limit/loc_limit are `not null check (> 0)` in the DB — never send
+      // null/0. Omit the key entirely when the field is empty/invalid so the
+      // backend's `!== undefined` guard leaves the stored value untouched
+      // instead of failing the constraint.
+      if (fileLimit.trim() && Number(fileLimit) > 0) settingsBody.file_limit = Number(fileLimit);
+      if (locLimit.trim() && Number(locLimit) > 0) settingsBody.loc_limit = Number(locLimit);
       await apiFetch(`/projects/${id}/settings`, {
         method: "PUT",
-        body: JSON.stringify({
-          ignored_paths: ignoredPaths.split("\n").map((p) => p.trim()).filter(Boolean),
-          default_developer_role: defaultRole,
-          privacy_mode: privacyMode,
-          analysis_depth: analysisDepth,
-          file_limit: fileLimit,
-          loc_limit: locLimit,
-          budget_overrides,
-          budget_stop_behavior: stopBehavior,
-          auto_reanalyze_on_push: autoReanalyze,
-        }),
+        body: JSON.stringify(settingsBody),
       });
       setSaved(true);
       refetch();
@@ -250,7 +264,10 @@ export function ProjectSettingsPage() {
       />
 
       {error && (
-        <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+        <div
+          ref={errorRef}
+          className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+        >
           {error}
         </div>
       )}
@@ -316,13 +333,30 @@ export function ProjectSettingsPage() {
               <Sparkles className="h-3.5 w-3.5 text-primary" />
               <h3 className="text-xs font-medium text-foreground">AI &amp; privacy</h3>
             </div>
-            <div className="space-y-1.5" role="radiogroup" aria-label="Privacy mode">
-              {PRIVACY_MODES.map((mode) => (
+            <div
+              className="space-y-1.5"
+              role="radiogroup"
+              aria-label="Privacy mode"
+              onKeyDown={(e) => {
+                if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(e.key)) return;
+                e.preventDefault();
+                const currentIndex = PRIVACY_MODES.findIndex((m) => m.key === privacyMode);
+                const dir = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
+                const nextIndex = (currentIndex + dir + PRIVACY_MODES.length) % PRIVACY_MODES.length;
+                const next = PRIVACY_MODES[nextIndex];
+                if (!next) return;
+                setPrivacyMode(next.key);
+                radioRefs.current[nextIndex]?.focus();
+              }}
+            >
+              {PRIVACY_MODES.map((mode, i) => (
                 <button
                   key={mode.key}
+                  ref={(el) => { radioRefs.current[i] = el; }}
                   type="button"
                   role="radio"
                   aria-checked={privacyMode === mode.key}
+                  tabIndex={privacyMode === mode.key ? 0 : -1}
                   disabled={!canEdit}
                   onClick={() => setPrivacyMode(mode.key)}
                   className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${
@@ -387,7 +421,7 @@ export function ProjectSettingsPage() {
                   type="number"
                   value={budgetTokens}
                   onChange={(e) => setBudgetTokens(e.target.value)}
-                  placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000}M`}
+                  placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -489,7 +523,7 @@ export function ProjectSettingsPage() {
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-medium text-foreground">Ranking weights</h3>
               {activeWeights?.customized && (
-                <Badge variant="outline" className="text-[10px]">customized</Badge>
+                <Badge variant="outline" className="text-[11px]">customized</Badge>
               )}
             </div>
             <p className="mb-2 text-[11px] text-muted-foreground">
@@ -572,7 +606,8 @@ export function ProjectSettingsPage() {
                 <Input
                   type="number"
                   value={fileLimit}
-                  onChange={(e) => setFileLimit(Number(e.target.value))}
+                  onChange={(e) => setFileLimit(e.target.value)}
+                  placeholder="unchanged if blank"
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -582,7 +617,8 @@ export function ProjectSettingsPage() {
                 <Input
                   type="number"
                   value={locLimit}
-                  onChange={(e) => setLocLimit(Number(e.target.value))}
+                  onChange={(e) => setLocLimit(e.target.value)}
+                  placeholder="unchanged if blank"
                   disabled={!canEdit}
                   className="h-8 text-[13px]"
                 />
@@ -636,7 +672,13 @@ export function ProjectSettingsPage() {
         }}
       />
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(open) => {
+          setDeleteOpen(open);
+          if (!open) setDeleteConfirm("");
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-sm">Delete project</DialogTitle>
@@ -651,7 +693,7 @@ export function ProjectSettingsPage() {
             className="h-8 text-[13px]"
           />
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)}>Cancel</Button>
+            <Button variant="outline" size="sm" onClick={() => { setDeleteOpen(false); setDeleteConfirm(""); }}>Cancel</Button>
             <Button
               variant="destructive"
               size="sm"

@@ -24,6 +24,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 import { ROLES } from "@/lib/onboardingData";
 import { pipelineProgress } from "@/lib/pipelineProgress";
@@ -130,21 +131,37 @@ function RunCard({
               {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")}
             </h3>
             {runConfigParts(job, defaultBranch).map((part) => (
-              <Badge key={part} variant="outline" className="font-mono text-[10px]">{part}</Badge>
+              <Badge key={part} variant="outline" className="font-mono text-[11px]">{part}</Badge>
             ))}
           </div>
           {canManage && (
             <div className="flex shrink-0 items-center gap-1.5">
               {isActive && (
                 <>
-                  <Button variant="outline" size="xs" onClick={() => onControl(job.id, "pause")} disabled={controlBusy} title="Worker pauses at the next step — completed work is checkpointed">
-                    <PauseCircle className="mr-1 h-3 w-3" />
-                    Pause
-                  </Button>
-                  <Button variant="outline" size="xs" className="text-destructive hover:text-destructive" onClick={() => onControl(job.id, "stop")} disabled={controlBusy} title="Stops the run; completed phases stay cached">
-                    <Square className="mr-1 h-3 w-3" />
-                    Stop
-                  </Button>
+                  <Tooltip>
+                    {/* The span keeps hover working while the button is disabled
+                        (disabled buttons swallow pointer events). */}
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex">
+                        <Button variant="outline" size="xs" onClick={() => onControl(job.id, "pause")} disabled={controlBusy}>
+                          <PauseCircle className="mr-1 h-3 w-3" />
+                          Pause
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">Worker pauses at the next step — completed work is checkpointed</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex">
+                        <Button variant="outline" size="xs" className="text-destructive hover:text-destructive" onClick={() => onControl(job.id, "stop")} disabled={controlBusy}>
+                          <Square className="mr-1 h-3 w-3" />
+                          Stop
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">Stops the run; completed phases stay cached</TooltipContent>
+                  </Tooltip>
                 </>
               )}
               {job.status === "paused" && (
@@ -164,14 +181,21 @@ function RunCard({
           </span>
           <span className="flex items-center gap-1.5">
             {job.attempt > 1 && (
-              <Badge variant="outline" className="text-[10px] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
+              <Badge variant="outline" className="text-[11px] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
                 attempt #{job.attempt}
               </Badge>
             )}
             {job.stalled && (
-              <Badge variant="destructive" className="text-[10px]" title="Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it">
-                stalled
-              </Badge>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help">
+                    <Badge variant="destructive" className="text-[11px]">
+                      stalled
+                    </Badge>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it</TooltipContent>
+              </Tooltip>
             )}
             <Badge variant={statusBadgeVariant(job.status)} className="text-[11px]">{job.status}</Badge>
           </span>
@@ -244,17 +268,17 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           )}
           {run.duration_ms !== null && <span>{fmtDuration(run.duration_ms)}</span>}
           <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
-          <Badge variant={statusBadgeVariant(run.status)} className="text-[10px]">{run.status}</Badge>
+          <Badge variant={statusBadgeVariant(run.status)} className="text-[11px]">{run.status}</Badge>
         </span>
       </summary>
 
       <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          {run.config.branch && <Badge variant="outline" className="font-mono text-[10px]">branch {run.config.branch}</Badge>}
-          {run.config.commit && <Badge variant="outline" className="font-mono text-[10px]">commit {run.config.commit.slice(0, 7)}</Badge>}
-          {run.config.scope_path && <Badge variant="outline" className="font-mono text-[10px]">scope {run.config.scope_path}/</Badge>}
-          {run.config.depth && <Badge variant="outline" className="font-mono text-[10px]">{run.config.depth} depth</Badge>}
-          {run.config.role && <Badge variant="outline" className="font-mono text-[10px]">{run.config.role} role</Badge>}
+          {run.config.branch && <Badge variant="outline" className="font-mono text-[11px]">branch {run.config.branch}</Badge>}
+          {run.config.commit && <Badge variant="outline" className="font-mono text-[11px]">commit {run.config.commit.slice(0, 7)}</Badge>}
+          {run.config.scope_path && <Badge variant="outline" className="font-mono text-[11px]">scope {run.config.scope_path}/</Badge>}
+          {run.config.depth && <Badge variant="outline" className="font-mono text-[11px]">{run.config.depth} depth</Badge>}
+          {run.config.role && <Badge variant="outline" className="font-mono text-[11px]">{run.config.role} role</Badge>}
           {run.requested_by_email && <span>by {run.requested_by_email}</span>}
           {run.attempt > 1 && <span>attempt #{run.attempt}</span>}
         </div>
@@ -293,7 +317,7 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
             {run.step_log.map((entry, i) => (
               <div key={i} className="flex items-start gap-2 py-0.5">
                 <span className="flex-1 text-[11px] text-muted-foreground">{entry.step}</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                   {new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </span>
               </div>
@@ -332,8 +356,11 @@ export function ProjectOverviewPage() {
     refreshStatus,
     activeJobs,
     registerSessionJob,
+    packagesError,
+    statusError,
   } = usePackages();
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [pendingQuickAction, setPendingQuickAction] = useState<"onboarding" | "tutorial" | "role" | null>(null);
 
   // Per-user resume markers: the Continue cards deep-link to the exact
   // section/step the user last read (falling back to the plain tabs).
@@ -423,6 +450,7 @@ export function ProjectOverviewPage() {
   );
 
   const neverAnalyzed = !snap && activeJobs.length === 0 && (runs?.length ?? 0) === 0 && (packages?.length ?? 0) === 0;
+  const loadError = packagesError || statusError;
 
   return (
     <div>
@@ -431,7 +459,7 @@ export function ProjectOverviewPage() {
         subtitle={
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="font-medium text-foreground">{project.repo_owner}/{project.repo_name}</span>
-            <Badge variant="outline" className="text-[10px] capitalize">{project.developer_role}</Badge>
+            <Badge variant="outline" className="text-[11px] capitalize">{project.developer_role}</Badge>
             {snap && (
               <span className="font-mono text-[11px] text-muted-foreground" title="Latest complete analysis">
                 latest: {snap.branch}@{snap.commit_hash.slice(0, 7)} · {snap.file_count} files · {snap.symbol_count} symbols · {snap.workflow_count} workflows
@@ -449,55 +477,84 @@ export function ProjectOverviewPage() {
         }
       />
 
-      {/* Quick actions: flat rows — icon left, text right */}
+      {/* Quick actions: flat rows — icon left, text right. Whole card is a
+          Link (not just the inner text) so the hover affordance matches the
+          clickable area; a brief pending state covers the click-to-route gap. */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="flex items-center gap-3 p-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
-              <BookOpen className="h-4 w-4 text-primary" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
-              <Link to={onboardingResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
-                {onboardingProgress
-                  ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
-                  : "Start reading"}
-                <ArrowRight className="h-3 w-3 shrink-0" />
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+        <Link
+          to={onboardingResumeLink}
+          onClick={() => setPendingQuickAction("onboarding")}
+          aria-disabled={pendingQuickAction === "onboarding"}
+          className={`group block rounded-xl ${pendingQuickAction === "onboarding" ? "pointer-events-none opacity-70" : ""}`}
+        >
+          <Card className="h-full transition-colors group-hover:border-primary/40">
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
+                <BookOpen className="h-4 w-4 text-primary" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
+                <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
+                  {onboardingProgress
+                    ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
+                    : "Start reading"}
+                  {pendingQuickAction === "onboarding"
+                    ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                    : <ArrowRight className="h-3 w-3 shrink-0" />}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
 
-        <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="flex items-center gap-3 p-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-blue-500/10">
-              <Play className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
-              <Link to={tutorialResumeLink} className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary hover:underline">
-                {tutorialProgress
-                  ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
-                  : "Start a tutorial"}
-                <ArrowRight className="h-3 w-3 shrink-0" />
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+        <Link
+          to={tutorialResumeLink}
+          onClick={() => setPendingQuickAction("tutorial")}
+          aria-disabled={pendingQuickAction === "tutorial"}
+          className={`group block rounded-xl ${pendingQuickAction === "tutorial" ? "pointer-events-none opacity-70" : ""}`}
+        >
+          <Card className="h-full transition-colors group-hover:border-primary/40">
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-info/10">
+                <Play className="h-4 w-4 text-info" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
+                <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
+                  {tutorialProgress
+                    ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
+                    : "Start a tutorial"}
+                  {pendingQuickAction === "tutorial"
+                    ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                    : <ArrowRight className="h-3 w-3 shrink-0" />}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
 
-        <Card className="transition-colors hover:border-primary/40">
-          <CardContent className="flex items-center gap-3 p-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-amber-500/10">
-              <User className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="text-[13px] font-medium capitalize text-foreground">{project.developer_role} role</h3>
-              <Link to={`/projects/${id}/team`} className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline">
-                View team <ArrowRight className="h-3 w-3" />
-              </Link>
-            </div>
-          </CardContent>
-        </Card>
+        <Link
+          to={`/projects/${id}/team`}
+          onClick={() => setPendingQuickAction("role")}
+          aria-disabled={pendingQuickAction === "role"}
+          className={`group block rounded-xl ${pendingQuickAction === "role" ? "pointer-events-none opacity-70" : ""}`}
+        >
+          <Card className="h-full transition-colors group-hover:border-primary/40">
+            <CardContent className="flex items-center gap-3 p-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-warning/10">
+                <User className="h-4 w-4 text-warning" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-[13px] font-medium capitalize text-foreground">{project.developer_role} role</h3>
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-primary">
+                  View team {pendingQuickAction === "role"
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <ArrowRight className="h-3 w-3" />}
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
       </div>
 
       {controlError && <p className="mb-2 text-xs text-destructive">{controlError}</p>}
@@ -508,7 +565,7 @@ export function ProjectOverviewPage() {
           <h2 className="mb-2 flex items-center gap-2 text-[13px] font-medium text-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
             Active runs
-            <Badge variant="secondary" className="text-[10px] tabular-nums">{activeJobs.length}</Badge>
+            <Badge variant="secondary" className="text-[11px] tabular-nums">{activeJobs.length}</Badge>
           </h2>
           <div className="space-y-2">
             {activeJobs.map((job) => (
@@ -540,7 +597,7 @@ export function ProjectOverviewPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-foreground">
                     {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")} {job.status}
-                    <span className="ml-2 font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">
                       {runConfigParts(job, project.branch).join(" · ")}
                     </span>
                   </p>
@@ -565,22 +622,35 @@ export function ProjectOverviewPage() {
       )}
 
       {neverAnalyzed && (
-        <Card className="mb-4">
-          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-            <CheckCircle2 className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <h3 className="text-sm font-semibold text-foreground">Not yet analyzed</h3>
-            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-              Run the first analysis to build the dependency graph, workflows, and a role-based
-              onboarding package — with a cost preview before anything runs.
-            </p>
-            {canManage && (
-              <Button size="sm" className="mt-4" onClick={() => setAnalyzeOpen(true)}>
-                <RefreshCw className="h-3.5 w-3.5" />
-                Analyze…
-              </Button>
-            )}
-          </CardContent>
-        </Card>
+        loadError ? (
+          <Card className="mb-4 border-destructive/30">
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <AlertTriangle className="mb-3 h-8 w-8 text-destructive/60" />
+              <h3 className="text-sm font-semibold text-foreground">Couldn't load analysis status</h3>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                The request for this project's packages and analysis status failed. Try refreshing
+                the page — if it keeps happening, the API may be unreachable.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="mb-4">
+            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+              <CheckCircle2 className="mb-3 h-8 w-8 text-muted-foreground/40" />
+              <h3 className="text-sm font-semibold text-foreground">Not yet analyzed</h3>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                Run the first analysis to build the dependency graph, workflows, and a role-based
+                onboarding package — with a cost preview before anything runs.
+              </p>
+              {canManage && (
+                <Button size="sm" className="mt-4" onClick={() => setAnalyzeOpen(true)}>
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  Analyze…
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )
       )}
 
       {/* ── Packages: every (branch, commit, scope, role) package. ── */}
