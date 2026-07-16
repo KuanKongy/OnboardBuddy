@@ -38,6 +38,12 @@ export function AuthCallbackPage() {
     if (error) return;
     let cancelled = false;
 
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) {
+        setError("Sign in is taking longer than expected. Please try again.");
+      }
+    }, 10000);
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -51,11 +57,13 @@ export function AuthCallbackPage() {
       }
 
       if (event === "SIGNED_IN" && session) {
+        window.clearTimeout(timeoutId);
         navigate(next, { replace: true });
         return;
       }
 
       if (event === "SIGNED_OUT") {
+        window.clearTimeout(timeoutId);
         setError("Could not complete sign in. Please try again.");
       }
     });
@@ -63,16 +71,19 @@ export function AuthCallbackPage() {
     void supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
       if (cancelled) return;
       if (sessionError) {
+        window.clearTimeout(timeoutId);
         setError(sessionError.message);
         return;
       }
       if (session) {
+        window.clearTimeout(timeoutId);
         navigate(next, { replace: true });
       }
     });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, [navigate, error, next]);
