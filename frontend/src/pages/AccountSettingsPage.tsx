@@ -1,4 +1,4 @@
-import { AlertTriangle, Github, Loader2, LogOut, Pencil, Save, Trash2, Unplug } from "lucide-react";
+import { AlertTriangle, Github, Link2, Loader2, LogOut, Mail, Pencil, Save, Trash2, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -32,22 +32,31 @@ export function AccountSettingsPage() {
   const emailIdentity = user?.identities?.find((id) => id.provider === "email");
   const githubAvatar = (githubIdentity?.identity_data as Record<string, string> | undefined)?.avatar_url;
 
-  // ── Profile (name + avatar URL live in user_metadata; email on the auth
-  // user itself). Read-only by default; "Edit" switches the card to a form. ──
+  // Sign-in methods. app_metadata.providers is GoTrue's source of truth and
+  // also covers accounts whose email login predates identity rows; either
+  // signal means "this account can sign in with email+password".
+  const providers = ((user?.app_metadata as Record<string, unknown> | undefined)?.providers ?? []) as string[];
+  const hasEmailLogin = !!emailIdentity || providers.includes("email");
+  const canUnlinkGithub = !!githubIdentity && hasEmailLogin;
+  // Unlinking needs the identity row itself (unlinkIdentity's argument) plus
+  // another way in.
+  const canUnlinkEmail = !!emailIdentity && !!githubIdentity;
+  // Secure email change in flight (confirmation link not clicked yet).
+  const pendingEmail = (user as { new_email?: string } | null)?.new_email;
+
+  // ── Profile (name + avatar URL live in user_metadata). Read-only by
+  // default; "Edit" switches the card to a form. Email is NOT here: it's a
+  // sign-in method, managed in the Email Login card below. ──
   const [editingProfile, setEditingProfile] = useState(false);
   const [fullName, setFullName] = useState("");
   const [avatarUrl, setAvatarUrl] = useState("");
-  const [email, setEmail] = useState("");
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileNotice, setProfileNotice] = useState("");
   const [profileError, setProfileError] = useState("");
-  // Email a confirmation is still pending for (secure email change).
-  const pendingEmail = (user as { new_email?: string } | null)?.new_email;
 
   function seedProfileForm() {
     setFullName(((meta.full_name as string) || (meta.name as string)) ?? "");
     setAvatarUrl(((meta.avatar_url as string) || githubAvatar) ?? "");
-    setEmail(user?.email ?? "");
   }
   useEffect(() => {
     // Seed once per loaded user; GitHub-login users get their GitHub avatar
@@ -60,23 +69,12 @@ export function AccountSettingsPage() {
     setProfileError("");
     setProfileNotice("");
     try {
-      // Email changes ride along only when actually changed — Supabase sends
-      // a confirmation link and applies the change once it's clicked. An
-      // OAuth-only account starts with no email at all; setting one here is
-      // what makes email sign-in (and unlinking GitHub) possible later.
-      const newEmail = email.trim();
-      const emailChanged = newEmail !== "" && newEmail.toLowerCase() !== (user?.email ?? "").toLowerCase();
       const { error } = await supabase.auth.updateUser({
-        ...(emailChanged ? { email: newEmail } : {}),
         data: { full_name: fullName.trim(), avatar_url: avatarUrl.trim() },
       });
       if (error) throw new Error(error.message);
       setEditingProfile(false);
-      setProfileNotice(
-        emailChanged
-          ? `Profile saved. Check ${newEmail} for a confirmation link — the email change applies once confirmed.`
-          : "Profile saved.",
-      );
+      setProfileNotice("Profile saved.");
     } catch (err: unknown) {
       setProfileError(err instanceof Error ? err.message : "Failed to save profile");
     } finally {
@@ -97,10 +95,10 @@ export function AccountSettingsPage() {
     setEditingProfile(false);
   }
 
-  // ── GitHub sign-in identity unlink ─────────────────────────────────────────
+  // ── GitHub sign-in identity: unlink / link ─────────────────────────────────
   const [unlinking, setUnlinking] = useState(false);
   const [unlinkError, setUnlinkError] = useState("");
-  const canUnlinkGithub = !!githubIdentity && !!emailIdentity;
+  const [linkingGithub, setLinkingGithub] = useState(false);
 
   async function handleUnlinkGithub() {
     if (!githubIdentity) return;
@@ -114,6 +112,90 @@ export function AccountSettingsPage() {
       setUnlinkError(err instanceof Error ? err.message : "Failed to unlink GitHub");
     } finally {
       setUnlinking(false);
+    }
+  }
+
+  // Link (or, after an unlink, switch to) a GitHub account as a sign-in
+  // method. Redirects through GitHub's consent screen and lands back on this
+  // page via /auth/callback?next=/settings. Requires Supabase manual linking.
+  async function handleLinkGithub() {
+    setLinkingGithub(true);
+    setUnlinkError("");
+    try {
+      const { error } = await supabase.auth.linkIdentity({
+        provider: "github",
+        options: { redirectTo: `${window.location.origin}/auth/callback?next=/settings` },
+      });
+      if (error) throw new Error(error.message);
+      // On success the browser navigates away to GitHub.
+    } catch (err: unknown) {
+      setUnlinkError(err instanceof Error ? err.message : "Failed to start GitHub linking");
+      setLinkingGithub(false);
+    }
+  }
+
+  // ── Email sign-in: add (like sign-up) / unlink ─────────────────────────────
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginPasswordConfirm, setLoginPasswordConfirm] = useState("");
+  const [emailLoginBusy, setEmailLoginBusy] = useState(false);
+  const [emailLoginError, setEmailLoginError] = useState("");
+  const [emailLoginNotice, setEmailLoginNotice] = useState("");
+
+  async function handleAddEmailLogin() {
+    const newEmail = loginEmail.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+      setEmailLoginError("Enter a valid email address");
+      return;
+    }
+    if (loginPassword.length < 8) {
+      setEmailLoginError("Password must be at least 8 characters");
+      return;
+    }
+    if (loginPassword !== loginPasswordConfirm) {
+      setEmailLoginError("Passwords do not match");
+      return;
+    }
+    setEmailLoginBusy(true);
+    setEmailLoginError("");
+    try {
+      // The password applies immediately; an email different from the
+      // account's current one goes through Supabase's confirmation link
+      // before it becomes the sign-in address.
+      const emailChanged = newEmail.toLowerCase() !== (user?.email ?? "").toLowerCase();
+      const { error } = await supabase.auth.updateUser({
+        ...(emailChanged ? { email: newEmail } : {}),
+        password: loginPassword,
+      });
+      if (error) throw new Error(error.message);
+      await supabase.auth.refreshSession().catch(() => {});
+      setEmailDialogOpen(false);
+      setEmailLoginNotice(
+        emailChanged
+          ? `Almost done — confirm from your inbox at ${newEmail}; email sign-in activates once confirmed.`
+          : "Email sign-in enabled — you can now sign in with this email and password.",
+      );
+    } catch (err: unknown) {
+      setEmailLoginError(err instanceof Error ? err.message : "Failed to set up email sign-in");
+    } finally {
+      setEmailLoginBusy(false);
+    }
+  }
+
+  async function handleUnlinkEmail() {
+    if (!emailIdentity) return;
+    setEmailLoginBusy(true);
+    setEmailLoginError("");
+    setEmailLoginNotice("");
+    try {
+      const { error } = await supabase.auth.unlinkIdentity(emailIdentity);
+      if (error) throw new Error(error.message);
+      await supabase.auth.refreshSession();
+    } catch (err: unknown) {
+      setEmailLoginError(err instanceof Error ? err.message : "Failed to unlink email sign-in");
+    } finally {
+      setEmailLoginBusy(false);
     }
   }
 
@@ -222,22 +304,6 @@ export function AccountSettingsPage() {
                       className="mt-1 h-8 text-[13px]"
                     />
                   </div>
-                  <div>
-                    <Label htmlFor="profile-email" className="text-[11px] text-muted-foreground">Email</Label>
-                    <Input
-                      id="profile-email"
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="you@example.com"
-                      className="mt-1 h-8 text-[13px]"
-                    />
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      {user?.email
-                        ? "Changing it sends a confirmation link before anything switches over."
-                        : "Signed up through GitHub, so no email is set yet — add one to enable email sign-in and password reset."}
-                    </p>
-                  </div>
                 </div>
               </div>
               {profileError && <p className="mt-2 text-[11px] text-destructive">{profileError}</p>}
@@ -261,12 +327,6 @@ export function AccountSettingsPage() {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-foreground">
                     {fullName || <span className="text-muted-foreground">No name set</span>}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {user?.email || "No email set"}
-                    {pendingEmail && pendingEmail !== user?.email && (
-                      <span className="text-amber-600 dark:text-amber-400"> · pending confirmation: {pendingEmail}</span>
-                    )}
                   </p>
                   <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
                 </div>
@@ -309,15 +369,88 @@ export function AccountSettingsPage() {
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-64">
                   {canUnlinkGithub
-                    ? "Removes GitHub as a sign-in method; your email/password sign-in keeps working."
-                    : "GitHub is currently your only way to sign in, so unlinking would lock you out. Add an email above and set a password (via “Forgot password” on the sign-in page) first."}
+                    ? "Removes GitHub as a sign-in method; your email sign-in keeps working. You can link a different GitHub account afterwards."
+                    : "GitHub is currently your only way to sign in, so unlinking would lock you out. Set up email sign-in below first."}
                 </TooltipContent>
               </Tooltip>
             </div>
           ) : (
-            <span className="text-xs text-muted-foreground">Signed in with email/password</span>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">Not linked — you can sign in with GitHub after linking</span>
+              <Button variant="outline" size="xs" onClick={handleLinkGithub} disabled={linkingGithub}>
+                {linkingGithub ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />}
+                Link GitHub account
+              </Button>
+            </div>
           )}
           {unlinkError && <p className="mt-2 text-[11px] text-destructive">{unlinkError}</p>}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <h2 className="mb-2 text-xs font-medium text-foreground">Email Login</h2>
+          {hasEmailLogin ? (
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-xs">
+                <Mail className="h-3.5 w-3.5 shrink-0 text-foreground" />
+                <span className="truncate font-medium text-foreground">
+                  Signed in as{" "}
+                  {((emailIdentity?.identity_data as Record<string, string> | undefined)?.email) ?? user?.email}
+                </span>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={handleUnlinkEmail}
+                      disabled={!canUnlinkEmail || emailLoginBusy}
+                    >
+                      {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                      Unlink
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-64">
+                  {canUnlinkEmail
+                    ? "Removes email/password as a sign-in method; your GitHub sign-in keeps working."
+                    : !githubIdentity
+                      ? "Email is currently your only way to sign in, so unlinking would lock you out. Link GitHub above first."
+                      : "This account's email sign-in can't be unlinked (it has no separate identity record)."}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Not set up — add an email &amp; password so you can sign in without GitHub
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  setLoginEmail("");
+                  setLoginPassword("");
+                  setLoginPasswordConfirm("");
+                  setEmailLoginError("");
+                  setEmailLoginNotice("");
+                  setEmailDialogOpen(true);
+                }}
+              >
+                <Mail className="h-3 w-3" />
+                Add email sign-in
+              </Button>
+            </div>
+          )}
+          {pendingEmail && pendingEmail !== user?.email && (
+            <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+              Pending confirmation: {pendingEmail} — check that inbox to finish.
+            </p>
+          )}
+          {emailLoginNotice && <p className="mt-2 text-[11px] text-emerald-600 dark:text-emerald-400">{emailLoginNotice}</p>}
+          {emailLoginError && !emailDialogOpen && <p className="mt-2 text-[11px] text-destructive">{emailLoginError}</p>}
         </CardContent>
       </Card>
 
@@ -376,6 +509,72 @@ export function AccountSettingsPage() {
         </CardContent>
       </Card>
       </div>
+
+      <Dialog open={emailDialogOpen} onOpenChange={(open) => !emailLoginBusy && setEmailDialogOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Add email sign-in</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Works like signing up: pick the email and password you'll use to sign in to
+              OnboardBuddy — it doesn't have to match your GitHub email.
+            </p>
+            <div>
+              <Label htmlFor="login-email" className="text-[11px] text-muted-foreground">Email</Label>
+              <Input
+                id="login-email"
+                type="email"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="mt-1 h-8 text-[13px]"
+                autoComplete="email"
+              />
+              {user?.email && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  A different address than {user.email} needs a confirmation click from its inbox first.
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="login-password" className="text-[11px] text-muted-foreground">Password</Label>
+              <Input
+                id="login-password"
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="••••••••"
+                className="mt-1 h-8 text-[13px]"
+                autoComplete="new-password"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">Minimum 8 characters</p>
+            </div>
+            <div>
+              <Label htmlFor="login-password-confirm" className="text-[11px] text-muted-foreground">Confirm password</Label>
+              <Input
+                id="login-password-confirm"
+                type="password"
+                value={loginPasswordConfirm}
+                onChange={(e) => setLoginPasswordConfirm(e.target.value)}
+                placeholder="••••••••"
+                className="mt-1 h-8 text-[13px]"
+                autoComplete="new-password"
+              />
+            </div>
+            {emailLoginError && <p className="text-[11px] text-destructive">{emailLoginError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setEmailDialogOpen(false)} disabled={emailLoginBusy}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleAddEmailLogin} disabled={emailLoginBusy}>
+                {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mail className="h-3 w-3" />}
+                Enable email sign-in
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleteOpen} onOpenChange={(open) => !deleting && setDeleteOpen(open)}>
         <DialogContent className="sm:max-w-md">

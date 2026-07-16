@@ -2,7 +2,7 @@ import { Router } from "express";
 import { supabaseAdmin } from "../../lib/supabase.js";
 import { pool, query } from "../../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
-import { deleteAccountTx } from "../services/accountDeletion.js";
+import { deleteAccountTx, deleteAuthUser } from "../services/accountDeletion.js";
 
 export const authRouter = Router();
 
@@ -101,8 +101,9 @@ authRouter.delete("/account", requireAuth, async (req, res) => {
   }
 
   try {
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId);
-    if (error) throw new Error(error.message);
+    // "already_gone" is success too: stateless JWT verification means a
+    // session can outlive its auth user (earlier attempt, dashboard delete).
+    await deleteAuthUser(userId);
   } catch (err) {
     console.error("Auth user deletion failed after data wipe:", err);
     res.status(500).json({ error: "Account data deleted, but removing the sign-in failed — please retry" });

@@ -1,27 +1,25 @@
 import { useEffect, useState } from "react";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const THEME_KEY = "onboardbuddy:theme";
 
-export type ThemeMode = "system" | "light" | "dark";
+export type ThemeMode = "light" | "dark";
 
-/** system → light → dark → system. */
-const NEXT_MODE: Record<ThemeMode, ThemeMode> = { system: "light", light: "dark", dark: "system" };
-
-const MODE_LABEL: Record<ThemeMode, string> = {
-  system: "System (follows your browser)",
-  light: "Light",
-  dark: "Dark",
-};
-
-function readMode(): ThemeMode {
+/**
+ * Two-state switch seeded from the OS: with nothing stored the app shows the
+ * system's theme (and keeps following live OS flips); the first click pins an
+ * explicit light/dark choice and the OS stops mattering. (The index.html
+ * bootstrap resolves the same way, so there's no flash on load.)
+ */
+function readStoredMode(): ThemeMode | null {
   try {
     const stored = localStorage.getItem(THEME_KEY);
-    return stored === "light" || stored === "dark" ? stored : "system";
+    // Anything else — including the legacy "system" value — means "not pinned".
+    return stored === "light" || stored === "dark" ? stored : null;
   } catch {
-    return "system";
+    return null;
   }
 }
 
@@ -33,10 +31,9 @@ function systemPrefersDark(): boolean {
   }
 }
 
-/** Resolve the mode to a concrete class on <html>; persist the MODE (not the result). */
+/** Apply an explicit choice: set the class and pin it in storage. */
 export function applyThemeMode(mode: ThemeMode): void {
-  const dark = mode === "dark" || (mode === "system" && systemPrefersDark());
-  document.documentElement.classList.toggle("dark", dark);
+  document.documentElement.classList.toggle("dark", mode === "dark");
   try {
     localStorage.setItem(THEME_KEY, mode);
   } catch {
@@ -45,11 +42,14 @@ export function applyThemeMode(mode: ThemeMode): void {
 }
 
 export function ThemeToggle() {
-  const [mode, setMode] = useState<ThemeMode>(() => readMode());
+  const [pinned, setPinned] = useState<boolean>(() => readStoredMode() !== null);
+  const [mode, setMode] = useState<ThemeMode>(
+    () => readStoredMode() ?? (systemPrefersDark() ? "dark" : "light"),
+  );
 
-  // While in system mode, follow live OS/browser theme changes.
+  // Until the user picks explicitly, follow live OS/browser theme changes.
   useEffect(() => {
-    if (mode !== "system") return;
+    if (pinned) return;
     let media: MediaQueryList | undefined;
     try {
       media = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -57,24 +57,29 @@ export function ThemeToggle() {
       return;
     }
     if (!media?.addEventListener) return;
-    const onChange = () => applyThemeMode("system");
+    const onChange = (e: MediaQueryListEvent) => {
+      const next: ThemeMode = e.matches ? "dark" : "light";
+      document.documentElement.classList.toggle("dark", next === "dark");
+      setMode(next);
+    };
     media.addEventListener("change", onChange);
     return () => media?.removeEventListener("change", onChange);
-  }, [mode]);
+  }, [pinned]);
 
-  const cycle = () => {
-    const next = NEXT_MODE[mode];
+  const toggle = () => {
+    const next: ThemeMode = mode === "dark" ? "light" : "dark";
     applyThemeMode(next);
     setMode(next);
+    setPinned(true);
   };
 
-  const Icon = mode === "system" ? Monitor : mode === "light" ? Sun : Moon;
-  const label = `Theme: ${MODE_LABEL[mode]} — click for ${MODE_LABEL[NEXT_MODE[mode]].toLowerCase()}`;
+  const Icon = mode === "dark" ? Moon : Sun;
+  const label = `Theme: ${mode === "dark" ? "Dark" : "Light"} — click for ${mode === "dark" ? "light" : "dark"}`;
 
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-xs" onClick={cycle} aria-label={label}>
+        <Button variant="ghost" size="icon-xs" onClick={toggle} aria-label={label}>
           <Icon className="h-3.5 w-3.5" />
         </Button>
       </TooltipTrigger>

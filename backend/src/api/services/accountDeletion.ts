@@ -11,6 +11,8 @@
  * the caller controls BEGIN/COMMIT.
  */
 
+import { supabaseAdmin } from "../../lib/supabase.js";
+
 export interface TxClient {
   query: (text: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 }
@@ -50,4 +52,37 @@ export async function deleteAccountTx(client: TxClient, userId: string): Promise
   //    project_members rows, and user_progress; SET NULLs the soft refs
   //    (reviewed_by, accepted_by, updated_by, created_by on scopes).
   await client.query(`DELETE FROM public.users WHERE id = $1`, [userId]);
+}
+
+/** Shape of the one admin-auth call we make, injectable for tests. */
+export interface AuthAdminLike {
+  auth: {
+    admin: {
+      deleteUser: (id: string) => Promise<{
+        error: { message: string; status?: number; code?: string } | null;
+      }>;
+    };
+  };
+}
+
+/**
+ * Deletes the Supabase auth user, treating "user not found" as success:
+ * JWT verification is stateless (JWKS), so a session can outlive its auth
+ * user — e.g. an earlier deletion attempt, or a dashboard-side removal.
+ * Retrying such an account used to 500 forever ("removing the sign-in
+ * failed") even though the goal state (auth user gone) was already reached.
+ */
+export async function deleteAuthUser(
+  userId: string,
+  admin: AuthAdminLike = supabaseAdmin,
+): Promise<"deleted" | "already_gone"> {
+  const { error } = await admin.auth.admin.deleteUser(userId);
+  if (!error) return "deleted";
+  const alreadyGone =
+    error.status === 404 || error.code === "user_not_found" || /not found/i.test(error.message);
+  if (alreadyGone) {
+    console.warn(`Auth user ${userId} already absent — treating deletion as complete`);
+    return "already_gone";
+  }
+  throw new Error(error.message);
 }

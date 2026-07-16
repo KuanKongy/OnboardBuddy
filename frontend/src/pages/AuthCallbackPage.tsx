@@ -19,9 +19,20 @@ function readOAuthError(): string {
   return description?.replace(/\+/g, " ") ?? code ?? "";
 }
 
+/**
+ * Optional in-app destination (e.g. identity linking sends ?next=/settings so
+ * the user lands back where they clicked "Link"). Only local paths are
+ * honored — anything not starting with a single "/" falls back to /dashboard.
+ */
+function readNextParam(): string {
+  const next = new URLSearchParams(window.location.search).get("next");
+  return next && next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+}
+
 export function AuthCallbackPage() {
   const navigate = useNavigate();
   const [error, setError] = useState(() => readOAuthError());
+  const [next] = useState(() => readNextParam());
 
   useEffect(() => {
     if (error) return;
@@ -40,7 +51,7 @@ export function AuthCallbackPage() {
       }
 
       if (event === "SIGNED_IN" && session) {
-        navigate("/dashboard", { replace: true });
+        navigate(next, { replace: true });
         return;
       }
 
@@ -56,7 +67,7 @@ export function AuthCallbackPage() {
         return;
       }
       if (session) {
-        navigate("/dashboard", { replace: true });
+        navigate(next, { replace: true });
       }
     });
 
@@ -64,7 +75,7 @@ export function AuthCallbackPage() {
       cancelled = true;
       subscription.unsubscribe();
     };
-  }, [navigate, error]);
+  }, [navigate, error, next]);
 
   const isProviderProfileError = /user profile from external provider/i.test(error);
 
