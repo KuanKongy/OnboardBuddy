@@ -1,6 +1,7 @@
 import { CheckCircle2, CircleDashed, Loader2, MinusCircle, PauseCircle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * The one panel for an analysis run: every pipeline step in order with its
@@ -165,19 +166,34 @@ export function AnalysisRunPanel({
               // incremental_diff row on a first analysis).
               if (!p && !isActive) return null;
               const running = status === "running";
+              const errorText = !running ? (p?.error_message ?? null) : null;
+              const summaryText = running
+                ? currentStep ?? "working…"
+                : errorText
+                  ? errorText
+                  : p ? keyMetrics(p.metrics) : "";
               return (
-                <li key={key} className="flex items-center gap-2.5 py-0.5" title={p ? JSON.stringify(p.metrics) : undefined}>
+                <li key={key} className="flex items-center gap-2.5 py-0.5" title={!errorText && p ? JSON.stringify(p.metrics) : undefined}>
                   <StatusIcon status={status} />
                   <span className={`w-44 shrink-0 text-[12px] ${running ? "font-medium text-foreground" : status === "pending" || status === "not_run" ? "text-muted-foreground/60" : "text-foreground"}`}>
                     {label}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                    {running
-                      ? currentStep ?? "working…"
-                      : p?.error_message
-                        ? p.error_message.slice(0, 80)
-                        : p ? keyMetrics(p.metrics) : ""}
-                  </span>
+                  {errorText ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={0} className="min-w-0 flex-1 cursor-help truncate text-[11px] text-muted-foreground">
+                          {summaryText}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-sm text-left whitespace-pre-wrap">
+                        {errorText}
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                      {summaryText}
+                    </span>
+                  )}
                   <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
                     {p?.started_at ? `${timeOf(p.started_at)}${p.finished_at ? ` → ${timeOf(p.finished_at)}` : "…"}` : ""}
                     {p && durationOf(p) ? ` (${durationOf(p)})` : ""}

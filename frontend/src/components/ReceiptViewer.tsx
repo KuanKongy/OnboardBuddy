@@ -4,22 +4,26 @@ import {
   Code2,
   FileCode2,
   Shield,
-  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { CodeSnippet } from "@/components/CodeSnippet";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { SourceReceipt } from "@/types/onboarding";
 
 function confidenceBadgeClasses(c: string) {
   switch (c) {
     case "high":
-      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/30";
+      return "border-success/40 bg-success-soft text-success";
     case "medium":
-      return "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30";
+      return "border-warning/40 bg-warning-soft text-warning";
     default:
-      return "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30";
+      return "border-danger/40 bg-danger-soft text-danger";
   }
 }
 
@@ -30,7 +34,7 @@ function ConfidenceBadge({ confidence }: { confidence: string }) {
         <span tabIndex={0} className="inline-flex cursor-help">
           <Badge
             variant="outline"
-            className={`text-xs border ${confidenceBadgeClasses(confidence)}`}
+            className={`text-xs ${confidenceBadgeClasses(confidence)}`}
           >
             <Shield className="mr-1 h-2.5 w-2.5" />
             {confidence.charAt(0).toUpperCase() + confidence.slice(1)}
@@ -58,46 +62,23 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
         : null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="receipt-viewer-title"
-    >
-      <div
-        className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border bg-background shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between border-b px-5 py-4">
-          <div className="min-w-0 flex-1">
-            <h2
-              id="receipt-viewer-title"
-              className="flex items-center gap-2 text-[14px] font-semibold text-foreground"
-            >
-              <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              <span className="truncate font-mono" title={receipt.filePath}>{receipt.filePath}</span>
-            </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
-              {receipt.symbolName && (
-                <span className="flex items-center gap-1">
-                  <Code2 className="h-3 w-3" />
-                  {receipt.symbolName}
-                </span>
-              )}
-              {lineRange && <span>Lines {lineRange}</span>}
-            </div>
+    <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="flex max-h-[85vh] w-full flex-col overflow-hidden p-0 sm:max-w-2xl">
+        <DialogHeader className="border-b px-5 py-4 pr-10 text-left">
+          <DialogTitle className="flex items-center gap-2 text-[14px] font-semibold text-foreground">
+            <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <span className="truncate font-mono" title={receipt.filePath}>{receipt.filePath}</span>
+          </DialogTitle>
+          <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+            {receipt.symbolName && (
+              <span className="flex items-center gap-1">
+                <Code2 className="h-3 w-3" />
+                {receipt.symbolName}
+              </span>
+            )}
+            {lineRange && <span>Lines {lineRange}</span>}
           </div>
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={onClose}
-            aria-label="Close receipt viewer"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+        </DialogHeader>
 
         {/* Body */}
         <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
@@ -107,7 +88,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             {receipt.staleness === "stale" ? (
               <Badge
                 variant="outline"
-                className="border-amber-500/30 bg-amber-500/5 text-xs text-amber-700 dark:text-amber-400"
+                className="border-warning/40 bg-warning-soft text-xs text-warning"
               >
                 <AlertTriangle className="mr-1 h-2.5 w-2.5" />
                 Stale — source has changed
@@ -115,7 +96,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             ) : (
               <Badge
                 variant="outline"
-                className="border-emerald-500/30 bg-emerald-500/5 text-xs text-emerald-700 dark:text-emerald-400"
+                className="border-success/40 bg-success-soft text-xs text-success"
               >
                 <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
                 Current
@@ -176,7 +157,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             )}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

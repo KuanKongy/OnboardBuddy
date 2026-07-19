@@ -141,12 +141,12 @@ export function AnalyzeConfigForm({
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div className="min-w-0 space-y-1">
-        <Label className="text-xs">Branch</Label>
+        <Label htmlFor="analyze-branch" className="text-xs">Branch</Label>
         <Select
           value={branch}
           onValueChange={(v) => onChange({ ...config, branch: v, commit: "" })}
         >
-          <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-branch" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {(branches.length > 0 ? branches : [branch]).map((b) => (
               <SelectItem key={b} value={b}>
@@ -159,12 +159,12 @@ export function AnalyzeConfigForm({
       </div>
 
       <div className="min-w-0 space-y-1">
-        <Label className="text-xs">Commit</Label>
+        <Label htmlFor="analyze-commit" className="text-xs">Commit</Label>
         <Select
           value={config.commit || "head"}
           onValueChange={(v) => onChange({ ...config, commit: v === "head" ? "" : v })}
         >
-          <SelectTrigger className="h-8 w-full min-w-0 text-[13px]">
+          <SelectTrigger id="analyze-commit" className="h-8 w-full min-w-0 text-[13px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -181,12 +181,12 @@ export function AnalyzeConfigForm({
       </div>
 
       <div className="min-w-0 space-y-1">
-        <Label className="text-xs">Scope</Label>
+        <Label htmlFor="analyze-scope" className="text-xs">Scope</Label>
         <Select
           value={config.scopeId}
           onValueChange={(v) => onChange({ ...config, scopeId: v })}
         >
-          <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-scope" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="whole">Whole repository</SelectItem>
             {scopes.filter((s) => s.path_prefix !== "").map((s) => (
@@ -198,22 +198,26 @@ export function AnalyzeConfigForm({
           </SelectContent>
         </Select>
         {config.scopeId === "custom" && (
-          <Input
-            value={config.scopePath}
-            onChange={(e) => onChange({ ...config, scopePath: e.target.value })}
-            placeholder="e.g. backend/ or packages/server"
-            className="h-8 font-mono text-[12px]"
-          />
+          <>
+            <Label htmlFor="analyze-scope-path" className="sr-only">Custom scope path</Label>
+            <Input
+              id="analyze-scope-path"
+              value={config.scopePath}
+              onChange={(e) => onChange({ ...config, scopePath: e.target.value })}
+              placeholder="e.g. backend/ or packages/server"
+              className="h-8 font-mono text-[12px]"
+            />
+          </>
         )}
       </div>
 
       <div className="min-w-0 space-y-1">
-        <Label className="text-xs">Analysis depth</Label>
+        <Label htmlFor="analyze-depth" className="text-xs">Analysis depth</Label>
         <Select
           value={config.depth || "default"}
           onValueChange={(v) => onChange({ ...config, depth: v === "default" ? "" : v })}
         >
-          <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-depth" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Project default</SelectItem>
             {DEPTHS.map((d) => (
@@ -224,12 +228,12 @@ export function AnalyzeConfigForm({
       </div>
 
       <div className="min-w-0 space-y-1 sm:col-span-2">
-        <Label className="text-xs">Onboarding package role</Label>
+        <Label htmlFor="analyze-role" className="text-xs">Onboarding package role</Label>
         <Select
           value={config.role || "default"}
           onValueChange={(v) => onChange({ ...config, role: v === "default" ? "" : v })}
         >
-          <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Project default role</SelectItem>
             {ROLES.map((r) => (
