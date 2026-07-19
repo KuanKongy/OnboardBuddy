@@ -118,11 +118,15 @@ function StepPager({
               key={i}
               onClick={() => onJump(i)}
               aria-label={`Go to step ${i + 1}`}
-              className={cn(
-                "h-1.5 rounded-full transition-all",
-                i === current ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/60",
-              )}
-            />
+              className="flex h-6 w-6 items-center justify-center"
+            >
+              <span
+                className={cn(
+                  "h-1.5 rounded-full transition-all",
+                  i === current ? "w-4 bg-primary" : "w-1.5 bg-muted-foreground/30 hover:bg-muted-foreground/60",
+                )}
+              />
+            </button>
           ))}
         </div>
         <Button variant="outline" size="xs" disabled={current === 0} onClick={onPrev} aria-label="Previous step">
@@ -168,6 +172,7 @@ export function WalkthroughTab() {
 
   const [tutorials, setTutorials] = useState<TutorialSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
@@ -209,13 +214,19 @@ export function WalkthroughTab() {
     setLoading(true);
     setDetail(null);
     setCurrentStep(0);
+    setLoadError(false);
     try {
       const data = await apiFetch(`/projects/${id}/tutorials${packageQuery}`);
       const list: TutorialSummary[] = data.tutorials ?? [];
       setTutorials(list);
       if (list.length === 0) {
-        const wf = await apiFetch(`/projects/${id}/workflows`);
-        setWorkflows(wf.workflows ?? []);
+        try {
+          const wf = await apiFetch(`/projects/${id}/workflows`);
+          setWorkflows(wf.workflows ?? []);
+        } catch {
+          setWorkflows([]);
+          setLoadError(true);
+        }
       } else {
         // Deep link / resume: ?tutorial=<id>&step=<n> opens at that step.
         const requested = searchParams.get("tutorial");
@@ -225,6 +236,8 @@ export function WalkthroughTab() {
       }
     } catch {
       setTutorials([]);
+      setWorkflows([]);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -511,6 +524,20 @@ export function WalkthroughTab() {
             </div>
           </div>
         </>
+      ) : loadError ? (
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-danger/40 bg-danger-soft py-20 text-center">
+          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-danger-soft">
+            <AlertTriangle className="h-5 w-5 text-danger" />
+          </div>
+          <h2 className="text-sm font-semibold text-foreground">Couldn't load tutorials</h2>
+          <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+            Something went wrong fetching tutorials and workflows for this project. Check your
+            connection and try again.
+          </p>
+          <Button variant="outline" size="sm" className="mt-4" onClick={() => load()}>
+            Retry
+          </Button>
+        </div>
       ) : (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20 text-center">
           <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-muted">

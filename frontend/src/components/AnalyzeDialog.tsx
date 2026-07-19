@@ -34,6 +34,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
   const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(projectId);
 
   useEffect(() => {
@@ -41,6 +42,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     resetPreflight();
     setError("");
     setConflict(false);
+    setConfirmed(false);
     setConfig({ ...DEFAULT_ANALYZE_CONFIG, role: initialRole ?? "" });
   }, [open, projectId, initialRole]);
 
@@ -51,6 +53,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     // A tuple conflict is config-specific too — editing the config may
     // resolve it (different branch/commit/scope runs in parallel).
     setConflict(false);
+    setConfirmed(false);
   }
 
   async function startAnalysis() {
@@ -105,7 +108,19 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           </div>
         )}
         {(error || previewError) && (
-          <div className="rounded-md border border-danger/40 bg-danger-soft px-3 py-2 text-xs text-danger">{error || previewError}</div>
+          <div className="flex items-center justify-between gap-3 rounded-md border border-danger/40 bg-danger-soft px-3 py-2 text-xs text-danger">
+            <span>{error || previewError}</span>
+            {previewError && (
+              <Button
+                size="xs"
+                variant="outline"
+                className="shrink-0 border-danger/50 text-danger hover:bg-danger-soft"
+                onClick={() => runPreflight(analyzeRequestBody(config))}
+              >
+                Retry
+              </Button>
+            )}
+          </div>
         )}
 
         {previewing && (
@@ -115,7 +130,9 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           </div>
         )}
 
-        {preview && <PreflightPreviewCard preview={preview} />}
+        {preview && (
+          <PreflightPreviewCard preview={preview} acknowledged={confirmed} onAcknowledgedChange={setConfirmed} />
+        )}
 
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -125,7 +142,11 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
               Preview first
             </Button>
           )}
-          <Button size="sm" onClick={startAnalysis} disabled={starting || conflict}>
+          <Button
+            size="sm"
+            onClick={startAnalysis}
+            disabled={starting || conflict || (preview !== null && preview.confirmationsRequired.length > 0 && !confirmed)}
+          >
             {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
             Start analysis
           </Button>

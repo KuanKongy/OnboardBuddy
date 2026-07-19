@@ -1,4 +1,4 @@
-export type PackageStatus = "missing" | "generating" | "draft" | "approved" | "stale";
+export type PackageStatus = "missing" | "generating" | "draft" | "approved" | "stale" | "failed";
 export type ConfidenceLevel = "high" | "medium" | "low";
 export type SectionStatus = "complete" | "stale" | "missing";
 

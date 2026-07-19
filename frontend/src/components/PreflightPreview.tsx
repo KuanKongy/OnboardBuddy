@@ -1,4 +1,4 @@
-import { AlertTriangle, Shield } from "lucide-react";
+import { AlertTriangle, ShieldAlert, Shield } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
@@ -39,19 +39,26 @@ export function usePreflight(projectId: string) {
   const [preview, setPreview] = useState<PreflightPreviewData | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState("");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef = useRef<number | undefined>(undefined);
+  const cancelledRef = useRef(false);
 
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+      window.clearInterval(pollRef.current);
+    };
+  }, []);
 
   function reset() {
-    if (pollRef.current) clearInterval(pollRef.current);
+    window.clearInterval(pollRef.current);
     setPreview(null);
     setError("");
     setPreviewing(false);
   }
 
   async function run(body: Record<string, string>) {
-    if (pollRef.current) clearInterval(pollRef.current);
+    window.clearInterval(pollRef.current);
     setPreviewing(true);
     setPreview(null);
     setError("");
@@ -60,30 +67,35 @@ export function usePreflight(projectId: string) {
         method: "POST",
         body: JSON.stringify(body),
       });
+      if (cancelledRef.current) return;
       const jobId = res.preflight?.id;
       if (!jobId) throw new Error("Preflight did not start");
       const started = Date.now();
-      pollRef.current = setInterval(async () => {
+      pollRef.current = window.setInterval(async () => {
         try {
           const status = await apiFetch(`/projects/${projectId}/analysis-status`);
+          if (cancelledRef.current) return;
           const job = (status.jobs as Array<{ id: string; status: string; checkpoint?: { preview?: PreflightPreviewData }; error_message?: string | null }>)
             .find((j) => j.id === jobId);
           if (job?.status === "complete" && job.checkpoint?.preview) {
-            if (pollRef.current) clearInterval(pollRef.current);
+            window.clearInterval(pollRef.current);
             setPreview(job.checkpoint.preview);
             setPreviewing(false);
           } else if (job?.status === "failed") {
-            if (pollRef.current) clearInterval(pollRef.current);
+            window.clearInterval(pollRef.current);
             setError(job.error_message || "Preview failed");
             setPreviewing(false);
           } else if (Date.now() - started > 180_000) {
-            if (pollRef.current) clearInterval(pollRef.current);
-            setError("Preview timed out — you can still start the analysis directly.");
+            window.clearInterval(pollRef.current);
+            setError("Preview timed out — retry, or start the analysis directly.");
             setPreviewing(false);
           }
-        } catch { /* transient; keep polling */ }
+        } catch {
+          if (cancelledRef.current) window.clearInterval(pollRef.current);
+        }
       }, 2500);
     } catch (err) {
+      if (cancelledRef.current) return;
       setError(err instanceof Error ? err.message : "Preview failed");
       setPreviewing(false);
     }
@@ -92,7 +104,19 @@ export function usePreflight(projectId: string) {
   return { preview, previewing, error, run, reset };
 }
 
-export function PreflightPreviewCard({ preview }: { preview: PreflightPreviewData }) {
+export function PreflightPreviewCard({
+  preview,
+  acknowledged,
+  onAcknowledgedChange,
+}: {
+  preview: PreflightPreviewData;
+  /** Whether the user has checked the confirmations-required acknowledgment. */
+  acknowledged?: boolean;
+  onAcknowledgedChange?: (v: boolean) => void;
+}) {
+  const unsupportedLangs = Object.keys(preview.languageInventory.unsupported);
+  const shownLangs = unsupportedLangs.slice(0, 4);
+  const remainingLangs = unsupportedLangs.length - shownLangs.length;
   return (
     <div className="space-y-2.5 rounded-lg border border-border bg-muted/20 p-3">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-foreground">
@@ -107,7 +131,7 @@ export function PreflightPreviewCard({ preview }: { preview: PreflightPreviewDat
       {preview.languageInventory.unsupportedFileCount > 0 && (
         <p className="text-[11.5px] text-muted-foreground">
           {preview.languageInventory.unsupportedFileCount} files are in unsupported languages
-          ({Object.keys(preview.languageInventory.unsupported).slice(0, 4).join(", ")}) and
+          ({shownLangs.join(", ")}{remainingLangs > 0 ? `, +${remainingLangs} more` : ""}) and
           will be listed as a known gap, not analyzed.
         </p>
       )}
@@ -125,11 +149,34 @@ export function PreflightPreviewCard({ preview }: { preview: PreflightPreviewDat
         </p>
       </div>
 
-      {[...preview.confirmationsRequired, ...preview.warnings].map((w, i) => (
-        <p key={i} className="flex items-start gap-1.5 text-[11.5px] text-warning">
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {w}
-        </p>
-      ))}
+      {preview.confirmationsRequired.length > 0 && (
+        <label className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11.5px]">
+          <input
+            type="checkbox"
+            checked={acknowledged ?? false}
+            onChange={(e) => onAcknowledgedChange?.(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-destructive"
+          />
+          <span className="text-foreground">
+            <span className="mb-1 flex items-center gap-1.5 font-medium text-destructive">
+              <ShieldAlert className="h-3 w-3 shrink-0" /> Requires acknowledgment before starting
+            </span>
+            {preview.confirmationsRequired.map((w, i) => (
+              <span key={i} className="block text-muted-foreground">{w}</span>
+            ))}
+          </span>
+        </label>
+      )}
+
+      {preview.warnings.length > 0 && (
+        <div className="space-y-1">
+          {preview.warnings.map((w, i) => (
+            <p key={i} className="flex items-start gap-1.5 text-[11.5px] text-warning">
+              <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {w}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
