@@ -1567,6 +1567,8 @@ Fixed (2026-07-11):
 - ai_disabled no longer blocks: new `deterministicSectionGenerator` renders each section's deterministic query result (the same facts the LLM would get as authoritative context) into readable markdown with the section's Mermaid diagrams, zero LLM calls, `generation_run_id NULL`, an explicit "AI explanations are off" banner, and an `ai_disabled` unknown. The 403 gates on `/generate`, `/sections/:id/regenerate`, and `/summarize` are removed — the mode decides HOW, never WHETHER.
 - Settings audit: budgets, stop behavior, model tiers/failure behavior, and ranking weights were already read live at job time; ignored paths, file/LOC limits, and analysis depth correctly apply at the next analysis (copied onto the snapshot per spec).
 
+---
+
 ## [P2][Closed] Bug 48: Regenerate failures invisible: silent UI catch, sections stuck in regenerate_requested
 
 **Bug #48**
@@ -1617,6 +1619,8 @@ Tour dismissal lived in browser-global localStorage keys, which survive DB wipes
 
 Fixed (2026-07-11): dismissal keys are per-account (`…:<userId>`, shared helper `lib/tourState.ts`); the lifecycle tour auto-runs on first visit to the package grid, sequenced after the project tour so two spotlight overlays never stack. Existing accounts see each tour once more (keys migrated).
 
+---
+
 ## [P1][Closed] Bug 50: Runs are untrustworthy — phantom phase durations, dead workers look alive, no pause/stop/resume
 
 **Bug #50**
@@ -1646,6 +1650,8 @@ Fixed (2026-07-12):
 - Bonus: ai_disabled analyses now auto-enqueue their deterministic package (previously only manual generation).
 
 Verified live: paused a run mid-download → worker logged "stopped by kill switch (status: paused)" and exited without stomping the status; resume re-enqueued and completed from checkpoints.
+
+---
 
 ## [P3][Closed] Bug 51: Receipt UX — unbounded snippets, no symbol explanation, reviewer shown as UUID
 
