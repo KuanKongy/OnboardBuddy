@@ -79,7 +79,7 @@ const statusConfig = {
 
 const tierColors: Record<string, string> = {
   owner: "bg-warning-soft text-warning border-warning/30",
-  admin: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30",
+  admin: "bg-info/15 text-info border-info/30",
   contributor: "bg-muted text-muted-foreground border-border",
   developer: "bg-muted text-muted-foreground border-border",
 };
