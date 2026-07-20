@@ -156,18 +156,27 @@ export function CapabilitiesPage() {
                   <div className="mt-3 rounded-md border border-primary/25 bg-primary/5 px-2.5 py-2">
                     <p className="section-label mb-1">Start here</p>
                     <ul className="space-y-1">
-                      {cap.whereToStart.map((s) => (
-                        <li key={s.stable_key} className="text-[12px]">
-                          <Link
-                            to={`/projects/${id}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
-                            className="inline-flex items-center gap-1.5 font-mono text-primary hover:underline"
-                          >
-                            <FileCode2 className="h-3 w-3 shrink-0" />
-                            {s.stable_key}
-                          </Link>
-                          {s.reason && <p className="text-muted-foreground">{s.reason}</p>}
-                        </li>
-                      ))}
+                      {cap.whereToStart.map((s) => {
+                        const file = fileOf(s.stable_key);
+                        const symbolIndex = s.stable_key.indexOf("#");
+                        const symbol = symbolIndex >= 0 ? s.stable_key.slice(symbolIndex + 1) : null;
+                        return (
+                          <li key={s.stable_key} className="text-[12px]">
+                            <Link
+                              to={`/projects/${id}/dependencies?focus=${encodeURIComponent(file)}`}
+                              className="flex min-w-0 items-center gap-1.5 font-mono text-primary hover:underline"
+                              title={s.stable_key}
+                            >
+                              <FileCode2 className="h-3 w-3 shrink-0" />
+                              <span className="min-w-0 truncate">
+                                {file}
+                                {symbol && <span className="text-muted-foreground"> #{symbol}</span>}
+                              </span>
+                            </Link>
+                            {s.reason && <p className="text-muted-foreground">{s.reason}</p>}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 )}
