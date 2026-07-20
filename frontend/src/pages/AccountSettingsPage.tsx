@@ -342,7 +342,7 @@ export function AccountSettingsPage() {
                   <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
                 </div>
               </div>
-              {profileNotice && <p className="mt-2 text-[11px] text-emerald-600 dark:text-emerald-400">{profileNotice}</p>}
+              {profileNotice && <p className="mt-2 text-[11px] text-success">{profileNotice}</p>}
               {profileError && <p className="mt-2 text-[11px] text-destructive">{profileError}</p>}
             </>
           )}
@@ -456,11 +456,11 @@ export function AccountSettingsPage() {
             </div>
           )}
           {pendingEmail && pendingEmail !== user?.email && (
-            <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-400">
+            <p className="mt-2 text-[11px] text-warning">
               Pending confirmation: {pendingEmail} — check that inbox to finish.
             </p>
           )}
-          {emailLoginNotice && <p className="mt-2 text-[11px] text-emerald-600 dark:text-emerald-400">{emailLoginNotice}</p>}
+          {emailLoginNotice && <p className="mt-2 text-[11px] text-success">{emailLoginNotice}</p>}
           {emailLoginError && !emailDialogOpen && <p className="mt-2 text-[11px] text-destructive">{emailLoginError}</p>}
         </CardContent>
       </Card>

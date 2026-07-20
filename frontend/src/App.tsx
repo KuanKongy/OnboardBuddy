@@ -112,7 +112,7 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-          <Route path="/dev/graph/:id" element={<GraphPage />} />
+          {import.meta.env.DEV && <Route path="/dev/graph/:id" element={<GraphPage />} />}
 
           <Route element={<ProtectedRoute />}>
             <Route element={<AuthenticatedLayout />}>
