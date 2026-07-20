@@ -31,7 +31,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
       className={cn(
         "w-52 rounded-lg border bg-card px-3 py-2.5 shadow-md transition-opacity",
         data.selected
-          ? "border-primary shadow-[0_0_0_1px_hsl(var(--ring))]"
+          ? "border-primary ring-2 ring-ring"
           : "border-border hover:border-muted-foreground/40",
         data.dimmed && "opacity-20",
       )}

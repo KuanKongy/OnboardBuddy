@@ -24,6 +24,23 @@ export function ViewportFocus({
     if (!mounted.current) {
       mounted.current = true;
       if (!selectedNodeId) return;
+      // First mount with a pre-selected node (e.g. a ?focus=/?cluster= deep
+      // link): defer to the next frame so the declarative `fitView` prop
+      // finishes its own initial positioning/measurement first, then glide
+      // to the target — running synchronously here would race node
+      // measurement (dimensions aren't known yet on the very first tick).
+      const raf = requestAnimationFrame(() => {
+        try {
+          const node = getNode(selectedNodeId);
+          if (!node) return;
+          const w = node.width ?? 208; // ModuleNode is w-52
+          const h = node.height ?? 56;
+          setCenter(node.position.x + w / 2, node.position.y + h / 2, { zoom, duration: 500 });
+        } catch {
+          /* jsdom / zero-size container — animation is cosmetic only */
+        }
+      });
+      return () => cancelAnimationFrame(raf);
     }
     try {
       if (selectedNodeId) {

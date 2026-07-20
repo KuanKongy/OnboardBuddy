@@ -1,5 +1,5 @@
 import { AlertTriangle, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
@@ -17,7 +17,7 @@ import {
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import { layoutDependencyGraph } from "@/lib/graphLayout";
+import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
 type GraphView = "files" | "classes";
@@ -49,7 +49,26 @@ export function GraphPage() {
   const [allEdges, setAllEdges] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
-  const [activeCluster, setActiveCluster] = useState<string | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeCluster = searchParams.get("cluster");
+
+  /** Drills in/out of a directory cluster — the URL is the source of truth
+   * (?cluster=<path>) so browser Back/Forward walks the drill path instead
+   * of leaving the page; the effect below reacts to the resulting change. */
+  function goToCluster(cluster: string | null, opts?: { replace?: boolean }) {
+    // A single click fires both onNodeClick and onSelectionChange (item 1);
+    // no-op when nothing actually changes so one click doesn't push two
+    // history entries (which would need two Back presses to undo).
+    if (cluster === searchParams.get("cluster")) return;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (cluster) next.set("cluster", cluster);
+      else next.delete("cluster");
+      return next;
+    }, opts);
+  }
 
   function loadGraph(cluster?: string) {
     if (!id) return;
@@ -62,19 +81,29 @@ export function GraphPage() {
       .finally(() => setLoading(false));
   }
 
-  // Switching packages reloads from the top — a drill path from another
-  // snapshot's directory layout may not exist in this one.
+  // The drilled-in cluster is read straight from the URL (?cluster=) so
+  // even the very first render already reflects it — including a fresh
+  // page load from a deep link. A real project/package switch invalidates
+  // any drill path from another snapshot's directory layout, so it resets
+  // to the root and drops a stale ?cluster= instead of trying to keep it.
+  const prevGraphKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    setActiveCluster(null);
-    loadGraph();
-  }, [id, selectedPackageId]);
+    const key = `${id ?? ""}::${selectedPackageId ?? ""}`;
+    const projectOrPackageChanged = prevGraphKeyRef.current !== null && prevGraphKeyRef.current !== key;
+    prevGraphKeyRef.current = key;
+    const cluster = activeCluster;
+    if (projectOrPackageChanged && cluster) {
+      goToCluster(null, { replace: true });
+      return;
+    }
+    loadGraph(cluster ?? undefined);
+  }, [id, selectedPackageId, searchParams]);
 
   /** One level up the cluster path; root (null) when at the first level. */
   function drillUp() {
     const segments = (activeCluster ?? "").split("/").filter(Boolean);
     const parent = segments.slice(0, -1).join("/") || null;
-    setActiveCluster(parent);
-    loadGraph(parent ?? undefined);
+    goToCluster(parent);
   }
 
   // ← / → cycle the selectable (non-cluster) nodes; Esc deselects — paired
@@ -99,22 +128,35 @@ export function GraphPage() {
   );
 
   // Deep link from other tabs (?focus=<file path>): select the node so the
-  // symbol doc panel opens on arrival.
-  const [searchParams] = useSearchParams();
+  // symbol doc panel opens on arrival — but only once it's confirmed to
+  // exist in the currently rendered (possibly clustered) graph; otherwise
+  // surface a visible message instead of silently dimming everything with
+  // no explanation.
   useEffect(() => {
     const focus = searchParams.get("focus");
-    if (focus) setSelectedNodeId(focus);
-  }, [searchParams]);
+    if (!focus || !data) return;
+    if (data.graph.nodes.some((n) => n.id === focus)) {
+      setSelectedNodeId(focus);
+      setFocusNotFoundId(null);
+    } else {
+      setFocusNotFoundId(focus);
+    }
+  }, [searchParams, data]);
 
   // Enrich the selected node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
   useEffect(() => {
     setSelectedNodeDetail(null);
     if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
+    setDetailLoading(true);
     let cancelled = false;
-    fetchNodeDetail(id, selectedNodeId, selectedPackageId).then((detail) => {
-      if (!cancelled) setSelectedNodeDetail(detail);
-    });
+    fetchNodeDetail(id, selectedNodeId, selectedPackageId)
+      .then((detail) => {
+        if (!cancelled) setSelectedNodeDetail(detail);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
     return () => { cancelled = true; };
   }, [id, selectedNodeId, selectedPackageId]);
 
@@ -167,22 +209,9 @@ export function GraphPage() {
 
   const visibleEdges = useMemo(() => {
     const inFilter = edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target));
-    if (allEdges) return inFilter;
     // Dense repos mangle: default to each node's strongest 3 edges in each
-    // direction (by weight, then insertion order) — the layout stays readable
-    // and "Show all edges" is one click.
-    const sorted = [...inFilter].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
-    const perNode = new Map<string, number>();
-    const keptIds = new Set<string>();
-    for (const edge of sorted) {
-      const out = perNode.get(`out:${edge.source}`) ?? 0;
-      const inn = perNode.get(`in:${edge.target}`) ?? 0;
-      if (out >= 3 && inn >= 3) continue;
-      perNode.set(`out:${edge.source}`, out + 1);
-      perNode.set(`in:${edge.target}`, inn + 1);
-      keptIds.add(edge.id);
-    }
-    return inFilter.filter((edge) => keptIds.has(edge.id));
+    // direction — the layout stays readable and "Show all edges" is one click.
+    return allEdges ? inFilter : capEdgesPerNode(inFilter);
   }, [edges, filteredNodeIds, allEdges]);
 
   const positionedNodes = useMemo(
@@ -204,7 +233,7 @@ export function GraphPage() {
             <span className="flex flex-wrap items-baseline gap-1.5">
               <button
                 className="transition-colors hover:text-primary"
-                onClick={() => { setActiveCluster(null); loadGraph(); }}
+                onClick={() => goToCluster(null)}
                 title="Back to all groups"
               >
                 Dependencies
@@ -220,7 +249,7 @@ export function GraphPage() {
                     ) : (
                       <button
                         className="transition-colors hover:text-primary"
-                        onClick={() => { setActiveCluster(prefix); loadGraph(prefix); }}
+                        onClick={() => goToCluster(prefix)}
                         title={`Drill up to ${prefix}`}
                       >
                         {segment}
@@ -266,6 +295,7 @@ export function GraphPage() {
                 <button
                   key={v.key}
                   onClick={() => setView(v.key)}
+                  aria-pressed={view === v.key}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     view === v.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
@@ -312,6 +342,18 @@ export function GraphPage() {
             </p>
           )}
 
+          {focusNotFoundId && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="flex-1 text-foreground">
+                Could not find <code className="font-mono">{focusNotFoundId}</code> in the current view.
+              </span>
+              <Button variant="ghost" size="xs" onClick={() => setFocusNotFoundId(null)}>
+                Dismiss
+              </Button>
+            </div>
+          )}
+
           <GraphToolbar
             search={search}
             onSearchChange={setSearch}
@@ -329,9 +371,7 @@ export function GraphPage() {
                 selectedNodeId={selectedNodeId}
                 onSelectNode={(nodeId) => {
                   if (data.clustered && nodeId?.startsWith("cluster:")) {
-                    const dir = nodeId.replace("cluster:", "");
-                    setActiveCluster(dir);
-                    loadGraph(dir);
+                    goToCluster(nodeId.replace("cluster:", ""));
                   } else {
                     setSelectedNodeId(nodeId);
                   }
@@ -344,6 +384,7 @@ export function GraphPage() {
                 <NodeInfoPanel
                   node={selectedNode}
                   detail={selectedNodeDetail}
+                  loading={detailLoading}
                   githubRepo={githubRepo}
                   onClose={() => setSelectedNodeId(null)}
                 />

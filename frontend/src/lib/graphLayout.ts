@@ -195,3 +195,25 @@ export function layoutDependencyGraph(
 ): PositionedNode[] {
   return layoutGraph(nodes, edges, { direction: "LR" });
 }
+
+/**
+ * Caps each node's edges to its `maxPerDirection` strongest connections in
+ * each direction (by weight, then insertion order) — dense graphs stay
+ * readable without collapsing into a hairball. Assumes `edges` is already
+ * filtered to the visible node set. Shared by the files and classes graph
+ * views so both get the same readability guarantee.
+ */
+export function capEdgesPerNode(edges: GraphEdge[], maxPerDirection = 3): GraphEdge[] {
+  const sorted = [...edges].sort((a, b) => (b.weight ?? 1) - (a.weight ?? 1));
+  const perNode = new Map<string, number>();
+  const keptIds = new Set<string>();
+  for (const edge of sorted) {
+    const out = perNode.get(`out:${edge.source}`) ?? 0;
+    const inn = perNode.get(`in:${edge.target}`) ?? 0;
+    if (out >= maxPerDirection && inn >= maxPerDirection) continue;
+    perNode.set(`out:${edge.source}`, out + 1);
+    perNode.set(`in:${edge.target}`, inn + 1);
+    keptIds.add(edge.id);
+  }
+  return edges.filter((edge) => keptIds.has(edge.id));
+}

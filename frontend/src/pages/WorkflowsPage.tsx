@@ -129,6 +129,10 @@ export function WorkflowsPage() {
   useEffect(() => {
     if (!id || !selectedWorkflowId) return;
     setLoadingGraph(true);
+    // Clears any lingering list-level error too — a successful graph load
+    // means the list is in a working state, so a stale banner shouldn't
+    // keep showing above it.
+    setError("");
     setSelectedNodeId(null);
     fetchWorkflowGraph(id, selectedWorkflowId)
       .then(setDetail)
@@ -249,6 +253,7 @@ export function WorkflowsPage() {
                 <button
                   key={wf.id}
                   onClick={() => setSelectedWorkflowId(wf.id)}
+                  aria-pressed={selectedWorkflowId === wf.id}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                     selectedWorkflowId === wf.id
@@ -298,6 +303,11 @@ export function WorkflowsPage() {
                   edges={flowEdges}
                   nodeTypes={nodeTypes}
                   onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                  onSelectionChange={({ nodes: selectedNodes }) => {
+                    // Keyboard selection (Tab focuses a node, Enter/Space
+                    // selects it) never fires onNodeClick, only this.
+                    if (selectedNodes.length > 0) setSelectedNodeId(selectedNodes[0]!.id);
+                  }}
                   onPaneClick={() => setSelectedNodeId(null)}
                   fitView
                   fitViewOptions={{ padding: 0.15 }}
