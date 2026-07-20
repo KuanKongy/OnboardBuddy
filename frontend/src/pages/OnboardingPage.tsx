@@ -941,7 +941,7 @@ export function OnboardingPage() {
 
   // ── reader view ─────────────────────────────────────────────────────────────
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* compact top bar: navigation + role + actions in one row */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
         <SidebarToggle />
@@ -1088,7 +1088,7 @@ export function OnboardingPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
-        <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block" data-tour="reader-sections">
+        <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
           <nav className="space-y-0.5">
             {SECTION_NAV_ORDER
@@ -1120,7 +1120,7 @@ export function OnboardingPage() {
         </aside>
 
         {/* content */}
-        <div className="min-w-0 flex-1 px-5 py-5 lg:px-8">
+        <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
           <div className="mx-auto max-w-3xl">
             {isMissing ? (
               pkgFetchError ? (
