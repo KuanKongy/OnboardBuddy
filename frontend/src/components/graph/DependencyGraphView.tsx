@@ -46,6 +46,15 @@ interface DependencyGraphViewProps {
   entryPoints: string[];
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
+  /** True when the caller already knows a node should be focused on this
+   * mount (e.g. a `?focus=` deep link) — suppresses React Flow's own
+   * declarative initial `fitView` so `ViewportFocus` is the sole viewport
+   * writer on arrival. Without this, both fire around the same
+   * measurement-ready moment and whichever lands last wins, which is
+   * exactly why a redirect into this graph used to center/zoom
+   * inconsistently while a manual node click (on an already-settled
+   * graph, nothing else writing the viewport) always worked. */
+  suppressInitialFit?: boolean;
 }
 
 export function DependencyGraphView({
@@ -54,6 +63,7 @@ export function DependencyGraphView({
   entryPoints,
   selectedNodeId,
   onSelectNode,
+  suppressInitialFit = false,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
@@ -153,11 +163,11 @@ export function DependencyGraphView({
           if (selectedNodes.length > 0) onSelectNode(selectedNodes[0]!.id);
         }}
         onPaneClick={() => onSelectNode(null)}
-        fitView
+        fitView={!suppressInitialFit}
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
       >
-        <ViewportFocus selectedNodeId={selectedNodeId} />
+        <ViewportFocus selectedNodeId={selectedNodeId} ownsInitialFit={suppressInitialFit} />
 
         <Background
           variant={BackgroundVariant.Dots}

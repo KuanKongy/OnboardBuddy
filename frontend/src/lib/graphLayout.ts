@@ -36,7 +36,7 @@ export function layoutGraph(
 ): PositionedNode[] {
   const {
     direction = "LR",
-    nodeWidth = 216,
+    nodeWidth = 248,
     nodeHeight = 92,
     ranksep = 90,
     nodesep = 28,

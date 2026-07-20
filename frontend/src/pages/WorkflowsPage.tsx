@@ -310,11 +310,11 @@ export function WorkflowsPage() {
                   }}
                   onPaneClick={() => setSelectedNodeId(null)}
                   fitView
-                  fitViewOptions={{ padding: 0.15 }}
+                  fitViewOptions={{ padding: 0.15, minZoom: 0.5 }}
                   minZoom={0.2}
                   proOptions={{ hideAttribution: true }}
                 >
-                  <ViewportFocus selectedNodeId={selectedNodeId} fitPadding={0.15} />
+                  <ViewportFocus selectedNodeId={selectedNodeId} fitPadding={0.15} fitMinZoom={0.5} />
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
                   <Controls className="!border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
                 </ReactFlow>

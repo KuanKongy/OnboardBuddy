@@ -53,6 +53,10 @@ export function GraphPage() {
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const activeCluster = searchParams.get("cluster");
+  // Suppresses React Flow's own declarative initial fitView on this mount
+  // so ViewportFocus is the sole viewport writer while resolving a
+  // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
+  const hasFocusTarget = !!searchParams.get("focus");
 
   /** Drills in/out of a directory cluster — the URL is the source of truth
    * (?cluster=<path>) so browser Back/Forward walks the drill path instead
@@ -75,8 +79,39 @@ export function GraphPage() {
     setLoading(true);
     setError("");
     setSelectedNodeId(null);
+    const focus = searchParams.get("focus");
     fetchDependencyGraph(id, cluster, selectedPackageId)
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        // Resolve a pending `?focus=<file>` deep link in the SAME state
+        // update as the data that makes it resolvable, instead of a
+        // separate effect a tick later — DependencyGraphView would
+        // otherwise mount with nothing selected (racing React Flow's own
+        // initial `fitView` before the real selection ever arrived),
+        // which is exactly why a redirect into this graph used to
+        // center/zoom inconsistently while a manual node click (on an
+        // already-settled graph) always worked.
+        if (!focus) return;
+        if (d.graph.nodes.some((n) => n.id === focus)) {
+          setSelectedNodeId(focus);
+          setFocusNotFoundId(null);
+          return;
+        }
+        // Large repos render as directory clusters at the root — the
+        // target file is never a root-level node there, it lives inside
+        // one of the groups. Drill into its 2-level directory prefix
+        // (mirrors the backend's own clustering rule in graph.ts) before
+        // concluding it's genuinely missing; the resulting ?cluster=
+        // change re-triggers this same function against that cluster's
+        // nodes.
+        if (d.clustered && !cluster) {
+          const parts = focus.split("/");
+          const dir = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : ".";
+          goToCluster(dir);
+          return;
+        }
+        setFocusNotFoundId(focus);
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
@@ -126,22 +161,6 @@ export function GraphPage() {
     },
     view === "files" && !!data && !loading,
   );
-
-  // Deep link from other tabs (?focus=<file path>): select the node so the
-  // symbol doc panel opens on arrival — but only once it's confirmed to
-  // exist in the currently rendered (possibly clustered) graph; otherwise
-  // surface a visible message instead of silently dimming everything with
-  // no explanation.
-  useEffect(() => {
-    const focus = searchParams.get("focus");
-    if (!focus || !data) return;
-    if (data.graph.nodes.some((n) => n.id === focus)) {
-      setSelectedNodeId(focus);
-      setFocusNotFoundId(null);
-    } else {
-      setFocusNotFoundId(focus);
-    }
-  }, [searchParams, data]);
 
   // Enrich the selected node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
@@ -369,6 +388,7 @@ export function GraphPage() {
                 edges={visibleEdges}
                 entryPoints={data.graph.entryPoints}
                 selectedNodeId={selectedNodeId}
+                suppressInitialFit={hasFocusTarget}
                 onSelectNode={(nodeId) => {
                   if (data.clustered && nodeId?.startsWith("cluster:")) {
                     goToCluster(nodeId.replace("cluster:", ""));
