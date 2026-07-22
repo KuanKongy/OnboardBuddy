@@ -8,7 +8,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -112,7 +112,7 @@ export function ImportPage() {
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState("");
 
-  const [displayName, setDisplayName] = useState("");
+  const [strandedProjectId, setStrandedProjectId] = useState<string | null>(null);
   const [developerRole, setDeveloperRole] = useState("general");
 
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
@@ -173,7 +173,6 @@ export function ImportPage() {
     if (!repo || !selectedInstallation) return;
     setBranchesLoading(true);
     setSelectedBranch("");
-    setDisplayName(repo.name);
     apiFetch(
       `/github/repos/${repo.owner}/${repo.name}/branches?installation_id=${selectedInstallation}`,
     )
@@ -207,7 +206,7 @@ export function ImportPage() {
       }
 
       sessionStorage.setItem("onboardbuddy.github.after_oauth", "install");
-      await connectGithub();
+      await connectGithub(true);
     } catch (err: unknown) {
       sessionStorage.removeItem("onboardbuddy.github.after_oauth");
       setError(err instanceof Error ? err.message : "Failed to connect GitHub App");
@@ -221,6 +220,8 @@ export function ImportPage() {
     if (!repo) return;
     setCreating(true);
     setError("");
+    setStrandedProjectId(null);
+    let createdProject: { id: string } | undefined;
     try {
       const { project } = await apiFetch("/projects", {
         method: "POST",
@@ -232,6 +233,7 @@ export function ImportPage() {
           default_developer_role: developerRole,
         }),
       }) as { project: { id: string } };
+      createdProject = project;
 
       // Persist privacy choices. Only send ignored_paths when the user added
       // some, so we don't overwrite the backend's sensible default ignore list.
@@ -254,6 +256,10 @@ export function ImportPage() {
       } catch { /* storage unavailable */ }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create project");
+      // The project row can exist even though settings failed to save right
+      // after — point the user at it instead of stranding them with only an
+      // error message and no way back to what was already created.
+      if (createdProject) setStrandedProjectId(createdProject.id);
     } finally {
       setCreating(false);
     }
@@ -367,13 +373,23 @@ export function ImportPage() {
             <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
               {error}
               {error.includes("reconnect") && (
-                <button
-                  type="button"
+                <Button
+                  variant="link"
+                  size="xs"
+                  className="ml-2 h-auto p-0 text-destructive underline"
                   onClick={() => connectGithub()}
-                  className="ml-2 font-medium underline"
                 >
                   Reconnect GitHub
-                </button>
+                </Button>
+              )}
+              {strandedProjectId && (
+                <div className="mt-1.5">
+                  <Button variant="link" size="xs" className="h-auto p-0 text-destructive underline" asChild>
+                    <Link to={`/projects/${strandedProjectId}`}>
+                      The project was created — open it to finish setting it up
+                    </Link>
+                  </Button>
+                </div>
               )}
             </div>
           )}
@@ -430,20 +446,22 @@ export function ImportPage() {
                         Configure repositories <ExternalLink className="h-2.5 w-2.5" />
                       </a>
                     )}
-                    <button
-                      type="button"
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={handleAuthorizeGitHubApp}
-                      className="text-xs text-muted-foreground hover:text-foreground"
+                      className="text-muted-foreground hover:text-foreground"
                     >
                       Authorize GitHub App
-                    </button>
-                    <button
-                      type="button"
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => setRefreshKey((k) => k + 1)}
-                      className="text-xs text-muted-foreground hover:text-foreground"
+                      className="text-muted-foreground hover:text-foreground"
                     >
                       Refresh
-                    </button>
+                    </Button>
                   </div>
                 </>
               )}
@@ -474,40 +492,29 @@ export function ImportPage() {
               </div>
             )}
 
-            {/* Display name + Branch */}
+            {/* Branch */}
             {selectedRepo && (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">Display name</Label>
-                  <Input
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="Project name"
-                    className="h-8 text-[13px]"
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Branch</Label>
-                  {branchesLoading ? (
-                    <div className="flex h-8 items-center gap-2 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" /> Loading...
-                    </div>
-                  ) : (
-                    <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                      <SelectTrigger className="h-8 text-[13px]">
-                        <SelectValue placeholder="Select branch" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {branches.map((b) => (
-                          <SelectItem key={b.name} value={b.name}>
-                            <GitBranch className="mr-1 inline h-3 w-3" />
-                            {b.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Branch</Label>
+                {branchesLoading ? (
+                  <div className="flex h-8 items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+                  </div>
+                ) : (
+                  <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+                    <SelectTrigger className="h-8 text-[13px]">
+                      <SelectValue placeholder="Select branch" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {branches.map((b) => (
+                        <SelectItem key={b.name} value={b.name}>
+                          <GitBranch className="mr-1 inline h-3 w-3" />
+                          {b.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
             )}
 
@@ -535,26 +542,29 @@ export function ImportPage() {
               <>
                 <Separator />
                 <div>
-                  <button
-                    type="button"
+                  <Button
+                    variant="link"
+                    size="xs"
+                    className="h-auto p-0 text-xs font-medium"
                     onClick={() => setShowIgnored(!showIgnored)}
-                    className="text-xs font-medium text-primary hover:underline"
                   >
                     {showIgnored ? "- Hide" : "+ Show"} ignored paths
-                  </button>
+                  </Button>
                   {showIgnored && (
                     <div className="mt-2 space-y-1.5">
                       <div className="flex flex-wrap gap-1">
                         {ignoredPaths.map((p) => (
                           <Badge key={p} variant="secondary" className="gap-0.5 pr-1 text-xs">
                             {p}
-                            <button
-                              type="button"
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label="Remove ignored path"
                               onClick={() => setIgnoredPaths((prev) => prev.filter((x) => x !== p))}
-                              className="ml-0.5 rounded-sm hover:bg-accent"
+                              className="ml-0.5 size-4 rounded-sm p-0 hover:bg-accent"
                             >
                               <X className="h-2.5 w-2.5" />
-                            </button>
+                            </Button>
                           </Badge>
                         ))}
                       </div>

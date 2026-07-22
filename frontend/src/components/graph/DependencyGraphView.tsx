@@ -46,6 +46,15 @@ interface DependencyGraphViewProps {
   entryPoints: string[];
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
+  /** True when the caller already knows a node should be focused on this
+   * mount (e.g. a `?focus=` deep link) — suppresses React Flow's own
+   * declarative initial `fitView` so `ViewportFocus` is the sole viewport
+   * writer on arrival. Without this, both fire around the same
+   * measurement-ready moment and whichever lands last wins, which is
+   * exactly why a redirect into this graph used to center/zoom
+   * inconsistently while a manual node click (on an already-settled
+   * graph, nothing else writing the viewport) always worked. */
+  suppressInitialFit?: boolean;
 }
 
 export function DependencyGraphView({
@@ -54,6 +63,7 @@ export function DependencyGraphView({
   entryPoints,
   selectedNodeId,
   onSelectNode,
+  suppressInitialFit = false,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
@@ -139,19 +149,31 @@ export function DependencyGraphView({
         nodes={flowNodes}
         edges={flowEdges}
         nodeTypes={nodeTypes}
+        nodesDraggable={false}
         onNodeClick={(_, node) => onSelectNode(node.id)}
+        onSelectionChange={({ nodes: selectedNodes }) => {
+          // Keyboard selection (Tab focuses a node, Enter/Space selects it)
+          // never fires onNodeClick, only this — so it's the path that
+          // covers Tab/Enter. It also fires for mouse clicks (alongside
+          // onNodeClick above), which is harmless: the setter is idempotent
+          // for a given id. Deselection stays on onPaneClick below; an
+          // empty selection here can also mean "nothing has been clicked
+          // in the canvas yet" (e.g. right after a deep-link selection), so
+          // it's ignored rather than clobbering the current selection.
+          if (selectedNodes.length > 0) onSelectNode(selectedNodes[0]!.id);
+        }}
         onPaneClick={() => onSelectNode(null)}
-        fitView
+        fitView={!suppressInitialFit}
         fitViewOptions={{ padding: 0.2 }}
         proOptions={{ hideAttribution: true }}
       >
-        <ViewportFocus selectedNodeId={selectedNodeId} />
+        <ViewportFocus selectedNodeId={selectedNodeId} ownsInitialFit={suppressInitialFit} />
 
         <Background
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color={isDark ? "oklch(0.3 0 0)" : "oklch(0.82 0 0)"}
+          color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"}
         />
         <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
 
@@ -159,14 +181,14 @@ export function DependencyGraphView({
           pannable
           zoomable
           className="!bg-card !border-border"
-          nodeColor={isDark ? "oklch(0.28 0 0)" : "oklch(0.85 0 0)"}
-          maskColor={isDark ? "oklch(0.17 0 0 / 0.7)" : "oklch(0.95 0 0 / 0.7)"}
+          nodeColor={isDark ? "oklch(0.3 0.02 264)" : "oklch(0.85 0.008 265)"}
+          maskColor={isDark ? "oklch(0.17 0.015 264 / 0.7)" : "oklch(0.95 0.005 265 / 0.7)"}
         />
         <Panel position="top-left">
           <GraphLegend presentKinds={presentKinds} />
         </Panel>
-        <Panel position="top-center">
-          <GraphFirstVisitHint />
+        <Panel position="bottom-center">
+          <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
         </Panel>
       </ReactFlow>
     </ReactFlowProvider>

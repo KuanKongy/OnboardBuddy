@@ -38,6 +38,12 @@ export function AuthCallbackPage() {
     if (error) return;
     let cancelled = false;
 
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) {
+        setError("Sign in is taking longer than expected. Please try again.");
+      }
+    }, 10000);
+
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((event, session) => {
@@ -51,11 +57,13 @@ export function AuthCallbackPage() {
       }
 
       if (event === "SIGNED_IN" && session) {
+        window.clearTimeout(timeoutId);
         navigate(next, { replace: true });
         return;
       }
 
       if (event === "SIGNED_OUT") {
+        window.clearTimeout(timeoutId);
         setError("Could not complete sign in. Please try again.");
       }
     });
@@ -63,21 +71,32 @@ export function AuthCallbackPage() {
     void supabase.auth.getSession().then(({ data: { session }, error: sessionError }) => {
       if (cancelled) return;
       if (sessionError) {
+        window.clearTimeout(timeoutId);
         setError(sessionError.message);
         return;
       }
       if (session) {
+        window.clearTimeout(timeoutId);
         navigate(next, { replace: true });
       }
     });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       subscription.unsubscribe();
     };
   }, [navigate, error, next]);
 
   const isProviderProfileError = /user profile from external provider/i.test(error);
+  // GoTrue's own error text when this GitHub account's email already
+  // resolves to more than one existing Supabase user (e.g. an email/
+  // password account plus a separate GitHub-created one with the same
+  // address) — automatic identity linking refuses to guess which one to
+  // sign into. Known GoTrue limitation (supabase/auth#1242), not something
+  // this app can resolve automatically, so at least name it plainly instead
+  // of surfacing GoTrue's raw "linking domain" wording as-is.
+  const isDuplicateEmailError = /multiple accounts with the same email address/i.test(error);
 
   if (error) {
     return (
@@ -91,6 +110,13 @@ export function AuthCallbackPage() {
                 GitHub sign-in couldn't read your profile. You can still sign up
                 with email and password, and connect GitHub afterwards from
                 Account Settings.
+              </p>
+            )}
+            {isDuplicateEmailError && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                An OnboardBuddy account already exists for this email address under a
+                different sign-in method. Sign in that original way instead, then link
+                GitHub afterwards from Account Settings.
               </p>
             )}
             <Button variant="link" size="sm" className="mt-2" asChild>

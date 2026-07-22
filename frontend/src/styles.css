@@ -28,14 +28,14 @@
   --accent: oklch(0.9 0.012 262);
   --accent-foreground: oklch(0.22 0.02 265);
   --destructive: oklch(0.55 0.22 27);
-  --border: oklch(0.87 0.01 265);
-  --input: oklch(0.87 0.01 265);
+  --border: oklch(0.62 0.01 265);
+  --input: oklch(0.62 0.01 265);
   --ring: oklch(0.54 0.2 259);
   --radius: 0.5rem;
 
-  --success: oklch(0.55 0.14 158);
+  --success: oklch(0.52 0.14 158);
   --success-soft: oklch(0.55 0.14 158 / 0.12);
-  --warning: oklch(0.6 0.13 75);
+  --warning: oklch(0.55 0.13 75);
   --warning-soft: oklch(0.72 0.15 75 / 0.15);
   --danger: oklch(0.55 0.22 27);
   --danger-soft: oklch(0.55 0.22 27 / 0.1);

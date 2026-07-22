@@ -129,6 +129,10 @@ export function WorkflowsPage() {
   useEffect(() => {
     if (!id || !selectedWorkflowId) return;
     setLoadingGraph(true);
+    // Clears any lingering list-level error too — a successful graph load
+    // means the list is in a working state, so a stale banner shouldn't
+    // keep showing above it.
+    setError("");
     setSelectedNodeId(null);
     fetchWorkflowGraph(id, selectedWorkflowId)
       .then(setDetail)
@@ -249,6 +253,7 @@ export function WorkflowsPage() {
                 <button
                   key={wf.id}
                   onClick={() => setSelectedWorkflowId(wf.id)}
+                  aria-pressed={selectedWorkflowId === wf.id}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                     selectedWorkflowId === wf.id
@@ -298,13 +303,18 @@ export function WorkflowsPage() {
                   edges={flowEdges}
                   nodeTypes={nodeTypes}
                   onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+                  onSelectionChange={({ nodes: selectedNodes }) => {
+                    // Keyboard selection (Tab focuses a node, Enter/Space
+                    // selects it) never fires onNodeClick, only this.
+                    if (selectedNodes.length > 0) setSelectedNodeId(selectedNodes[0]!.id);
+                  }}
                   onPaneClick={() => setSelectedNodeId(null)}
                   fitView
-                  fitViewOptions={{ padding: 0.15 }}
+                  fitViewOptions={{ padding: 0.15, minZoom: 0.5 }}
                   minZoom={0.2}
                   proOptions={{ hideAttribution: true }}
                 >
-                  <ViewportFocus selectedNodeId={selectedNodeId} fitPadding={0.15} />
+                  <ViewportFocus selectedNodeId={selectedNodeId} fitPadding={0.15} fitMinZoom={0.5} />
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
                   <Controls className="!border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
                 </ReactFlow>
