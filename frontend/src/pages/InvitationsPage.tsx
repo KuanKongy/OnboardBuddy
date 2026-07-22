@@ -1,10 +1,11 @@
-import { CheckCircle, Loader2, Plus, Users } from "lucide-react";
+import { CheckCircle, Loader2, Users } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
@@ -21,11 +22,11 @@ interface Invitation {
 }
 
 const roleOptions = [
-  { value: "backend", label: "Backend Developer", tech: "Node.js, PostgreSQL" },
-  { value: "frontend", label: "Frontend Developer", tech: "React, Tailwind" },
-  { value: "devops", label: "DevOps Engineer", tech: "AWS, CI/CD" },
-  { value: "qa", label: "QA Automation", tech: "Jest, Playwright" },
-  { value: "general", label: "General / Fullstack", tech: "End to end" },
+  { value: "backend", label: "Backend Developer", description: "Server-side logic & APIs" },
+  { value: "frontend", label: "Frontend Developer", description: "UI & client-side code" },
+  { value: "devops", label: "DevOps Engineer", description: "Infrastructure & deployments" },
+  { value: "qa", label: "QA Automation", description: "Testing & quality assurance" },
+  { value: "general", label: "General / Fullstack", description: "End to end" },
 ];
 
 export function InvitationsPage() {
@@ -49,6 +50,11 @@ export function InvitationsPage() {
   }, []);
 
   const selected = invitations.find((inv) => inv.id === selectedId);
+
+  function selectInvitation(inv: Invitation) {
+    setSelectedId(inv.id);
+    if (inv.developer_role) setSelectedRole(inv.developer_role);
+  }
 
   async function handleAccept(invitation: Invitation) {
     setAccepting(true);
@@ -91,7 +97,7 @@ export function InvitationsPage() {
           <Users className="mx-auto h-6 w-6 text-muted-foreground" />
           <p className="mt-2 text-sm text-muted-foreground">No pending invitations</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Sync with your organization to find more
+            New invitations from project owners will appear here.
           </p>
         </div>
       ) : (
@@ -104,14 +110,20 @@ export function InvitationsPage() {
             {invitations.map((inv) => (
               <Card
                 key={inv.id}
+                role="button"
+                tabIndex={0}
+                aria-pressed={selectedId === inv.id}
                 className={`cursor-pointer transition-colors ${
                   selectedId === inv.id
                     ? "border-primary bg-primary/5"
                     : "hover:border-border/80"
                 }`}
-                onClick={() => {
-                  setSelectedId(inv.id);
-                  if (inv.developer_role) setSelectedRole(inv.developer_role);
+                onClick={() => selectInvitation(inv)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    selectInvitation(inv);
+                  }
                 }}
               >
                 <CardContent className="p-3">
@@ -137,14 +149,6 @@ export function InvitationsPage() {
                 </CardContent>
               </Card>
             ))}
-
-            <Card className="border-dashed">
-              <CardContent className="flex flex-col items-center p-3 text-center">
-                <Plus className="mb-0.5 h-4 w-4 text-muted-foreground" />
-                <p className="text-xs text-muted-foreground">Looking for more?</p>
-                <p className="text-xs text-muted-foreground">Sync with your org</p>
-              </CardContent>
-            </Card>
           </div>
 
           {/* Right panel */}
@@ -184,7 +188,7 @@ export function InvitationsPage() {
                             {role?.label ?? selected.developer_role}
                           </span>
                           <span className="text-xs text-muted-foreground">
-                            {role?.tech ?? "Assigned by inviter"}
+                            {role?.description ?? "Assigned by inviter"}
                           </span>
                         </div>
                       );
@@ -206,7 +210,7 @@ export function InvitationsPage() {
                           }`}
                         >
                           <span className="text-xs font-medium text-foreground">{role.label}</span>
-                          <span className="text-xs text-muted-foreground">{role.tech}</span>
+                          <span className="text-xs text-muted-foreground">{role.description}</span>
                         </button>
                       ))}
                     </div>
@@ -214,18 +218,19 @@ export function InvitationsPage() {
                 )}
 
                 <div className="mt-4 flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    // No decline endpoint in the API; dismiss client-side only.
-                    // The invitation reappears on refresh until backend support exists.
-                    onClick={() => {
-                      setInvitations((prev) => prev.filter((inv) => inv.id !== selected.id));
-                      setSelectedId(null);
-                    }}
-                  >
-                    Decline
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex">
+                        <Button variant="outline" size="sm" disabled>
+                          Decline
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64">
+                      Declining isn't supported yet — this invitation stays pending. Ask the
+                      inviter to cancel it if you don't want to join.
+                    </TooltipContent>
+                  </Tooltip>
                   <Button size="sm" disabled={accepting} onClick={() => handleAccept(selected)}>
                     {accepting ? (
                       <Loader2 className="h-3 w-3 animate-spin" />

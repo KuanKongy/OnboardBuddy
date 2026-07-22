@@ -29,9 +29,9 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   return (
     <div
       className={cn(
-        "w-52 rounded-lg border bg-card px-3 py-2.5 shadow-md transition-opacity",
+        "w-60 rounded-lg border bg-card px-3 py-2.5 shadow-md transition-opacity",
         data.selected
-          ? "border-primary shadow-[0_0_0_1px_hsl(var(--ring))]"
+          ? "border-primary ring-2 ring-ring"
           : "border-border hover:border-muted-foreground/40",
         data.dimmed && "opacity-20",
       )}
@@ -66,7 +66,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
       )} */}
 
       <div
-        className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+        className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground"
         title={`Imports ${data.importCount} project file${data.importCount === 1 ? "" : "s"}${
           data.externalImportCount ? ` (+${data.externalImportCount} external)` : ""
         }; imported by ${data.dependentCount}`}

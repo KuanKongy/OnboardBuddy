@@ -115,12 +115,15 @@ describe("GraphPage", () => {
 
     fireEvent.click(screen.getByText("userService"));
 
-    // The panel header carries copy/open actions; detail is mocked null so
-    // the doc body shows its loading state.
+    // The panel header carries copy/open actions; detail resolves to null
+    // (mocked), so the doc body settles into its terminal "no details"
+    // state rather than spinning forever.
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Copy path" })).toBeInTheDocument();
     });
-    expect(screen.getByText(/loading details/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/no additional details/i)).toBeInTheDocument();
+    });
   });
 
   it("switches to the Classes view and renders class/interface nodes", async () => {

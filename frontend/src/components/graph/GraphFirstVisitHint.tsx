@@ -26,7 +26,7 @@ function persistHintDismissed(): void {
   }
 }
 
-export function GraphFirstVisitHint() {
+export function GraphFirstVisitHint({ hasEntryPoints = true }: { hasEntryPoints?: boolean }) {
   const [dismissed, setDismissed] = useState(() => readHintDismissed());
 
   if (dismissed) return null;
@@ -38,8 +38,8 @@ export function GraphFirstVisitHint() {
         This is a map of how files in this project depend on each other.
       </p>
       <p className="text-muted-foreground">
-        Click a node to see its file details and open it on GitHub. Start from
-        an entry point (marked ▶) to follow the app's flow.
+        Click a node to see its file details and open it on GitHub.
+        {hasEntryPoints && " Start from an entry point (marked ▶) to follow the app's flow."}
       </p>
       <div className="flex justify-end pt-1">
         <Button

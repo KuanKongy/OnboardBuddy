@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 
@@ -46,9 +47,16 @@ export function MermaidDiagram({ code, label }: { code: string; label?: string }
 
   if (failed) {
     return (
-      <pre className="overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 text-[11px] text-muted-foreground">
-        {code}
-      </pre>
+      <figure className="overflow-x-auto rounded-lg border border-border bg-card p-3">
+        {label && <figcaption className="section-label mb-2">{label}</figcaption>}
+        <p className="mb-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          Couldn't render this diagram — showing its source instead.
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 text-[11px] text-muted-foreground">
+          {code}
+        </pre>
+      </figure>
     );
   }
 

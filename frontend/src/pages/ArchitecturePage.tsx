@@ -228,6 +228,11 @@ export function ArchitecturePage() {
                   edges={flowEdges}
                   nodeTypes={nodeTypes}
                   onNodeClick={(_, node) => setSelectedId(node.id)}
+                  onSelectionChange={({ nodes: selectedNodes }) => {
+                    // Keyboard selection (Tab focuses a node, Enter/Space
+                    // selects it) never fires onNodeClick, only this.
+                    if (selectedNodes.length > 0) setSelectedId(selectedNodes[0]!.id);
+                  }}
                   onPaneClick={() => setSelectedId(null)}
                   fitView
                   fitViewOptions={{ padding: 0.15 }}

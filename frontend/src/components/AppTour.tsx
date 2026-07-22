@@ -36,6 +36,17 @@ function measure(target: string): Rect | null {
   };
 }
 
+/** True when `el` actually has on-screen pixels — catches CSS transforms
+ * (e.g. the mobile drawer's `-translate-x-full`) that `offsetParent` misses
+ * since it only detects `display: none`. */
+function isOnScreen(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return false;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  return r.right > 0 && r.bottom > 0 && r.left < viewportWidth && r.top < viewportHeight;
+}
+
 interface AppTourProps {
   steps: TourStep[];
   /** Called on Skip, Esc, or completing the final step. */
@@ -53,7 +64,7 @@ export function AppTour({ steps, onDone }: AppTourProps) {
   const [available] = useState(() =>
     steps.filter((s) => {
       const el = getTargetEl(s.target);
-      return el !== null && el.offsetParent !== null;
+      return el !== null && el.offsetParent !== null && isOnScreen(el);
     }),
   );
   const [index, setIndex] = useState(0);

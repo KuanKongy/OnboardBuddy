@@ -1,12 +1,11 @@
-import { AlertTriangle, Loader2, RefreshCw, Search } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
+import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { fetchClassGraph, type GraphResponse } from "@/lib/graphData";
-import { layoutDependencyGraph } from "@/lib/graphLayout";
+import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import type { GraphEdge, GraphNode } from "@/types/graph";
@@ -86,7 +85,7 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
     [nodes, filteredNodeIds],
   );
   const visibleEdges = useMemo(
-    () => edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target)),
+    () => capEdgesPerNode(edges.filter((edge) => filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target))),
     [edges, filteredNodeIds],
   );
   const positionedNodes = useMemo(
@@ -127,20 +126,14 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
 
   return (
     <>
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[160px] flex-1">
-          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search classes, interfaces or members..."
-            className="h-8 pl-8 text-xs"
-          />
-        </div>
-        <Badge variant="outline" className="text-[10px]">
-          {visibleNodes.length} / {nodes.length} classes · {edges.length} relationships
-        </Badge>
-      </div>
+      <GraphToolbar
+        search={search}
+        onSearchChange={setSearch}
+        matchCount={visibleNodes.length}
+        totalCount={nodes.length}
+        noun="classes"
+        extra={`${edges.length} relationships`}
+      />
 
       <div className={selectedNode ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
         <div className="graph-canvas">

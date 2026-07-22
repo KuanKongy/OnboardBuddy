@@ -1,4 +1,4 @@
-import { Check, Copy, ExternalLink, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, Copy, ExternalLink, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,10 @@ export interface GithubRepoRef {
 interface NodeInfoPanelProps {
   node: GraphNode;
   detail?: NodeDetail | null;
+  /** True while a detail fetch is in flight — distinguishes "still loading"
+   * from "no detail was ever fetched for this node type" or "the fetch
+   * settled with nothing" so the panel doesn't show a spinner forever. */
+  loading?: boolean;
   githubRepo?: GithubRepoRef;
   /** Deselects the node (also reachable via Esc / clicking empty canvas). */
   onClose?: () => void;
@@ -56,8 +60,9 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * (doc/Pipeline.md): one-line summary, signature/params/returns, a real
  * call-site example, then importance and receipts.
  */
-export function NodeInfoPanel({ node, detail, githubRepo, onClose }: NodeInfoPanelProps) {
+export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClose }: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
   const doc = detail?.doc;
 
@@ -66,6 +71,9 @@ export function NodeInfoPanel({ node, detail, githubRepo, onClose }: NodeInfoPan
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+    } else {
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 1500);
     }
   }
 
@@ -96,10 +104,16 @@ export function NodeInfoPanel({ node, detail, githubRepo, onClose }: NodeInfoPan
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="outline" size="xs" onClick={handleCopyPath} aria-label="Copy path">
-                {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                {copyFailed ? (
+                  <AlertCircle className="h-3 w-3 text-destructive" />
+                ) : copied ? (
+                  <Check className="h-3 w-3" />
+                ) : (
+                  <Copy className="h-3 w-3" />
+                )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">Copy the file path</TooltipContent>
+            <TooltipContent side="top">{copyFailed ? "Couldn't copy the path" : "Copy the file path"}</TooltipContent>
           </Tooltip>
           {onClose && (
             <Tooltip>
@@ -290,8 +304,11 @@ export function NodeInfoPanel({ node, detail, githubRepo, onClose }: NodeInfoPan
           </div>
         )}
 
-        {!detail && (
+        {!detail && loading && (
           <p className="text-[11.5px] text-muted-foreground">Loading details…</p>
+        )}
+        {!detail && !loading && (
+          <p className="text-[11.5px] text-muted-foreground">No additional details available for this node.</p>
         )}
       </div>
     </div>

@@ -14,10 +14,10 @@ interface AuthContextValue {
   session: Session | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<Session | null>;
   signOut: () => Promise<void>;
   signInWithGithub: () => Promise<void>;
-  connectGithub: () => Promise<void>;
+  connectGithub: (preserveAfterOAuthFlag?: boolean) => Promise<void>;
   disconnectGithub: () => Promise<void>;
 }
 
@@ -55,8 +55,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signUp(email: string, password: string) {
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) throw error;
+    return data.session;
   }
 
   async function signOut() {
@@ -78,8 +79,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  async function connectGithub() {
-    sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+  async function connectGithub(preserveAfterOAuthFlag = false) {
+    // Callers that just set the flag themselves (e.g. ImportPage staging an
+    // "install" continuation right before this call) pass true so their
+    // flag survives; everyone else gets the defensive clear of any stale
+    // flag left behind by a previous, abandoned OAuth attempt.
+    if (!preserveAfterOAuthFlag) sessionStorage.removeItem("onboardbuddy.github.after_oauth");
     const { authorization_url } = await apiFetch("/github/oauth/start") as {
       authorization_url: string;
     };

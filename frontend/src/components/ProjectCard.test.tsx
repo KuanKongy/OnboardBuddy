@@ -62,12 +62,14 @@ describe("ProjectCard", () => {
   it("always renders the actions menu for managers and deletes without navigating", async () => {
     const user = userEvent.setup();
     const onDeleted = vi.fn();
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     renderCard(PROJECT, onDeleted);
 
     // No hover needed — the trigger is permanently rendered.
     await user.click(screen.getByRole("button", { name: "Project actions" }));
     await user.click(await screen.findByText("Delete project"));
+
+    // Confirm dialog gates the actual delete call.
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
 
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith(`/projects/${PROJECT.id}`, { method: "DELETE" });
     expect(onDeleted).toHaveBeenCalledWith(PROJECT.id);

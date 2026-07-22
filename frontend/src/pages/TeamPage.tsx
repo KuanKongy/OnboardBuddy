@@ -97,6 +97,9 @@ export function TeamPage() {
   const [editTier, setEditTier] = useState("developer");
   const [editRole, setEditRole] = useState("general");
   const [savingMember, setSavingMember] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState<Member | null>(null);
+  const [removing, setRemoving] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const canManage =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
@@ -142,6 +145,7 @@ export function TeamPage() {
   }
 
   async function handleRevoke(invitationId: string) {
+    setRevokingId(invitationId);
     try {
       await apiFetch(`/projects/${id}/members/invitations/${invitationId}`, {
         method: "PATCH",
@@ -149,10 +153,13 @@ export function TeamPage() {
       setInvitations((prev) => prev.filter((inv) => inv.id !== invitationId));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to revoke invitation");
+    } finally {
+      setRevokingId(null);
     }
   }
 
   function openManage(member: Member) {
+    setError("");
     setManageMember(member);
     setEditTier(member.permission_tier);
     setEditRole(member.developer_role);
@@ -183,13 +190,17 @@ export function TeamPage() {
   }
 
   async function handleRemove(member: Member) {
-    if (!window.confirm(`Remove ${member.email} from this project?`)) return;
+    setRemoving(true);
+    setError("");
     try {
       await apiFetch(`/projects/${id}/members/${member.user_id}`, { method: "DELETE" });
       setMembers((prev) => prev.filter((m) => m.user_id !== member.user_id));
       setManageMember(null);
+      setRemoveConfirm(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to remove member");
+    } finally {
+      setRemoving(false);
     }
   }
 
@@ -210,7 +221,7 @@ export function TeamPage() {
         }`}
         actions={
           canManage && (
-            <Button size="sm" onClick={() => setInviteOpen(true)}>
+            <Button size="sm" onClick={() => { setError(""); setInviteOpen(true); }}>
               <UserPlus className="h-3.5 w-3.5" />
               Invite
             </Button>
@@ -219,62 +230,89 @@ export function TeamPage() {
       />
 
       {canManage && (
-          <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
-            <DialogContent className="sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle className="text-sm">Invite a team member</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-3 pt-1">
+        <Dialog
+          open={inviteOpen}
+          onOpenChange={(open) => {
+            setInviteOpen(open);
+            if (!open) setError("");
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="text-sm">Invite a team member</DialogTitle>
+            </DialogHeader>
+            <form
+              className="space-y-3 pt-1"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleInvite();
+              }}
+            >
+              <div className="space-y-1">
+                <Label className="text-xs">Email address</Label>
+                <Input
+                  type="email"
+                  placeholder="colleague@example.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  className="h-8 text-[13px]"
+                />
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label className="text-xs">Email address</Label>
-                  <Input
-                    type="email"
-                    placeholder="colleague@example.com"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    className="h-8 text-[13px]"
-                  />
+                  <Label className="text-xs">Permission tier</Label>
+                  <Select value={inviteTier} onValueChange={setInviteTier}>
+                    <SelectTrigger className="h-8 text-[13px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">Admin</SelectItem>
+                      <SelectItem value="developer">Developer</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label className="text-xs">Permission tier</Label>
-                    <Select value={inviteTier} onValueChange={setInviteTier}>
-                      <SelectTrigger className="h-8 text-[13px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="admin">Admin</SelectItem>
-                        <SelectItem value="developer">Developer</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs">Developer role</Label>
-                    <Select value={inviteRole} onValueChange={setInviteRole}>
-                      <SelectTrigger className="h-8 text-[13px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {roleOptions.map((r) => (
-                          <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2 pt-1">
-                  <Button variant="outline" size="sm" onClick={() => setInviteOpen(false)}>Cancel</Button>
-                  <Button size="sm" onClick={handleInvite} disabled={inviting || !inviteEmail.trim()}>
-                    {inviting && <Loader2 className="h-3 w-3 animate-spin" />}
-                    Send
-                  </Button>
+                <div className="space-y-1">
+                  <Label className="text-xs">Developer role</Label>
+                  <Select value={inviteRole} onValueChange={setInviteRole}>
+                    <SelectTrigger className="h-8 text-[13px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roleOptions.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-            </DialogContent>
-          </Dialog>
-        )}
+              <p className="text-[11px] text-muted-foreground">
+                Permission tier controls what they can manage; developer role tailors their onboarding content by specialty.
+              </p>
+              {error && (
+                <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {error}
+                </div>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setInviteOpen(false); setError(""); }}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={inviting || !inviteEmail.trim()}>
+                  {inviting && <Loader2 className="h-3 w-3 animate-spin" />}
+                  Send
+                </Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
 
-      {error && (
+      {error && !inviteOpen && manageMember === null && removeConfirm === null && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
         </div>
@@ -359,8 +397,11 @@ export function TeamPage() {
                     size="xs"
                     className="shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => handleRevoke(inv.id)}
+                    disabled={revokingId === inv.id}
                   >
-                    <X className="h-3 w-3" />
+                    {revokingId === inv.id
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <X className="h-3 w-3" />}
                     Revoke
                   </Button>
                 </CardContent>
@@ -372,7 +413,12 @@ export function TeamPage() {
 
       {/* Member detail dialog: profile info for everyone, management
           controls only when the caller may manage this member. */}
-      <Dialog open={manageMember !== null} onOpenChange={(open) => !open && setManageMember(null)}>
+      <Dialog
+        open={manageMember !== null}
+        onOpenChange={(open) => {
+          if (!open) { setManageMember(null); setError(""); }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
@@ -384,7 +430,7 @@ export function TeamPage() {
               {manageMember?.email.split("@")[0]}
               <Badge
                 variant={tierBadgeVariant[manageMember?.permission_tier ?? ""] ?? "outline"}
-                className="text-[10px] capitalize"
+                className="text-[11px] capitalize"
               >
                 {manageMember?.permission_tier}
               </Badge>
@@ -466,19 +512,24 @@ export function TeamPage() {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:text-destructive"
-                      onClick={() => handleRemove(manageMember)}
+                      onClick={() => { setError(""); setRemoveConfirm(manageMember); }}
                     >
                       <Trash2 className="h-3 w-3" />
                       Remove
                     </Button>
                     <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => setManageMember(null)}>Cancel</Button>
+                      <Button variant="outline" size="sm" onClick={() => { setManageMember(null); setError(""); }}>Cancel</Button>
                       <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
                         {savingMember && <Loader2 className="h-3 w-3 animate-spin" />}
                         Save
                       </Button>
                     </div>
                   </div>
+                  {error && (
+                    <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                      {error}
+                    </div>
+                  )}
                 </>
               ) : (
                 <p className="text-[11px] text-muted-foreground">
@@ -489,6 +540,44 @@ export function TeamPage() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove-member confirmation: a themed Dialog instead of
+          window.confirm, matching ProjectSettingsPage's delete-project
+          convention (Cancel/destructive-confirm buttons, inline error slot). */}
+      <Dialog
+        open={removeConfirm !== null}
+        onOpenChange={(open) => {
+          if (!open) { setRemoveConfirm(null); setError(""); }
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Remove member</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Remove <span className="font-medium text-foreground">{removeConfirm?.email}</span> from this project? This can't be undone.
+          </p>
+          {error && (
+            <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={() => { setRemoveConfirm(null); setError(""); }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={removing}
+              onClick={() => removeConfirm && handleRemove(removeConfirm)}
+            >
+              {removing && <Loader2 className="h-3 w-3 animate-spin" />}
+              Remove
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

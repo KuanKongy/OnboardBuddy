@@ -19,7 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
@@ -196,7 +196,7 @@ function SectionView({
 
   useLayoutEffect(() => {
     setExpanded(initialBlockExpansion(section));
-  }, [section.id]);
+  }, [section.id, section.sectionId]);
 
   if (section.status === "missing") {
     return (
@@ -398,7 +398,7 @@ export function OnboardingPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { project, refetch } = useProject();
-  const { packages: cards, refreshPackages, selectPackage, registerSessionJob } = usePackages();
+  const { packages: cards, packagesError, refreshPackages, selectPackage, registerSessionJob } = usePackages();
 
   const view = searchParams.get("view") ?? "cards";
   const selectedRole = searchParams.get("role") ?? project?.developer_role ?? "general";
@@ -432,6 +432,9 @@ export function OnboardingPage() {
   const { user } = useAuth();
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
+  const [pkgFetchError, setPkgFetchError] = useState(false);
+  const generateRolePollRef = useRef<number | null>(null);
+  const [exporting, setExporting] = useState(false);
   const { save: saveProgress } = useProgress(id);
 
   // Remember where the reader is so "Continue onboarding" resumes here.
@@ -458,20 +461,31 @@ export function OnboardingPage() {
   // one shared poll); this page only re-requests on explicit actions.
   const loadCards = refreshPackages;
 
-  useEffect(() => {
+  const loadPkg = useCallback(() => {
     if (!id || view !== "reader") return;
     fetchAbortRef.current?.abort();
     const controller = new AbortController();
     fetchAbortRef.current = controller;
+    setPkgFetchError(false);
     fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
       .then((data) => { if (!controller.signal.aborted) setPkg(data); })
-      .catch(() => {});
-    return () => { controller.abort(); };
+      .catch(() => { if (!controller.signal.aborted) setPkgFetchError(true); });
   }, [id, selectedRole, selectedPackageParam, view]);
+
+  useEffect(() => {
+    loadPkg();
+    return () => { fetchAbortRef.current?.abort(); };
+  }, [loadPkg]);
 
   useEffect(() => {
     setGenerating(project?.status === "analyzing");
   }, [project?.status]);
+
+  // Ensure the generate-role poll (handleGenerateRole, below) never keeps
+  // running after unmount.
+  useEffect(() => () => {
+    if (generateRolePollRef.current) window.clearInterval(generateRolePollRef.current);
+  }, []);
 
   // Sections persist one by one while the package is generating — poll so
   // they appear as they land instead of only after the whole run finishes.
@@ -589,15 +603,20 @@ export function OnboardingPage() {
       })) as { job?: { id: string } };
       if (data.job?.id) registerSessionJob(data.job.id, { navigateOnDone: false });
       const started = Date.now();
-      const poll = window.setInterval(async () => {
+      generateRolePollRef.current = window.setInterval(async () => {
         const polled = await fetchOnboardingPackage(id, { role: selectedRole });
-        if ((polled && polled.status !== "missing") || Date.now() - started > 300_000) {
-          window.clearInterval(poll);
+        const timedOut = Date.now() - started > 300_000;
+        const landed = polled && polled.status !== "missing";
+        if (landed || timedOut) {
+          if (generateRolePollRef.current) window.clearInterval(generateRolePollRef.current);
+          generateRolePollRef.current = null;
           setGenerating(false);
-          if (polled) {
+          if (landed) {
             setPkg(polled);
             // Pin the reader to the package that just landed.
-            if (polled.id) setParams({ package: polled.id });
+            if (polled!.id) setParams({ package: polled!.id });
+          } else if (timedOut) {
+            setActionError("Generation is taking longer than expected — check the Overview page for job status, or try again.");
           }
           loadCards();
         }
@@ -640,6 +659,7 @@ export function OnboardingPage() {
   async function handleToggleReview() {
     if (!id || !activeSection?.sectionId) return;
     const newStatus = activeSection.reviewStatus === "approved" ? "draft" : "approved";
+    setActionError("");
     try {
       await apiFetch(`/projects/${id}/onboarding/sections/${activeSection.sectionId}/review`, {
         method: "PATCH",
@@ -648,12 +668,14 @@ export function OnboardingPage() {
       fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
         .then((data) => { if (data) setPkg(data); });
     } catch (err) {
-      console.error("Review update error:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to update review status");
     }
   }
 
   async function handleExport() {
     if (!id) return;
+    setExporting(true);
+    setActionError("");
     try {
       const exportQs = selectedPackageParam
         ? `package_id=${encodeURIComponent(selectedPackageParam)}`
@@ -677,7 +699,9 @@ export function OnboardingPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Export error:", err);
+      setActionError(err instanceof Error ? err.message : "Failed to export package");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -728,14 +752,14 @@ export function OnboardingPage() {
         {cards && cards.length > 0 && (
           <div className="mb-4 flex flex-wrap items-center gap-2" data-tour="onboarding-filters">
             <Select value={roleFilter} onValueChange={setRoleFilter}>
-              <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by role" className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All roles</SelectItem>
                 {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-8 w-[130px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by status" className="h-8 w-[130px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Any status</SelectItem>
                 {["draft", "approved", "stale", "generating", "failed"].map((s) => (
@@ -744,7 +768,7 @@ export function OnboardingPage() {
               </SelectContent>
             </Select>
             <Select value={freshFilter} onValueChange={setFreshFilter}>
-              <SelectTrigger className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by commit freshness" className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Any commit</SelectItem>
                 <SelectItem value="latest">Latest commit</SelectItem>
@@ -758,31 +782,61 @@ export function OnboardingPage() {
         )}
 
         {cardsLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          </div>
-        ) : !cards || cards.length === 0 ? (
-          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-              <BookOpen className="h-6 w-6 text-muted-foreground" />
-            </div>
-            <h2 className="text-sm font-semibold text-foreground">No onboarding packages yet</h2>
-            <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-              Run an analysis to generate role-based onboarding: entry points, critical files,
-              workflows, tutorials, and safety notes — every claim backed by code receipts.
-            </p>
-            {canManage && (
-              <Button
-                size="sm"
-                className="mt-4 gap-1.5"
-                onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
-                disabled={generating || project?.status === "analyzing"}
-              >
-                {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                {generating || project?.status === "analyzing" ? "Analyzing…" : "Analyze & generate…"}
+          packagesError ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-danger/40 bg-danger-soft py-20 text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger-soft">
+                <AlertTriangle className="h-6 w-6 text-danger" />
+              </div>
+              <h2 className="text-sm font-semibold text-foreground">Couldn't load your packages</h2>
+              <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                Something went wrong fetching your onboarding packages. Check your connection and try again.
+              </p>
+              <Button size="sm" variant="outline" className="mt-4 gap-1.5" onClick={refreshPackages}>
+                <RefreshCw className="h-3.5 w-3.5" /> Retry
               </Button>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            </div>
+          )
+        ) : !cards || cards.length === 0 ? (
+          packagesError ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-danger/40 bg-danger-soft py-20 text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger-soft">
+                <AlertTriangle className="h-6 w-6 text-danger" />
+              </div>
+              <h2 className="text-sm font-semibold text-foreground">Couldn't load your packages</h2>
+              <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                Something went wrong refreshing your onboarding packages. Check your connection and try again.
+              </p>
+              <Button size="sm" variant="outline" className="mt-4 gap-1.5" onClick={refreshPackages}>
+                <RefreshCw className="h-3.5 w-3.5" /> Retry
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20 text-center">
+              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                <BookOpen className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h2 className="text-sm font-semibold text-foreground">No onboarding packages yet</h2>
+              <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                Run an analysis to generate role-based onboarding: entry points, critical files,
+                workflows, tutorials, and safety notes — every claim backed by code receipts.
+              </p>
+              {canManage && (
+                <Button
+                  size="sm"
+                  className="mt-4 gap-1.5"
+                  onClick={() => { setAnalyzeInitialRole(undefined); setAnalyzeOpen(true); }}
+                  disabled={generating || project?.status === "analyzing"}
+                >
+                  {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {generating || project?.status === "analyzing" ? "Analyzing…" : "Analyze & generate…"}
+                </Button>
+              )}
+            </div>
+          )
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-tour="onboarding-cards">
             {filtered.map((card) => (
@@ -887,7 +941,7 @@ export function OnboardingPage() {
 
   // ── reader view ─────────────────────────────────────────────────────────────
   return (
-    <div className="flex min-h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* compact top bar: navigation + role + actions in one row */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
         <SidebarToggle />
@@ -908,7 +962,7 @@ export function OnboardingPage() {
             </Badge>
           ) : (
             <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
-              <SelectTrigger className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
               </SelectContent>
@@ -932,30 +986,39 @@ export function OnboardingPage() {
                   {regenerating ? "Regenerating…" : "Regenerate section"}
                 </Button>
               )}
-              <Button
-                size="xs"
-                variant={markedReviewed ? "secondary" : "default"}
-                data-tour="reader-review"
-                className={cn(
-                  "gap-1.5",
-                  markedReviewed
-                    ? "border-success/40 bg-success-soft text-success"
-                    : "ring-2 ring-primary/30",
-                )}
-                onClick={handleToggleReview}
-              >
-                {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                {markedReviewed ? "Reviewed" : "Mark reviewed"}
-              </Button>
+              {canManage && activeSection?.sectionId && (
+                <Button
+                  size="xs"
+                  variant={markedReviewed ? "secondary" : "default"}
+                  data-tour="reader-review"
+                  className={cn(
+                    "gap-1.5",
+                    markedReviewed
+                      ? "border-success/40 bg-success-soft text-success"
+                      : "ring-2 ring-primary/30",
+                  )}
+                  onClick={handleToggleReview}
+                >
+                  {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                  {markedReviewed ? "Reviewed" : "Mark reviewed"}
+                </Button>
+              )}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button size="xs" variant="outline" className="gap-1" data-tour="reader-actions">
-                    <Download className="h-3 w-3" />
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="gap-1"
+                    data-tour="reader-actions"
+                    aria-label="Export options"
+                    disabled={exporting}
+                  >
+                    {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
                     <ChevronDown className="h-3 w-3" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem className="text-xs" onSelect={handleExport}>
+                  <DropdownMenuItem className="text-xs" onSelect={handleExport} disabled={exporting}>
                     <FileText className="mr-2 h-3 w-3" /> Markdown file
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -968,7 +1031,25 @@ export function OnboardingPage() {
       {!isMissing && pkg.status === "generating" && (
         <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Generating — sections appear here as each one finishes ({sections.length}/11 so far).
+          Generating — sections appear here as each one finishes ({sections.length}/{SECTION_NAV_ORDER.length} so far).
+        </div>
+      )}
+      {!isMissing && pkg.status === "failed" && (
+        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger">
+          <span>
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            Generation failed — some sections may be missing or incomplete.
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0 border-danger/50 text-danger hover:bg-danger-soft"
+            onClick={handleGenerateRole}
+            disabled={generating}
+          >
+            {generating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1.5 h-3 w-3" />}
+            Retry
+          </Button>
         </div>
       )}
 
@@ -988,7 +1069,7 @@ export function OnboardingPage() {
       {!isMissing && sections.length > 0 && (
         <div className="border-b px-4 py-2 lg:hidden">
           <Select value={activeSectionId ?? undefined} onValueChange={(v) => setActiveSectionId(v as typeof activeSectionId)}>
-            <SelectTrigger className="h-8 w-full text-[13px]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
+            <SelectTrigger aria-label="Jump to section" className="h-8 w-full text-[13px]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
             <SelectContent>
               {SECTION_NAV_ORDER
                 .filter((navId) => sections.some((s) => s.id === navId))
@@ -1007,7 +1088,7 @@ export function OnboardingPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
-        <aside className="hidden w-52 shrink-0 border-r py-3 pr-2 lg:block" data-tour="reader-sections">
+        <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
           <nav className="space-y-0.5">
             {SECTION_NAV_ORDER
@@ -1039,25 +1120,41 @@ export function OnboardingPage() {
         </aside>
 
         {/* content */}
-        <div className="min-w-0 flex-1 px-5 py-5 lg:px-8">
+        <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
           <div className="mx-auto max-w-3xl">
             {isMissing ? (
-              <div className="flex flex-col items-center justify-center py-24 text-center">
-                <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                  <FileText className="h-6 w-6 text-muted-foreground" />
+              pkgFetchError ? (
+                <div className="flex flex-col items-center justify-center py-24 text-center">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger-soft">
+                    <AlertTriangle className="h-6 w-6 text-danger" />
+                  </div>
+                  <h2 className="text-sm font-semibold text-foreground">Couldn't load this package</h2>
+                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                    Something went wrong fetching this package. This may be a transient issue —
+                    try again before generating a new one.
+                  </p>
+                  <Button size="sm" variant="outline" className="mt-4 gap-1.5" onClick={loadPkg}>
+                    <RefreshCw className="h-3.5 w-3.5" /> Retry
+                  </Button>
                 </div>
-                <h2 className="text-sm font-semibold text-foreground">
-                  No package for {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
-                </h2>
-                <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                  Generate this role's package from the latest analysis — role-specific entry
-                  points, critical files, workflows, and safety notes. Other roles are unaffected.
-                </p>
-                <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerateRole} disabled={generating}>
-                  {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  {generating ? "Generating…" : `Generate for ${ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}`}
-                </Button>
-              </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-24 text-center">
+                  <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+                    <FileText className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <h2 className="text-sm font-semibold text-foreground">
+                    No package for {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
+                  </h2>
+                  <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
+                    Generate this role's package from the latest analysis — role-specific entry
+                    points, critical files, workflows, and safety notes. Other roles are unaffected.
+                  </p>
+                  <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerateRole} disabled={generating}>
+                    {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {generating ? "Generating…" : `Generate for ${ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}`}
+                  </Button>
+                </div>
+              )
             ) : activeSection ? (
               <>
                 {activeSection.status === "stale" && canManage && (

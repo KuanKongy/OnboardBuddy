@@ -1,6 +1,6 @@
-import { ArrowLeft, Github, Loader2 } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff, Github, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, type Location } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
@@ -12,10 +12,13 @@ import { Separator } from "@/components/ui/separator";
 export function LoginPage() {
   const { user, loading: authLoading, signIn, signInWithGithub } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
 
   // Already signed in → straight to the app (the intro page never redirects;
   // this page is the "I want in" signal).
@@ -29,7 +32,8 @@ export function LoginPage() {
     setLoading(true);
     try {
       await signIn(email, password);
-      navigate("/dashboard");
+      const from = (location.state as { from?: Location } | null)?.from;
+      navigate(from ?? "/dashboard", { replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign in failed");
     } finally {
@@ -39,10 +43,13 @@ export function LoginPage() {
 
   async function handleGithub() {
     setError("");
+    setGithubLoading(true);
     try {
       await signInWithGithub();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "GitHub sign in failed");
+    } finally {
+      setGithubLoading(false);
     }
   }
 
@@ -58,7 +65,7 @@ export function LoginPage() {
         <Card>
           <CardContent className="p-4">
             {error && (
-              <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <div role="alert" className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                 {error}
               </div>
             )}
@@ -83,17 +90,29 @@ export function LoginPage() {
                     Forgot password?
                   </Link>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="h-8 text-[13px]"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? "text" : "password"}
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    className="h-8 pr-8 text-[13px]"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2"
+                    onClick={() => setShowPassword((v) => !v)}
+                  >
+                    {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                    <span className="sr-only">{showPassword ? "Hide password" : "Show password"}</span>
+                  </Button>
+                </div>
               </div>
-              <Button type="submit" className="w-full" size="sm" disabled={loading}>
+              <Button type="submit" className="w-full" size="sm" disabled={loading || githubLoading}>
                 {loading && <Loader2 className="h-3 w-3 animate-spin" />}
                 Sign In
               </Button>
@@ -106,8 +125,8 @@ export function LoginPage() {
               </span>
             </div>
 
-            <Button variant="outline" className="w-full" size="sm" onClick={handleGithub}>
-              <Github className="h-3.5 w-3.5" />
+            <Button variant="outline" className="w-full" size="sm" onClick={handleGithub} disabled={loading || githubLoading}>
+              {githubLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Github className="h-3.5 w-3.5" />}
               Sign in with GitHub
             </Button>
           </CardContent>
