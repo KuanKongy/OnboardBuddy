@@ -19,9 +19,10 @@ import type { SemanticDepth } from '../worker/engine/budgets.js';
 import type { DeveloperRole } from '../worker/semantic/projections.js';
 import { viewsForIntent, type ViewType } from '../worker/semantic/embeddingViews.js';
 import { retrieve, type EvidenceBundleV2 } from '../retrieval/retrievalService.js';
+import { rewriteQaUuidCitations } from '../worker/generation/citationMarkers.js';
 import { validateGeneratedOutput, type GeneratedClaim } from '../worker/generation/citationValidator.js';
 
-export const QA_PROMPT_VERSION = 'qa-v1';
+export const QA_PROMPT_VERSION = 'qa-v2';
 
 export type QuestionIntent = 'what_does' | 'what_handles' | 'what_uses' | 'what_breaks' | 'general';
 
@@ -228,8 +229,12 @@ export async function answerQuestion(input: AskInput): Promise<AskAnswer> {
   }
 
   const used = new Set(validation.usedReceiptIds);
+  // Raw UUID citations in the prose become the same [[receipt:…]] markers
+  // sections use — the reader renders them as numbered chips; unknown ids
+  // are stripped, never shipped as dead labels.
+  const inline = rewriteQaUuidCitations(output.answerMarkdown, used);
   return {
-    answerMarkdown: output.answerMarkdown,
+    answerMarkdown: inline.content,
     claims: validation.adjustedClaims,
     receipts: bundle.receipts
       .filter((r) => used.has(r.receiptId))
@@ -275,6 +280,9 @@ async function callQaModel(
     `Answer this question from a ${role} developer about the ${bundle.repo.owner}/${bundle.repo.name} codebase (scope: ${bundle.scope.displayName}):`,
     `QUESTION: ${question}`,
     'Ground every substantive statement in the evidence below and cite receipt ids (the exact UUIDs) in claims and usedReceiptIds. If the evidence does not answer the question, say so plainly and record it in unknowns — never guess. Code receipts win over docs.',
+    // Nested/unbalanced fences flip the rest of the answer into a code block
+    // in the reader — seen live the first day the Q&A UI shipped.
+    'answerMarkdown is standard CommonMark: never nest ``` fences, close every fence you open, and cite receipts in prose (never inside a code block).',
     previousIssues && previousIssues.length > 0
       ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
       : null,

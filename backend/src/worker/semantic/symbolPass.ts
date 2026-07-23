@@ -9,6 +9,7 @@
 import { BudgetExceededError } from '../ai/budgetEnforcer.js';
 import { mapLimit } from '../../lib/parallel.js';
 import { MAX_SYMBOLS_PER_CALL, MAX_SNIPPET_CHARS, MAX_REQUEST_INPUT_TOKENS, CHARS_PER_TOKEN } from '../engine/budgets.js';
+import { capReceiptSpan } from '../engine/receiptSpan.js';
 import type { EvidenceNode } from '../types/analysis.js';
 import type { SemanticContext } from './context.js';
 import {
@@ -262,7 +263,9 @@ function renderSymbolFacts(ctx: SemanticContext, node: EvidenceNode, receiptAlia
 }
 
 function symbolReceiptDraft(ctx: SemanticContext, node: EvidenceNode, alias: string): ReceiptDraft {
-  return {
+  // Span cap (audit §3.7): a receipt over a whole 550-line component is not
+  // verifiable; slice to the first 40 lines and keep the true extent.
+  return capReceiptSpan({
     alias,
     kind: 'code_snippet',
     trustLevel: 'code',
@@ -274,7 +277,7 @@ function symbolReceiptDraft(ctx: SemanticContext, node: EvidenceNode, alias: str
     lineStart: node.lineStart ?? null,
     lineEnd: node.lineEnd ?? null,
     snippet: node.snippet?.slice(0, MAX_SNIPPET_CHARS) ?? null,
-  };
+  });
 }
 
 /** Merges deterministic side effects into the LLM record (spec: mergedWithDeterministic). */

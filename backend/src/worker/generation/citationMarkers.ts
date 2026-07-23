@@ -136,3 +136,129 @@ export function rewriteInlineCitations(
 export function stripLegacyCitationAliases(markdown: string): RewriteResult {
   return rewriteInlineCitations(markdown, new Map(), new Set());
 }
+
+export interface UnverifiedMarkResult {
+  content: string;
+  /** Downgraded claims wrapped in inline [[unverified]] markers. */
+  marked: number;
+  /** Downgraded claims whose text was not found in the prose (footer-only). */
+  unmatched: number;
+}
+
+/** Lowercased, markdown-decoration-free, whitespace-collapsed comparison form. */
+function normalizeForMatch(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.。]$/, '');
+}
+
+const MIN_MATCH_CHARS = 20;
+
+/**
+ * Inline unverified-claim markers (audit §8: "Known Gaps disconnected from
+ * the claims they refer to"). Claims the validator downgraded to low with
+ * zero receipts are wrapped `[[unverified]]…[[/unverified]]` on the prose
+ * line where their text appears, so the flag sits at the point of doubt
+ * instead of only in a footer list.
+ *
+ * Matching is deliberately conservative — a wrong underline is worse than a
+ * missing one: normalized containment either way (claim text is truncated
+ * at 160 chars, so a prose line may extend past it), never inside code
+ * fences, headings, tables, or lines that already carry links/markers, and
+ * a fragment-line only counts when it covers most of the claim. Unmatched
+ * claims stay footer-only.
+ */
+export function markUnverifiedClaims(markdown: string, downgradedClaims: string[]): UnverifiedMarkResult {
+  const claims = downgradedClaims
+    .map((c) => normalizeForMatch(c))
+    .filter((c) => c.length >= MIN_MATCH_CHARS);
+  if (claims.length === 0) {
+    return { content: markdown, marked: 0, unmatched: downgradedClaims.length - claims.length };
+  }
+
+  const lines = markdown.split('\n');
+  const usedLines = new Set<number>();
+  let inCodeFence = false;
+  const normalized: Array<string | null> = lines.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inCodeFence = !inCodeFence;
+      return null;
+    }
+    if (inCodeFence) return null;
+    // Headings render as block titles, tables break when wrapped, and lines
+    // with links/markers would nest links (invalid markdown).
+    if (/^\s*#/.test(line) || line.includes('|') || line.includes('[')) return null;
+    const norm = normalizeForMatch(line);
+    return norm.length >= MIN_MATCH_CHARS ? norm : null;
+  });
+
+  let marked = 0;
+  for (const claim of claims) {
+    const lineIdx = normalized.findIndex((norm, i) => {
+      if (norm === null || usedLines.has(i)) return false;
+      if (norm.includes(claim)) return true;
+      // Truncated-claim case: the line is a fragment of the claim — only
+      // when it covers most of it, so short generic lines never match.
+      return claim.includes(norm) && norm.length >= 0.6 * claim.length;
+    });
+    if (lineIdx === -1) continue;
+    usedLines.add(lineIdx);
+    const m = lines[lineIdx]!.match(/^(\s*(?:(?:[-*+]|\d+\.)\s+)?)(.*?)(\s*)$/)!;
+    lines[lineIdx] = `${m[1]}[[unverified]]${m[2]}[[/unverified]]${m[3]}`;
+    marked += 1;
+  }
+
+  return {
+    content: lines.join('\n'),
+    marked,
+    unmatched: downgradedClaims.length - marked,
+  };
+}
+
+const UUID_CITATION = new RegExp(
+  String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*\)` +
+    `|` +
+    String.raw`\[([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]`,
+  'gi',
+);
+
+/**
+ * Q&A answers cite receipts by raw UUID (no alias map); prose like
+ * "(receipt 3f2a…)" becomes a numbered marker for used receipts and is
+ * dropped otherwise — same contract as section content, same renderer.
+ */
+export function rewriteQaUuidCitations(markdown: string, usedReceiptIds: Set<string>): RewriteResult {
+  const resolved: string[] = [];
+  const dropped: string[] = [];
+  const lines = markdown.split('\n');
+  let inCodeFence = false;
+  const rewritten = lines.map((line) => {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inCodeFence = !inCodeFence;
+      return line;
+    }
+    if (inCodeFence) return line;
+    const replaced = line.replace(UUID_CITATION, (_m, paren: string | undefined, bracket: string | undefined) => {
+      const id = (paren ?? bracket)!.toLowerCase();
+      if (usedReceiptIds.has(id)) {
+        resolved.push(id);
+        return ` [[receipt:${id}]]`;
+      }
+      dropped.push(id);
+      return '';
+    });
+    const indent = replaced.match(/^[ \t]*/)![0];
+    return (
+      indent +
+      replaced
+        .slice(indent.length)
+        .replace(/[ \t]+([.,;:)])/g, '$1')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trimEnd()
+    );
+  });
+  return { content: rewritten.join('\n').trim(), resolved, dropped };
+}

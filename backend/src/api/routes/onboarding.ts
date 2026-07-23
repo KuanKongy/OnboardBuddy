@@ -1,7 +1,15 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
-import { ageLabelFrom, claimForReceipt, inlineMarkersToText, receiptStaleness } from "../lib/receiptPresentation.js";
+import { CANDIDATE_WEIGHTS } from "../../worker/engine/candidateRanker.js";
+import {
+  ageLabelFrom,
+  claimForReceipt,
+  confidenceReasonFor,
+  inlineMarkersToText,
+  receiptStaleness,
+  receiptVerification,
+} from "../lib/receiptPresentation.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { BadPackageParamError, readPackageParam, resolveForRequest } from "../services/packageResolver.js";
 
@@ -297,6 +305,145 @@ onboardingRouter.get("/staleness", requireProjectAccess(), async (req, res) => {
   }
 });
 
+/**
+ * "How this was made" (audit P2 §13): the full production record of one
+ * package — which models ran, how many calls, what it cost, what retrieval
+ * saw, what validation flagged, and what the voice lint let through. All of
+ * it is already stored (ai_generation_runs + generation_context); this
+ * endpoint only aggregates. Any member can read it — provenance is the
+ * product's trust story, not an admin secret.
+ */
+onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => {
+  try {
+    const projectId = req.params.id;
+
+    let packageId: string | null = null;
+    const ctx = await resolveForRequest(req, res);
+    if (ctx === false) return;
+    if (ctx?.source === "explicit" || ctx?.source === "member_default") {
+      packageId = ctx.packageId;
+    }
+    if (!packageId) {
+      packageId = ((await query(
+        `SELECT id FROM onboarding_packages
+         WHERE project_id = $1 ORDER BY created_at DESC LIMIT 1`,
+        [projectId],
+      )).rows[0] as { id: string } | undefined)?.id ?? null;
+    }
+    if (!packageId) {
+      res.status(404).json({ error: "No onboarding package found" });
+      return;
+    }
+
+    const pkg = (await query(
+      `SELECT op.id, op.role, op.analyzed_commit, op.branch, op.created_at,
+              s.semantic_depth, s.privacy_mode
+       FROM onboarding_packages op
+       JOIN analysis_snapshots s ON s.id = op.snapshot_id
+       WHERE op.id = $1 AND op.project_id = $2`,
+      [packageId, projectId],
+    )).rows[0] as
+      | { id: string; role: string; analyzed_commit: string; branch: string;
+          created_at: string; semantic_depth: string; privacy_mode: string }
+      | undefined;
+    if (!pkg) {
+      res.status(404).json({ error: "Package not found" });
+      return;
+    }
+
+    const models = (await query(
+      `SELECT provider, model, model_tier,
+              COUNT(*) FILTER (WHERE status = 'complete')::int AS calls,
+              COUNT(*) FILTER (WHERE status = 'skipped_cached')::int AS cached_calls,
+              COUNT(*) FILTER (WHERE status = 'failed')::int AS failed_calls,
+              COALESCE(SUM((token_usage->>'inputTokens')::bigint) FILTER (WHERE status = 'complete'), 0)::bigint AS input_tokens,
+              COALESCE(SUM((token_usage->>'outputTokens')::bigint) FILTER (WHERE status = 'complete'), 0)::bigint AS output_tokens,
+              COALESCE(SUM(estimated_cost_usd), 0)::numeric AS cost_usd
+       FROM ai_generation_runs
+       WHERE package_id = $1
+       GROUP BY provider, model, model_tier
+       ORDER BY cost_usd DESC`,
+      [packageId],
+    )).rows as Array<Record<string, unknown>>;
+
+    const sections = (await query(
+      `SELECT ps.id, ps.type, ps.title, ps.confidence, ps.review_status,
+              ps.generation_context, ps.unknowns,
+              (SELECT count(*)::int FROM source_receipts sr WHERE sr.section_id = ps.id) AS receipt_count
+       FROM package_sections ps
+       WHERE ps.package_id = $1
+       ORDER BY ps.created_at ASC`,
+      [packageId],
+    )).rows as Array<{
+      id: string; type: string; title: string; confidence: string; review_status: string;
+      generation_context: Record<string, unknown> | null;
+      unknowns: Array<unknown> | null;
+      receipt_count: number;
+    }>;
+
+    res.json({
+      package: {
+        id: pkg.id,
+        role: pkg.role,
+        analyzedCommit: pkg.analyzed_commit,
+        branch: pkg.branch,
+        generatedAt: pkg.created_at,
+        semanticDepth: pkg.semantic_depth,
+        privacyMode: pkg.privacy_mode,
+      },
+      models: models.map((m) => ({
+        provider: m.provider,
+        model: m.model,
+        tier: m.model_tier,
+        calls: Number(m.calls ?? 0),
+        cachedCalls: Number(m.cached_calls ?? 0),
+        failedCalls: Number(m.failed_calls ?? 0),
+        inputTokens: Number(m.input_tokens ?? 0),
+        outputTokens: Number(m.output_tokens ?? 0),
+        costUsd: Number(m.cost_usd ?? 0),
+      })),
+      sections: sections.map((sec) => {
+        const ctx2 = (sec.generation_context ?? {}) as {
+          prompt_version?: unknown;
+          retrieval?: unknown;
+          validation?: { issues?: unknown[]; retried?: unknown; hardFailure?: unknown };
+          claims?: Array<{ receiptIds?: unknown; confidence?: unknown }>;
+          inline_citations?: unknown;
+          voice_lint?: { remaining_hits?: unknown[] };
+        };
+        const claims = Array.isArray(ctx2.claims) ? ctx2.claims : [];
+        return {
+          sectionId: sec.id,
+          type: sec.type,
+          title: sec.title,
+          confidence: sec.confidence,
+          confidenceReason: confidenceReasonFor(sec.generation_context, sec.receipt_count),
+          reviewStatus: sec.review_status,
+          receiptCount: sec.receipt_count,
+          promptVersion: (ctx2.prompt_version as string | undefined) ?? null,
+          retrieval: ctx2.retrieval ?? null,
+          validation: {
+            issues: Array.isArray(ctx2.validation?.issues) ? ctx2.validation!.issues : [],
+            retried: ctx2.validation?.retried === true,
+            hardFailure: ctx2.validation?.hardFailure === true,
+          },
+          voiceLintHits: Array.isArray(ctx2.voice_lint?.remaining_hits) ? ctx2.voice_lint!.remaining_hits : [],
+          inlineCitations: ctx2.inline_citations ?? null,
+          claims: {
+            total: claims.length,
+            cited: claims.filter((c) => Array.isArray(c.receiptIds) && (c.receiptIds as unknown[]).length > 0).length,
+            low: claims.filter((c) => c.confidence === "low").length,
+          },
+          unknownsCount: Array.isArray(sec.unknowns) ? sec.unknowns.length : 0,
+        };
+      }),
+    });
+  } catch (err) {
+    console.error("Provenance error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -387,11 +534,65 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     // hashes — never asserted. No baseline -> compare against the receipt's
     // own snapshot (trivially fresh).
     const latestSnap = (await query(
-      `SELECT id FROM analysis_snapshots
+      `SELECT id, commit_hash FROM analysis_snapshots
        WHERE scope_id = $1 AND status = 'complete'
        ORDER BY created_at DESC LIMIT 1`,
       [pkg.scope_id],
-    )).rows[0] as { id: string } | undefined;
+    )).rows[0] as { id: string; commit_hash: string } | undefined;
+
+    // Coverage strip (audit §4.2): the "critical 25%" claim gets real
+    // denominators — what was analyzed, what this package actually cites,
+    // and which signals ranked it. Every number is a count over stored
+    // rows; nothing here passes through a model.
+    const snapMeta = (await query(
+      `SELECT created_at, file_count, symbol_count, workflow_count, language_inventory
+       FROM analysis_snapshots WHERE id = $1`,
+      [pkg.snapshot_id],
+    )).rows[0] as {
+      created_at: string;
+      file_count: number;
+      symbol_count: number;
+      workflow_count: number;
+      language_inventory: Record<string, unknown>;
+    } | undefined;
+
+    const citedAgg = (await query(
+      `SELECT
+         (SELECT count(*)::int FROM tutorials t WHERE t.package_id = $1) AS tutorial_count,
+         (SELECT count(*)::int FROM (
+            SELECT sr.workflow_id FROM source_receipts sr
+              JOIN package_sections ps ON ps.id = sr.section_id
+             WHERE ps.package_id = $1 AND sr.workflow_id IS NOT NULL
+            UNION
+            SELECT t.workflow_id FROM tutorials t
+             WHERE t.package_id = $1 AND t.workflow_id IS NOT NULL) wf) AS workflows_covered,
+         (SELECT count(*)::int FROM (
+            SELECT DISTINCT sr.node_stable_key AS key FROM source_receipts sr
+              JOIN package_sections ps ON ps.id = sr.section_id
+             WHERE ps.package_id = $1 AND sr.node_stable_key IS NOT NULL
+               AND sr.node_stable_key NOT LIKE '%:%'
+            UNION
+            SELECT DISTINCT sr.node_stable_key FROM source_receipts sr
+              JOIN tutorial_steps ts ON ts.id = sr.tutorial_step_id
+              JOIN tutorials tt ON tt.id = ts.tutorial_id
+             WHERE tt.package_id = $1 AND sr.node_stable_key IS NOT NULL
+               AND sr.node_stable_key NOT LIKE '%:%') sym) AS symbols_cited,
+         (SELECT count(*)::int FROM (
+            SELECT DISTINCT sr.file_path AS f FROM source_receipts sr
+              JOIN package_sections ps ON ps.id = sr.section_id
+             WHERE ps.package_id = $1 AND sr.file_path IS NOT NULL
+            UNION
+            SELECT DISTINCT sr.file_path FROM source_receipts sr
+              JOIN tutorial_steps ts ON ts.id = sr.tutorial_step_id
+              JOIN tutorials tt ON tt.id = ts.tutorial_id
+             WHERE tt.package_id = $1 AND sr.file_path IS NOT NULL) fl) AS files_cited`,
+      [pkg.id],
+    )).rows[0] as {
+      tutorial_count: number;
+      workflows_covered: number;
+      symbols_cited: number;
+      files_cited: number;
+    } | undefined;
 
     const sections = await Promise.all(
       (sectionsResult.rows as SectionRow[]).map(async (sec) => {
@@ -403,9 +604,13 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
                   sr.snippet, sr.confidence, sr.commit_hash, sr.node_stable_key,
                   sr.trust_level, sr.claim,
                   sr.metadata->>'copiedFromReceiptId' AS bundle_receipt_id,
+                  (sr.metadata->>'truncatedFromLineEnd')::int AS truncated_from_line_end,
                   snap.created_at AS analyzed_at,
                   own_node.hash AS own_node_hash,
+                  own_node.line_start AS own_node_line_start,
                   latest_node.hash AS latest_node_hash,
+                  latest_node.line_start AS latest_node_line_start,
+                  latest_node.line_end AS latest_node_line_end,
                   COALESCE(
                     (SELECT rec.summary FROM snapshot_semantic_records ssr
                        JOIN semantic_records rec ON rec.id = ssr.record_id
@@ -447,6 +652,25 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
         branch: pkg.branch,
         generatedAt: pkg.created_at,
         updatedAt: pkg.updated_at,
+        coverage: snapMeta
+          ? {
+              snapshotCreatedAt: snapMeta.created_at,
+              files: {
+                analyzed: snapMeta.file_count,
+                unsupported:
+                  (snapMeta.language_inventory?.unsupportedFileCount as number | undefined) ?? null,
+                cited: citedAgg?.files_cited ?? 0,
+              },
+              symbols: { total: snapMeta.symbol_count, cited: citedAgg?.symbols_cited ?? 0 },
+              workflows: { total: snapMeta.workflow_count, covered: citedAgg?.workflows_covered ?? 0 },
+              tutorialCount: citedAgg?.tutorial_count ?? 0,
+              languages: snapMeta.language_inventory ?? null,
+              rankingSignals: Object.entries(CANDIDATE_WEIGHTS).map(([signal, weight]) => ({
+                signal,
+                weight,
+              })),
+            }
+          : null,
         sections: sections.map((sec) => {
           const SECTION_ID_MAP: Record<string, string> = {
             workflow_guide: "workflows",
@@ -465,36 +689,51 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             diagrams: sec.diagrams ?? [],
             unknowns: sec.unknowns ?? [],
             analyzedCommit: sec.analyzed_commit,
+            confidenceReason: confidenceReasonFor(sec.generation_context, sec.receipts.length),
             blocks: [
               {
                 title: sec.title,
                 body: sec.content,
-                receipts: sec.receipts.map((r: Record<string, unknown>) => ({
-                  id: r.id as string,
-                  bundleReceiptId: (r.bundle_receipt_id as string | null) ?? null,
-                  filePath: r.file_path as string,
-                  symbolName: r.symbol_name as string | null,
-                  lineStart: r.line_start as number | null,
-                  lineEnd: r.line_end as number | null,
-                  snippet: r.snippet as string | null,
-                  summary: (r.symbol_summary as string | null) ?? null,
-                  confidence: (r.confidence as string) ?? "medium",
-                  trustLevel: (r.trust_level as string | null) ?? null,
-                  commitHash: (r.commit_hash as string | null) ?? null,
-                  nodeStableKey: (r.node_stable_key as string | null) ?? null,
-                  claim:
-                    (r.claim as string | null) ??
-                    claimForReceipt(
-                      (r.bundle_receipt_id as string | null) ?? null,
-                      sec.generation_context,
-                    ),
-                  staleness: receiptStaleness({
+                receipts: sec.receipts.map((r: Record<string, unknown>) => {
+                  const staleness = receiptStaleness({
                     nodeStableKey: (r.node_stable_key as string | null) ?? null,
                     ownNodeHash: (r.own_node_hash as string | null) ?? null,
                     latestNodeHash: (r.latest_node_hash as string | null) ?? null,
-                  }),
-                  ageLabel: ageLabelFrom((r.analyzed_at as string | null) ?? null),
-                })),
+                  });
+                  return {
+                    id: r.id as string,
+                    bundleReceiptId: (r.bundle_receipt_id as string | null) ?? null,
+                    filePath: r.file_path as string,
+                    symbolName: r.symbol_name as string | null,
+                    lineStart: r.line_start as number | null,
+                    lineEnd: r.line_end as number | null,
+                    truncatedFromLineEnd: (r.truncated_from_line_end as number | null) ?? null,
+                    snippet: r.snippet as string | null,
+                    summary: (r.symbol_summary as string | null) ?? null,
+                    confidence: (r.confidence as string) ?? "medium",
+                    trustLevel: (r.trust_level as string | null) ?? null,
+                    commitHash: (r.commit_hash as string | null) ?? null,
+                    nodeStableKey: (r.node_stable_key as string | null) ?? null,
+                    claim:
+                      (r.claim as string | null) ??
+                      claimForReceipt(
+                        (r.bundle_receipt_id as string | null) ?? null,
+                        sec.generation_context,
+                      ),
+                    staleness,
+                    verification: receiptVerification({
+                      staleness,
+                      latestNodeHash: (r.latest_node_hash as string | null) ?? null,
+                      latestCommitHash: latestSnap?.commit_hash ?? (r.commit_hash as string | null) ?? null,
+                      receiptLineStart: (r.line_start as number | null) ?? null,
+                      receiptLineEnd: (r.line_end as number | null) ?? null,
+                      ownNodeLineStart: (r.own_node_line_start as number | null) ?? null,
+                      latestNodeLineStart: (r.latest_node_line_start as number | null) ?? null,
+                      latestNodeLineEnd: (r.latest_node_line_end as number | null) ?? null,
+                    }),
+                    ageLabel: ageLabelFrom((r.analyzed_at as string | null) ?? null),
+                  };
+                }),
               },
             ],
           };

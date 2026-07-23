@@ -232,6 +232,8 @@ export interface ReceiptDraft {
   snippet?: string | null;
   detectionExpression?: string | null;
   referencedRecordId?: string | null;
+  /** Original lineEnd when the span was capped (receiptSpan.capReceiptSpan). */
+  truncatedFromLineEnd?: number | null;
 }
 
 /**
@@ -251,13 +253,14 @@ export async function attachReceipts(params: {
       `INSERT INTO source_receipts
          (project_id, snapshot_id, receipt_kind, trust_level, record_id, node_id,
           referenced_record_id, node_stable_key, node_hash, file_path, symbol_name,
-          line_start, line_end, snippet, detection_expression, commit_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          line_start, line_end, snippet, detection_expression, commit_hash, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING id`,
       [params.projectId, params.snapshotId, d.kind, d.trustLevel, params.record.id,
        d.nodeId ?? null, d.referencedRecordId ?? null, d.nodeStableKey ?? null, d.nodeHash ?? null,
        d.filePath ?? null, d.symbolName ?? null, d.lineStart ?? null, d.lineEnd ?? null,
-       d.snippet ?? null, d.detectionExpression ?? null, params.commitHash],
+       d.snippet ?? null, d.detectionExpression ?? null, params.commitHash,
+       JSON.stringify(d.truncatedFromLineEnd != null ? { truncatedFromLineEnd: d.truncatedFromLineEnd } : {})],
     );
     aliasToId.set(d.alias, (result.rows[0] as { id: string }).id);
   }

@@ -18,13 +18,18 @@ export interface ProgressItem {
  */
 export function useProgress(projectId: string | undefined) {
   const [items, setItems] = useState<ProgressItem[]>([]);
+  // Consumers that MERGE into stored positions (e.g. per-section read marks)
+  // must wait for the initial fetch or they'd overwrite history with [].
+  const [loaded, setLoaded] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
+    setLoaded(false);
     apiFetch(`/projects/${projectId}/progress`)
       .then((data: { items: ProgressItem[] }) => setItems(data.items ?? []))
-      .catch(() => setItems([]));
+      .catch(() => setItems([]))
+      .finally(() => setLoaded(true));
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [projectId]);
 
@@ -42,5 +47,5 @@ export function useProgress(projectId: string | undefined) {
     [projectId],
   );
 
-  return { items, save };
+  return { items, loaded, save };
 }

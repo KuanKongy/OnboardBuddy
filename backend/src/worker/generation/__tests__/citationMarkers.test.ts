@@ -1,5 +1,10 @@
 import { expect } from 'chai';
-import { rewriteInlineCitations, stripLegacyCitationAliases } from '../citationMarkers.js';
+import {
+  markUnverifiedClaims,
+  rewriteInlineCitations,
+  rewriteQaUuidCitations,
+  stripLegacyCitationAliases,
+} from '../citationMarkers.js';
 
 const aliasToId = new Map<string, string>([
   ['r1', 'uuid-1'],
@@ -134,5 +139,88 @@ describe('citationMarkers.stripLegacyCitationAliases', () => {
     // The "- r3" inside the bookkeeping block is deleted with the block,
     // so it never registers as a dropped alias.
     expect(r.dropped).to.have.members(['r6', 'r14', 'r3', 'r13']);
+  });
+});
+
+describe('citationMarkers.markUnverifiedClaims', () => {
+  it('wraps the prose line carrying a downgraded claim', () => {
+    const md = [
+      '## Risks',
+      'The queue retries failed jobs twice with fixed backoff.',
+      'Budget checks happen before every call.',
+    ].join('\n');
+    const r = markUnverifiedClaims(md, ['The queue retries failed jobs twice with fixed backoff.']);
+    expect(r.content).to.equal(
+      [
+        '## Risks',
+        '[[unverified]]The queue retries failed jobs twice with fixed backoff.[[/unverified]]',
+        'Budget checks happen before every call.',
+      ].join('\n'),
+    );
+    expect(r.marked).to.equal(1);
+    expect(r.unmatched).to.equal(0);
+  });
+
+  it('matches through markdown decoration and keeps bullet prefixes outside the span', () => {
+    const md = '- **The worker** processes `analyze_scope` jobs sequentially.';
+    const r = markUnverifiedClaims(md, ['The worker processes analyze_scope jobs sequentially']);
+    expect(r.content).to.equal(
+      '- [[unverified]]**The worker** processes `analyze_scope` jobs sequentially.[[/unverified]]',
+    );
+    expect(r.marked).to.equal(1);
+  });
+
+  it('matches a prose line that extends past the 160-char truncated claim', () => {
+    const longLine =
+      'The pipeline orchestrates ingest, parse, graph and semantic phases in order, resuming from per-phase checkpoints stored on the snapshot whenever a run is interrupted midway.';
+    const truncated = longLine.slice(0, 160);
+    const r = markUnverifiedClaims(longLine, [truncated]);
+    expect(r.marked).to.equal(1);
+    expect(r.content.startsWith('[[unverified]]')).to.equal(true);
+  });
+
+  it('never marks inside code fences, headings, tables, or linked lines', () => {
+    const md = [
+      '```',
+      'The queue retries failed jobs twice with fixed backoff.',
+      '```',
+      '## The queue retries failed jobs twice with fixed backoff.',
+      '| The queue retries failed jobs twice with fixed backoff. | x |',
+      'See [the docs](x) — the queue retries failed jobs twice with fixed backoff.',
+    ].join('\n');
+    const r = markUnverifiedClaims(md, ['The queue retries failed jobs twice with fixed backoff.']);
+    expect(r.content).to.equal(md);
+    expect(r.marked).to.equal(0);
+    expect(r.unmatched).to.equal(1);
+  });
+
+  it('short generic lines never match a long claim fragment', () => {
+    const md = 'It processes jobs.';
+    const r = markUnverifiedClaims(md, [
+      'It processes jobs from three queues with retry semantics and dead-letter handling on repeated failure',
+    ]);
+    expect(r.marked).to.equal(0);
+    expect(r.unmatched).to.equal(1);
+  });
+});
+
+describe('citationMarkers.rewriteQaUuidCitations', () => {
+  const ID = '3f2a1b4c-1234-4abc-9def-0123456789ab';
+  const GHOST = '99999999-9999-4999-8999-999999999999';
+
+  it('rewrites used-receipt UUID citations to markers and drops unknown ones', () => {
+    const r = rewriteQaUuidCitations(
+      `Queries run through db.ts (receipt ${ID}). Unknown source [${GHOST}].`,
+      new Set([ID]),
+    );
+    expect(r.content).to.equal(`Queries run through db.ts [[receipt:${ID}]]. Unknown source.`);
+    expect(r.resolved).to.deep.equal([ID]);
+    expect(r.dropped).to.deep.equal([GHOST]);
+  });
+
+  it('leaves code fences untouched', () => {
+    const md = ['```', `const id = "(${ID})";`, '```'].join('\n');
+    const r = rewriteQaUuidCitations(md, new Set([ID]));
+    expect(r.content).to.equal(md);
   });
 });

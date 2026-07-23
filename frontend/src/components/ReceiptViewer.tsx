@@ -60,18 +60,36 @@ interface ReceiptViewerProps {
 export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
   const projectCtx = useOptionalProject();
   const project = projectCtx?.project;
+  const verification = receipt.verification;
+  const reAnchored = verification?.status === "re_anchored";
   const lineRange =
     receipt.lineStart && receipt.lineEnd
       ? `${receipt.lineStart}–${receipt.lineEnd}`
       : receipt.lineStart
         ? `${receipt.lineStart}`
         : null;
+  const shortSha = verification?.checkedAgainstCommit?.slice(0, 8) ?? null;
+  // Unchanged (possibly moved) code links at its CURRENT location in the
+  // latest verified commit; changed/missing evidence keeps pointing at the
+  // receipt's own commit — that snapshot is what the snippet proves.
+  const githubTarget =
+    verification && (verification.status === "verified" || reAnchored) && verification.checkedAgainstCommit
+      ? {
+          ref: verification.checkedAgainstCommit,
+          lineStart: verification.lineStart,
+          lineEnd: verification.lineEnd,
+        }
+      : {
+          ref: receipt.commitHash ?? undefined,
+          lineStart: receipt.lineStart ?? null,
+          lineEnd: receipt.lineEnd ?? null,
+        };
   const githubUrl =
     project && receipt.filePath
       ? buildGithubBlobUrl(
           { owner: project.repo_owner, repo: project.repo_name, branch: project.branch },
           receipt.filePath,
-          { ref: receipt.commitHash ?? undefined, lineStart: receipt.lineStart ?? null, lineEnd: receipt.lineEnd ?? null },
+          githubTarget,
         )
       : null;
 
@@ -90,40 +108,89 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                 {receipt.symbolName}
               </span>
             )}
-            {lineRange && <span>Lines {lineRange}</span>}
+            {lineRange && (
+              <span>
+                Lines {lineRange}
+                {reAnchored && verification?.lineStart && (
+                  <span className="text-info"> → now {verification.lineStart}–{verification.lineEnd}</span>
+                )}
+              </span>
+            )}
+            {receipt.truncatedFromLineEnd && receipt.lineStart && (
+              <span title="Long symbols are sliced so a receipt stays reviewable.">
+                (first {(receipt.lineEnd ?? receipt.lineStart) - receipt.lineStart + 1} of{" "}
+                {receipt.truncatedFromLineEnd - receipt.lineStart + 1} lines)
+              </span>
+            )}
           </div>
         </DialogHeader>
 
         {/* Body */}
         <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
-          {/* Confidence & staleness badges */}
+          {/* Confidence & verification badges */}
           <div className="flex flex-wrap items-center gap-2">
-            <ConfidenceBadge confidence={receipt.confidence} />
+            {receipt.confidence && <ConfidenceBadge confidence={receipt.confidence} />}
             {receipt.staleness === "stale" ? (
-              <Badge
-                variant="outline"
-                className="border-warning/40 bg-warning-soft text-xs text-warning"
-              >
-                <AlertTriangle className="mr-1 h-2.5 w-2.5" />
-                Stale — source has changed
-              </Badge>
-            ) : receipt.staleness === "fresh" ? (
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex cursor-help">
                     <Badge
                       variant="outline"
-                      className="border-success/40 bg-success-soft text-xs text-success"
+                      className="border-warning/40 bg-warning-soft text-xs text-warning"
                     >
-                      <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
-                      Current
+                      <AlertTriangle className="mr-1 h-2.5 w-2.5" />
+                      {verification?.status === "missing"
+                        ? "Review required — symbol removed"
+                        : "Review required — code changed"}
                     </Badge>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top">
-                  Re-verified: this symbol's code is unchanged in the latest analysis.
+                <TooltipContent side="top" className="max-w-72">
+                  {verification?.status === "missing"
+                    ? `This symbol no longer exists in the latest analysis${shortSha ? ` (${shortSha})` : ""}. The snippet shows the code as analyzed.`
+                    : `The cited code changed since this was written${shortSha ? ` (checked against ${shortSha})` : ""}${
+                        verification?.lineStart ? `; the symbol now spans lines ${verification.lineStart}–${verification.lineEnd}` : ""
+                      }. The snippet shows the code as analyzed.`}
                 </TooltipContent>
               </Tooltip>
+            ) : receipt.staleness === "fresh" ? (
+              <>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex cursor-help">
+                      <Badge
+                        variant="outline"
+                        className="border-success/40 bg-success-soft text-xs text-success"
+                      >
+                        <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
+                        {shortSha ? `Verified against ${shortSha}` : "Current"}
+                      </Badge>
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-72">
+                    Re-verified: this symbol's code is unchanged in the latest analysis
+                    {shortSha ? ` (commit ${shortSha})` : ""}.
+                  </TooltipContent>
+                </Tooltip>
+                {reAnchored && verification?.lineStart && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex cursor-help">
+                        <Badge
+                          variant="outline"
+                          className="border-info/40 bg-info-soft text-xs text-info"
+                        >
+                          Re-anchored → L{verification.lineStart}–{verification.lineEnd}
+                        </Badge>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-72">
+                      The code is unchanged but moved within its file; line numbers were
+                      re-anchored to the latest analysis.
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </>
             ) : (
               // "unknown" — docs/synthesis evidence with no symbol hash to
               // re-check. Shown neutrally; never a green "Current" we can't back.
@@ -131,9 +198,11 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                 Not re-verifiable
               </Badge>
             )}
-            <span className="text-xs text-muted-foreground">
-              {receipt.ageLabel}
-            </span>
+            {receipt.ageLabel && (
+              <span className="text-xs text-muted-foreground">
+                {receipt.ageLabel}
+              </span>
+            )}
           </div>
 
           {/* What the cited symbol does — evidence should explain, not just show */}

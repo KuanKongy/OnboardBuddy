@@ -2,8 +2,10 @@ import { expect } from "chai";
 import {
   ageLabelFrom,
   claimForReceipt,
+  confidenceReasonFor,
   inlineMarkersToText,
   receiptStaleness,
+  receiptVerification,
 } from "../../src/api/lib/receiptPresentation.js";
 
 describe("receiptPresentation.inlineMarkersToText", () => {
@@ -15,6 +17,12 @@ describe("receiptPresentation.inlineMarkersToText", () => {
     expect(
       inlineMarkersToText("Runs SQL [[receipt:b-1]]. Documented [[receipt:b-2]]. Ghost [[receipt:b-3]].", map),
     ).to.equal("Runs SQL (backend/src/lib/db.ts:25). Documented (README.md). Ghost.");
+  });
+
+  it("converts unverified spans to an explicit [unverified] tag — no marker syntax leaks", () => {
+    expect(
+      inlineMarkersToText("[[unverified]]The scheduler retries forever[[/unverified]] and more.", new Map()),
+    ).to.equal("The scheduler retries forever *[unverified]* and more.");
   });
 });
 
@@ -42,11 +50,132 @@ describe("receiptPresentation.receiptStaleness", () => {
       receiptStaleness({ nodeStableKey: "docnode:doc:README.md#x", ownNodeHash: "h", latestNodeHash: "h" }),
     ).to.equal("unknown");
     expect(
+      receiptStaleness({ nodeStableKey: "wf:GET /api/projects", ownNodeHash: "h", latestNodeHash: "h" }),
+    ).to.equal("unknown");
+    expect(
       receiptStaleness({ nodeStableKey: null, ownNodeHash: null, latestNodeHash: null }),
     ).to.equal("unknown");
     expect(
       receiptStaleness({ nodeStableKey: "a/b.ts#fn", ownNodeHash: null, latestNodeHash: "h" }),
     ).to.equal("unknown");
+  });
+
+  it("route symbols with path-param colons are ordinary graph keys, not synthesis", () => {
+    expect(
+      receiptStaleness({
+        nodeStableKey: "backend/src/api/routes/projects.ts#POST /:id/analyze",
+        ownNodeHash: "h1",
+        latestNodeHash: "h1",
+      }),
+    ).to.equal("fresh");
+    expect(
+      receiptStaleness({
+        nodeStableKey: "backend/src/api/routes/projects.ts#POST /:id/analyze",
+        ownNodeHash: "h1",
+        latestNodeHash: "h2",
+      }),
+    ).to.equal("stale");
+  });
+});
+
+describe("receiptPresentation.receiptVerification", () => {
+  const base = {
+    latestCommitHash: "abc1234",
+    receiptLineStart: 23,
+    receiptLineEnd: 26,
+    ownNodeLineStart: 20,
+    latestNodeLineStart: 20,
+    latestNodeLineEnd: 40,
+  };
+
+  it("verified: unchanged symbol at unchanged lines, checked against the latest commit", () => {
+    const v = receiptVerification({ ...base, staleness: "fresh", latestNodeHash: "h1" });
+    expect(v).to.deep.equal({
+      status: "verified",
+      checkedAgainstCommit: "abc1234",
+      lineStart: 23,
+      lineEnd: 26,
+    });
+  });
+
+  it("re_anchored: unchanged symbol that moved shifts the receipt span by its delta", () => {
+    const v = receiptVerification({
+      ...base,
+      staleness: "fresh",
+      latestNodeHash: "h1",
+      latestNodeLineStart: 275, // symbol moved down 255 lines
+    });
+    expect(v).to.deep.equal({
+      status: "re_anchored",
+      checkedAgainstCommit: "abc1234",
+      lineStart: 278,
+      lineEnd: 281,
+    });
+  });
+
+  it("changed: modified symbol reports where it now lives, never re-anchors the snippet", () => {
+    const v = receiptVerification({
+      ...base,
+      staleness: "stale",
+      latestNodeHash: "h-CHANGED",
+      latestNodeLineStart: 30,
+      latestNodeLineEnd: 55,
+    });
+    expect(v).to.deep.equal({
+      status: "changed",
+      checkedAgainstCommit: "abc1234",
+      lineStart: 30,
+      lineEnd: 55,
+    });
+  });
+
+  it("missing: symbol gone from the latest analysis", () => {
+    const v = receiptVerification({ ...base, staleness: "stale", latestNodeHash: null });
+    expect(v).to.deep.equal({
+      status: "missing",
+      checkedAgainstCommit: "abc1234",
+      lineStart: null,
+      lineEnd: null,
+    });
+  });
+
+  it("unverifiable: docs/synthesis receipts claim nothing about any commit", () => {
+    const v = receiptVerification({ ...base, staleness: "unknown", latestNodeHash: null });
+    expect(v).to.deep.equal({
+      status: "unverifiable",
+      checkedAgainstCommit: null,
+      lineStart: null,
+      lineEnd: null,
+    });
+  });
+});
+
+describe("receiptPresentation.confidenceReasonFor", () => {
+  it("counts cited claims and downgrades from the stored validation", () => {
+    const ctx = {
+      claims: [
+        { claim: "a", receiptIds: ["r1"], confidence: "high" },
+        { claim: "b", receiptIds: ["r1", "r2"], confidence: "medium" },
+        { claim: "c", receiptIds: [], confidence: "low" },
+      ],
+    };
+    expect(confidenceReasonFor(ctx, 6)).to.equal(
+      "2/3 tracked claims cite receipts · 1 downgraded to low · 6 receipts",
+    );
+  });
+
+  it("omits the downgrade clause when nothing was downgraded", () => {
+    const ctx = { claims: [{ claim: "a", receiptIds: ["r1"], confidence: "high" }] };
+    expect(confidenceReasonFor(ctx, 1)).to.equal("1/1 tracked claims cite receipts · 1 receipt");
+  });
+
+  it("is honest when claim tracking is missing", () => {
+    expect(confidenceReasonFor(null, 4)).to.equal(
+      "4 receipts · per-claim tracking not available for this generation",
+    );
+    expect(confidenceReasonFor({}, 0)).to.equal(
+      "no receipts — content is not independently verifiable",
+    );
   });
 });
 

@@ -8,6 +8,8 @@
  * per-claim citations in generation_context).
  */
 
+import { hasKindPrefix } from "../../worker/engine/stableKeys.js";
+
 export type ReceiptStaleness = "fresh" | "stale" | "unknown";
 
 /**
@@ -15,8 +17,8 @@ export type ReceiptStaleness = "fresh" | "stale" | "unknown";
  * the receipt's own snapshot against the latest complete snapshot:
  *  - same hash            -> "fresh"  (code unchanged since this was written)
  *  - different / missing  -> "stale"  (source changed or symbol removed)
- *  - not node-addressable -> "unknown" (docs/synthesis keys have no hash to
- *    compare — shown neutrally, never as a green "Current")
+ *  - not node-addressable -> "unknown" (kind-prefixed keys — docs, config,
+ *    schema, synthesis — stay neutral, never a green "Current")
  */
 export function receiptStaleness(input: {
   nodeStableKey: string | null;
@@ -24,12 +26,99 @@ export function receiptStaleness(input: {
   latestNodeHash: string | null;
 }): ReceiptStaleness {
   const { nodeStableKey, ownNodeHash, latestNodeHash } = input;
-  // Synthesis keys (cluster:…, wf:…) and doc keys (docnode:…) are not graph
-  // nodes; there is nothing to diff against. Same when the receipt predates
-  // node hashing.
-  if (!nodeStableKey || nodeStableKey.includes(":") || !ownNodeHash) return "unknown";
+  // Kind-prefixed keys (doc:…, cluster:…, wf:…) are excluded by PREFIX, not
+  // by containing a colon — route symbols like `x.ts#POST /:id/analyze` are
+  // ordinary graph nodes and must re-verify. Missing hash = predates node
+  // hashing.
+  if (!nodeStableKey || hasKindPrefix(nodeStableKey) || !ownNodeHash) return "unknown";
   if (!latestNodeHash) return "stale"; // symbol gone from the latest analysis
   return ownNodeHash === latestNodeHash ? "fresh" : "stale";
+}
+
+export interface ReceiptVerification {
+  status: "verified" | "re_anchored" | "changed" | "missing" | "unverifiable";
+  /** Commit of the latest complete analysis the receipt was checked against. */
+  checkedAgainstCommit: string | null;
+  /**
+   * Where this evidence lives in the latest analysis. For "re_anchored" the
+   * receipt span shifted by the symbol's own movement; for "changed" it is
+   * the symbol's current span (the receipt's snippet no longer matches it).
+   */
+  lineStart: number | null;
+  lineEnd: number | null;
+}
+
+/**
+ * Receipt re-anchoring (Swimm-style lifecycle): a receipt is verified at its
+ * own commit and re-checked against the newest analysis. Unchanged symbols
+ * that moved within their file re-anchor the receipt span by the symbol's
+ * line delta — hash equality means identical content, so every sub-range
+ * shifts by the same amount. Changed or missing symbols are never silently
+ * presented at their old coordinates as if still valid.
+ */
+export function receiptVerification(input: {
+  staleness: ReceiptStaleness;
+  latestNodeHash: string | null;
+  latestCommitHash: string | null;
+  receiptLineStart: number | null;
+  receiptLineEnd: number | null;
+  ownNodeLineStart: number | null;
+  latestNodeLineStart: number | null;
+  latestNodeLineEnd: number | null;
+}): ReceiptVerification {
+  if (input.staleness === "unknown") {
+    return { status: "unverifiable", checkedAgainstCommit: null, lineStart: null, lineEnd: null };
+  }
+  if (input.staleness === "stale") {
+    const exists = input.latestNodeHash !== null;
+    return {
+      status: exists ? "changed" : "missing",
+      checkedAgainstCommit: input.latestCommitHash,
+      lineStart: exists ? input.latestNodeLineStart : null,
+      lineEnd: exists ? input.latestNodeLineEnd : null,
+    };
+  }
+  const canShift =
+    input.ownNodeLineStart !== null && input.latestNodeLineStart !== null && input.receiptLineStart !== null;
+  const delta = canShift ? input.latestNodeLineStart! - input.ownNodeLineStart! : 0;
+  if (delta !== 0) {
+    return {
+      status: "re_anchored",
+      checkedAgainstCommit: input.latestCommitHash,
+      lineStart: input.receiptLineStart! + delta,
+      lineEnd: input.receiptLineEnd !== null ? input.receiptLineEnd + delta : null,
+    };
+  }
+  return {
+    status: "verified",
+    checkedAgainstCommit: input.latestCommitHash,
+    lineStart: input.receiptLineStart,
+    lineEnd: input.receiptLineEnd,
+  };
+}
+
+/**
+ * A confidence label without its reason is theater (audit §3.6): "high" on a
+ * one-receipt section and "high" on a fifteen-receipt section must read
+ * differently. The reason is computed from the same per-claim validation the
+ * grade came from — mechanical counts, no adjectives. Works for legacy
+ * sections too (generation_context.claims has been stored since v1).
+ */
+export function confidenceReasonFor(generationContext: unknown, receiptCount: number): string {
+  const ctx = generationContext as { claims?: Array<{ receiptIds?: unknown; confidence?: unknown }> } | null;
+  const claims = Array.isArray(ctx?.claims) ? ctx!.claims! : null;
+  const receipts = `${receiptCount} receipt${receiptCount === 1 ? "" : "s"}`;
+  if (!claims || claims.length === 0) {
+    return receiptCount > 0
+      ? `${receipts} · per-claim tracking not available for this generation`
+      : "no receipts — content is not independently verifiable";
+  }
+  const cited = claims.filter((c) => Array.isArray(c.receiptIds) && (c.receiptIds as unknown[]).length > 0).length;
+  const low = claims.filter((c) => c.confidence === "low").length;
+  const parts = [`${cited}/${claims.length} tracked claims cite receipts`];
+  if (low > 0) parts.push(`${low} downgraded to low`);
+  parts.push(receipts);
+  return parts.join(" · ");
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,6 +139,8 @@ export function ageLabelFrom(analyzedAt: string | Date | null, now: Date = new D
  * Inline [[receipt:<bundle-id>]] markers are a reader-UI affordance; in
  * exported Markdown they become plain "(path:line)" citations. Unresolvable
  * markers are dropped — never leak raw marker syntax into an export.
+ * [[unverified]] spans keep their text with an explicit "[unverified]" tag —
+ * the export must stay as honest as the reader.
  */
 export function inlineMarkersToText(
   content: string,
@@ -61,6 +152,8 @@ export function inlineMarkersToText(
       if (!r?.filePath) return "";
       return ` (${r.filePath}${r.lineStart ? `:${r.lineStart}` : ""})`;
     })
+    .replace(/\[\[unverified\]\]/g, "")
+    .replace(/\[\[\/unverified\]\]/g, " *[unverified]*")
     .replace(/[ \t]+([.,;:)])/g, "$1")
     .replace(/[ \t]{2,}/g, " ");
 }

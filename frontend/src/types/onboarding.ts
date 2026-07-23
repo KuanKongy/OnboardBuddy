@@ -15,6 +15,19 @@ export type SectionId =
   | "dependency-graph"
   | "doc-health";
 
+/**
+ * Receipt re-anchoring lifecycle (Swimm-style): where this evidence stands
+ * against the latest complete analysis.
+ */
+export interface ReceiptVerification {
+  status: "verified" | "re_anchored" | "changed" | "missing" | "unverifiable";
+  /** Commit of the latest analysis the receipt was checked against. */
+  checkedAgainstCommit: string | null;
+  /** The receipt span in the latest analysis (shifted when re-anchored). */
+  lineStart: number | null;
+  lineEnd: number | null;
+}
+
 export interface SourceReceipt {
   /** source_receipts row id (present on reader receipts). */
   id?: string;
@@ -23,6 +36,8 @@ export interface SourceReceipt {
   filePath: string;
   lineStart?: number;
   lineEnd?: number;
+  /** Original lineEnd when the span was capped to stay spot-checkable. */
+  truncatedFromLineEnd?: number | null;
   symbolName?: string;
   snippet?: string;
   /** Semantic summary of the cited symbol ("what this does"), when available. */
@@ -37,8 +52,9 @@ export interface SourceReceipt {
    * unknown = not node-addressable (docs/synthesis) — never shown as "Current".
    */
   staleness: "fresh" | "stale" | "unknown";
-  confidence: ConfidenceLevel;
-  ageLabel: string;
+  verification?: ReceiptVerification;
+  confidence?: ConfidenceLevel;
+  ageLabel?: string;
 }
 
 export interface ContentBlock {
@@ -61,6 +77,8 @@ export interface OnboardingSection {
   status: SectionStatus;
   reviewStatus?: string;
   confidence: ConfidenceLevel;
+  /** Mechanical explanation of the grade ("7/9 tracked claims cite receipts · …"). */
+  confidenceReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
   blocks: ContentBlock[];
@@ -71,6 +89,17 @@ export interface OnboardingSection {
   analyzedCommit?: string;
 }
 
+/** Honest denominators for the "critical 25%" story — counts over stored rows. */
+export interface PackageCoverage {
+  snapshotCreatedAt: string;
+  files: { analyzed: number; unsupported: number | null; cited: number };
+  symbols: { total: number; cited: number };
+  workflows: { total: number; covered: number };
+  tutorialCount: number;
+  languages: Record<string, unknown> | null;
+  rankingSignals: Array<{ signal: string; weight: number }>;
+}
+
 export interface OnboardingPackage {
   /** Absent only on the synthetic "missing" placeholder. */
   id?: string;
@@ -79,7 +108,72 @@ export interface OnboardingPackage {
   status: PackageStatus;
   generatedAt: string;
   reviewedBy?: string;
+  analyzedCommit?: string;
+  coverage?: PackageCoverage | null;
   sections: OnboardingSection[];
+}
+
+/** POST /projects/:id/ask response (grounded Q&A with receipts). */
+export interface AskAnswer {
+  answerMarkdown: string;
+  claims: Array<{ claim: string; receiptIds: string[]; confidence: ConfidenceLevel }>;
+  receipts: Array<{
+    receiptId: string;
+    filePath?: string;
+    symbolName?: string;
+    lineStart?: number;
+    lineEnd?: number;
+    snippet?: string;
+    trustLevel?: string;
+  }>;
+  confidence: ConfidenceLevel;
+  unknowns: SectionUnknown[];
+  meta: { snapshotId: string; role: string; intent?: string; validationIssues?: string[]; retried?: boolean };
+}
+
+/** GET /projects/:id/onboarding/provenance — "how this was made". */
+export interface PackageProvenance {
+  package: {
+    id: string;
+    role: string;
+    analyzedCommit: string;
+    branch: string;
+    generatedAt: string;
+    semanticDepth: string;
+    privacyMode: string;
+  };
+  models: Array<{
+    provider: string;
+    model: string;
+    tier: string | null;
+    calls: number;
+    cachedCalls: number;
+    failedCalls: number;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number;
+  }>;
+  sections: Array<{
+    sectionId: string;
+    type: string;
+    title: string;
+    confidence: ConfidenceLevel;
+    confidenceReason: string;
+    reviewStatus: string;
+    receiptCount: number;
+    promptVersion: string | null;
+    retrieval: { seeds?: number; candidates?: number; selected?: number; views?: string[] } | null;
+    validation: { issues: string[]; retried: boolean; hardFailure: boolean };
+    voiceLintHits: string[];
+    inlineCitations: {
+      resolved?: number;
+      dropped?: string[];
+      unverified_marked?: number;
+      unverified_unmatched?: number;
+    } | null;
+    claims: { total: number; cited: number; low: number };
+    unknownsCount: number;
+  }>;
 }
 
 /** One onboarding package card: (scope, role, commit, branch) with status rollups. */

@@ -13,7 +13,12 @@ import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalServic
 import type { DeveloperRole } from '../semantic/projections.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
-import { rewriteInlineCitations, type RewriteResult } from './citationMarkers.js';
+import {
+  markUnverifiedClaims,
+  rewriteInlineCitations,
+  type RewriteResult,
+  type UnverifiedMarkResult,
+} from './citationMarkers.js';
 import { lintVoice } from './voiceLint.js';
 
 export const SECTION_PROMPT_VERSION = 'section-v3';
@@ -119,11 +124,22 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     aliasToId,
     new Set(validation.usedReceiptIds),
   );
-  output = { ...output, contentMarkdown: inline.content };
+  // Claims downgraded for citing nothing get flagged AT the claim, not only
+  // in the Known Gaps footer — the reader sees "unverified" at the point of
+  // doubt.
+  const unverified = markUnverifiedClaims(
+    inline.content,
+    validation.adjustedClaims
+      .filter((c) => c.confidence === 'low' && c.receiptIds.length === 0)
+      .map((c) => c.claim),
+  );
+  output = { ...output, contentMarkdown: unverified.content };
 
   const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
 
-  const sectionId = await persistSection(params, bundle, output, validation, diagrams, runId, retried, inline, voice.hits);
+  const sectionId = await persistSection(
+    params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits,
+  );
   return { sectionId, validation, retried, runId };
 }
 
@@ -194,6 +210,7 @@ async function persistSection(
   runId: string | null,
   retried: boolean,
   inline: RewriteResult,
+  unverified: UnverifiedMarkResult,
   voiceHits: string[],
 ): Promise<string> {
   const generationContext = {
@@ -202,7 +219,12 @@ async function persistSection(
     retrieval: bundle.deterministicContext.retrievalStats ?? null,
     validation: { issues: validation.issues, retried, hardFailure: validation.hardFailure },
     claims: validation.adjustedClaims,
-    inline_citations: { resolved: inline.resolved.length, dropped: inline.dropped },
+    inline_citations: {
+      resolved: inline.resolved.length,
+      dropped: inline.dropped,
+      unverified_marked: unverified.marked,
+      unverified_unmatched: unverified.unmatched,
+    },
     voice_lint: { remaining_hits: voiceHits },
   };
 
@@ -245,7 +267,12 @@ async function persistSection(
        receipt.snippet ?? null, receipt.detectionExpression ?? null,
        receipt.referencedRecordId ?? null, params.commitHash,
        claimByReceiptId.get(receipt.receiptId) ?? null,
-       JSON.stringify({ copiedFromReceiptId: receipt.receiptId })],
+       JSON.stringify({
+         copiedFromReceiptId: receipt.receiptId,
+         ...(receipt.truncatedFromLineEnd != null
+           ? { truncatedFromLineEnd: receipt.truncatedFromLineEnd }
+           : {}),
+       })],
     );
   }
   return sectionRow.id;

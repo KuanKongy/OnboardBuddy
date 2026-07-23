@@ -95,31 +95,47 @@ interface WorkflowStep {
   deterministic_description: string | null;
 }
 
+/** "worker/engine/repoIngester.ts" -> "repoIngester.ts" */
+function stepName(step: { symbol_name?: string | null; file_path: string }): string {
+  return step.symbol_name ?? step.file_path.split("/").pop() ?? step.file_path;
+}
+
 function StepPager({
   current,
   total,
+  labels,
   onPrev,
   onNext,
   onJump,
 }: {
   current: number;
   total: number;
+  /** Per-step names (symbol or file) — the rail was 21 anonymous dots. */
+  labels?: string[];
   onPrev: () => void;
   onNext: () => void;
   onJump: (i: number) => void;
 }) {
   return (
-    <div className="flex items-center justify-between">
-      <Badge variant="outline" className="text-xs tabular-nums">
-        Step {current + 1} of {total}
-      </Badge>
-      <div className="flex items-center gap-2">
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <Badge variant="outline" className="shrink-0 text-xs tabular-nums">
+          Step {current + 1} of {total}
+        </Badge>
+        {labels?.[current] && (
+          <span className="truncate font-mono text-xs text-muted-foreground" title={labels[current]}>
+            {labels[current]}
+          </span>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
         <div className="flex items-center gap-1">
           {Array.from({ length: total }).map((_, i) => (
             <button
               key={i}
               onClick={() => onJump(i)}
-              aria-label={`Go to step ${i + 1}`}
+              aria-label={labels?.[i] ? `Go to step ${i + 1}: ${labels[i]}` : `Go to step ${i + 1}`}
+              title={labels?.[i] ? `${i + 1}. ${labels[i]}` : undefined}
               className="flex h-6 w-6 items-center justify-center"
             >
               <span
@@ -392,6 +408,7 @@ export function WalkthroughTab() {
                 <StepPager
                   current={currentStep}
                   total={detail.steps.length}
+                  labels={detail.steps.map(stepName)}
                   onPrev={() => setCurrentStep((s) => s - 1)}
                   onNext={() => setCurrentStep((s) => s + 1)}
                   onJump={setCurrentStep}
@@ -551,6 +568,7 @@ export function WalkthroughTab() {
                   <StepPager
                     current={currentStep}
                     total={wfSteps.length}
+                    labels={wfSteps.map(stepName)}
                     onPrev={() => setCurrentStep((s) => s - 1)}
                     onNext={() => setCurrentStep((s) => s + 1)}
                     onJump={setCurrentStep}
