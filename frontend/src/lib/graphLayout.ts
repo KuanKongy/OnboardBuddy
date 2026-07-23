@@ -192,8 +192,9 @@ export function layoutDependencyGraph(
   nodes: GraphNode[],
   edges: GraphEdge[],
   _entryPoints: string[],
+  direction: "LR" | "TB" = "LR",
 ): PositionedNode[] {
-  return layoutGraph(nodes, edges, { direction: "LR" });
+  return layoutGraph(nodes, edges, { direction });
 }
 
 /**

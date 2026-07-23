@@ -76,7 +76,7 @@ export function ForgotPasswordPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="h-8 text-[13px]"
+                    className="h-8 text-[0.8125rem]"
                   />
                 </div>
                 <Button type="submit" className="w-full" size="sm" disabled={loading}>

@@ -1,17 +1,15 @@
-import { AlertCircle, Check, Copy, ExternalLink, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, Copy, ExternalLink, Info, Sparkles, X } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NodeDetail } from "@/lib/graphData";
+import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
+import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
+import { useOptionalProject } from "@/contexts/ProjectContext";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphNode } from "@/types/graph";
-
-export interface GithubRepoRef {
-  owner: string;
-  repo: string;
-  branch: string;
-}
 
 interface NodeInfoPanelProps {
   node: GraphNode;
@@ -23,14 +21,6 @@ interface NodeInfoPanelProps {
   githubRepo?: GithubRepoRef;
   /** Deselects the node (also reachable via Esc / clicking empty canvas). */
   onClose?: () => void;
-}
-
-function buildGithubBlobUrl(repo: GithubRepoRef, filePath: string): string {
-  const encodedPath = filePath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-  return `https://github.com/${repo.owner}/${repo.repo}/blob/${encodeURIComponent(repo.branch)}/${encodedPath}`;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -64,6 +54,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
+  const projectId = useOptionalProject()?.project?.id ?? null;
   const doc = detail?.doc;
 
   async function handleCopyPath() {
@@ -84,7 +75,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
           <p className="truncate text-sm font-semibold text-foreground" title={node.label}>
             {node.label}
           </p>
-          <p className="truncate font-mono text-[11px] text-muted-foreground" title={node.id}>
+          <p className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={node.id}>
             {node.id}
           </p>
         </div>
@@ -132,8 +123,8 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
         {/* 1. One-line summary */}
         {doc?.summary && (
           <div>
-            <p className="text-[13px] leading-relaxed text-foreground">{doc.summary}</p>
-            <p className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-muted-foreground/70">
+            <p className="text-[0.8125rem] leading-relaxed text-foreground">{doc.summary}</p>
+            <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
               {doc.factsOnly ? (
                 "Deterministic facts only — no AI summary for this symbol"
               ) : (
@@ -149,12 +140,12 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
         {doc?.signature && (
           <div>
             <p className="section-label mb-1">Signature</p>
-            <pre className="overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11.5px] leading-relaxed text-foreground">
+            <pre className="overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[0.71875rem] leading-relaxed text-foreground">
               {doc.signature}
             </pre>
             {doc.returns && (
-              <p className="mt-1 text-[11.5px] text-muted-foreground">
-                Returns <code className="rounded bg-muted px-1 py-0.5 text-[11px]">{doc.returns}</code>
+              <p className="mt-1 text-[0.71875rem] text-muted-foreground">
+                Returns <code className="rounded bg-muted px-1 py-0.5 text-[0.6875rem]">{doc.returns}</code>
               </p>
             )}
           </div>
@@ -164,11 +155,11 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
         {doc?.exampleUsage && (
           <div>
             <p className="section-label mb-1">Example usage</p>
-            <p className="mb-1 font-mono text-[11px] text-muted-foreground">
+            <p className="mb-1 font-mono text-[0.6875rem] text-muted-foreground">
               called from {doc.exampleUsage.caller} · {doc.exampleUsage.filePath}
               {doc.exampleUsage.lineStart ? `:${doc.exampleUsage.lineStart}` : ""}
             </p>
-            <pre className="max-h-40 overflow-auto rounded-md bg-muted px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
+            <pre className="max-h-40 overflow-auto rounded-md bg-muted px-2.5 py-2 text-[0.6875rem] leading-relaxed text-foreground">
               {doc.exampleUsage.snippet}
             </pre>
           </div>
@@ -177,15 +168,33 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
         {/* Importance (ranking always shown with its reasons) */}
         {detail && (
           <div>
-            <p className="section-label mb-1.5">Importance</p>
+            <div className="mb-1.5 flex items-center gap-1.5">
+              <p className="section-label">Importance</p>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                    <Info className="h-3 w-3" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-left">{RANKING_EXPLANATION}</TooltipContent>
+              </Tooltip>
+              {projectId && (
+                <Link
+                  to={`/projects/${projectId}/settings`}
+                  className="text-[0.65625rem] font-medium text-primary hover:underline"
+                >
+                  Adjust weights
+                </Link>
+              )}
+            </div>
             {detail.composite_score === null ? (
-              <p className="text-[11.5px] text-muted-foreground">Not ranked in this snapshot</p>
+              <p className="text-[0.71875rem] text-muted-foreground">Not ranked in this snapshot</p>
             ) : (
               <div className="flex items-baseline gap-2">
                 <span className="text-lg font-semibold tabular-nums text-foreground">
                   {Math.round(detail.composite_score * 100)}
                 </span>
-                <span className="text-[10.5px] text-muted-foreground">/ 100 critical-path score</span>
+                <span className="text-[0.65625rem] text-muted-foreground">/ 100 critical-path score</span>
               </div>
             )}
             {detail.ranking_reasons.length > 0 && (
@@ -193,7 +202,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                 {detail.ranking_reasons.map((reason) => (
                   <li key={reason} className="flex items-start gap-1.5">
                     <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-success" />
-                    <span className="text-[11.5px] text-muted-foreground">{reason}</span>
+                    <span className="text-[0.71875rem] text-muted-foreground">{reason}</span>
                   </li>
                 ))}
               </ul>
@@ -214,7 +223,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                   </p>
                   <ul className="space-y-0.5">
                     {detail.callers!.map((c) => (
-                      <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>
+                      <li key={c.stable_key} className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={c.file_path ?? undefined}>
                         {c.name}
                       </li>
                     ))}
@@ -228,7 +237,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                   </p>
                   <ul className="space-y-0.5">
                     {detail.callees!.map((c) => (
-                      <li key={c.stable_key} className="truncate font-mono text-[11px] text-muted-foreground" title={c.file_path ?? undefined}>
+                      <li key={c.stable_key} className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={c.file_path ?? undefined}>
                         {c.name}
                       </li>
                     ))}
@@ -248,7 +257,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                 <p className="section-label mb-1.5">Side effects</p>
                 <div className="flex flex-wrap gap-1">
                   {detail.side_effects!.map((se, i) => (
-                    <Badge key={i} variant="outline" className="h-5 px-1.5 text-[10px]" title={se.target ?? undefined}>
+                    <Badge key={i} variant="outline" className="h-5 px-1.5 text-[0.625rem]" title={se.target ?? undefined}>
                       {se.type.replace(/_/g, " ")}
                     </Badge>
                   ))}
@@ -256,7 +265,7 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
               </div>
             )}
             {detail.cluster && (
-              <p className="text-[11.5px] text-muted-foreground">
+              <p className="text-[0.71875rem] text-muted-foreground">
                 Part of the <span className="font-medium text-foreground">{detail.cluster.label}</span> component
                 — see the Architecture tab.
               </p>
@@ -273,8 +282,8 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
               {detail.connected_workflows.map((wf) => (
                 <li key={wf.id} className="flex items-center gap-1.5">
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: "var(--node-worker)" }} />
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-foreground">{wf.title}</span>
-                  <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[9px]">
+                  <span className="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{wf.title}</span>
+                  <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[0.5625rem]">
                     {wf.trigger_type}
                   </Badge>
                 </li>
@@ -289,26 +298,50 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
             <Separator className="mb-3" />
             <p className="section-label mb-1.5">Receipts</p>
             <ul className="space-y-1">
-              {doc.receipts.map((r) => (
-                <li key={r.id} className="flex items-center gap-1.5 text-[11px]">
-                  <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[9px] uppercase">
-                    {r.trust_level}
-                  </Badge>
-                  <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={r.file_path ?? undefined}>
+              {doc.receipts.map((r) => {
+                const receiptUrl =
+                  githubRepo && r.file_path
+                    ? buildGithubBlobUrl(githubRepo, r.file_path, { lineStart: r.line_start, lineEnd: r.line_end })
+                    : null;
+                const label = (
+                  <>
                     {r.file_path ?? r.receipt_kind}
                     {r.line_start ? `:${r.line_start}` : ""}
-                  </span>
-                </li>
-              ))}
+                  </>
+                );
+                return (
+                  <li key={r.id} className="flex items-center gap-1.5 text-[0.6875rem]">
+                    <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[0.5625rem] uppercase">
+                      {r.trust_level}
+                    </Badge>
+                    {receiptUrl ? (
+                      <a
+                        href={receiptUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={r.file_path ?? undefined}
+                        className="inline-flex min-w-0 flex-1 items-center gap-1 truncate font-mono text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        <span className="min-w-0 truncate">{label}</span>
+                        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={r.file_path ?? undefined}>
+                        {label}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </div>
         )}
 
         {!detail && loading && (
-          <p className="text-[11.5px] text-muted-foreground">Loading details…</p>
+          <p className="text-[0.71875rem] text-muted-foreground">Loading details…</p>
         )}
         {!detail && !loading && (
-          <p className="text-[11.5px] text-muted-foreground">No additional details available for this node.</p>
+          <p className="text-[0.71875rem] text-muted-foreground">No additional details available for this node.</p>
         )}
       </div>
     </div>

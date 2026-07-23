@@ -84,7 +84,7 @@ export function SignupPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="space-y-1">
@@ -98,7 +98,7 @@ export function SignupPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="h-8 pr-8 text-[13px]"
+                    className="h-8 pr-8 text-[0.8125rem]"
                   />
                   <Button
                     type="button"

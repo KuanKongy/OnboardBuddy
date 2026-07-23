@@ -61,7 +61,7 @@ export function PackageSelector() {
             <span className="min-w-0 flex-1">
               {selectedPackage ? (
                 <>
-                  <span className="flex items-center gap-1 truncate font-mono text-[11px] text-foreground">
+                  <span className="flex items-center gap-1 truncate font-mono text-[0.6875rem] text-foreground">
                     <GitBranch className="h-2.5 w-2.5 shrink-0" />
                     {selectedPackage.branch}@{selectedPackage.analyzed_commit.slice(0, 7)}
                     {!selectedPackage.is_latest_commit && (
@@ -73,14 +73,14 @@ export function PackageSelector() {
                       </Tooltip>
                     )}
                   </span>
-                  <span className="block truncate text-[10px] text-muted-foreground">
+                  <span className="block truncate text-[0.625rem] text-muted-foreground">
                     {selectedPackage.path_prefix ? `${selectedPackage.path_prefix}/` : "whole repo"} · {roleLabel(selectedPackage.role)}
                   </span>
                 </>
               ) : (
                 <>
-                  <span className="block truncate text-[11px] font-medium text-foreground">Latest analysis</span>
-                  <span className="block truncate text-[10px] text-muted-foreground">auto-follows the newest run</span>
+                  <span className="block truncate text-[0.6875rem] font-medium text-foreground">Latest analysis</span>
+                  <span className="block truncate text-[0.625rem] text-muted-foreground">auto-follows the newest run</span>
                 </>
               )}
             </span>
@@ -88,12 +88,12 @@ export function PackageSelector() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72">
-          <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+          <DropdownMenuLabel className="text-[0.6875rem] font-normal text-muted-foreground">
             Every tab follows this selection · ★ = your default
           </DropdownMenuLabel>
           <DropdownMenuItem onSelect={() => selectPackage(null)} className="gap-2">
             <Check className={cn("h-3.5 w-3.5 shrink-0", selectedPackageId === null ? "opacity-100" : "opacity-0")} />
-            <span className="flex-1 text-[12px]">Latest analysis (auto)</span>
+            <span className="flex-1 text-[0.75rem]">Latest analysis (auto)</span>
             {defaultPackageId === null ? (
               <Star className="h-3.5 w-3.5 shrink-0 fill-warning text-warning" />
             ) : (
@@ -121,9 +121,9 @@ export function PackageSelector() {
                 title={pkg.status}
               />
               <span className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-[11px]">{packageLine(pkg)}</span>
+                <span className="block truncate font-mono text-[0.6875rem]">{packageLine(pkg)}</span>
                 {!pkg.is_latest_commit && (
-                  <span className="block text-[10px] text-warning">behind latest on {pkg.branch}</span>
+                  <span className="block text-[0.625rem] text-warning">behind latest on {pkg.branch}</span>
                 )}
               </span>
               {defaultPackageId === pkg.id ? (

@@ -45,3 +45,29 @@ export function resetTour(tour: TourName, userId: string): void {
     // Best-effort only.
   }
 }
+
+// ── Tour picker requests ────────────────────────────────────────────────
+// The Help page's tour picker can request a tour on a page the user isn't
+// on yet (e.g. "Start the reader tour" from /help navigates to a package
+// reader). sessionStorage — not localStorage — so a stale request can't
+// fire a tour days later if the tab is reused; it dies with the tab.
+const REQUEST_KEY = "onboardbuddy:tour-request";
+
+export function requestTour(tour: TourName): void {
+  try {
+    sessionStorage.setItem(REQUEST_KEY, tour);
+  } catch {
+    // Best-effort only.
+  }
+}
+
+/** True (and consumes the request) when a pending request matches `tour`. */
+export function consumeTourRequest(tour: TourName): boolean {
+  try {
+    if (sessionStorage.getItem(REQUEST_KEY) !== tour) return false;
+    sessionStorage.removeItem(REQUEST_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}

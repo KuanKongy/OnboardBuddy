@@ -31,23 +31,23 @@ interface StepLogEntry {
 }
 
 /** Pipeline order + labels; phases the backend hasn't reached yet render as upcoming. */
-const PHASE_ORDER: Array<{ key: string; label: string }> = [
-  { key: "ingest", label: "Download & inventory" },
-  { key: "parse", label: "Parse code (AST)" },
-  { key: "graph", label: "Build evidence graph" },
-  { key: "workflows", label: "Trace workflows" },
-  { key: "candidate_ranking", label: "Rank critical code" },
-  { key: "clustering", label: "Cluster architecture" },
-  { key: "incremental_diff", label: "Diff vs previous commit" },
-  { key: "semantic_symbols", label: "AI: explain symbols" },
-  { key: "synthesis", label: "AI: file → system synthesis" },
-  { key: "capabilities", label: "AI: extract capabilities" },
-  { key: "refinement", label: "AI: refine top items" },
-  { key: "critique", label: "AI: verify claims" },
-  { key: "semantic_ranking", label: "AI: blend rankings" },
-  { key: "embeddings", label: "Index for retrieval" },
-  { key: "generation", label: "Generate onboarding" },
-  { key: "validation", label: "Validate citations" },
+const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = [
+  { key: "ingest", label: "Download & inventory", desc: "Clones the repo and inventories files — nothing is sent to any AI" },
+  { key: "parse", label: "Parse code (AST)", desc: "Builds a syntax tree per file to extract symbols deterministically" },
+  { key: "graph", label: "Build evidence graph", desc: "Links imports, calls and dependencies into an evidence graph" },
+  { key: "workflows", label: "Trace workflows", desc: "Traces end-to-end flows through the graph (routes, jobs, handlers)" },
+  { key: "candidate_ranking", label: "Rank critical code", desc: "Scores files/symbols on the seven criticality signals" },
+  { key: "clustering", label: "Cluster architecture", desc: "Groups modules into architecture components" },
+  { key: "incremental_diff", label: "Diff vs previous commit", desc: "Compares against the previous analyzed commit to find what changed" },
+  { key: "semantic_symbols", label: "AI: explain symbols", desc: "AI reads extracted facts (and code under Full AI) to explain symbols" },
+  { key: "synthesis", label: "AI: file → system synthesis", desc: "AI composes file-level explanations into a system narrative" },
+  { key: "capabilities", label: "AI: extract capabilities", desc: "AI names the product capabilities the code implements" },
+  { key: "refinement", label: "AI: refine top items", desc: "AI rewrites the highest-ranked explanations for clarity" },
+  { key: "critique", label: "AI: verify claims", desc: "AI cross-checks claims against the evidence graph" },
+  { key: "semantic_ranking", label: "AI: blend rankings", desc: "Blends AI judgment into the deterministic ranking" },
+  { key: "embeddings", label: "Index for retrieval", desc: "Indexes content for retrieval (OpenAI-compatible embeddings endpoint)" },
+  { key: "generation", label: "Generate onboarding", desc: "Assembles the onboarding package sections" },
+  { key: "validation", label: "Validate citations", desc: "Verifies every citation still points at real code" },
 ];
 
 function StatusIcon({ status }: { status: string }) {
@@ -157,9 +157,12 @@ export function AnalysisRunPanel({
   return (
     <div className="rounded-md border border-border bg-muted/25">
       <div className="px-3 py-2">
+        <p className="mb-1.5 text-[0.65625rem] text-muted-foreground/70">
+          Deterministic phases run first; AI phases are skipped entirely when this project's privacy mode disables them.
+        </p>
         {havePhases ? (
           <ol className="space-y-0.5">
-            {PHASE_ORDER.map(({ key, label }) => {
+            {PHASE_ORDER.map(({ key, label, desc }) => {
               const p = phaseByKey.get(key);
               const status = p?.status ?? (isActive ? "pending" : "not_run");
               // Hide phases that never applied to finished runs (e.g. no
@@ -175,13 +178,21 @@ export function AnalysisRunPanel({
               return (
                 <li key={key} className="flex items-center gap-2.5 py-0.5" title={!errorText && p ? JSON.stringify(p.metrics) : undefined}>
                   <StatusIcon status={status} />
-                  <span className={`w-44 shrink-0 text-[12px] ${running ? "font-medium text-foreground" : status === "pending" || status === "not_run" ? "text-muted-foreground/60" : "text-foreground"}`}>
-                    {label}
-                  </span>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        tabIndex={0}
+                        className={`w-44 shrink-0 cursor-help text-[0.75rem] ${running ? "font-medium text-foreground" : status === "pending" || status === "not_run" ? "text-muted-foreground/60" : "text-foreground"}`}
+                      >
+                        {label}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-left">{desc}</TooltipContent>
+                  </Tooltip>
                   {errorText ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span tabIndex={0} className="min-w-0 flex-1 cursor-help truncate text-[11px] text-muted-foreground">
+                        <span tabIndex={0} className="min-w-0 flex-1 cursor-help truncate text-[0.6875rem] text-muted-foreground">
                           {summaryText}
                         </span>
                       </TooltipTrigger>
@@ -190,11 +201,11 @@ export function AnalysisRunPanel({
                       </TooltipContent>
                     </Tooltip>
                   ) : (
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted-foreground">
                       {summaryText}
                     </span>
                   )}
-                  <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">
+                  <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/60">
                     {p?.started_at ? `${timeOf(p.started_at)}${p.finished_at ? ` → ${timeOf(p.finished_at)}` : "…"}` : ""}
                     {p && durationOf(p) ? ` (${durationOf(p)})` : ""}
                     {running && p?.started_at && !p.finished_at ? ` (${liveElapsed(p.started_at, nowTs)})` : ""}
@@ -210,7 +221,7 @@ export function AnalysisRunPanel({
             {stepLog.slice(-5).map((entry, i, shown) => {
               const isCurrent = i === shown.length - 1;
               return (
-                <li key={`${entry.ts}-${i}`} className="flex items-center gap-2 text-[11.5px]">
+                <li key={`${entry.ts}-${i}`} className="flex items-center gap-2 text-[0.71875rem]">
                   {isCurrent
                     ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />
                     : <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />}
@@ -221,12 +232,12 @@ export function AnalysisRunPanel({
             })}
           </ol>
         ) : (
-          <p className="py-1 text-[11.5px] text-muted-foreground">No run recorded yet for this snapshot.</p>
+          <p className="py-1 text-[0.71875rem] text-muted-foreground">No run recorded yet for this snapshot.</p>
         )}
       </div>
 
       {(typeof budget.llm_calls === "number" || typeof budget.estimated_cost_usd === "number") && (
-        <p className="border-t border-border/60 px-3 py-1.5 text-[11px] tabular-nums text-muted-foreground">
+        <p className="border-t border-border/60 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground">
           Spend: {typeof budget.llm_calls === "number" ? `${budget.llm_calls} AI calls` : ""}
           {typeof budget.input_tokens === "number" ? ` · ${Number(budget.input_tokens).toLocaleString()} input tokens` : ""}
           {typeof budget.output_tokens === "number" ? ` · ${Number(budget.output_tokens).toLocaleString()} output tokens` : ""}
@@ -236,14 +247,14 @@ export function AnalysisRunPanel({
 
       {stepLog.length > 0 && havePhases && (
         <details className="border-t border-border/60 px-3 py-1.5">
-          <summary className="cursor-pointer text-[11px] text-muted-foreground hover:text-foreground">
+          <summary className="cursor-pointer text-[0.6875rem] text-muted-foreground hover:text-foreground">
             Raw step log ({stepLog.length} entries)
           </summary>
           <div className="mt-1 border-l border-border pl-3">
             {stepLog.map((entry, i) => (
               <div key={i} className="flex items-start gap-2 py-0.5">
-                <span className="flex-1 text-[11px] text-muted-foreground">{entry.step}</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/60">{timeOf(entry.ts)}</span>
+                <span className="flex-1 text-[0.6875rem] text-muted-foreground">{entry.step}</span>
+                <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/60">{timeOf(entry.ts)}</span>
               </div>
             ))}
           </div>

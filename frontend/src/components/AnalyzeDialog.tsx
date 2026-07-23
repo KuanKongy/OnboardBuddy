@@ -1,5 +1,6 @@
-import { Loader2, Sparkles } from "lucide-react";
+import { ChevronDown, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { ApiError, apiFetch } from "@/lib/api";
 import {
   AnalyzeConfigForm,
@@ -9,8 +10,10 @@ import {
 } from "@/components/AnalyzeConfigForm";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
 import type { ProjectData } from "@/contexts/ProjectContext";
+import { PRIVACY_MODES } from "@/pages/ProjectSettingsPage";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 
 interface AnalyzeDialogProps {
   project: ProjectData;
@@ -35,6 +38,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(projectId);
 
   useEffect(() => {
@@ -97,6 +101,36 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           onChange={updateConfig}
         />
 
+        <div className="rounded-md border border-border">
+          <button
+            type="button"
+            onClick={() => setPrivacyOpen((v) => !v)}
+            aria-expanded={privacyOpen}
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-[0.71875rem] text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform", !privacyOpen && "-rotate-90")} />
+            What gets sent to the AI?
+          </button>
+          {privacyOpen && (() => {
+            const mode = PRIVACY_MODES.find((m) => m.key === (project.settings?.privacy_mode ?? "full_ai")) ?? PRIVACY_MODES[0]!;
+            return (
+              <div className="border-t border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
+                <p>
+                  This project's privacy mode: <span className="font-medium text-foreground">{mode.label}</span>
+                </p>
+                <p className="mt-0.5">{mode.hint}</p>
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                  <Link to={`/projects/${projectId}/settings`} className="text-primary hover:underline">
+                    Change in Project Settings
+                  </Link>
+                  <Link to="/help#privacy" className="text-primary hover:underline">
+                    Learn more
+                  </Link>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
         {conflict && (
           <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
             <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
