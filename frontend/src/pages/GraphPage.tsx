@@ -1,4 +1,4 @@
-import { AlertTriangle, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, CornerLeftUp, Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
@@ -18,6 +18,7 @@ import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
+import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
 type GraphView = "files" | "classes";
@@ -47,6 +48,9 @@ export function GraphPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [allEdges, setAllEdges] = useState(false);
+  const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set());
+  const [direction, setDirection] = useState<"LR" | "TB">("LR");
+  const [fullscreen, setFullscreen] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -162,6 +166,24 @@ export function GraphPage() {
     view === "files" && !!data && !loading,
   );
 
+  function toggleKind(kind: string) {
+    setHiddenKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
+
   // Enrich the selected node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
   useEffect(() => {
@@ -234,15 +256,15 @@ export function GraphPage() {
   }, [edges, filteredNodeIds, allEdges]);
 
   const positionedNodes = useMemo(
-    () => layoutDependencyGraph(visibleNodes, visibleEdges, data?.graph.entryPoints ?? []),
-    [visibleNodes, visibleEdges, data],
+    () => layoutDependencyGraph(visibleNodes, visibleEdges, data?.graph.entryPoints ?? [], direction),
+    [visibleNodes, visibleEdges, data, direction],
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const showPanel = view === "files" && selectedNode && !data?.clustered;
 
   return (
-    <div style={{ "--graph-chrome": "230px" } as React.CSSProperties}>
+    <div style={{ "--graph-chrome": fullscreen ? "90px" : "230px" } as React.CSSProperties}>
       <PageHeader
         title={
           // Stable breadcrumb: "Dependencies" never moves — drilling into a
@@ -293,10 +315,18 @@ export function GraphPage() {
             )}
             {view === "files" && data && (
               <>
-                <Badge variant="outline" className="text-[11px] tabular-nums">
+                <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
                   {data.totalNodes} files · {data.totalEdges} edges
                   {data.clustered && " (grouped)"}
                 </Badge>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => setFullscreen((v) => !v)}
+                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                >
+                  {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                </Button>
                 <Button
                   variant={allEdges ? "secondary" : "outline"}
                   size="xs"
@@ -305,6 +335,21 @@ export function GraphPage() {
                 >
                   {allEdges ? "Strongest edges only" : "Show all edges"}
                 </Button>
+                <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
+                  {(["LR", "TB"] as const).map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setDirection(d)}
+                      aria-pressed={direction === d}
+                      title={d === "LR" ? "Left-to-right layout" : "Top-to-bottom layout"}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        direction === d ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
               </>
             )}
             {/* The view toggle stays rightmost so it never shifts when the
@@ -381,7 +426,7 @@ export function GraphPage() {
             noun={data.clustered ? "groups" : "files"}
           />
 
-          <div className={showPanel ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
+          <div className={cn(showPanel ? "grid gap-3 lg:grid-cols-[1fr_340px]" : "", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
             <div className="graph-canvas">
               <DependencyGraphView
                 nodes={positionedNodes}
@@ -389,6 +434,9 @@ export function GraphPage() {
                 entryPoints={data.graph.entryPoints}
                 selectedNodeId={selectedNodeId}
                 suppressInitialFit={hasFocusTarget}
+                hiddenKinds={hiddenKinds}
+                onToggleKind={toggleKind}
+                refitSignal={`${direction}:${fullscreen}`}
                 onSelectNode={(nodeId) => {
                   if (data.clustered && nodeId?.startsWith("cluster:")) {
                     goToCluster(nodeId.replace("cluster:", ""));

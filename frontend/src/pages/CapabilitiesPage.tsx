@@ -96,7 +96,7 @@ export function CapabilitiesPage() {
         subtitle="What this product does in plain terms — and for each part, where the code lives and where to start reading."
         actions={
           capabilities && capabilities.length > 0 ? (
-            <Badge variant="outline" className="text-[11px] tabular-nums">
+            <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
               {capabilities.length} capabilit{capabilities.length === 1 ? "y" : "ies"}
             </Badge>
           ) : undefined
@@ -138,16 +138,16 @@ export function CapabilitiesPage() {
                       {cap.name}
                     </h2>
                   </div>
-                  <Badge variant="secondary" className="shrink-0 text-[10px] uppercase">
+                  <Badge variant="secondary" className="shrink-0 text-[0.625rem] uppercase">
                     {cap.confidence} confidence
                   </Badge>
                 </div>
 
-                <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+                <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-muted-foreground">
                   {cap.description || cap.summary}
                 </p>
                 {cap.userValue && (
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+                  <p className="mt-1 text-[0.75rem] leading-relaxed text-muted-foreground">
                     <span className="font-medium text-foreground">When you'll touch it:</span> {cap.userValue}
                   </p>
                 )}
@@ -161,7 +161,7 @@ export function CapabilitiesPage() {
                         const symbolIndex = s.stable_key.indexOf("#");
                         const symbol = symbolIndex >= 0 ? s.stable_key.slice(symbolIndex + 1) : null;
                         return (
-                          <li key={s.stable_key} className="text-[12px]">
+                          <li key={s.stable_key} className="text-[0.75rem]">
                             <Link
                               to={`/projects/${id}/dependencies?focus=${encodeURIComponent(file)}`}
                               className="flex min-w-0 items-center gap-1.5 font-mono text-primary hover:underline"
@@ -186,7 +186,7 @@ export function CapabilitiesPage() {
                     <p className="section-label mb-1">Flows that deliver it</p>
                     <ul className="space-y-1.5">
                       {cap.workflows.slice(0, 4).map((wf) => (
-                        <li key={wf.id} className="text-[12px]">
+                        <li key={wf.id} className="text-[0.75rem]">
                           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                             <Link
                               to={`/projects/${id}/workflows?workflow=${wf.id}`}
@@ -198,7 +198,7 @@ export function CapabilitiesPage() {
                               <Link
                                 key={t.id}
                                 to={`/projects/${id}/walkthrough?tutorial=${t.id}`}
-                                className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-primary hover:underline"
+                                className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground hover:text-primary hover:underline"
                                 title={`Tutorial: ${t.title}`}
                               >
                                 <Route className="h-3 w-3" /> tutorial
@@ -221,7 +221,7 @@ export function CapabilitiesPage() {
                           key={mod.id}
                           to={`/projects/${id}/architecture?cluster=${encodeURIComponent(mod.stableKey ?? "")}`}
                           title={mod.reason ?? undefined}
-                          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[11px] text-foreground transition-colors hover:border-primary/50"
+                          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[0.6875rem] text-foreground transition-colors hover:border-primary/50"
                         >
                           <span
                             className="h-2 w-2 rounded-full"
@@ -237,7 +237,7 @@ export function CapabilitiesPage() {
                 <div className="mt-3 border-t border-border pt-2">
                   <Link
                     to={`/projects/${id}/architecture`}
-                    className="inline-flex items-center gap-1 text-[11.5px] text-muted-foreground hover:text-primary"
+                    className="inline-flex items-center gap-1 text-[0.71875rem] text-muted-foreground hover:text-primary"
                   >
                     <Map className="h-3 w-3" /> See it on the architecture map <ArrowRight className="h-3 w-3" />
                   </Link>

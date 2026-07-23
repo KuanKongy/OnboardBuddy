@@ -125,11 +125,11 @@ export function PreflightPreviewCard({
         {preview.privacy.llmCallsPlanned && (
           <span>~<strong>{preview.estimates.llmCalls}</strong> AI calls</span>
         )}
-        <Badge variant="outline" className="text-[10px] uppercase">{preview.estimates.costTier} cost tier</Badge>
+        <Badge variant="outline" className="text-[0.625rem] uppercase">{preview.estimates.costTier} cost tier</Badge>
       </div>
 
       {preview.languageInventory.unsupportedFileCount > 0 && (
-        <p className="text-[11.5px] text-muted-foreground">
+        <p className="text-[0.71875rem] text-muted-foreground">
           {preview.languageInventory.unsupportedFileCount} files are in unsupported languages
           ({shownLangs.join(", ")}{remainingLangs > 0 ? `, +${remainingLangs} more` : ""}) and
           will be listed as a known gap, not analyzed.
@@ -138,7 +138,7 @@ export function PreflightPreviewCard({
 
       <div className="flex items-start gap-2 rounded-md border border-border bg-background/60 px-2.5 py-2">
         <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <p className="text-[11.5px] text-muted-foreground">
+        <p className="text-[0.71875rem] text-muted-foreground">
           Privacy: <span className="font-medium text-foreground">{preview.privacy.mode.replace(/_/g, " ")}</span>
           {" — "}
           {preview.privacy.codeSnippetsLeaveSystem
@@ -150,7 +150,7 @@ export function PreflightPreviewCard({
       </div>
 
       {preview.confirmationsRequired.length > 0 && (
-        <label className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11.5px]">
+        <label className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[0.71875rem]">
           <input
             type="checkbox"
             checked={acknowledged ?? false}
@@ -171,7 +171,7 @@ export function PreflightPreviewCard({
       {preview.warnings.length > 0 && (
         <div className="space-y-1">
           {preview.warnings.map((w, i) => (
-            <p key={i} className="flex items-start gap-1.5 text-[11.5px] text-warning">
+            <p key={i} className="flex items-start gap-1.5 text-[0.71875rem] text-warning">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" /> {w}
             </p>
           ))}

@@ -424,7 +424,7 @@ export function ImportPage() {
               ) : (
                 <>
                   <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
-                    <SelectTrigger className="h-8 text-[13px]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]">
                       <SelectValue placeholder="Select account" />
                     </SelectTrigger>
                     <SelectContent>
@@ -477,7 +477,7 @@ export function ImportPage() {
                   </div>
                 ) : (
                   <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-                    <SelectTrigger className="h-8 text-[13px]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]">
                       <SelectValue placeholder="Select repository" />
                     </SelectTrigger>
                     <SelectContent>
@@ -502,7 +502,7 @@ export function ImportPage() {
                   </div>
                 ) : (
                   <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                    <SelectTrigger className="h-8 text-[13px]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]">
                       <SelectValue placeholder="Select branch" />
                     </SelectTrigger>
                     <SelectContent>
@@ -523,7 +523,7 @@ export function ImportPage() {
               <div className="space-y-1">
                 <Label className="text-xs">Role</Label>
                 <Select value={developerRole} onValueChange={setDeveloperRole}>
-                  <SelectTrigger className="h-8 text-[13px]">
+                  <SelectTrigger className="h-8 text-[0.8125rem]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -574,7 +574,7 @@ export function ImportPage() {
                           onChange={(e) => setIgnoreInput(e.target.value)}
                           onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addIgnoredPath())}
                           placeholder="e.g. node_modules/"
-                          className="h-8 flex-1 text-[13px]"
+                          className="h-8 flex-1 text-[0.8125rem]"
                         />
                         <Button variant="outline" size="xs" onClick={addIgnoredPath}>
                           Add
@@ -617,7 +617,7 @@ export function ImportPage() {
               {creating ? "Importing…" : "Import repository"}
             </Button>
           </div>
-          <p className="mt-2 text-right text-[11px] text-muted-foreground">
+          <p className="mt-2 text-right text-[0.6875rem] text-muted-foreground">
             Nothing is analyzed yet — the next step configures the first run
             (branch, commit, scope, depth) with a cost preview before anything starts.
           </p>

@@ -55,7 +55,7 @@ const DASHBOARD_SHORTCUT_GROUPS: ShortcutGroups = [
 
 function Key({ children }: { children: string }) {
   return (
-    <kbd className="inline-flex min-w-6 items-center justify-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground shadow-[0_1px_0_var(--border)]">
+    <kbd className="inline-flex min-w-6 items-center justify-center rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[0.6875rem] font-medium text-foreground shadow-[0_1px_0_var(--border)]">
       {children}
     </kbd>
   );
@@ -81,7 +81,7 @@ export function ShortcutsHelpDialog({
         <div className="space-y-4">
           {SHORTCUT_GROUPS.map(({ group, rows }) => (
             <div key={group}>
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group}</p>
+              <p className="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">{group}</p>
               <div className="space-y-1">
                 {rows.map(({ keys, action }) => (
                   <div key={action} className="flex items-center justify-between gap-3 text-xs">
@@ -96,7 +96,7 @@ export function ShortcutsHelpDialog({
               </div>
             </div>
           ))}
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[0.6875rem] text-muted-foreground">
             Shortcuts pause while you're typing or a dialog is open.
           </p>
         </div>

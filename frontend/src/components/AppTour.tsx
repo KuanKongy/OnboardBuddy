@@ -203,7 +203,7 @@ export function AppTour({ steps, onDone }: AppTourProps) {
         className="fixed w-72 max-w-[85vw] rounded-lg border border-border bg-card p-3 text-xs shadow-xl outline-none transition-all duration-200"
         style={{ top: cardTop, left: cardLeft }}
       >
-        <p className="mb-1 text-[11px] font-medium text-muted-foreground">
+        <p className="mb-1 text-[0.6875rem] font-medium text-muted-foreground">
           {index + 1} of {available.length}
         </p>
         <p className="font-semibold text-foreground">{step.title}</p>

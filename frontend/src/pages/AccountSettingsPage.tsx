@@ -1,6 +1,6 @@
-import { AlertTriangle, Github, Link2, Loader2, LogOut, Mail, Pencil, Save, Trash2, Unplug } from "lucide-react";
+import { AlertTriangle, Github, HelpCircle, Link2, Loader2, LogOut, Mail, Pencil, Save, Shield, Trash2, Unplug } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
@@ -14,6 +14,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
+import { applyFontSize, readStoredFontSize, type FontSizeChoice } from "@/lib/fontSize";
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
@@ -22,6 +23,12 @@ function initials(name: string): string {
 export function AccountSettingsPage() {
   const { user, signOut, connectGithub, disconnectGithub } = useAuth();
   const navigate = useNavigate();
+  const [fontSize, setFontSize] = useState<FontSizeChoice>(() => readStoredFontSize());
+
+  function chooseFontSize(choice: FontSizeChoice) {
+    applyFontSize(choice);
+    setFontSize(choice);
+  }
 
   const [appConnected, setAppConnected] = useState(false);
   const [appUsername, setAppUsername] = useState<string | null>(null);
@@ -296,28 +303,28 @@ export function AccountSettingsPage() {
                 </Avatar>
                 <div className="min-w-0 flex-1 space-y-2">
                   <div>
-                    <Label htmlFor="profile-name" className="text-[11px] text-muted-foreground">Full name</Label>
+                    <Label htmlFor="profile-name" className="text-[0.6875rem] text-muted-foreground">Full name</Label>
                     <Input
                       id="profile-name"
                       value={fullName}
                       onChange={(e) => setFullName(e.target.value)}
                       placeholder="Your name"
-                      className="mt-1 h-8 text-[13px]"
+                      className="mt-1 h-8 text-[0.8125rem]"
                     />
                   </div>
                   <div>
-                    <Label htmlFor="profile-avatar" className="text-[11px] text-muted-foreground">Avatar URL</Label>
+                    <Label htmlFor="profile-avatar" className="text-[0.6875rem] text-muted-foreground">Avatar URL</Label>
                     <Input
                       id="profile-avatar"
                       value={avatarUrl}
                       onChange={(e) => setAvatarUrl(e.target.value)}
                       placeholder="https://…/avatar.png"
-                      className="mt-1 h-8 text-[13px]"
+                      className="mt-1 h-8 text-[0.8125rem]"
                     />
                   </div>
                 </div>
               </div>
-              {profileError && <p className="mt-2 text-[11px] text-destructive">{profileError}</p>}
+              {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
               <div className="mt-2 flex items-center justify-end gap-1.5">
                 <Button variant="ghost" size="xs" onClick={cancelEditProfile} disabled={profileSaving}>
                   Cancel
@@ -342,8 +349,8 @@ export function AccountSettingsPage() {
                   <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
                 </div>
               </div>
-              {profileNotice && <p className="mt-2 text-[11px] text-success">{profileNotice}</p>}
-              {profileError && <p className="mt-2 text-[11px] text-destructive">{profileError}</p>}
+              {profileNotice && <p className="mt-2 text-[0.6875rem] text-success">{profileNotice}</p>}
+              {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
             </>
           )}
         </CardContent>
@@ -394,7 +401,7 @@ export function AccountSettingsPage() {
               </Button>
             </div>
           )}
-          {unlinkError && <p className="mt-2 text-[11px] text-destructive">{unlinkError}</p>}
+          {unlinkError && <p className="mt-2 text-[0.6875rem] text-destructive">{unlinkError}</p>}
         </CardContent>
       </Card>
 
@@ -456,12 +463,12 @@ export function AccountSettingsPage() {
             </div>
           )}
           {pendingEmail && pendingEmail !== user?.email && (
-            <p className="mt-2 text-[11px] text-warning">
+            <p className="mt-2 text-[0.6875rem] text-warning">
               Pending confirmation: {pendingEmail} — check that inbox to finish.
             </p>
           )}
-          {emailLoginNotice && <p className="mt-2 text-[11px] text-success">{emailLoginNotice}</p>}
-          {emailLoginError && !emailDialogOpen && <p className="mt-2 text-[11px] text-destructive">{emailLoginError}</p>}
+          {emailLoginNotice && <p className="mt-2 text-[0.6875rem] text-success">{emailLoginNotice}</p>}
+          {emailLoginError && !emailDialogOpen && <p className="mt-2 text-[0.6875rem] text-destructive">{emailLoginError}</p>}
         </CardContent>
       </Card>
 
@@ -505,13 +512,56 @@ export function AccountSettingsPage() {
             </div>
           )}
           {appConnectionError && (
-            <p className="mt-2 text-[11px] text-destructive">
+            <p className="mt-2 text-[0.6875rem] text-destructive">
               Couldn't check GitHub App connection: {appConnectionError}
             </p>
           )}
         </CardContent>
       </Card>
 
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <h2 className="mb-2 text-xs font-medium text-foreground">Appearance</h2>
+          <Label className="text-[0.6875rem] text-muted-foreground">Base font size</Label>
+          <div className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5" role="group" aria-label="Base font size">
+            {(
+              [
+                { key: "default", label: "Default" },
+                { key: "large", label: "Large" },
+                { key: "xlarge", label: "Extra large" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.key}
+                type="button"
+                onClick={() => chooseFontSize(opt.key)}
+                aria-pressed={fontSize === opt.key}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  fontSize === opt.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <h2 className="mb-2 text-xs font-medium text-foreground">Help &amp; privacy</h2>
+          <div className="space-y-1.5">
+            <Link to="/help" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
+              <HelpCircle className="h-3.5 w-3.5" />
+              Help &amp; FAQ
+            </Link>
+            <Link to="/help#privacy" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
+              <Shield className="h-3.5 w-3.5" />
+              What we send to the AI
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
       <Card className="border-destructive/30">
         <CardContent className="p-3">
           <h2 className="mb-2 text-xs font-medium text-destructive">Danger Zone</h2>
@@ -541,48 +591,48 @@ export function AccountSettingsPage() {
               OnboardBuddy — it doesn't have to match your GitHub email.
             </p>
             <div>
-              <Label htmlFor="login-email" className="text-[11px] text-muted-foreground">Email</Label>
+              <Label htmlFor="login-email" className="text-[0.6875rem] text-muted-foreground">Email</Label>
               <Input
                 id="login-email"
                 type="email"
                 value={loginEmail}
                 onChange={(e) => setLoginEmail(e.target.value)}
                 placeholder="you@example.com"
-                className="mt-1 h-8 text-[13px]"
+                className="mt-1 h-8 text-[0.8125rem]"
                 autoComplete="email"
               />
               {user?.email && (
-                <p className="mt-1 text-[11px] text-muted-foreground">
+                <p className="mt-1 text-[0.6875rem] text-muted-foreground">
                   A different address than {user.email} needs a confirmation click from its inbox first.
                 </p>
               )}
             </div>
             <div>
-              <Label htmlFor="login-password" className="text-[11px] text-muted-foreground">Password</Label>
+              <Label htmlFor="login-password" className="text-[0.6875rem] text-muted-foreground">Password</Label>
               <Input
                 id="login-password"
                 type="password"
                 value={loginPassword}
                 onChange={(e) => setLoginPassword(e.target.value)}
                 placeholder="••••••••"
-                className="mt-1 h-8 text-[13px]"
+                className="mt-1 h-8 text-[0.8125rem]"
                 autoComplete="new-password"
               />
-              <p className="mt-1 text-[11px] text-muted-foreground">Minimum 8 characters</p>
+              <p className="mt-1 text-[0.6875rem] text-muted-foreground">Minimum 8 characters</p>
             </div>
             <div>
-              <Label htmlFor="login-password-confirm" className="text-[11px] text-muted-foreground">Confirm password</Label>
+              <Label htmlFor="login-password-confirm" className="text-[0.6875rem] text-muted-foreground">Confirm password</Label>
               <Input
                 id="login-password-confirm"
                 type="password"
                 value={loginPasswordConfirm}
                 onChange={(e) => setLoginPasswordConfirm(e.target.value)}
                 placeholder="••••••••"
-                className="mt-1 h-8 text-[13px]"
+                className="mt-1 h-8 text-[0.8125rem]"
                 autoComplete="new-password"
               />
             </div>
-            {emailLoginError && <p className="text-[11px] text-destructive">{emailLoginError}</p>}
+            {emailLoginError && <p className="text-[0.6875rem] text-destructive">{emailLoginError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setEmailDialogOpen(false)} disabled={emailLoginBusy}>
                 Cancel
@@ -612,7 +662,7 @@ export function AccountSettingsPage() {
               </span>
             </div>
             <div>
-              <Label htmlFor="delete-confirm" className="text-[11px] text-muted-foreground">
+              <Label htmlFor="delete-confirm" className="text-[0.6875rem] text-muted-foreground">
                 Type your email ({user?.email}) to confirm
               </Label>
               <Input
@@ -620,11 +670,11 @@ export function AccountSettingsPage() {
                 value={deleteConfirm}
                 onChange={(e) => setDeleteConfirm(e.target.value)}
                 placeholder={user?.email ?? ""}
-                className="mt-1 h-8 text-[13px]"
+                className="mt-1 h-8 text-[0.8125rem]"
                 autoComplete="off"
               />
             </div>
-            {deleteError && <p className="text-[11px] text-destructive">{deleteError}</p>}
+            {deleteError && <p className="text-[0.6875rem] text-destructive">{deleteError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setDeleteOpen(false)} disabled={deleting}>
                 Cancel
@@ -654,7 +704,7 @@ export function AccountSettingsPage() {
               {appUsername ? <>@{appUsername}</> : "this GitHub account"}. Existing projects keep
               working, but you won't be able to import new repositories until you reconnect.
             </p>
-            {disconnectError && <p className="text-[11px] text-destructive">{disconnectError}</p>}
+            {disconnectError && <p className="text-[0.6875rem] text-destructive">{disconnectError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setDisconnectConfirmOpen(false)} disabled={disconnecting}>
                 Cancel

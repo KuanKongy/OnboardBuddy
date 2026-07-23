@@ -23,6 +23,17 @@
           document.documentElement.classList.add("dark");
         }
       })();
+      // Font-size bootstrap before first paint — mirrors the theme
+      // bootstrap above so choosing "Extra large" never flashes at 100%.
+      (function () {
+        try {
+          var size = localStorage.getItem("onboardbuddy:font-size");
+          var pct = size === "large" ? "112.5%" : size === "xlarge" ? "125%" : "100%";
+          document.documentElement.style.fontSize = pct;
+        } catch (e) {
+          // Best-effort only; default 100% applies.
+        }
+      })();
     </script>
   </head>
   <body>

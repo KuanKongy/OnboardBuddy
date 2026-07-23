@@ -2,10 +2,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Code2,
+  ExternalLink,
   FileCode2,
   Shield,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { CodeSnippet } from "@/components/CodeSnippet";
 import {
   Dialog,
@@ -14,6 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useOptionalProject } from "@/contexts/ProjectContext";
+import { buildGithubBlobUrl } from "@/lib/githubUrl";
 import type { SourceReceipt } from "@/types/onboarding";
 
 function confidenceBadgeClasses(c: string) {
@@ -54,22 +58,32 @@ interface ReceiptViewerProps {
 }
 
 export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
+  const projectCtx = useOptionalProject();
+  const project = projectCtx?.project;
   const lineRange =
     receipt.lineStart && receipt.lineEnd
       ? `${receipt.lineStart}–${receipt.lineEnd}`
       : receipt.lineStart
         ? `${receipt.lineStart}`
         : null;
+  const githubUrl =
+    project && receipt.filePath
+      ? buildGithubBlobUrl(
+          { owner: project.repo_owner, repo: project.repo_name, branch: project.branch },
+          receipt.filePath,
+          { ref: receipt.commitHash, lineStart: receipt.lineStart ?? null, lineEnd: receipt.lineEnd ?? null },
+        )
+      : null;
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="flex max-h-[85vh] w-full flex-col overflow-hidden p-0 sm:max-w-2xl">
         <DialogHeader className="border-b px-5 py-4 pr-10 text-left">
-          <DialogTitle className="flex items-center gap-2 text-[14px] font-semibold text-foreground">
+          <DialogTitle className="flex items-center gap-2 text-[0.875rem] font-semibold text-foreground">
             <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
             <span className="truncate font-mono" title={receipt.filePath}>{receipt.filePath}</span>
           </DialogTitle>
-          <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted-foreground">
             {receipt.symbolName && (
               <span className="flex items-center gap-1">
                 <Code2 className="h-3 w-3" />
@@ -113,7 +127,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
               <p className="text-xs font-medium text-muted-foreground">
                 What this does
               </p>
-              <p className="mt-1 text-[13px] leading-relaxed text-foreground">{receipt.summary}</p>
+              <p className="mt-1 text-[0.8125rem] leading-relaxed text-foreground">{receipt.summary}</p>
             </div>
           )}
 
@@ -141,7 +155,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
               <p className="text-xs font-medium text-muted-foreground">
                 This receipt supports:
               </p>
-              <p className="mt-1 text-[13px] text-foreground">{receipt.claim}</p>
+              <p className="mt-1 text-[0.8125rem] text-foreground">{receipt.claim}</p>
             </div>
           )}
 
@@ -157,6 +171,17 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
             )}
           </div>
         </div>
+
+        {githubUrl && (
+          <div className="flex justify-end border-t px-5 py-3">
+            <Button variant="outline" size="sm" asChild>
+              <a href={githubUrl} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                View on GitHub
+              </a>
+            </Button>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

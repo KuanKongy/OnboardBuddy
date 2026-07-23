@@ -190,7 +190,7 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    font-size: 14px;
+    font-size: 0.875rem; /* 14/16 at default scale — scales with root for the user font-size setting */
   }
   code, pre, kbd {
     font-family: var(--font-mono);
@@ -212,10 +212,10 @@
     text-wrap: balance;
   }
   .page-subtitle {
-    @apply mt-0.5 text-[13px] text-muted-foreground;
+    @apply mt-0.5 text-[0.8125rem] text-muted-foreground;
   }
   .section-label {
-    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+    @apply text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
   }
   /* Graph canvases own the viewport instead of a fixed 300px strip. */
   .graph-canvas {

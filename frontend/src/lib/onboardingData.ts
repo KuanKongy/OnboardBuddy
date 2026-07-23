@@ -16,6 +16,15 @@ export const SECTION_NAV_ORDER: readonly SectionId[] = [
   "doc-health",
 ];
 
+/** Groups sections by theme for the reader nav; editorial grouping, not a
+ * server concept. */
+export const SECTION_GROUPS: ReadonlyArray<{ label: string; ids: readonly SectionId[] }> = [
+  { label: "Orientation", ids: ["start-here", "architecture", "entry-points"] },
+  { label: "Core systems", ids: ["critical-25", "capability-map", "workflows", "data-schema"] },
+  { label: "Your role", ids: ["role-path"] },
+  { label: "Guardrails & health", ids: ["safety-rails", "dependency-graph", "doc-health"] },
+];
+
 export const ROLES = [
   { key: "backend", label: "Backend Developer" },
   { key: "frontend", label: "Frontend Developer" },

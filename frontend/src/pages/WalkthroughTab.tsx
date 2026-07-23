@@ -4,6 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Code2,
+  ExternalLink,
   FileCode2,
   HelpCircle,
   Loader2,
@@ -23,6 +24,7 @@ import { useProgress } from "@/lib/useProgress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
 
 interface TutorialSummary {
   id: string;
@@ -140,12 +142,34 @@ function StepPager({
   );
 }
 
-function StepLocation({ step }: { step: { file_path: string; symbol_name: string | null; line_start: number | null; line_end: number | null; step_kind?: string | null } }) {
+function StepLocation({
+  step,
+  repo,
+}: {
+  step: { file_path: string; symbol_name: string | null; line_start: number | null; line_end: number | null; step_kind?: string | null };
+  repo?: GithubRepoRef;
+}) {
+  const githubUrl = repo
+    ? buildGithubBlobUrl(repo, step.file_path, { lineStart: step.line_start, lineEnd: step.line_end })
+    : null;
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
       <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
-        <p className="truncate font-mono text-[13px] text-foreground" title={step.file_path}>{step.file_path}</p>
+        {githubUrl ? (
+          <a
+            href={githubUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={step.file_path}
+            className="inline-flex max-w-full items-center gap-1 truncate font-mono text-[0.8125rem] text-foreground hover:underline"
+          >
+            <span className="min-w-0 truncate">{step.file_path}</span>
+            <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+          </a>
+        ) : (
+          <p className="truncate font-mono text-[0.8125rem] text-foreground" title={step.file_path}>{step.file_path}</p>
+        )}
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {step.symbol_name && (
             <span className="flex items-center gap-1">
@@ -158,7 +182,7 @@ function StepLocation({ step }: { step: { file_path: string; symbol_name: string
               Lines {step.line_start}{step.line_end ? `–${step.line_end}` : ""}
             </span>
           )}
-          {step.step_kind && <Badge variant="secondary" className="text-[10px] uppercase">{step.step_kind.replace(/_/g, " ")}</Badge>}
+          {step.step_kind && <Badge variant="secondary" className="text-[0.625rem] uppercase">{step.step_kind.replace(/_/g, " ")}</Badge>}
         </div>
       </div>
     </div>
@@ -167,6 +191,9 @@ function StepLocation({ step }: { step: { file_path: string; symbol_name: string
 
 export function WalkthroughTab() {
   const { project } = useProject();
+  const githubRepo: GithubRepoRef | undefined = project
+    ? { owner: project.repo_owner, repo: project.repo_name, branch: project.branch }
+    : undefined;
   const { id } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
 
@@ -311,7 +338,7 @@ export function WalkthroughTab() {
                   key={t.id}
                   onClick={() => openTutorial(t.id)}
                   className={cn(
-                    "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[12.5px] transition-colors",
+                    "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
                     detail?.tutorial.id === t.id
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -320,7 +347,7 @@ export function WalkthroughTab() {
                   <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                   <span className="min-w-0">
                     <span className="block truncate font-medium" title={t.title}>{t.title}</span>
-                    <span className="mt-0.5 block truncate text-[11px] opacity-60">
+                    <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
                       {t.step_count} steps · {t.confidence} confidence
                       {t.status === "stale" && " · stale"}
                     </span>
@@ -350,14 +377,14 @@ export function WalkthroughTab() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-sm font-semibold text-foreground">{detail.tutorial.title}</h2>
                     {detail.tutorial.status === "stale" && (
-                      <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[10px] text-warning">stale</Badge>
+                      <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
                     )}
-                    <span className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-muted-foreground/70">
+                    <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
                       <Sparkles className="h-2.5 w-2.5" /> AI explanations · {detail.tutorial.confidence} confidence
                     </span>
                   </div>
                   {detail.tutorial.goal && (
-                    <p className="mt-1 text-[12.5px] font-medium text-foreground">{detail.tutorial.goal}</p>
+                    <p className="mt-1 text-[0.78125rem] font-medium text-foreground">{detail.tutorial.goal}</p>
                   )}
                   <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
                 </div>
@@ -371,10 +398,10 @@ export function WalkthroughTab() {
                 />
 
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <StepLocation step={tStep} />
+                  <StepLocation step={tStep} repo={githubRepo} />
                   <Link
                     to={`/projects/${id}/dependencies?focus=${encodeURIComponent(tStep.file_path)}`}
-                    className="inline-flex items-center gap-1 text-[11.5px] font-medium text-primary hover:underline"
+                    className="inline-flex items-center gap-1 text-[0.71875rem] font-medium text-primary hover:underline"
                   >
                     Open in Dependencies <ArrowRight className="h-3 w-3" />
                   </Link>
@@ -393,37 +420,56 @@ export function WalkthroughTab() {
                       highlightRanges={hoverRangeFor(tStep, hoveredReceipt)}
                     />
                   ) : (
-                    <p className="rounded-md border border-dashed border-border px-3 py-2 text-[11.5px] text-muted-foreground">
+                    <p className="rounded-md border border-dashed border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
                       No snippet was captured for this step — open it in Dependencies to read the code.
                     </p>
                   )}
 
                   <div className="h-fit rounded-md border border-border px-4 py-3">
-                    <p className="text-[13px] leading-relaxed text-foreground">
+                    <p className="text-[0.8125rem] leading-relaxed text-foreground">
                       {tStep.explanation || "No explanation could be grounded in the evidence for this step."}
                     </p>
                     {tStep.receipts.length > 0 && (
-                      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-muted-foreground/70">
+                      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
                         Backed by:
                         {tStep.receipts.map((r) => {
                           const highlightable = hoverRangeFor(tStep, r) !== undefined;
-                          return (
-                            <span
-                              key={r.id}
-                              tabIndex={0}
-                              onMouseEnter={() => setHoveredReceipt(r)}
-                              onMouseLeave={() => setHoveredReceipt(null)}
-                              onFocus={() => setHoveredReceipt(r)}
-                              onBlur={() => setHoveredReceipt(null)}
-                              title={highlightable ? "Highlights these lines in the snippet" : undefined}
-                              className={cn(
-                                "cursor-default rounded bg-muted/60 px-1 font-mono",
-                                highlightable && "underline decoration-dotted underline-offset-2 hover:text-foreground",
-                              )}
-                            >
+                          const receiptUrl =
+                            githubRepo && r.file_path
+                              ? buildGithubBlobUrl(githubRepo, r.file_path, { lineStart: r.line_start, lineEnd: r.line_end })
+                              : null;
+                          const spanProps = {
+                            tabIndex: 0,
+                            onMouseEnter: () => setHoveredReceipt(r),
+                            onMouseLeave: () => setHoveredReceipt(null),
+                            onFocus: () => setHoveredReceipt(r),
+                            onBlur: () => setHoveredReceipt(null),
+                            title: highlightable ? "Highlights these lines in the snippet" : undefined,
+                            className: cn(
+                              "cursor-default rounded bg-muted/60 px-1 font-mono",
+                              highlightable && "underline decoration-dotted underline-offset-2 hover:text-foreground",
+                            ),
+                          };
+                          const label = (
+                            <>
                               {r.file_path}
                               {r.line_start ? `:${r.line_start}` : ""}
-                            </span>
+                            </>
+                          );
+                          return receiptUrl ? (
+                            <a
+                              key={r.id}
+                              {...spanProps}
+                              href={receiptUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={cn(spanProps.className, "inline-flex items-center gap-0.5")}
+                            >
+                              {label}
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+                          ) : (
+                            <span key={r.id} {...spanProps}>{label}</span>
                           );
                         })}
                       </p>
@@ -437,7 +483,7 @@ export function WalkthroughTab() {
                       <HelpCircle className="h-3 w-3" /> Known gaps
                     </p>
                     {detail.tutorial.unknowns.map((u, i) => (
-                      <p key={i} className="text-[11.5px] text-muted-foreground">
+                      <p key={i} className="text-[0.71875rem] text-muted-foreground">
                         {u.kind.replace(/_/g, " ")}{u.detail ? ` — ${u.detail}` : ""}
                       </p>
                     ))}
@@ -464,7 +510,7 @@ export function WalkthroughTab() {
                     key={wf.id}
                     onClick={() => openWorkflow(wf.id)}
                     className={cn(
-                      "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[12.5px] transition-colors",
+                      "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
                       selectedWorkflow === wf.id
                         ? "bg-accent text-accent-foreground"
                         : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
@@ -473,7 +519,7 @@ export function WalkthroughTab() {
                     <Zap className="mt-0.5 h-3 w-3 shrink-0" />
                     <span className="min-w-0">
                       <span className="block truncate font-medium" title={wf.title}>{wf.title}</span>
-                      <span className="mt-0.5 block truncate text-[11px] opacity-60">
+                      <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
                         {wf.trigger_type} · {wf.step_count} steps
                       </span>
                     </span>
@@ -509,9 +555,9 @@ export function WalkthroughTab() {
                     onNext={() => setCurrentStep((s) => s + 1)}
                     onJump={setCurrentStep}
                   />
-                  <StepLocation step={wStep} />
+                  <StepLocation step={wStep} repo={githubRepo} />
                   <div className="rounded-md border border-border px-4 py-3">
-                    <p className="text-[13px] leading-relaxed text-foreground">
+                    <p className="text-[0.8125rem] leading-relaxed text-foreground">
                       {wStep.explanation || wStep.deterministic_description || "No description available for this step."}
                     </p>
                   </div>

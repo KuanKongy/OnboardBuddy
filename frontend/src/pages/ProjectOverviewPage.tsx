@@ -127,11 +127,11 @@ function RunCard({
       <CardContent className="p-3">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <h3 className="text-[13px] font-medium text-foreground">
+            <h3 className="text-[0.8125rem] font-medium text-foreground">
               {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")}
             </h3>
             {runConfigParts(job, defaultBranch).map((part) => (
-              <Badge key={part} variant="outline" className="font-mono text-[11px]">{part}</Badge>
+              <Badge key={part} variant="outline" className="font-mono text-[0.6875rem]">{part}</Badge>
             ))}
           </div>
           {canManage && (
@@ -181,7 +181,7 @@ function RunCard({
           </span>
           <span className="flex items-center gap-1.5">
             {job.attempt > 1 && (
-              <Badge variant="outline" className="text-[11px] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
+              <Badge variant="outline" className="text-[0.6875rem] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
                 attempt #{job.attempt}
               </Badge>
             )}
@@ -189,7 +189,7 @@ function RunCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex cursor-help">
-                    <Badge variant="destructive" className="text-[11px]">
+                    <Badge variant="destructive" className="text-[0.6875rem]">
                       stalled
                     </Badge>
                   </span>
@@ -197,13 +197,13 @@ function RunCard({
                 <TooltipContent side="top">Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it</TooltipContent>
               </Tooltip>
             )}
-            <Badge variant={statusBadgeVariant(job.status)} className="text-[11px]">{job.status}</Badge>
+            <Badge variant={statusBadgeVariant(job.status)} className="text-[0.6875rem]">{job.status}</Badge>
           </span>
         </div>
         <Progress value={pct} className="mb-2 h-1.5" />
 
         {isActive && (
-          <p className={`mb-2 text-[11px] tabular-nums ${job.stalled ? "text-destructive" : "text-muted-foreground"}`}>
+          <p className={`mb-2 text-[0.6875rem] tabular-nums ${job.stalled ? "text-destructive" : "text-muted-foreground"}`}>
             {heartbeatAgoSec === null
               ? "Waiting for the worker's first signal…"
               : `Last worker activity ${heartbeatAgoSec < 5 ? "just now" : `${heartbeatAgoSec}s ago`}`}
@@ -223,7 +223,7 @@ function RunCard({
           open={panelOpen}
           onToggle={(e) => setPanelOpen((e.target as HTMLDetailsElement).open)}
         >
-          <summary className="flex cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+          <summary className="flex cursor-pointer items-center gap-1 text-[0.6875rem] text-muted-foreground hover:text-foreground">
             <ChevronDown className={`h-3 w-3 transition-transform ${panelOpen ? "" : "-rotate-90"}`} />
             Pipeline steps & spend
           </summary>
@@ -259,7 +259,7 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
       <summary className="flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1">
         <ChevronDown className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{runActionLabel(run)}</span>
-        <span className="flex shrink-0 items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-2 text-[0.6875rem] tabular-nums text-muted-foreground">
           {hasCost && (
             <span title={`${run.cost.llm_calls} AI calls · ${run.cost.cached_calls} served from cache · ${run.cost.input_tokens.toLocaleString()} in / ${run.cost.output_tokens.toLocaleString()} out tokens`}>
               ${run.cost.estimated_cost_usd.toFixed(4)} · {run.cost.llm_calls} calls
@@ -268,29 +268,29 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           )}
           {run.duration_ms !== null && <span>{fmtDuration(run.duration_ms)}</span>}
           <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
-          <Badge variant={statusBadgeVariant(run.status)} className="text-[11px]">{run.status}</Badge>
+          <Badge variant={statusBadgeVariant(run.status)} className="text-[0.6875rem]">{run.status}</Badge>
         </span>
       </summary>
 
       <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          {run.config.branch && <Badge variant="outline" className="font-mono text-[11px]">branch {run.config.branch}</Badge>}
-          {run.config.commit && <Badge variant="outline" className="font-mono text-[11px]">commit {run.config.commit.slice(0, 7)}</Badge>}
-          {run.config.scope_path && <Badge variant="outline" className="font-mono text-[11px]">scope {run.config.scope_path}/</Badge>}
-          {run.config.depth && <Badge variant="outline" className="font-mono text-[11px]">{run.config.depth} depth</Badge>}
-          {run.config.role && <Badge variant="outline" className="font-mono text-[11px]">{run.config.role} role</Badge>}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.6875rem] text-muted-foreground">
+          {run.config.branch && <Badge variant="outline" className="font-mono text-[0.6875rem]">branch {run.config.branch}</Badge>}
+          {run.config.commit && <Badge variant="outline" className="font-mono text-[0.6875rem]">commit {run.config.commit.slice(0, 7)}</Badge>}
+          {run.config.scope_path && <Badge variant="outline" className="font-mono text-[0.6875rem]">scope {run.config.scope_path}/</Badge>}
+          {run.config.depth && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.depth} depth</Badge>}
+          {run.config.role && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.role} role</Badge>}
           {run.requested_by_email && <span>by {run.requested_by_email}</span>}
           {run.attempt > 1 && <span>attempt #{run.attempt}</span>}
         </div>
 
         {run.error_message && (
-          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[11px] text-destructive">
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[0.6875rem] text-destructive">
             {run.error_message}
           </p>
         )}
 
         {(run.sections.generated.length > 0 || run.sections.cached.length > 0) && (
-          <div className="space-y-1 text-[11px]">
+          <div className="space-y-1 text-[0.6875rem]">
             {run.sections.generated.length > 0 && (
               <p className="text-muted-foreground">
                 <span className="font-medium text-foreground">Generated:</span>{" "}
@@ -307,7 +307,7 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
         )}
 
         {!hasCost && run.job_type !== "preflight" && (
-          <p className="text-[11px] text-muted-foreground/70">
+          <p className="text-[0.6875rem] text-muted-foreground/70">
             No per-run cost recorded (run predates cost tracking, or it was fully deterministic).
           </p>
         )}
@@ -316,8 +316,8 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           <div className="max-h-48 overflow-y-auto rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5">
             {run.step_log.map((entry, i) => (
               <div key={i} className="flex items-start gap-2 py-0.5">
-                <span className="flex-1 text-[11px] text-muted-foreground">{entry.step}</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                <span className="flex-1 text-[0.6875rem] text-muted-foreground">{entry.step}</span>
+                <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground">
                   {new Date(entry.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </span>
               </div>
@@ -459,9 +459,9 @@ export function ProjectOverviewPage() {
         subtitle={
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span className="font-medium text-foreground">{project.repo_owner}/{project.repo_name}</span>
-            <Badge variant="outline" className="text-[11px] capitalize">{project.developer_role}</Badge>
+            <Badge variant="outline" className="text-[0.6875rem] capitalize">{project.developer_role}</Badge>
             {snap && (
-              <span className="font-mono text-[11px] text-muted-foreground" title="Latest complete analysis">
+              <span className="font-mono text-[0.6875rem] text-muted-foreground" title="Latest complete analysis">
                 latest: {snap.branch}@{snap.commit_hash.slice(0, 7)} · {snap.file_count} files · {snap.symbol_count} symbols · {snap.workflow_count} workflows
               </span>
             )}
@@ -493,7 +493,7 @@ export function ProjectOverviewPage() {
                 <BookOpen className="h-4 w-4 text-primary" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-[13px] font-medium text-foreground">Continue onboarding</h3>
+                <h3 className="text-[0.8125rem] font-medium text-foreground">Continue onboarding</h3>
                 <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
                   {onboardingProgress
                     ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
@@ -519,7 +519,7 @@ export function ProjectOverviewPage() {
                 <Play className="h-4 w-4 text-info" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-[13px] font-medium text-foreground">Continue tutorial</h3>
+                <h3 className="text-[0.8125rem] font-medium text-foreground">Continue tutorial</h3>
                 <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
                   {tutorialProgress
                     ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
@@ -545,7 +545,7 @@ export function ProjectOverviewPage() {
                 <User className="h-4 w-4 text-warning" />
               </div>
               <div className="min-w-0">
-                <h3 className="text-[13px] font-medium capitalize text-foreground">{project.developer_role} role</h3>
+                <h3 className="text-[0.8125rem] font-medium capitalize text-foreground">{project.developer_role} role</h3>
                 <span className="inline-flex items-center gap-1 text-xs font-medium text-primary">
                   View team {pendingQuickAction === "role"
                     ? <Loader2 className="h-3 w-3 animate-spin" />
@@ -562,10 +562,10 @@ export function ProjectOverviewPage() {
       {/* ── Active runs: every queued/running job gets its own card. ── */}
       {activeJobs.length > 0 && (
         <div className="mb-4">
-          <h2 className="mb-2 flex items-center gap-2 text-[13px] font-medium text-foreground">
+          <h2 className="mb-2 flex items-center gap-2 text-[0.8125rem] font-medium text-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
             Active runs
-            <Badge variant="secondary" className="text-[11px] tabular-nums">{activeJobs.length}</Badge>
+            <Badge variant="secondary" className="text-[0.6875rem] tabular-nums">{activeJobs.length}</Badge>
           </h2>
           <div className="space-y-2">
             {activeJobs.map((job) => (
@@ -597,11 +597,11 @@ export function ProjectOverviewPage() {
                 <div className="min-w-0 flex-1">
                   <p className="text-xs font-medium text-foreground">
                     {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")} {job.status}
-                    <span className="ml-2 font-mono text-[11px] text-muted-foreground">
+                    <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">
                       {runConfigParts(job, project.branch).join(" · ")}
                     </span>
                   </p>
-                  {job.error_message && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{job.error_message}</p>}
+                  {job.error_message && <p className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">{job.error_message}</p>}
                 </div>
                 {canManage && ["analyze_scope", "incremental_update", "generate_package"].includes(job.job_type) && (
                   <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job — checkpointed phases and cached AI work are skipped">
@@ -657,8 +657,8 @@ export function ProjectOverviewPage() {
       {(packages?.length ?? 0) > 0 && (
         <div className="mb-4" data-tour="overview-packages">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-[13px] font-medium text-foreground">Packages</h2>
-            <span className="text-[11px] tabular-nums text-muted-foreground">
+            <h2 className="text-[0.8125rem] font-medium text-foreground">Packages</h2>
+            <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
               {filteredPackages.length} / {packages!.length}
             </span>
             <div className="ml-auto flex flex-wrap items-center gap-1.5">
@@ -708,7 +708,7 @@ export function ProjectOverviewPage() {
 
       {/* ── Run history: actions taken, sections generated, whole cost. ── */}
       <div className="mb-4" data-tour="run-history">
-        <h2 className="mb-2 flex items-center gap-2 text-[13px] font-medium text-foreground">
+        <h2 className="mb-2 flex items-center gap-2 text-[0.8125rem] font-medium text-foreground">
           <History className="h-3.5 w-3.5 text-muted-foreground" />
           Run history
         </h2>

@@ -80,13 +80,13 @@ export function LoginPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="password" className="text-xs">Password</Label>
-                  <Link to="/forgot-password" className="text-[11px] font-medium text-primary hover:underline">
+                  <Link to="/forgot-password" className="text-[0.6875rem] font-medium text-primary hover:underline">
                     Forgot password?
                   </Link>
                 </div>
@@ -98,7 +98,7 @@ export function LoginPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="h-8 pr-8 text-[13px]"
+                    className="h-8 pr-8 text-[0.8125rem]"
                   />
                   <Button
                     type="button"
