@@ -272,6 +272,15 @@ export interface RouteRegistration {
   line: number;
 }
 
+/** A sub-router mount (`app.use('/api', router)`) found in a file. */
+export interface RouterMount {
+  /** Mount path literal; '' when mounted without a path (`app.use(router)`). */
+  prefix: string;
+  /** Repo-relative file the mounted router identifier resolves to. */
+  targetRelativePath: string;
+  line: number;
+}
+
 export interface FileAnalysis {
   filePath: string;
   relativePath: string;
@@ -280,6 +289,8 @@ export interface FileAnalysis {
   exports: ExportRecord[];
   /** HTTP route registrations found anywhere in the file (AST-detected). */
   routeRegistrations?: RouteRegistration[];
+  /** Express-style sub-router mounts — lets route paths resolve to full paths. */
+  routerMounts?: RouterMount[];
   hasParseErrors: boolean;
   parseErrors: string[];
 }

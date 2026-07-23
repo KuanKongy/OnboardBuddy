@@ -52,6 +52,50 @@ export async function loadRoleProjections(
   return projected.sort((a, b) => b.score - a.score);
 }
 
+/**
+ * Area = first three path segments of the target's file part
+ * ("frontend/src/pages", "backend/src/worker") — the granularity at which
+ * ranking bias showed up (a wall of page components).
+ */
+function areaOf(stableKey: string): string {
+  const filePart = stableKey.split('#')[0]!;
+  return filePart.split('/').slice(0, 3).join('/');
+}
+
+/** Max share of one area in a selection before further picks defer. */
+const AREA_SHARE_CAP = 0.4;
+
+/**
+ * Top-score-first selection with an area diversity cap: once an area holds
+ * ≥40% of the picks (and at least 2), further candidates from it defer to
+ * the best-scored targets from other areas. If the cap can't be filled from
+ * elsewhere, deferred candidates backfill — the size contract never shrinks.
+ * Rationale: signal bias made role=general's top symbols 100% UI pages while
+ * the analysis pipeline (the codebase's core) never surfaced; a learning
+ * path must span the codebase's areas, not one directory's.
+ */
+function selectWithAreaCap(targets: ProjectedTarget[], take: number): ProjectedTarget[] {
+  const picked: ProjectedTarget[] = [];
+  const deferred: ProjectedTarget[] = [];
+  const perArea = new Map<string, number>();
+  for (const target of targets) {
+    if (picked.length >= take) break;
+    const area = areaOf(target.stableKey);
+    const count = perArea.get(area) ?? 0;
+    if (count >= 2 && count + 1 > take * AREA_SHARE_CAP) {
+      deferred.push(target);
+      continue;
+    }
+    perArea.set(area, count + 1);
+    picked.push(target);
+  }
+  for (const target of deferred) {
+    if (picked.length >= take) break;
+    picked.push(target);
+  }
+  return picked.sort((a, b) => b.score - a.score);
+}
+
 /** Top 25% (at least `minPerType`) per target_type — the "Critical 25%". */
 export function critical25(
   projected: ProjectedTarget[],
@@ -65,7 +109,12 @@ export function critical25(
   const result = new Map<string, ProjectedTarget[]>();
   for (const [type, targets] of byType) {
     const take = Math.max(minPerType, Math.ceil(targets.length * 0.25));
-    result.set(type, targets.slice(0, take));
+    // Diversity applies where areas exist (files/symbols); workflow and
+    // cluster keys aren't path-shaped.
+    result.set(
+      type,
+      type === 'file' || type === 'symbol' ? selectWithAreaCap(targets, take) : targets.slice(0, take),
+    );
   }
   return result;
 }

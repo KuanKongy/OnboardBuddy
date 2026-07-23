@@ -16,6 +16,10 @@ export type SectionId =
   | "doc-health";
 
 export interface SourceReceipt {
+  /** source_receipts row id (present on reader receipts). */
+  id?: string;
+  /** Original evidence-bundle receipt id — the key inline [[receipt:…]] markers use. */
+  bundleReceiptId?: string | null;
   filePath: string;
   lineStart?: number;
   lineEnd?: number;
@@ -23,10 +27,16 @@ export interface SourceReceipt {
   snippet?: string;
   /** Semantic summary of the cited symbol ("what this does"), when available. */
   summary?: string | null;
-  claim?: string;
-  commitHash?: string;
-  nodeStableKey?: string;
-  staleness: "fresh" | "stale";
+  claim?: string | null;
+  commitHash?: string | null;
+  nodeStableKey?: string | null;
+  trustLevel?: string | null;
+  /**
+   * Re-verification result against the latest complete analysis:
+   * fresh = symbol hash unchanged; stale = changed or removed;
+   * unknown = not node-addressable (docs/synthesis) — never shown as "Current".
+   */
+  staleness: "fresh" | "stale" | "unknown";
   confidence: ConfidenceLevel;
   ageLabel: string;
 }

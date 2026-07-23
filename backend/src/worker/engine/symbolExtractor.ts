@@ -51,6 +51,11 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
   // nodes for those handlers so workflow tracing has a seed with a body.
   const routes = extractRouteRegistrations(sourceFile, relativePath, ctx, symbols);
 
+  // Sub-router mounts (`app.use('/api', router)`) — entrypoint detection
+  // chains these so routes get their FULL path ("/api/projects/:id/…"),
+  // not the ambiguous sub-router path ("GET /").
+  const mounts = extractRouterMounts(sourceFile, ctx);
+
   // Stamp stable keys (repo-local, '/'-separated) on every symbol.
   for (const sym of symbols) {
     sym.stableKey = symbolKey(normalizePath(relativePath), sym.name);
@@ -63,6 +68,7 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     imports,
     exports,
     ...(routes.length > 0 ? { routeRegistrations: routes } : {}),
+    ...(mounts.length > 0 ? { routerMounts: mounts } : {}),
     hasParseErrors: parsed.hasErrors,
     parseErrors: parsed.errors,
   };
@@ -392,6 +398,52 @@ function extractRouteRegistrations(
 
   visit(sourceFile);
   return routes;
+}
+
+/**
+ * `app.use('/api', apiRouter)` / `router.use('/x', requireAuth, childRouter)`
+ * — records where each repo-local router file is mounted and under what
+ * prefix. The mounted router is taken as the LAST argument that resolves to
+ * a repo file (middleware and external routers resolve to null and drop out).
+ * `use(router)` with no path literal is a mount at ''.
+ */
+function extractRouterMounts(
+  sourceFile: ts.SourceFile,
+  ctx: ExtractCtx,
+): import('../types/analysis.js').RouterMount[] {
+  if (!ctx.checker) return [];
+  const mounts: import('../types/analysis.js').RouterMount[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'use' &&
+      node.arguments.length >= 1
+    ) {
+      const first = node.arguments[0]!;
+      const hasPath = ts.isStringLiteralLike(first) && first.text.startsWith('/');
+      const prefix = hasPath ? first.text : '';
+      const last = node.arguments[node.arguments.length - 1]!;
+      if (
+        (ts.isIdentifier(last) || ts.isPropertyAccessExpression(last)) &&
+        (hasPath || node.arguments.length === 1)
+      ) {
+        const target = resolveCallTarget(last, ctx.checker!, ctx.rootPath);
+        if (target) {
+          mounts.push({
+            prefix,
+            targetRelativePath: target.targetRelativePath,
+            line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+          });
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return mounts;
 }
 
 function resolveCallTarget(

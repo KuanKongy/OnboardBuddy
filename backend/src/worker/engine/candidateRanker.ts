@@ -4,6 +4,7 @@ import type { DetectedSideEffect } from './sideEffectDetector.js';
 import type { ExtractedWorkflow } from './workflowExtractor.js';
 import type { ChurnStats } from './churnService.js';
 import { budgetForDepth, type SemanticDepth } from './budgets.js';
+import { isTestOrFixturePath } from './testPaths.js';
 import { query } from '../../lib/db.js';
 
 /**
@@ -75,6 +76,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
 
   const entrypointKeys = new Set<string>();
   const routeEntrypointKeys = new Set<string>();
+  const uiOnlyEntrypointKeys = new Set<string>();
   for (const ep of input.entrypoints) {
     entrypointKeys.add(ep.symbolStableKey ?? ep.nodeStableKey);
     entrypointKeys.add(ep.nodeStableKey);
@@ -82,6 +84,22 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       routeEntrypointKeys.add(ep.symbolStableKey ?? ep.nodeStableKey);
       routeEntrypointKeys.add(ep.nodeStableKey);
     }
+  }
+  // UI pages are entrypoints, but EVERY page is one — full entrypoint credit
+  // made the top of the ranking a wall of near-identical page components
+  // while the pipeline code they render never surfaced. Pages that are ONLY
+  // ui_route entrypoints get half credit; anything that is also a route
+  // handler / job / CLI keeps full weight.
+  for (const ep of input.entrypoints) {
+    if (ep.kind !== 'ui_route') continue;
+    for (const key of [ep.symbolStableKey ?? ep.nodeStableKey, ep.nodeStableKey]) {
+      uiOnlyEntrypointKeys.add(key);
+    }
+  }
+  for (const ep of input.entrypoints) {
+    if (ep.kind === 'ui_route') continue;
+    uiOnlyEntrypointKeys.delete(ep.symbolStableKey ?? ep.nodeStableKey);
+    uiOnlyEntrypointKeys.delete(ep.nodeStableKey);
   }
 
   const effectCount = new Map<string, number>();
@@ -124,6 +142,9 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
 
     const key = node.stableKey;
     const filePath = node.filePath ?? key;
+    // Tests and fixtures are evidence (testProximity, clusters), never
+    // ranked learning targets — a fixture file once out-ranked real routes.
+    if (isTestOrFixturePath(filePath)) continue;
     const signals = Array.isArray(node.metadata.behaviorSignals)
       ? (node.metadata.behaviorSignals as string[]) : [];
     const purposes = Array.isArray(node.metadata.purposeSignals)
@@ -135,7 +156,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       ? (Array.isArray(node.metadata.exportedSymbols) ? (node.metadata.exportedSymbols as string[]).length : 0)
       : node.exported ? 1 : 0;
     const effects = effectCount.get(key) ?? 0;
-    const isEntry = entrypointKeys.has(key) ? 1 : 0;
+    const isEntry = entrypointKeys.has(key) ? (uiOnlyEntrypointKeys.has(key) ? 0.5 : 1) : 0;
     const ownsRouteOrSchema =
       schemaOwners.has(key) || routeHandlers.has(key) || routeEntrypointKeys.has(key) ? 1 : 0;
     const tested = testedFiles.has(filePath) || testedFiles.has(key) ? 1 : 0;
@@ -161,7 +182,8 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (isSymbol && node.exported) reasons.push('Exported public surface');
     if (isFile && exported >= 3) reasons.push(`Exports ${exported} symbols`);
     if (effects > 0) reasons.push(`Has ${effects} detected side effect${effects > 1 ? 's' : ''}`);
-    if (isEntry) reasons.push('Entry point');
+    if (isEntry === 1) reasons.push('Entry point');
+    else if (isEntry > 0) reasons.push('Entry point (UI page — reduced weight)');
     if (schemaOwners.has(key)) reasons.push('Touches database schema');
     if (routeHandlers.has(key) || routeEntrypointKeys.has(key)) reasons.push('Handles a route');
     if (tested) reasons.push('Covered by tests');
