@@ -9,6 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { hasKindPrefix } from '../engine/stableKeys.js';
 import type { EvidenceBundleV2, TrustLevel } from '../../retrieval/retrievalService.js';
 
 export interface GeneratedClaim {
@@ -179,9 +180,10 @@ async function findStaleReceipts(
       [snapshotId, [...new Set(keyed.map((r) => r.key))]],
     )).rows as Array<{ stable_key: string }>).map((r) => r.stable_key),
   );
-  // Synthesis stable keys (clusters, services, workflows, system) are not
-  // graph nodes; only judge staleness for keys that look node-addressable.
-  return new Set(keyed.filter((r) => !existing.has(r.key) && !r.key.includes(':')).map((r) => r.id));
+  // Kind-prefixed stable keys (clusters, workflows, docs, config) are not
+  // plain graph keys; judged by prefix — a colon inside a route symbol
+  // (`#POST /:id/analyze`) does not make a key synthetic.
+  return new Set(keyed.filter((r) => !existing.has(r.key) && !hasKindPrefix(r.key)).map((r) => r.id));
 }
 
 /** Follows record_reference chains down to the referenced records' receipts. */

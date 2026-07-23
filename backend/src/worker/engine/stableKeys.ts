@@ -20,6 +20,17 @@ export function normalizePath(relativePath: string): string {
   return relativePath.replace(/\\/g, '/');
 }
 
+/**
+ * True for `kind:`-prefixed keys (doc:, config:, schema:, external:, and
+ * synthesis keys like cluster:/wf:) — everything that is not a plain
+ * `path` / `path#symbol` graph key. The prefix is the ONLY safe signal:
+ * route symbols such as `projects.ts#POST /:id/analyze` contain colons in
+ * their Express path params and must never be mistaken for synthesis keys.
+ */
+export function hasKindPrefix(stableKey: string): boolean {
+  return /^[a-z][a-z0-9_]*:/i.test(stableKey);
+}
+
 export function fileKey(relativePath: string): string {
   return normalizePath(relativePath);
 }

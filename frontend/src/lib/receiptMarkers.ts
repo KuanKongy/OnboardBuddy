@@ -17,7 +17,15 @@ import type { SourceReceipt } from "@/types/onboarding";
 // synthetic ids like `docnode:doc:README.md#section` — anything up to `]]`.
 const MARKER = /\[\[receipt:(.+?)\]\]/g;
 
+/**
+ * `[[unverified]]…[[/unverified]]` wraps a claim the validator downgraded
+ * for citing nothing. It becomes `[…](#unverified)` and the `a` override
+ * renders a dotted-underline span — the Known Gaps flag at the claim site.
+ */
+const UNVERIFIED_SPAN = /\[\[unverified\]\]([\s\S]*?)\[\[\/unverified\]\]/g;
+
 export const RECEIPT_HREF_PREFIX = "#receipt:";
+export const UNVERIFIED_HREF = "#unverified";
 
 export function receiptNumberById(receipts: SourceReceipt[]): Map<string, number> {
   const map = new Map<string, number>();
@@ -34,6 +42,11 @@ export function renderReceiptMarkers(body: string, receipts: SourceReceipt[]): s
       const n = numbers.get(id);
       return n ? `[${n}](${RECEIPT_HREF_PREFIX}${id})` : "";
     })
+    .replace(UNVERIFIED_SPAN, (_m, inner: string) =>
+      // Nested brackets would break the link syntax — unwrap rather than
+      // ship a broken render.
+      inner.includes("[") || inner.includes("]") ? inner : `[${inner}](${UNVERIFIED_HREF})`,
+    )
     .replace(/[ \t]+([.,;:)])/g, "$1");
 }
 

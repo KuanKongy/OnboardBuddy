@@ -8,12 +8,13 @@ import {
   ChevronRight,
   Circle,
   Download,
-  FileCode2,
   FileText,
+  FlaskConical,
   GitCommitHorizontal,
   HelpCircle,
   Layers,
   Loader2,
+  MessageSquare,
   RefreshCw,
   Route,
   Sparkles,
@@ -22,7 +23,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -41,10 +42,14 @@ import {
   fetchOnboardingPackage,
   regenerateSection,
 } from "@/lib/onboardingData";
-import { receiptForHref, receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
+import { receiptForHref, receiptNumberById, renderReceiptMarkers, UNVERIFIED_HREF } from "@/lib/receiptMarkers";
+import { AskPanel } from "@/components/AskPanel";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
+import { ProvenancePanel } from "@/components/ProvenancePanel";
+import { ReceiptChip, InlineReceiptRef } from "@/components/ReceiptChips";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -120,6 +125,19 @@ const UNKNOWN_LABELS: Record<string, string> = {
   data: "Supporting data for part of this section wasn't available in the evidence",
 };
 
+/** Human names for the ranker's signals (served with their real weights). */
+const SIGNAL_LABELS: Record<string, string> = {
+  workflowParticipation: "workflow participation",
+  fanCentrality: "fan-in/out centrality",
+  exportedSurface: "exported surface",
+  sideEffects: "side effects",
+  entrypointParticipation: "entry points",
+  routeSchemaOwnership: "route/schema ownership",
+  testProximity: "test proximity",
+  configRelevance: "config relevance",
+  churn: "churn (90d)",
+};
+
 /**
  * "How packages work" tour: the transparency contract for package lifecycle —
  * when a package is updated in place, when a new one appears, when nothing is
@@ -159,7 +177,7 @@ const READER_TOUR_STEPS: TourStep[] = [
   {
     target: "reader-review",
     title: "Track what you've read",
-    body: "Mark each section reviewed as you finish it — that's your progress tracker AND a signal to teammates that the content was checked. If a regeneration changes a section, it drops back to draft so you know to re-read it.",
+    body: "Mark each section as you finish it — your personal progress shows in the section list. For owners and admins the same button is an editorial 'Reviewed' signal to the whole team; if a regeneration changes a section it drops back to draft so everyone knows to re-read it.",
   },
   {
     target: "reader-actions",
@@ -170,64 +188,19 @@ const READER_TOUR_STEPS: TourStep[] = [
 
 // ── section reader ────────────────────────────────────────────────────────────
 
-function ReceiptChip({
-  receipt,
-  onClick,
-  index,
-}: {
-  receipt: SourceReceipt;
-  onClick: (r: SourceReceipt) => void;
-  /** 1-based number matching inline [N] citation markers in the section text. */
-  index?: number;
-}) {
-  const lineRange = receipt.lineStart
-    ? ` ${receipt.lineStart}${receipt.lineEnd ? `–${receipt.lineEnd}` : ""}`
-    : "";
-  return (
-    <button
-      onClick={() => onClick(receipt)}
-      className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[0.71875rem] transition-colors hover:border-primary/50 hover:bg-accent",
-        receipt.staleness === "stale" ? "border-warning/40 bg-warning-soft" : "border-border bg-muted/40",
-      )}
-      title={receipt.snippet ? "Click to view the code snippet" : receipt.filePath}
-    >
-      {index != null && (
-        <span className="shrink-0 rounded bg-muted px-1 text-[0.625rem] font-semibold text-muted-foreground">
-          {index}
-        </span>
-      )}
-      <FileCode2 className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
-      <span className="truncate text-foreground">{receipt.filePath}</span>
-      {lineRange && <span className="shrink-0 text-muted-foreground">{lineRange}</span>}
-      {receipt.staleness === "stale" && <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-warning" />}
-    </button>
-  );
-}
-
 /**
- * Inline citation chip rendered where the generated text cited a receipt —
- * the [N] numbering matches the receipt chips listed under the section.
+ * The reader already shows the section title in the sticky top bar; when the
+ * generated markdown opens with the same heading, drop it — the audit's
+ * "page header + h1 + h2 stack" is three copies of one string.
  */
-function InlineReceiptRef({
-  receipt,
-  index,
-  onClick,
-}: {
-  receipt: SourceReceipt;
-  index: number;
-  onClick: (r: SourceReceipt) => void;
-}) {
-  return (
-    <button
-      onClick={() => onClick(receipt)}
-      className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-border bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-foreground"
-      title={`${receipt.filePath}${receipt.lineStart ? ` ${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}`}
-      aria-label={`Source reference ${index}: ${receipt.filePath}`}
-    >
-      {index}
-    </button>
-  );
+function stripLeadingDuplicateHeading(body: string, title: string): string {
+  const lines = body.split("\n");
+  let i = 0;
+  while (i < lines.length && lines[i]!.trim() === "") i++;
+  const m = lines[i]?.match(/^#{1,3}\s+(.*?)\s*$/);
+  if (!m) return body;
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return norm(m[1]!) === norm(title) ? lines.slice(i + 1).join("\n") : body;
 }
 
 function initialBlockExpansion(section: OnboardingSection): boolean[] {
@@ -269,6 +242,13 @@ function SectionView({
         <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", confidenceStyle(section.confidence))}>
           {section.confidence} confidence
         </Badge>
+        {section.confidenceReason && (
+          // The grade's mechanical basis, inline (audit §3.6) — a label
+          // without its reason reads as theater.
+          <span className="text-[0.6875rem] text-muted-foreground" title="How this grade was computed">
+            {section.confidenceReason}
+          </span>
+        )}
         {section.status === "stale" && (
           <Badge variant="outline" className={cn("text-[0.6875rem]", STATUS_STYLE.stale)}>
             <AlertTriangle className="mr-1 h-2.5 w-2.5" />
@@ -318,7 +298,10 @@ function SectionView({
                 )}
               </button>
             ) : (
-              <h3 className="mb-1.5 text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
+              // The lead block's title always equals the section label shown
+              // in the sticky top bar — rendering it again is the duplicated
+              // title stack the audit flagged.
+              !isLead && <h3 className="mb-1.5 text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
             )}
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
@@ -327,6 +310,26 @@ function SectionView({
                   <ReactMarkdown
                     components={{
                       a: ({ href, children }) => {
+                        if (href === UNVERIFIED_HREF) {
+                          // A claim the validator downgraded for citing
+                          // nothing — flagged at the point of doubt.
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span
+                                  tabIndex={0}
+                                  className="cursor-help underline decoration-warning decoration-dotted underline-offset-4"
+                                >
+                                  {children}
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-72">
+                                Unverified — this statement cites no receipt. It was downgraded
+                                during validation and is listed under Known gaps.
+                              </TooltipContent>
+                            </Tooltip>
+                          );
+                        }
                         const cited = receiptForHref(href, block.receipts);
                         if (cited) {
                           const n = receiptNumberById(block.receipts).get(cited.bundleReceiptId ?? "") ?? 0;
@@ -340,7 +343,10 @@ function SectionView({
                       },
                     }}
                   >
-                    {renderReceiptMarkers(block.body, block.receipts)}
+                    {renderReceiptMarkers(
+                      isLead ? stripLeadingDuplicateHeading(block.body, section.label) : block.body,
+                      block.receipts,
+                    )}
                   </ReactMarkdown>
                 </div>
                 {block.receipts.length > 0 && (
@@ -501,17 +507,34 @@ export function OnboardingPage() {
   const [pkgFetchError, setPkgFetchError] = useState(false);
   const generateRolePollRef = useRef<number | null>(null);
   const [exporting, setExporting] = useState(false);
-  const { save: saveProgress } = useProgress(id);
+  const [askOpen, setAskOpen] = useState(false);
+  const [provenanceOpen, setProvenanceOpen] = useState(false);
+  const { items: progressItems, loaded: progressLoaded, save: saveProgress } = useProgress(id);
+
+  // Per-user read tracking (any tier): which sections of THIS package this
+  // member has marked as read. Lives in user_progress.position — the same
+  // row that powers "Continue onboarding" — so no schema is involved.
+  // null = not initialized yet; saving before init would wipe stored marks.
+  const [readSections, setReadSections] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (!pkg?.id || !progressLoaded) return;
+    const item = progressItems.find((p) => p.kind === "onboarding" && p.ref_id === pkg.id);
+    const stored = Array.isArray(item?.position?.readSections)
+      ? (item!.position.readSections as string[])
+      : [];
+    setReadSections((prev) => [...new Set([...(prev ?? []), ...stored])]);
+  }, [pkg?.id, progressItems, progressLoaded]);
 
   // Remember where the reader is so "Continue onboarding" resumes here.
   useEffect(() => {
-    if (view !== "reader" || !pkg?.id || pkg.status === "missing") return;
+    if (view !== "reader" || !pkg?.id || pkg.status === "missing" || readSections === null) return;
     saveProgress("onboarding", pkg.id, {
       sectionType: activeSectionId,
       role: pkg.role ?? selectedRole,
       packageId: pkg.id,
+      readSections,
     });
-  }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, saveProgress]);
+  }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, readSections, saveProgress]);
 
   function setParams(next: Record<string, string | null>) {
     setSearchParams((prev) => {
@@ -591,6 +614,20 @@ export function OnboardingPage() {
   const sections = isMissing ? [] : pkg.sections;
   const activeSection = sections.find((s) => s.id === activeSectionId);
   const markedReviewed = activeSection?.reviewStatus === "approved";
+  const isSectionRead = readSections?.includes(activeSectionId) ?? false;
+
+  // Personal read mark — every member gets a progress tracker (the reader
+  // tour promises one; owner/admin "Mark reviewed" is an editorial action,
+  // not this). Saved via the auto-save effect above.
+  function handleToggleRead() {
+    if (readSections === null) return;
+    setReadSections((prev) => {
+      const cur = prev ?? [];
+      return cur.includes(activeSectionId)
+        ? cur.filter((s) => s !== activeSectionId)
+        : [...cur, activeSectionId];
+    });
+  }
 
   // First reader visit: a 3-step coach mark (reading path → mark reviewed →
   // export/regenerate). Only after the project tour, and only with content.
@@ -1077,6 +1114,46 @@ export function OnboardingPage() {
                   {markedReviewed ? "Reviewed" : "Mark reviewed"}
                 </Button>
               )}
+              {/* Personal progress for everyone else — the tour's "track what
+                  you've read" was previously only true for owners/admins. */}
+              {!canManage && activeSection && (
+                <Button
+                  size="xs"
+                  variant={isSectionRead ? "secondary" : "default"}
+                  data-tour="reader-review"
+                  disabled={readSections === null}
+                  className={cn(
+                    "gap-1.5",
+                    isSectionRead
+                      ? "border-success/40 bg-success-soft text-success"
+                      : "ring-2 ring-primary/30",
+                  )}
+                  onClick={handleToggleRead}
+                >
+                  {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                  {isSectionRead ? "Read" : "Mark as read"}
+                </Button>
+              )}
+              <Button
+                size="xs"
+                variant="outline"
+                className="gap-1.5"
+                onClick={() => setAskOpen(true)}
+                title="Ask a question about this codebase — answered from the analyzed evidence with receipts"
+              >
+                <MessageSquare className="h-3 w-3" />
+                Ask
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                className="gap-1"
+                onClick={() => setProvenanceOpen(true)}
+                title="How this package was made — models, calls, cost, validation"
+                aria-label="How this package was made"
+              >
+                <FlaskConical className="h-3 w-3" />
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1101,6 +1178,51 @@ export function OnboardingPage() {
           )}
         </div>
       </div>
+
+      {/* Coverage strip (audit §4.2): what was analyzed, what this package
+          actually cites, and the signals behind the ranking — the honest
+          denominators the "critical 25%" story needs. All counts, no prose. */}
+      {!isMissing && pkg.coverage && (
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-5 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
+          <span>
+            Analyzed <span className="font-medium text-foreground">{pkg.coverage.files.analyzed}</span> files
+            {pkg.coverage.files.unsupported ? ` (${pkg.coverage.files.unsupported} unsupported skipped)` : ""}
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            cites <span className="font-medium text-foreground">{pkg.coverage.symbols.cited}</span> of{" "}
+            {pkg.coverage.symbols.total} symbols in {pkg.coverage.files.cited} files
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            <span className="font-medium text-foreground">{pkg.coverage.workflows.covered}</span> of{" "}
+            {pkg.coverage.workflows.total} traced workflows in sections & tutorials
+          </span>
+          {pkg.coverage.rankingSignals.length > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+                    ranked by {pkg.coverage.rankingSignals.length} signals
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-80">
+                  {pkg.coverage.rankingSignals
+                    .map((s) => `${SIGNAL_LABELS[s.signal] ?? s.signal} ${Math.round(s.weight * 100)}%`)
+                    .join(" · ")}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
+          <Link
+            to={`/projects/${id}/dependencies`}
+            className="ml-auto shrink-0 font-medium text-primary hover:underline"
+          >
+            Everything else → Dependencies
+          </Link>
+        </div>
+      )}
 
       {!isMissing && pkg.status === "generating" && (
         <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
@@ -1160,6 +1282,12 @@ export function OnboardingPage() {
         {/* section nav */}
         <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
+          {readSections !== null && presentSectionIds.length > 0 && (
+            <p className="mb-2 px-2 text-[0.625rem] tabular-nums text-muted-foreground/60">
+              {presentSectionIds.filter((navId) => readSections.includes(navId)).length}/
+              {presentSectionIds.length} read
+            </p>
+          )}
           <nav className="space-y-3">
             {(() => {
               const filteredNavIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) => isMissing || sections.some((s) => s.id === navId));
@@ -1192,6 +1320,9 @@ export function OnboardingPage() {
                             {section?.status === "stale" && <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />}
                             {section?.confidence === "low" && section.status !== "stale" && (
                               <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" title="Low confidence" />
+                            )}
+                            {readSections?.includes(navId) && (
+                              <CheckCircle2 className="h-3 w-3 shrink-0 text-success/70" aria-label="Read" />
                             )}
                           </button>
                         );
@@ -1301,6 +1432,23 @@ export function OnboardingPage() {
       </div>
 
       {receiptModal && <ReceiptViewer receipt={receiptModal} onClose={() => setReceiptModal(null)} />}
+      {id && (
+        <AskPanel
+          projectId={id}
+          packageId={pkg?.id ?? selectedPackageParam}
+          open={askOpen}
+          onClose={() => setAskOpen(false)}
+          onReceiptClick={setReceiptModal}
+        />
+      )}
+      {id && (
+        <ProvenancePanel
+          projectId={id}
+          packageId={pkg?.id ?? selectedPackageParam}
+          open={provenanceOpen}
+          onClose={() => setProvenanceOpen(false)}
+        />
+      )}
       {readerTourOpen && <AppTour steps={READER_TOUR_STEPS} onDone={finishReaderTour} />}
     </div>
   );

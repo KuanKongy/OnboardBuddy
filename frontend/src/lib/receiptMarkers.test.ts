@@ -48,6 +48,18 @@ describe("renderReceiptMarkers", () => {
     const text = "See [the docs](https://example.com) and `code`.";
     expect(renderReceiptMarkers(text, receipts)).toBe(text);
   });
+
+  it("turns unverified spans into #unverified links for the dotted-underline render", () => {
+    expect(
+      renderReceiptMarkers("[[unverified]]The queue retries forever.[[/unverified]]", receipts),
+    ).toBe("[The queue retries forever.](#unverified)");
+  });
+
+  it("unwraps unverified spans whose text would nest brackets", () => {
+    expect(
+      renderReceiptMarkers("[[unverified]]see [note] here[[/unverified]]", receipts),
+    ).toBe("see [note] here");
+  });
 });
 
 describe("receiptForHref", () => {

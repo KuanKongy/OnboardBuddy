@@ -14,6 +14,7 @@
 
 import { query } from '../lib/db.js';
 import { embedText } from '../worker/engine/embeddingService.js';
+import { capReceiptSpan } from '../worker/engine/receiptSpan.js';
 import type { ViewType } from '../worker/semantic/embeddingViews.js';
 import type { RecordLevel, SemanticRecordBody } from '../worker/semantic/recordTypes.js';
 import {
@@ -58,6 +59,8 @@ export interface EvidenceBundleV2 {
     snippet?: string; // stripped in facts_only_ai
     detectionExpression?: string;
     referencedRecordId?: string;
+    /** Original lineEnd when the span was capped for spot-checkability. */
+    truncatedFromLineEnd?: number;
   }>;
   unknowns: Array<{ kind: string; detail?: string }>;
   outputRules: {
@@ -230,7 +233,8 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
   const receiptRows = receiptIds.length > 0
     ? (await query(
         `SELECT id, receipt_kind, trust_level, node_stable_key, file_path, symbol_name,
-                line_start, line_end, snippet, detection_expression, referenced_record_id
+                line_start, line_end, snippet, detection_expression, referenced_record_id,
+                (metadata->>'truncatedFromLineEnd')::int AS truncated_from_line_end
          FROM source_receipts
          WHERE id = ANY($1)
          ORDER BY array_position(ARRAY['code','config','tests','docs','llm_inference'], trust_level),
@@ -242,6 +246,7 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
         node_stable_key: string | null; file_path: string | null; symbol_name: string | null;
         line_start: number | null; line_end: number | null; snippet: string | null;
         detection_expression: string | null; referenced_record_id: string | null;
+        truncated_from_line_end: number | null;
       }>
     : [];
 
@@ -271,6 +276,7 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
         snippet: d.snippet,
         detection_expression: null,
         referenced_record_id: null,
+        truncated_from_line_end: null,
       });
     }
   }
@@ -303,20 +309,25 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
       receiptIds: c.receiptIds,
       retrieval: { score: round4(c.score), seededByView: c.seededByView, hop: c.hop },
     })),
-    receipts: [...receiptRows, ...docReceipts].map((r) => ({
-      receiptId: r.id,
-      receiptKind: r.receipt_kind,
-      trustLevel: r.trust_level,
-      nodeStableKey: r.node_stable_key ?? undefined,
-      filePath: r.file_path ?? undefined,
-      symbolName: r.symbol_name ?? undefined,
-      lineStart: r.line_start ?? undefined,
-      lineEnd: r.line_end ?? undefined,
-      // Mechanical privacy enforcement: snippets never leave in facts-only mode.
-      snippet: factsOnlyMode ? undefined : r.snippet ?? undefined,
-      detectionExpression: r.detection_expression ?? undefined,
-      referencedRecordId: r.referenced_record_id ?? undefined,
-    })),
+    receipts: [...receiptRows, ...docReceipts].map((r) =>
+      // Spans stay spot-checkable: legacy full-symbol receipts are capped
+      // here (audit §3.7) with the original extent kept as truncatedFromLineEnd.
+      capReceiptSpan({
+        receiptId: r.id,
+        receiptKind: r.receipt_kind,
+        trustLevel: r.trust_level,
+        nodeStableKey: r.node_stable_key ?? undefined,
+        filePath: r.file_path ?? undefined,
+        symbolName: r.symbol_name ?? undefined,
+        lineStart: r.line_start ?? undefined,
+        lineEnd: r.line_end ?? undefined,
+        // Mechanical privacy enforcement: snippets never leave in facts-only mode.
+        snippet: factsOnlyMode ? undefined : r.snippet ?? undefined,
+        detectionExpression: r.detection_expression ?? undefined,
+        referencedRecordId: r.referenced_record_id ?? undefined,
+        truncatedFromLineEnd: r.truncated_from_line_end ?? undefined,
+      }),
+    ),
     unknowns,
     outputRules: {
       useOnlyProvidedEvidence: true,
