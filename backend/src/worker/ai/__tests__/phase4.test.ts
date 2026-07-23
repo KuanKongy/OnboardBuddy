@@ -153,8 +153,9 @@ describe('phase 4 — model tiers', () => {
 
   it('cost estimates scale with tokens and tier', () => {
     expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.15, 1e-9);
-    // strong now defaults to gpt-4o-mini pricing (0.15 in / 0.60 out per Mtok)
-    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.75, 1e-9);
+    // strong tracks the gpt-4o this deployment points OPENROUTER_MODEL_STRONG
+    // at (2.50 in / 10.00 out per Mtok) — keep in sync with TIER_PRICES_PER_MTOK.
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(12.5, 1e-9);
   });
 });
 

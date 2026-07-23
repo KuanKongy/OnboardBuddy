@@ -71,7 +71,7 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
       ? buildGithubBlobUrl(
           { owner: project.repo_owner, repo: project.repo_name, branch: project.branch },
           receipt.filePath,
-          { ref: receipt.commitHash, lineStart: receipt.lineStart ?? null, lineEnd: receipt.lineEnd ?? null },
+          { ref: receipt.commitHash ?? undefined, lineStart: receipt.lineStart ?? null, lineEnd: receipt.lineEnd ?? null },
         )
       : null;
 
@@ -107,13 +107,28 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                 <AlertTriangle className="mr-1 h-2.5 w-2.5" />
                 Stale — source has changed
               </Badge>
+            ) : receipt.staleness === "fresh" ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help">
+                    <Badge
+                      variant="outline"
+                      className="border-success/40 bg-success-soft text-xs text-success"
+                    >
+                      <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
+                      Current
+                    </Badge>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  Re-verified: this symbol's code is unchanged in the latest analysis.
+                </TooltipContent>
+              </Tooltip>
             ) : (
-              <Badge
-                variant="outline"
-                className="border-success/40 bg-success-soft text-xs text-success"
-              >
-                <CheckCircle2 className="mr-1 h-2.5 w-2.5" />
-                Current
+              // "unknown" — docs/synthesis evidence with no symbol hash to
+              // re-check. Shown neutrally; never a green "Current" we can't back.
+              <Badge variant="outline" className="text-xs text-muted-foreground">
+                Not re-verifiable
               </Badge>
             )}
             <span className="text-xs text-muted-foreground">

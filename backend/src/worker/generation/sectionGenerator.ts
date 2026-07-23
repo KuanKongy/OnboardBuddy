@@ -13,8 +13,10 @@ import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalServic
 import type { DeveloperRole } from '../semantic/projections.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
+import { rewriteInlineCitations, type RewriteResult } from './citationMarkers.js';
+import { lintVoice } from './voiceLint.js';
 
-export const SECTION_PROMPT_VERSION = 'section-v2';
+export const SECTION_PROMPT_VERSION = 'section-v3';
 
 const SECTION_OUTPUT_SCHEMA = {
   type: 'object',
@@ -86,29 +88,6 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     embedQuery: params.embedQuery,
   });
 
-  // Structured call + inline validation with one stricter retry.
-  let { output, runId } = await callModel(params, bundle, null);
-  let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
-  let retried = false;
-  if (validation.hardFailure) {
-    retried = true;
-    const stricter = await callModel(params, bundle, validation.issues);
-    output = stricter.output;
-    runId = stricter.runId;
-    validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
-  }
-
-  const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
-
-  const sectionId = await persistSection(params, bundle, output, validation, diagrams, runId, retried);
-  return { sectionId, validation, retried, runId };
-}
-
-async function callModel(
-  params: GenerateSectionParams,
-  bundle: EvidenceBundleV2,
-  previousIssues: string[] | null,
-): Promise<{ output: GeneratedOutput; runId: string | null }> {
   // Receipts get short aliases (r1, r2, …) in the prompt — small models
   // mangle raw UUIDs, which used to surface as "unknown receipt id" hard
   // failures and dropped citations. Aliases map back to UUIDs before
@@ -116,6 +95,44 @@ async function callModel(
   const aliasToId = new Map<string, string>();
   bundle.receipts.forEach((r, i) => aliasToId.set(`r${i + 1}`, r.receiptId));
 
+  // Structured call + inline validation with one stricter retry. Voice lint
+  // shares the retry: marketing filler is a quality failure the same way an
+  // uncited claim is.
+  let { output, runId } = await callModel(params, bundle, null, aliasToId);
+  let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
+  let voice = lintVoice(output.contentMarkdown ?? '');
+  let retried = false;
+  if (validation.hardFailure || voice.issues.length > 0) {
+    retried = true;
+    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues], aliasToId);
+    output = stricter.output;
+    runId = stricter.runId;
+    validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
+    voice = lintVoice(output.contentMarkdown ?? '');
+  }
+
+  // Prose aliases become inline [[receipt:<uuid>]] markers for persisted
+  // receipts; the rest are stripped — never ship labels the reader can't
+  // resolve.
+  const inline = rewriteInlineCitations(
+    output.contentMarkdown ?? '',
+    aliasToId,
+    new Set(validation.usedReceiptIds),
+  );
+  output = { ...output, contentMarkdown: inline.content };
+
+  const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
+
+  const sectionId = await persistSection(params, bundle, output, validation, diagrams, runId, retried, inline, voice.hits);
+  return { sectionId, validation, retried, runId };
+}
+
+async function callModel(
+  params: GenerateSectionParams,
+  bundle: EvidenceBundleV2,
+  previousIssues: string[] | null,
+  aliasToId: Map<string, string>,
+): Promise<{ output: GeneratedOutput; runId: string | null }> {
   const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
   const response = await params.ai.call<GeneratedOutput>({
     tier: 'strong',
@@ -156,7 +173,8 @@ function renderPrompt(
   return [
     `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${bundle.repo.owner}/${bundle.repo.name} (scope: ${bundle.scope.displayName}).`,
     spec.instructions.replace(/\bROLE\b/g, params.role),
-    'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting.',
+    'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; when citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting.',
+    'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts — never derive or estimate your own.',
     previousIssues && previousIssues.length > 0
       ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
       : null,
@@ -175,6 +193,8 @@ async function persistSection(
   diagrams: Array<{ kind: string; mermaid: string }>,
   runId: string | null,
   retried: boolean,
+  inline: RewriteResult,
+  voiceHits: string[],
 ): Promise<string> {
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
@@ -182,6 +202,8 @@ async function persistSection(
     retrieval: bundle.deterministicContext.retrievalStats ?? null,
     validation: { issues: validation.issues, retried, hardFailure: validation.hardFailure },
     claims: validation.adjustedClaims,
+    inline_citations: { resolved: inline.resolved.length, dropped: inline.dropped },
+    voice_lint: { remaining_hits: voiceHits },
   };
 
   // Replace the previous version of this section; generation runs stay for audit.
@@ -200,6 +222,14 @@ async function persistSection(
 
   // Section-owned receipt copies for the receipts actually used — the API
   // serves receipts by section_id, and staleness tracking follows them.
+  // Each copy carries the claim text it supports so the receipt viewer can
+  // answer "what does this citation prove?" without spelunking context.
+  const claimByReceiptId = new Map<string, string>();
+  for (const claim of validation.adjustedClaims) {
+    for (const id of claim.receiptIds) {
+      if (!claimByReceiptId.has(id)) claimByReceiptId.set(id, claim.claim);
+    }
+  }
   const used = new Set(validation.usedReceiptIds);
   for (const receipt of bundle.receipts) {
     if (!used.has(receipt.receiptId)) continue;
@@ -207,13 +237,14 @@ async function persistSection(
       `INSERT INTO source_receipts
          (project_id, snapshot_id, receipt_kind, trust_level, section_id, node_stable_key,
           file_path, symbol_name, line_start, line_end, snippet, detection_expression,
-          referenced_record_id, commit_hash, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+          referenced_record_id, commit_hash, claim, metadata)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [params.projectId, params.snapshotId, receipt.receiptKind, receipt.trustLevel,
        sectionRow.id, receipt.nodeStableKey ?? null, receipt.filePath ?? null,
        receipt.symbolName ?? null, receipt.lineStart ?? null, receipt.lineEnd ?? null,
        receipt.snippet ?? null, receipt.detectionExpression ?? null,
        receipt.referencedRecordId ?? null, params.commitHash,
+       claimByReceiptId.get(receipt.receiptId) ?? null,
        JSON.stringify({ copiedFromReceiptId: receipt.receiptId })],
     );
   }

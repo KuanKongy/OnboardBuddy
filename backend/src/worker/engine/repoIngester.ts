@@ -28,6 +28,16 @@ const IGNORE_PATTERNS = [
   '**/coverage/**',
   '**/*.d.ts',
   '**/*.min.js',
+  // Embedded fixture apps are test DATA, not product code. Analyzing them
+  // polluted rankings, workflows and diagrams (a fixture's InsightFacade.ts
+  // once out-ranked real API routes; traces cited fixture SQL as the app
+  // schema). Tests themselves stay analyzed — only fixture trees are cut.
+  // Note: these only apply when a scanned repo CONTAINS such dirs; test
+  // suites that scan a fixture dir as the root are unaffected.
+  '**/fixtures/**',
+  '**/__fixtures__/**',
+  '**/__mocks__/**',
+  '**/testdata/**',
 ];
 
 export async function cloneRepo(githubUrl: string, targetDir: string): Promise<string> {

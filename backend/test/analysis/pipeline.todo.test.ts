@@ -18,7 +18,10 @@ const FIXTURE_DIR = path.resolve(__dirname, '../../src/worker/fixtures/simple');
 describe("analysis pipeline", () => {
   let fileAnalyses: FileAnalysis[];
 
-  before(async () => {
+  before(async function () {
+    // Building a real ts.Program loads lib.d.ts and friends — routinely >2s
+    // cold; mocha's 2s default made this hook a machine-speed flake.
+    this.timeout(30000);
     const index = await buildRepoIndex(FIXTURE_DIR);
     const tsFiles = filterByLanguage(index, 'typescript');
     const program = createProgram(tsFiles, FIXTURE_DIR);

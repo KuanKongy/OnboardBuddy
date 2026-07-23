@@ -80,11 +80,12 @@ export function resolveTierConfig(overrides?: {
 // Coarse per-tier prices used for ai_generation_runs.estimated_cost_usd.
 // Deliberately not a per-model price table: these estimates feed the cost
 // UI and budget trend lines, not billing. USD per million tokens.
-// Matches the gpt-4o-mini defaults — update the strong row if you point
-// OPENROUTER_MODEL_STRONG at a premium model.
+// Cheap matches the gpt-4o-mini default; strong matches the gpt-4o this
+// deployment points OPENROUTER_MODEL_STRONG at (backend/.env) — keep the
+// row in sync with that env var per the note above.
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
   cheap: { input: 0.15, output: 0.6 },
-  strong: { input: 0.15, output: 0.6 },
+  strong: { input: 2.5, output: 10 },
   embedding: { input: 0.02, output: 0 },
 };
 

@@ -63,25 +63,49 @@ const projectionRow = (t: ProjectedTarget) => ({
 export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   start_here: {
     views: ['purpose', 'domain'],
-    retrievalTask: (role) => `Repo purpose, main subsystems, and the first files a ${role} developer should read.`,
-    instructions: 'Write a focused orientation: what this system does (business purpose first), the main subsystems, and a "read these first" list for the ROLE with WHY each file unlocks understanding. 3-6 paragraphs plus the list. Reference exact paths from the evidence.',
+    retrievalTask: (role) => `Repo purpose, tech stack, how to run and test it, and the first files a ${role} developer should read.`,
+    instructions: [
+      'Orient a ROLE developer joining this codebase. Structure exactly as:',
+      '(1) "## What this is" — 2-4 sentences: what the system concretely does end to end and the stack, stated from the languageInventory, clusters and entrypoint evidence (name the languages, runtime processes and storage you can see — no marketing framing).',
+      '(2) "## Run & verify" — the exact build/run/test commands, but ONLY commands present verbatim in the evidence (README/doc receipts, package.json scripts, compose files listed in runSurface). Cite the receipt for each command. If evidence contains no commands, write exactly: "Run commands are not derivable from the analyzed evidence — check the README." Never invent a command.',
+      '(3) "## The lay of the land" — the top clusters with their real file counts and one factual sentence each on what lives there.',
+      '(4) "## Read these first" — 5-7 files ORDERED for the ROLE. Each entry: the path plus a concrete, evidence-backed reason (fan-in, workflow participation, what it orchestrates). A reason must say what the file DOES, never that it is "key/important". Do not fill the list with UI pages unless the role is frontend.',
+    ].join(' '),
     deterministic: async (deps) => {
       const snap = (await query(
         `SELECT file_count, symbol_count, workflow_count, language_inventory FROM analysis_snapshots WHERE id = $1`,
         [deps.snapshotId],
       )).rows[0];
+      // Member counts included so "N files" in prose is a provided number,
+      // never model arithmetic (a regeneration invented "approximately 64
+      // files" for a 23-file cluster when counts weren't supplied).
       const clusters = (await query(
-        `SELECT label, kind, critical_score FROM architecture_clusters WHERE snapshot_id = $1 ORDER BY critical_score DESC LIMIT 8`,
+        `SELECT c.label, c.kind, c.critical_score,
+                (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
+         FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC LIMIT 8`,
         [deps.snapshotId],
       )).rows;
       const entrypoints = (await query(
         `SELECT e.trigger_type, e.method, e.route_path, n.file_path FROM entrypoints e JOIN graph_nodes n ON n.id = e.node_id WHERE e.snapshot_id = $1 LIMIT 15`,
         [deps.snapshotId],
       )).rows;
+      // Build/run surface: compose files, manifests, READMEs — the files a
+      // "Run & verify" section may cite commands from.
+      const runSurface = (await query(
+        `SELECT file_path, category FROM repository_files
+         WHERE snapshot_id = $1 AND (
+           file_path ILIKE '%docker-compose%' OR file_path ILIKE '%makefile%'
+           OR file_path = 'package.json' OR file_path ILIKE '%/package.json'
+           OR file_path ILIKE 'readme%' OR file_path ILIKE '%/readme%'
+         )
+         ORDER BY length(file_path) LIMIT 12`,
+        [deps.snapshotId],
+      )).rows;
       return {
         snapshot: snap,
         topClusters: clusters,
         entrypoints,
+        runSurface,
         topForRole: deps.projections.filter((p) => p.targetType === 'file' || p.targetType === 'symbol').slice(0, 10).map(projectionRow),
       };
     },
@@ -131,7 +155,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   entry_points: {
     views: ['purpose'],
     retrievalTask: (role) => `The entry points (routes, jobs, CLI commands) a ${role} developer must understand.`,
-    instructions: 'List the important entry points grouped by trigger type. For each: exact file/symbol, what triggers it, connected workflow, and one sentence on business purpose. Order by criticality for the ROLE.',
+    instructions: 'List the important entry points grouped by trigger type. Route paths in the evidence are FULL mounted paths — reproduce them exactly, never abbreviate to sub-router paths. For each: exact file/symbol, what triggers it, connected workflow, and one sentence on purpose ONLY when the purpose is visible in the handler/workflow evidence — otherwise omit the purpose line instead of inventing one. Order by criticality for the ROLE and cover different routers rather than exhaustively listing one file\'s CRUD.',
     deterministic: async (deps) => ({
       entrypoints: (await query(
         `SELECT e.trigger_type, e.method, e.route_path, n.file_path, n.name AS symbol,
@@ -148,11 +172,28 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   critical_25: {
     views: ['purpose', 'domain'],
     retrievalTask: (role) => `Why the most critical files and symbols matter to a ${role} developer.`,
-    instructions: 'Explain the Critical 25% by category (symbols, files, workflows, clusters). Use the ranking REASONS to justify each entry in prose — never dump raw scores. For each: what it does, why it is critical, and what breaks when it is wrong.',
+    instructions: [
+      'Write the Critical 25% as an ORDERED LEARNING PATH, not an inventory.',
+      'Open with one sentence of honest coverage using ONLY the provided coverage numbers: "This path covers N of M symbols and X of Y traced workflows — the top ~25% by composite criticality; everything else stays browsable in the Dependencies tab."',
+      'Then 5-8 numbered stops in reading order for the ROLE. Each stop = one item from the provided critical25 data: what it does (from evidence), why it ranks here (quote its ranking reasons — fan-in, workflow participation, side effects), and what depends on it. Engineering facts only — no invented product or user consequences.',
+      'Close with "## What this path leaves out" — one short paragraph naming the biggest areas NOT in the path (from the cluster evidence) and why deferring them is safe.',
+    ].join(' '),
     deterministic: async (deps) => {
       const top = critical25(deps.projections);
+      const snap = (await query(
+        `SELECT symbol_count, file_count, workflow_count FROM analysis_snapshots WHERE id = $1`,
+        [deps.snapshotId],
+      )).rows[0] as { symbol_count: number | null; file_count: number | null; workflow_count: number | null } | undefined;
       return {
         critical25: Object.fromEntries([...top.entries()].map(([type, targets]) => [type, targets.map(projectionRow)])),
+        coverage: {
+          totalSymbols: snap?.symbol_count ?? null,
+          totalFiles: snap?.file_count ?? null,
+          totalWorkflows: snap?.workflow_count ?? null,
+          selectedSymbols: top.get('symbol')?.length ?? 0,
+          selectedFiles: top.get('file')?.length ?? 0,
+          selectedWorkflows: top.get('workflow')?.length ?? 0,
+        },
       };
     },
   },
@@ -160,7 +201,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   capability_map: {
     views: ['domain'],
     retrievalTask: () => 'The business capabilities this product provides and where each lives in the code.',
-    instructions: 'Describe each business capability: what user value it delivers, which workflows implement it, and which modules own it. This is business context, not code documentation.',
+    instructions: 'Describe each business capability: what user value it delivers, which workflows implement it, and which modules own it. This is business context, not code documentation. If a capability has no userValue in the evidence, omit that line entirely — never print "N/A". Refer to workflows and modules by their human-readable titles; internal keys (wf:…, cluster:…) must never appear in the output.',
     deterministic: async (deps) => ({
       capabilities: (await query(
         `SELECT c.name, c.description, c.confidence, c.metadata->>'userValue' AS user_value,
@@ -180,7 +221,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   role_path: {
     views: ['purpose', 'domain'],
     retrievalTask: (role) => `An ordered learning path for a new ${role} developer: what to study first and why.`,
-    instructions: 'Produce an ordered learning path for the ROLE: 5-10 steps, each naming concrete files/workflows/tutorials with the reason it comes at that position. Use the role projection ordering and capabilities as the backbone.',
+    instructions: 'Produce an ordered learning path THROUGH THE CODEBASE for a ROLE developer — this is how a developer learns the code, NOT the product\'s end-user page journey. 5-10 steps, each naming concrete files/workflows/tutorials with the reason it comes at that position; span the codebase\'s areas (backend, worker, frontend) per the projections rather than walking the app\'s UI screens. Use the role projection ordering and capabilities as the backbone.',
     deterministic: async (deps) => ({
       roleOrdering: deps.projections.slice(0, 12).map(projectionRow),
       capabilities: (await query(
@@ -197,7 +238,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   workflow_guide: {
     views: ['purpose', 'operations'],
     retrievalTask: () => 'End-to-end request flows: what each traced workflow does step by step.',
-    instructions: 'One subsection per workflow: trigger, the traced steps in order (file::symbol with the step kind), side effects, and failure handling. Use only traced steps — never invent steps.',
+    instructions: 'One subsection per workflow: trigger, the traced steps in order (file::symbol with the step kind), side effects, and failure handling. Use only traced steps — never invent steps. Describe failure handling only from visible evidence (status codes, catch blocks in snippets); if none is visible, write "failure handling not visible in the trace". When a step WRITES data, say so explicitly — do not soften writes into reads.',
     deterministic: async (deps) => ({
       workflows: (await query(
         `SELECT w.stable_key, w.title, w.trigger_type, w.purpose, w.confidence,
@@ -205,7 +246,11 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
                                            'kind', ws.step_kind, 'description', ws.deterministic_description)
                          ORDER BY ws.step_order) AS steps
          FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
-         WHERE w.snapshot_id = $1 GROUP BY w.id LIMIT 8`,
+         WHERE w.snapshot_id = $1 GROUP BY w.id
+         ORDER BY COALESCE((SELECT max(cs.score) FROM criticality_scores cs
+                            WHERE cs.snapshot_id = w.snapshot_id AND cs.target_type = 'workflow'
+                              AND cs.stable_key = w.stable_key), 0) DESC
+         LIMIT 8`,
         [deps.snapshotId],
       )).rows,
     }),
@@ -216,7 +261,11 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
                                                     'description', ws.deterministic_description)
                                   ORDER BY ws.step_order) AS steps
          FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
-         WHERE w.snapshot_id = $1 GROUP BY w.id LIMIT 3`,
+         WHERE w.snapshot_id = $1 GROUP BY w.id
+         ORDER BY COALESCE((SELECT max(cs.score) FROM criticality_scores cs
+                            WHERE cs.snapshot_id = w.snapshot_id AND cs.target_type = 'workflow'
+                              AND cs.stable_key = w.stable_key), 0) DESC
+         LIMIT 3`,
         [deps.snapshotId],
       )).rows as Array<{ title: string; steps: Array<{ stepOrder: number; filePath: string; symbolName: string | null; stepKind: string | null; description: string }> }>;
       return workflows.map((w) => ({ kind: 'sequence' as const, mermaid: workflowSequenceDiagram(w.title, w.steps) }));
@@ -226,18 +275,38 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   data_schema: {
     views: ['operations', 'dependency'],
     retrievalTask: () => 'The data model: source-of-truth objects and who reads or writes them.',
-    instructions: 'Document the data layer: schema objects (tables/migrations), which code reads/writes each, and the constraints visible in the evidence. Say plainly when column-level details are not in the evidence.',
-    deterministic: async (deps) => ({
-      schemaNodes: (await query(
-        `SELECT stable_key, name, file_path FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema' LIMIT 25`,
+    instructions: [
+      'Document the data layer from the provided inventory.',
+      'The total table count you state MUST be the provided schemaTableCount verbatim — never count the list yourself (it may be truncated; schemaNodesTruncated says so).',
+      'Name the migration/schema file(s) as the source of truth once — do not repeat the same file path per table.',
+      'Group tables into 3-6 domains by name and describe each group in one sentence.',
+      'For the most-accessed tables, say which code writes them (dbSideEffects evidence).',
+      'Say plainly when column-level details are not in the evidence.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      const schemaNodes = (await query(
+        `SELECT stable_key, name, file_path FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema' ORDER BY name LIMIT 60`,
         [deps.snapshotId],
-      )).rows,
-      dbSideEffects: (await query(
-        `SELECT s.type, s.target, n.file_path FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
-         WHERE s.snapshot_id = $1 AND s.type IN ('database_read', 'database_write') LIMIT 20`,
-        [deps.snapshotId],
-      )).rows,
-    }),
+      )).rows;
+      const schemaTableCount = Number(
+        ((await query(
+          `SELECT count(*)::int AS n FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema'`,
+          [deps.snapshotId],
+        )).rows[0] as { n: number }).n,
+      );
+      return {
+        // The old query fed the model a silently LIMIT-truncated list; it
+        // "counted" 25 tables in a 37-table schema and shipped the number.
+        schemaTableCount,
+        schemaNodesTruncated: schemaNodes.length < schemaTableCount,
+        schemaNodes,
+        dbSideEffects: (await query(
+          `SELECT s.type, s.target, n.file_path FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
+           WHERE s.snapshot_id = $1 AND s.type IN ('database_read', 'database_write') LIMIT 20`,
+          [deps.snapshotId],
+        )).rows,
+      };
+    },
     diagrams: async (deps) => {
       const tables = (await query(
         `SELECT name FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema' LIMIT 20`,

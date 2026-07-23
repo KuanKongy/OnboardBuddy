@@ -17,15 +17,54 @@ export interface DetectedEntrypoint {
 /** Exported worker/consumer symbols that actually look like job handlers. */
 const HANDLER_NAME = /^(process|handle|consume|on[A-Z])/;
 
-/** Test files are never triggers — `test/controller/x.spec.ts` must not
- * become a convention-based http_route entrypoint. */
-const TEST_FILE = /(^|\/)(tests?|__tests__|spec)\/|\.(spec|test)\.[cm]?[jt]sx?$/i;
+import { isTestOrFixturePath } from './testPaths.js';
+
+/** '/api' + '/projects/:id' -> '/api/projects/:id'; prefix + '/' -> prefix. */
+export function joinRoutePaths(prefix: string, routePath: string): string {
+  const joined = `${prefix}${routePath}`.replace(/\/{2,}/g, '/');
+  if (joined.length > 1 && joined.endsWith('/')) return joined.slice(0, -1);
+  return joined || '/';
+}
+
+/**
+ * Full mount prefix per file, chained through `use()` mounts recorded by the
+ * extractor: onboarding.ts <- routes/index.ts ('/projects/:id/onboarding')
+ * <- app.ts ('/api') gives '/api/projects/:id/onboarding'. Unmounted files
+ * (the app root) contribute ''. First mount wins when a file is mounted more
+ * than once; chains are depth-capped against cycles.
+ */
+export function buildMountPrefixes(fileAnalyses: FileAnalysis[]): Map<string, string> {
+  const mountOf = new Map<string, { prefix: string; parent: string }>();
+  for (const fa of fileAnalyses) {
+    const parent = normalizePath(fa.relativePath);
+    for (const m of fa.routerMounts ?? []) {
+      const child = normalizePath(m.targetRelativePath);
+      if (child !== parent && !mountOf.has(child)) {
+        mountOf.set(child, { prefix: m.prefix, parent });
+      }
+    }
+  }
+  const full = new Map<string, string>();
+  const resolve = (file: string, depth: number): string => {
+    if (full.has(file)) return full.get(file)!;
+    const mount = mountOf.get(file);
+    const prefix = !mount || depth <= 0 ? '' : `${resolve(mount.parent, depth - 1)}${mount.prefix}`;
+    full.set(file, prefix);
+    return prefix;
+  };
+  for (const file of mountOf.keys()) resolve(file, 6);
+  return full;
+}
 
 export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypoint[] {
   const entrypoints: DetectedEntrypoint[] = [];
+  const mountPrefixes = buildMountPrefixes(fileAnalyses);
 
   for (const fa of fileAnalyses) {
     const relativePath = normalizePath(fa.relativePath);
+    // Test and fixture code never triggers anything a newcomer should be
+    // pointed at — no branch below may seed entrypoints from it.
+    if (isTestOrFixturePath(relativePath)) continue;
     let foundEntrypoint = false;
 
     // HTTP routes: precise AST-detected registrations (`router.get('/x', h)`)
@@ -40,7 +79,9 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
         nodeStableKey: relativePath,
         kind: 'http_route',
         method: route.method,
-        routePattern: route.routePath,
+        // Full path via the file's mount chain — "GET /" on a sub-router is
+        // ambiguous seven different ways in this very repo.
+        routePattern: joinRoutePaths(mountPrefixes.get(relativePath) ?? '', route.routePath),
         filePath: relativePath,
         symbolName: route.handlerParentName
           ? `${route.handlerParentName}.${route.handlerSymbolName}`
@@ -53,7 +94,8 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
     }
 
     // Routes/controllers by convention only when nothing was AST-detected.
-    if (!foundEntrypoint && !TEST_FILE.test(relativePath) && (relativePath.match(/routes?\//i) || relativePath.match(/controller/i))) {
+    // (Test/fixture paths were already skipped at the top of the loop.)
+    if (!foundEntrypoint && (relativePath.match(/routes?\//i) || relativePath.match(/controller/i))) {
       entrypoints.push({
         nodeStableKey: relativePath,
         kind: 'http_route',

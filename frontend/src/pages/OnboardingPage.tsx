@@ -41,6 +41,7 @@ import {
   fetchOnboardingPackage,
   regenerateSection,
 } from "@/lib/onboardingData";
+import { receiptForHref, receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,6 +112,12 @@ const UNKNOWN_LABELS: Record<string, string> = {
   ai_disabled: "Generated without AI (privacy mode: AI disabled) — deterministic facts only",
   noReceipt: "No citable evidence was available for this topic",
   docs_only_support: "This claim rests on documentation alone (docs may lag the code)",
+  // Retrieval internals, translated: raw "no embeddings matched views […]"
+  // used to render verbatim to onboarding readers.
+  no_semantic_matches:
+    "The semantic index had nothing relevant for this section — it is based on structural facts only",
+  workflow: "A referenced workflow couldn't be fully resolved from the trace evidence",
+  data: "Supporting data for part of this section wasn't available in the evidence",
 };
 
 /**
@@ -163,7 +170,16 @@ const READER_TOUR_STEPS: TourStep[] = [
 
 // ── section reader ────────────────────────────────────────────────────────────
 
-function ReceiptChip({ receipt, onClick }: { receipt: SourceReceipt; onClick: (r: SourceReceipt) => void }) {
+function ReceiptChip({
+  receipt,
+  onClick,
+  index,
+}: {
+  receipt: SourceReceipt;
+  onClick: (r: SourceReceipt) => void;
+  /** 1-based number matching inline [N] citation markers in the section text. */
+  index?: number;
+}) {
   const lineRange = receipt.lineStart
     ? ` ${receipt.lineStart}${receipt.lineEnd ? `–${receipt.lineEnd}` : ""}`
     : "";
@@ -176,10 +192,40 @@ function ReceiptChip({ receipt, onClick }: { receipt: SourceReceipt; onClick: (r
       )}
       title={receipt.snippet ? "Click to view the code snippet" : receipt.filePath}
     >
+      {index != null && (
+        <span className="shrink-0 rounded bg-muted px-1 text-[0.625rem] font-semibold text-muted-foreground">
+          {index}
+        </span>
+      )}
       <FileCode2 className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
       <span className="truncate text-foreground">{receipt.filePath}</span>
       {lineRange && <span className="shrink-0 text-muted-foreground">{lineRange}</span>}
       {receipt.staleness === "stale" && <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-warning" />}
+    </button>
+  );
+}
+
+/**
+ * Inline citation chip rendered where the generated text cited a receipt —
+ * the [N] numbering matches the receipt chips listed under the section.
+ */
+function InlineReceiptRef({
+  receipt,
+  index,
+  onClick,
+}: {
+  receipt: SourceReceipt;
+  index: number;
+  onClick: (r: SourceReceipt) => void;
+}) {
+  return (
+    <button
+      onClick={() => onClick(receipt)}
+      className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-border bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-foreground"
+      title={`${receipt.filePath}${receipt.lineStart ? ` ${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}`}
+      aria-label={`Source reference ${index}: ${receipt.filePath}`}
+    >
+      {index}
     </button>
   );
 }
@@ -278,12 +324,29 @@ function SectionView({
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
                 <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
-                  <ReactMarkdown>{block.body}</ReactMarkdown>
+                  <ReactMarkdown
+                    components={{
+                      a: ({ href, children }) => {
+                        const cited = receiptForHref(href, block.receipts);
+                        if (cited) {
+                          const n = receiptNumberById(block.receipts).get(cited.bundleReceiptId ?? "") ?? 0;
+                          return <InlineReceiptRef receipt={cited} index={n} onClick={onReceiptClick} />;
+                        }
+                        return (
+                          <a href={href} target="_blank" rel="noopener noreferrer">
+                            {children}
+                          </a>
+                        );
+                      },
+                    }}
+                  >
+                    {renderReceiptMarkers(block.body, block.receipts)}
+                  </ReactMarkdown>
                 </div>
                 {block.receipts.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {block.receipts.map((r, ri) => (
-                      <ReceiptChip key={ri} receipt={r} onClick={onReceiptClick} />
+                      <ReceiptChip key={ri} receipt={r} onClick={onReceiptClick} index={ri + 1} />
                     ))}
                   </div>
                 )}

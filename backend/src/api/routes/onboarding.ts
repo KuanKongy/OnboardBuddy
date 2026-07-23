@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
+import { ageLabelFrom, claimForReceipt, inlineMarkersToText, receiptStaleness } from "../lib/receiptPresentation.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { BadPackageParamError, readPackageParam, resolveForRequest } from "../services/packageResolver.js";
 
@@ -381,6 +382,17 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
       unknowns: Array<{ kind: string; detail?: string | null }>;
     };
 
+    // Staleness baseline: receipts are re-verified against the newest
+    // complete analysis of the same scope by comparing symbol content
+    // hashes — never asserted. No baseline -> compare against the receipt's
+    // own snapshot (trivially fresh).
+    const latestSnap = (await query(
+      `SELECT id FROM analysis_snapshots
+       WHERE scope_id = $1 AND status = 'complete'
+       ORDER BY created_at DESC LIMIT 1`,
+      [pkg.scope_id],
+    )).rows[0] as { id: string } | undefined;
+
     const sections = await Promise.all(
       (sectionsResult.rows as SectionRow[]).map(async (sec) => {
         // symbol_summary: the semantic record's rendered summary for the
@@ -389,6 +401,11 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
         const receiptsResult = await query(
           `SELECT sr.id, sr.file_path, sr.symbol_name, sr.line_start, sr.line_end,
                   sr.snippet, sr.confidence, sr.commit_hash, sr.node_stable_key,
+                  sr.trust_level, sr.claim,
+                  sr.metadata->>'copiedFromReceiptId' AS bundle_receipt_id,
+                  snap.created_at AS analyzed_at,
+                  own_node.hash AS own_node_hash,
+                  latest_node.hash AS latest_node_hash,
                   COALESCE(
                     (SELECT rec.summary FROM snapshot_semantic_records ssr
                        JOIN semantic_records rec ON rec.id = ssr.record_id
@@ -400,8 +417,16 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
                      WHERE gn.snapshot_id = sr.snapshot_id
                        AND gn.stable_key = sr.node_stable_key LIMIT 1)
                   ) AS symbol_summary
-           FROM source_receipts sr WHERE sr.section_id = $1`,
-          [sec.id],
+           FROM source_receipts sr
+           LEFT JOIN analysis_snapshots snap ON snap.id = sr.snapshot_id
+           LEFT JOIN graph_nodes own_node
+             ON own_node.snapshot_id = sr.snapshot_id
+            AND own_node.stable_key = sr.node_stable_key
+           LEFT JOIN graph_nodes latest_node
+             ON latest_node.snapshot_id = COALESCE($2, sr.snapshot_id)
+            AND latest_node.stable_key = sr.node_stable_key
+           WHERE sr.section_id = $1`,
+          [sec.id, latestSnap?.id ?? null],
         );
         return {
           ...sec,
@@ -445,6 +470,8 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
                 title: sec.title,
                 body: sec.content,
                 receipts: sec.receipts.map((r: Record<string, unknown>) => ({
+                  id: r.id as string,
+                  bundleReceiptId: (r.bundle_receipt_id as string | null) ?? null,
                   filePath: r.file_path as string,
                   symbolName: r.symbol_name as string | null,
                   lineStart: r.line_start as number | null,
@@ -452,8 +479,21 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
                   snippet: r.snippet as string | null,
                   summary: (r.symbol_summary as string | null) ?? null,
                   confidence: (r.confidence as string) ?? "medium",
-                  staleness: "current",
-                  ageLabel: "recent",
+                  trustLevel: (r.trust_level as string | null) ?? null,
+                  commitHash: (r.commit_hash as string | null) ?? null,
+                  nodeStableKey: (r.node_stable_key as string | null) ?? null,
+                  claim:
+                    (r.claim as string | null) ??
+                    claimForReceipt(
+                      (r.bundle_receipt_id as string | null) ?? null,
+                      sec.generation_context,
+                    ),
+                  staleness: receiptStaleness({
+                    nodeStableKey: (r.node_stable_key as string | null) ?? null,
+                    ownNodeHash: (r.own_node_hash as string | null) ?? null,
+                    latestNodeHash: (r.latest_node_hash as string | null) ?? null,
+                  }),
+                  ageLabel: ageLabelFrom((r.analyzed_at as string | null) ?? null),
                 })),
               },
             ],
@@ -577,18 +617,37 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
     }
 
     const sectionsResult = await query(
-      `SELECT title, content
+      `SELECT id, title, content
        FROM package_sections
        WHERE package_id = $1
        ORDER BY created_at ASC`,
       [pkg.id],
     );
 
-    const sections = sectionsResult.rows as { title: string; content: string }[];
+    const sections = sectionsResult.rows as { id: string; title: string; content: string }[];
+
+    // Inline citation markers become plain "(path:line)" citations in the
+    // exported file — marker syntax is a reader-UI affordance.
+    const receiptRows = sections.length
+      ? ((await query(
+          `SELECT sr.section_id, sr.file_path, sr.line_start,
+                  sr.metadata->>'copiedFromReceiptId' AS bundle_receipt_id
+           FROM source_receipts sr
+           WHERE sr.section_id = ANY($1)`,
+          [sections.map((s) => s.id)],
+        )).rows as Array<{ section_id: string; file_path: string | null; line_start: number | null; bundle_receipt_id: string | null }>)
+      : [];
+    const receiptsBySection = new Map<string, Map<string, { filePath: string | null; lineStart: number | null }>>();
+    for (const r of receiptRows) {
+      if (!r.bundle_receipt_id) continue;
+      if (!receiptsBySection.has(r.section_id)) receiptsBySection.set(r.section_id, new Map());
+      receiptsBySection.get(r.section_id)!.set(r.bundle_receipt_id, { filePath: r.file_path, lineStart: r.line_start });
+    }
 
     const lines: string[] = [`# OnboardBuddy - Onboarding Package (${pkg.role})\n`];
     for (const sec of sections) {
-      lines.push(`## ${sec.title}\n\n${sec.content}\n`);
+      const body = inlineMarkersToText(sec.content, receiptsBySection.get(sec.id) ?? new Map());
+      lines.push(`## ${sec.title}\n\n${body}\n`);
     }
     lines.push(`---\n\nGenerated by OnboardBuddy on ${new Date().toISOString().split("T")[0]}`);
 
