@@ -28,7 +28,7 @@ function EntryAwareModuleNode(props: NodeProps<ModuleNodeData>) {
       {props.data.isEntryPoint && (
         <span
           title="Entry point"
-          className="absolute -left-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground shadow"
+          className="absolute -left-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[0.5rem] font-bold text-primary-foreground shadow"
         >
           ▶
         </span>
@@ -46,6 +46,11 @@ interface DependencyGraphViewProps {
   entryPoints: string[];
   selectedNodeId: string | null;
   onSelectNode: (nodeId: string | null) => void;
+  /** Kinds toggled off in the legend — their nodes dim and stop intercepting
+   * clicks instead of being removed (removal would relayout and jump the
+   * viewport). */
+  hiddenKinds?: Set<string>;
+  onToggleKind?: (kind: string) => void;
   /** True when the caller already knows a node should be focused on this
    * mount (e.g. a `?focus=` deep link) — suppresses React Flow's own
    * declarative initial `fitView` so `ViewportFocus` is the sole viewport
@@ -55,6 +60,13 @@ interface DependencyGraphViewProps {
    * inconsistently while a manual node click (on an already-settled
    * graph, nothing else writing the viewport) always worked. */
   suppressInitialFit?: boolean;
+  /** Bumped by the caller when node positions or the canvas container
+   * change without the selection changing (a layout direction toggle, a
+   * fullscreen toggle) — remounts the ReactFlow instance so its own
+   * declarative `fitView` (already correct on first mount) reruns, instead
+   * of racing an imperative `fitView()` call against React Flow's own
+   * internal position-store sync. */
+  refitSignal?: string | number;
 }
 
 export function DependencyGraphView({
@@ -63,16 +75,20 @@ export function DependencyGraphView({
   entryPoints,
   selectedNodeId,
   onSelectNode,
+  hiddenKinds,
+  onToggleKind,
   suppressInitialFit = false,
+  refitSignal,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
 
   // Legend shows only kinds that actually occur on this canvas.
-  const presentKinds = useMemo(
-    () => [...new Set(nodes.map((n) => inferNodeType(n.id, n.metadata.exportedSymbols).type))],
+  const nodeKindById = useMemo(
+    () => new Map(nodes.map((n) => [n.id, inferNodeType(n.id, n.metadata.exportedSymbols).type])),
     [nodes],
   );
+  const presentKinds = useMemo(() => [...new Set(nodeKindById.values())], [nodeKindById]);
 
   const neighborIds = useMemo(() => {
     if (!selectedNodeId) return null;
@@ -86,25 +102,30 @@ export function DependencyGraphView({
 
   const flowNodes: Node<ModuleNodeData>[] = useMemo(
     () =>
-      nodes.map((node) => ({
-        id: node.id,
-        type: "module",
-        position: { x: node.x, y: node.y },
-        data: {
-          label: node.label,
-          kind: node.kind,
-          filePath: node.id,
-          exportedSymbols: node.metadata.exportedSymbols,
-          importCount: node.metadata.importCount,
-          externalImportCount: node.metadata.externalImportCount ?? 0,
-          dependentCount: node.metadata.dependentCount,
-          symbolCount: node.metadata.exportedSymbols.length,
-          isEntryPoint: entryPointSet.has(node.id),
-          selected: node.id === selectedNodeId,
-          dimmed: neighborIds !== null && !neighborIds.has(node.id),
-        },
-      })),
-    [nodes, entryPointSet, selectedNodeId, neighborIds],
+      nodes.map((node) => {
+        const kind = nodeKindById.get(node.id);
+        const kindHidden = kind !== undefined && (hiddenKinds?.has(kind) ?? false);
+        return {
+          id: node.id,
+          type: "module",
+          position: { x: node.x, y: node.y },
+          ...(kindHidden ? { style: { opacity: 0.15, pointerEvents: "none" as const } } : {}),
+          data: {
+            label: node.label,
+            kind: node.kind,
+            filePath: node.id,
+            exportedSymbols: node.metadata.exportedSymbols,
+            importCount: node.metadata.importCount,
+            externalImportCount: node.metadata.externalImportCount ?? 0,
+            dependentCount: node.metadata.dependentCount,
+            symbolCount: node.metadata.exportedSymbols.length,
+            isEntryPoint: entryPointSet.has(node.id),
+            selected: node.id === selectedNodeId,
+            dimmed: neighborIds !== null && !neighborIds.has(node.id),
+          },
+        };
+      }),
+    [nodes, entryPointSet, selectedNodeId, neighborIds, nodeKindById, hiddenKinds],
   );
 
   const flowEdges: Edge[] = useMemo(
@@ -113,6 +134,9 @@ export function DependencyGraphView({
         const isActive =
           neighborIds !== null &&
           (edge.source === selectedNodeId || edge.target === selectedNodeId);
+        const endpointHidden =
+          (hiddenKinds?.has(nodeKindById.get(edge.source) ?? "") ?? false) ||
+          (hiddenKinds?.has(nodeKindById.get(edge.target) ?? "") ?? false);
 
         let label: string | undefined;
         if (selectedNodeId && (edge.source === selectedNodeId || edge.target === selectedNodeId)) {
@@ -134,13 +158,13 @@ export function DependencyGraphView({
           labelBgPadding: [4, 3] as [number, number],
           labelBgBorderRadius: 3,
           style: {
-            opacity: neighborIds === null || isActive ? 1 : 0.1,
+            opacity: endpointHidden ? 0.03 : neighborIds === null || isActive ? 1 : 0.1,
             strokeWidth: isActive ? 2 : 1,
             stroke: isActive ? "var(--primary)" : "var(--border)",
           },
         };
       }),
-    [edges, neighborIds, selectedNodeId, isDark],
+    [edges, neighborIds, selectedNodeId, isDark, nodeKindById, hiddenKinds],
   );
 
   return (
@@ -165,7 +189,9 @@ export function DependencyGraphView({
         onPaneClick={() => onSelectNode(null)}
         fitView={!suppressInitialFit}
         fitViewOptions={{ padding: 0.2 }}
+        minZoom={0.05}
         proOptions={{ hideAttribution: true }}
+        key={refitSignal}
       >
         <ViewportFocus selectedNodeId={selectedNodeId} ownsInitialFit={suppressInitialFit} />
 
@@ -173,7 +199,7 @@ export function DependencyGraphView({
           variant={BackgroundVariant.Dots}
           gap={20}
           size={1}
-          color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"}
+          color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.8 0.01 265)"}
         />
         <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
 
@@ -185,7 +211,7 @@ export function DependencyGraphView({
           maskColor={isDark ? "oklch(0.17 0.015 264 / 0.7)" : "oklch(0.95 0.005 265 / 0.7)"}
         />
         <Panel position="top-left">
-          <GraphLegend presentKinds={presentKinds} />
+          <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
         </Panel>
         <Panel position="bottom-center">
           <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />

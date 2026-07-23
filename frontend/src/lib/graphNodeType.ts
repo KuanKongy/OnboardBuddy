@@ -1,6 +1,7 @@
 export interface NodeTypeInfo {
   type: string;
   colorClasses: string;
+  accentClass: string;
   description: string;
 }
 
@@ -20,6 +21,8 @@ export interface NodeKindInfo {
   badgeClasses: string;
   /** Swatch classes (background + border only) for the legend dot. */
   swatchClasses: string;
+  /** Left-border accent class for the node card, at the 500 shade of the same hue as `badgeClasses`. */
+  accentClass: string;
 }
 
 export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
@@ -29,6 +32,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Test suite",
     badgeClasses: "bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/40",
     swatchClasses: "bg-purple-500/20 border-purple-500/40",
+    accentClass: "border-l-purple-500",
   },
   UTIL: {
     type: "UTIL",
@@ -36,6 +40,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Utility functions",
     badgeClasses: "bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border-cyan-500/40",
     swatchClasses: "bg-cyan-500/20 border-cyan-500/40",
+    accentClass: "border-l-slate-400",
   },
   API: {
     type: "API",
@@ -44,6 +49,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Routing layer",
     badgeClasses: "bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/40",
     swatchClasses: "bg-green-500/20 border-green-500/40",
+    accentClass: "border-l-green-500",
   },
   SERVICE: {
     type: "SERVICE",
@@ -51,6 +57,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Business logic service",
     badgeClasses: "bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/40",
     swatchClasses: "bg-blue-500/20 border-blue-500/40",
+    accentClass: "border-l-blue-500",
   },
   MIDDLEWARE: {
     type: "MIDDLEWARE",
@@ -58,6 +65,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Request middleware",
     badgeClasses: "bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/40",
     swatchClasses: "bg-amber-500/20 border-amber-500/40",
+    accentClass: "border-l-amber-500",
   },
   DATA: {
     type: "DATA",
@@ -65,6 +73,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Database layer",
     badgeClasses: "bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/40",
     swatchClasses: "bg-orange-500/20 border-orange-500/40",
+    accentClass: "border-l-orange-500",
   },
   ENV: {
     type: "ENV",
@@ -72,6 +81,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "App configuration",
     badgeClasses: "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/40",
     swatchClasses: "bg-yellow-500/20 border-yellow-500/40",
+    accentClass: "border-l-yellow-500",
   },
   ENTRY: {
     type: "ENTRY",
@@ -79,6 +89,7 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Application entry point",
     badgeClasses: "bg-primary/20 text-primary border-primary/40",
     swatchClasses: "bg-primary/20 border-primary/40",
+    accentClass: "border-l-primary",
   },
   MODULE: {
     type: "MODULE",
@@ -86,12 +97,13 @@ export const NODE_KIND_INFO: Record<string, NodeKindInfo> = {
     description: "Module",
     badgeClasses: "bg-slate-500/20 text-slate-700 dark:text-slate-400 border-slate-500/40",
     swatchClasses: "bg-slate-500/20 border-slate-500/40",
+    accentClass: "border-l-slate-400",
   },
 };
 
 function toNodeTypeInfo(kind: string): NodeTypeInfo {
   const info = NODE_KIND_INFO[kind]!;
-  return { type: info.type, colorClasses: info.badgeClasses, description: info.description };
+  return { type: info.type, colorClasses: info.badgeClasses, accentClass: info.accentClass, description: info.description };
 }
 
 /**

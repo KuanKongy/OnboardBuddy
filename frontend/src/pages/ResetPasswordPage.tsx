@@ -102,9 +102,9 @@ export function ResetPasswordPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
-                    className="h-8 text-[13px]"
+                    className="h-8 text-[0.8125rem]"
                   />
-                  <p className="text-[10.5px] text-muted-foreground">Minimum 8 characters</p>
+                  <p className="text-[0.65625rem] text-muted-foreground">Minimum 8 characters</p>
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="confirm-new" className="text-xs">Confirm new</Label>
@@ -115,7 +115,7 @@ export function ResetPasswordPage() {
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                     placeholder="••••••••"
-                    className="h-8 text-[13px]"
+                    className="h-8 text-[0.8125rem]"
                   />
                 </div>
                 <Button type="submit" className="w-full" size="sm" disabled={saving}>

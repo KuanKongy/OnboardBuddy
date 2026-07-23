@@ -20,7 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
-import { dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
+import { consumeTourRequest, dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 
 const RECENT_LIMIT = 6;
@@ -55,7 +55,7 @@ const TOUR_STEPS: TourStep[] = [
 ];
 
 /** Sort key: most recent activity first, projects never analyzed last. */
-function activityTime(p: Project): number {
+export function activityTime(p: Project): number {
   return p.last_analyzed_at ? new Date(p.last_analyzed_at).getTime() : 0;
 }
 
@@ -172,6 +172,7 @@ export function DashboardPage() {
   // load (never spotlight loading skeletons) and THIS account hasn't seen it.
   useEffect(() => {
     if (loading || !user) return;
+    if (consumeTourRequest("dashboard")) { setTourOpen(true); return; }
     if (tourDismissed("dashboard", user.id)) return;
     setTourOpen(true);
   }, [loading, user]);
@@ -229,7 +230,7 @@ export function DashboardPage() {
                 <Mail className="h-3.5 w-3.5" />
                 Join Project
                 {inviteCount !== null && inviteCount > 0 && (
-                  <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[11px] font-semibold text-primary-foreground">
+                  <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[0.6875rem] font-semibold text-primary-foreground">
                     {inviteCount}
                   </span>
                 )}
@@ -252,7 +253,7 @@ export function DashboardPage() {
       )}
 
       {error && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-[0.8125rem] text-destructive">
           {error}
         </div>
       )}
@@ -312,7 +313,7 @@ export function DashboardPage() {
                   </Button>
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {recentProjects.map((project) => (
                     <ProjectCard
                       key={project.id}
@@ -348,10 +349,10 @@ export function DashboardPage() {
                           >
                             <Icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${pres.tone} ${pres.spin ? "animate-spin" : ""}`} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-[13px] text-foreground" title={repo}>{repo}</p>
+                              <p className="truncate text-[0.8125rem] text-foreground" title={repo}>{repo}</p>
                               <p className="text-xs text-muted-foreground">{pres.text}</p>
                             </div>
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                            <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
                               {timeAgo(item.at)}
                             </span>
                           </Link>

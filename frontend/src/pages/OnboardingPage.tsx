@@ -4,6 +4,8 @@ import {
   BookOpen,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Circle,
   Download,
   FileCode2,
@@ -30,10 +32,11 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
 import { apiFetch } from "@/lib/api";
-import { dismissTour, tourDismissed } from "@/lib/tourState";
+import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
 import { useProgress } from "@/lib/useProgress";
 import {
   ROLES,
+  SECTION_GROUPS,
   SECTION_NAV_ORDER,
   fetchOnboardingPackage,
   regenerateSection,
@@ -83,7 +86,7 @@ const STATUS_STYLE: Record<string, string> = {
 
 function StatusBadge({ status }: { status: string }) {
   return (
-    <Badge variant="outline" className={cn("text-[11px] capitalize", STATUS_STYLE[status] ?? "")}>
+    <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", STATUS_STYLE[status] ?? "")}>
       {status}
     </Badge>
   );
@@ -168,7 +171,7 @@ function ReceiptChip({ receipt, onClick }: { receipt: SourceReceipt; onClick: (r
     <button
       onClick={() => onClick(receipt)}
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11.5px] transition-colors hover:border-primary/50 hover:bg-accent",
+        "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[0.71875rem] transition-colors hover:border-primary/50 hover:bg-accent",
         receipt.staleness === "stale" ? "border-warning/40 bg-warning-soft" : "border-border bg-muted/40",
       )}
       title={receipt.snippet ? "Click to view the code snippet" : receipt.filePath}
@@ -217,11 +220,11 @@ function SectionView({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className={cn("text-[11px] capitalize", confidenceStyle(section.confidence))}>
+        <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", confidenceStyle(section.confidence))}>
           {section.confidence} confidence
         </Badge>
         {section.status === "stale" && (
-          <Badge variant="outline" className={cn("text-[11px]", STATUS_STYLE.stale)}>
+          <Badge variant="outline" className={cn("text-[0.6875rem]", STATUS_STYLE.stale)}>
             <AlertTriangle className="mr-1 h-2.5 w-2.5" />
             Stale
           </Badge>
@@ -261,20 +264,20 @@ function SectionView({
                 <ChevronDown
                   className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150", !isOpen && "-rotate-90")}
                 />
-                <h3 className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{block.title}</h3>
+                <h3 className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
                 {block.receipts.length > 0 && (
-                  <span className="shrink-0 text-[11px] text-muted-foreground/60">
+                  <span className="shrink-0 text-[0.6875rem] text-muted-foreground/60">
                     {block.receipts.length} source ref{block.receipts.length === 1 ? "" : "s"}
                   </span>
                 )}
               </button>
             ) : (
-              <h3 className="mb-1.5 text-[13px] font-semibold text-foreground">{block.title}</h3>
+              <h3 className="mb-1.5 text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
             )}
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
-                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[13.5px] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[13.5px] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[12px] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
+                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
                   <ReactMarkdown>{block.body}</ReactMarkdown>
                 </div>
                 {block.receipts.length > 0 && (
@@ -303,7 +306,7 @@ function SectionView({
           </p>
           <ul className="space-y-1">
             {section.unknowns!.map((u, i) => (
-              <li key={i} className="text-[12px] leading-relaxed text-muted-foreground">
+              <li key={i} className="text-[0.75rem] leading-relaxed text-muted-foreground">
                 {UNKNOWN_LABELS[u.kind] ?? u.kind.replace(/_/g, " ")}
                 {u.detail ? <span className="text-muted-foreground/70"> — {u.detail}</span> : null}
               </li>
@@ -335,18 +338,18 @@ export function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageC
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
+          <p className="flex items-center gap-1.5 text-[0.8125rem] font-semibold text-foreground">
             <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
             <span className="truncate">{card.scope_name}</span>
           </p>
-          <p className="mt-0.5 text-[11.5px] text-muted-foreground">
+          <p className="mt-0.5 text-[0.71875rem] text-muted-foreground">
             {ROLES.find((r) => r.key === card.role)?.label ?? card.role}
           </p>
         </div>
         <StatusBadge status={card.status} />
       </div>
 
-      <div className="mt-3 flex items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="mt-3 flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
         <GitCommitHorizontal className="h-3 w-3" />
         <span className="truncate font-mono">{card.branch}@{card.analyzed_commit.slice(0, 7)}</span>
         {card.is_latest_commit ? (
@@ -357,7 +360,7 @@ export function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageC
         <span className="ml-auto shrink-0">{new Date(card.updated_at).toLocaleDateString()}</span>
       </div>
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2.5 text-[11.5px] tabular-nums text-muted-foreground">
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border/60 pt-2.5 text-[0.71875rem] tabular-nums text-muted-foreground">
         <span className="inline-flex items-center gap-1">
           <FileText className="h-3 w-3" /> {card.section_count} sections
         </span>
@@ -509,6 +512,7 @@ export function OnboardingPage() {
   // overlays never stack on a brand-new account's first project visit.
   useEffect(() => {
     if (view === "reader" || cardsLoading || !user) return;
+    if (consumeTourRequest("onboardingLifecycle")) { setLifecycleTourOpen(true); return; }
     if (!tourDismissed("project", user.id)) return;
     if (tourDismissed("onboardingLifecycle", user.id)) return;
     setLifecycleTourOpen(true);
@@ -530,6 +534,7 @@ export function OnboardingPage() {
   const [readerTourOpen, setReaderTourOpen] = useState(false);
   useEffect(() => {
     if (view !== "reader" || isMissing || sections.length === 0 || !user) return;
+    if (consumeTourRequest("onboardingReader")) { setReaderTourOpen(true); return; }
     if (!tourDismissed("project", user.id)) return;
     if (tourDismissed("onboardingReader", user.id)) return;
     setReaderTourOpen(true);
@@ -539,13 +544,19 @@ export function OnboardingPage() {
     setReaderTourOpen(false);
   }
 
-  // ← / → move through the present sections while reading.
-  const presentSectionIds = SECTION_NAV_ORDER.filter((navId) => sections.some((s) => s.id === navId));
+  // ← / → move through the present sections while reading, in the same
+  // order they appear in the grouped nav (SECTION_GROUPS), so hotkeys, the
+  // nav numbering, and the prev/next pager all agree on adjacency.
+  const presentSectionIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) => sections.some((s) => s.id === navId));
   const moveSection = (delta: number) => {
     const idx = presentSectionIds.indexOf(activeSectionId);
     const next = presentSectionIds[Math.min(Math.max((idx === -1 ? 0 : idx) + delta, 0), presentSectionIds.length - 1)];
     if (next && next !== activeSectionId) setActiveSectionId(next);
   };
+  function sectionLabelFor(navId: SectionId): string {
+    return sections.find((s) => s.id === navId)?.label
+      ?? navId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
   useHotkeys(
     {
       ArrowRight: () => moveSection(1),
@@ -775,7 +786,7 @@ export function OnboardingPage() {
                 <SelectItem value="behind">Behind latest</SelectItem>
               </SelectContent>
             </Select>
-            <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">
+            <span className="ml-auto text-[0.6875rem] tabular-nums text-muted-foreground">
               {filtered.length} / {cards.length} packages
             </span>
           </div>
@@ -881,7 +892,7 @@ export function OnboardingPage() {
                 disabled={regenBusy}
                 className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60"
               >
-                <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
                   {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                   Regenerate from the current analysis
                 </p>
@@ -903,7 +914,7 @@ export function OnboardingPage() {
                   }}
                   className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40"
                 >
-                  <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+                  <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
                     <Sparkles className="h-3.5 w-3.5" />
                     Re-analyze at a new commit first…
                   </p>
@@ -915,7 +926,7 @@ export function OnboardingPage() {
               )}
             </div>
 
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[0.6875rem] text-muted-foreground">
               Need just one section? Open the package and use "Regenerate section" inside the
               reader — it rebuilds only that section against the newest analysis.
             </p>
@@ -949,7 +960,7 @@ export function OnboardingPage() {
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
         </Button>
         <div className="min-w-0">
-          <h1 className="truncate text-[15px] font-semibold text-foreground">
+          <h1 className="truncate text-[0.9375rem] font-semibold text-foreground">
             {activeSection?.label ?? "Onboarding"}
           </h1>
         </div>
@@ -1069,18 +1080,14 @@ export function OnboardingPage() {
       {!isMissing && sections.length > 0 && (
         <div className="border-b px-4 py-2 lg:hidden">
           <Select value={activeSectionId ?? undefined} onValueChange={(v) => setActiveSectionId(v as typeof activeSectionId)}>
-            <SelectTrigger aria-label="Jump to section" className="h-8 w-full text-[13px]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
+            <SelectTrigger aria-label="Jump to section" className="h-8 w-full text-[0.8125rem]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
             <SelectContent>
-              {SECTION_NAV_ORDER
-                .filter((navId) => sections.some((s) => s.id === navId))
-                .map((navId, idx) => {
-                  const section = sections.find((s) => s.id === navId);
-                  return (
-                    <SelectItem key={navId} value={navId} className="text-[13px]">
-                      {idx + 1}. {section?.label ?? navId}
-                    </SelectItem>
-                  );
-                })}
+              {presentSectionIds
+                .map((navId, idx) => (
+                  <SelectItem key={navId} value={navId} className="text-[0.8125rem]">
+                    {idx + 1}. {sectionLabelFor(navId)}
+                  </SelectItem>
+                ))}
             </SelectContent>
           </Select>
         </div>
@@ -1090,32 +1097,47 @@ export function OnboardingPage() {
         {/* section nav */}
         <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
-          <nav className="space-y-0.5">
-            {SECTION_NAV_ORDER
-              .filter((navId) => isMissing || sections.some((s) => s.id === navId))
-              .map((navId, idx) => {
-              const section = sections.find((s) => s.id === navId);
-              const label = section?.label ?? navId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-              const isActive = activeSectionId === navId;
-              return (
-                <button
-                  key={navId}
-                  onClick={() => setActiveSectionId(navId)}
-                  disabled={isMissing}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors disabled:opacity-40",
-                    isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                  )}
-                >
-                  <span className="w-4 shrink-0 text-right text-[11px] tabular-nums text-muted-foreground/50">{idx + 1}</span>
-                  <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
-                  {section?.status === "stale" && <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />}
-                  {section?.confidence === "low" && section.status !== "stale" && (
-                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" title="Low confidence" />
-                  )}
-                </button>
-              );
-            })}
+          <nav className="space-y-3">
+            {(() => {
+              const filteredNavIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) => isMissing || sections.some((s) => s.id === navId));
+              return SECTION_GROUPS.map((group) => {
+                const idsInGroup = group.ids.filter((gid) => filteredNavIds.includes(gid));
+                if (idsInGroup.length === 0) return null;
+                return (
+                  <div key={group.label}>
+                    <p className="mb-1 px-2 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground/50">
+                      {group.label}
+                    </p>
+                    <div className="space-y-0.5">
+                      {idsInGroup.map((navId) => {
+                        const idx = filteredNavIds.indexOf(navId);
+                        const section = sections.find((s) => s.id === navId);
+                        const label = sectionLabelFor(navId);
+                        const isActive = activeSectionId === navId;
+                        return (
+                          <button
+                            key={navId}
+                            onClick={() => setActiveSectionId(navId)}
+                            disabled={isMissing}
+                            className={cn(
+                              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-medium transition-colors disabled:opacity-40",
+                              isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                          >
+                            <span className="w-4 shrink-0 text-right text-[0.6875rem] tabular-nums text-muted-foreground/50">{idx + 1}</span>
+                            <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
+                            {section?.status === "stale" && <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />}
+                            {section?.confidence === "low" && section.status !== "stale" && (
+                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" title="Low confidence" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              });
+            })()}
           </nav>
         </aside>
 
@@ -1176,6 +1198,34 @@ export function OnboardingPage() {
                   </div>
                 )}
                 <SectionView section={activeSection} onReceiptClick={setReceiptModal} />
+                {(() => {
+                  const navIdx = presentSectionIds.indexOf(activeSectionId);
+                  const prevId = navIdx > 0 ? presentSectionIds[navIdx - 1] : null;
+                  const nextId = navIdx !== -1 && navIdx < presentSectionIds.length - 1 ? presentSectionIds[navIdx + 1] : null;
+                  if (!prevId && !nextId) return null;
+                  return (
+                    <div className="mt-6 flex items-center justify-between gap-3 border-t border-border pt-4">
+                      {prevId ? (
+                        <button
+                          onClick={() => setActiveSectionId(prevId)}
+                          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        >
+                          <ChevronLeft className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">Previous: {sectionLabelFor(prevId)}</span>
+                        </button>
+                      ) : <span />}
+                      {nextId && (
+                        <button
+                          onClick={() => setActiveSectionId(nextId)}
+                          className="flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-right text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+                        >
+                          <span className="truncate">Next: {sectionLabelFor(nextId)}</span>
+                          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               <div className="flex flex-col items-center justify-center py-24 text-center">

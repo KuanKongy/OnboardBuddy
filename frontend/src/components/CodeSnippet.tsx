@@ -35,7 +35,7 @@ export function CodeSnippet({
   return (
     <div
       className={cn(
-        "overflow-auto rounded-md border border-border bg-muted/30 font-mono text-[12px] leading-relaxed",
+        "overflow-auto rounded-md border border-border bg-muted/30 font-mono text-[0.75rem] leading-relaxed",
         maxHeightClass,
         className,
       )}

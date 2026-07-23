@@ -197,7 +197,7 @@ export function ProjectCard({
               <h3 className="truncate text-sm font-semibold text-foreground" title={project.repo_name}>
                 {project.repo_name}
               </h3>
-              <Badge className={`text-[11px] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
+              <Badge className={`text-[0.6875rem] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
                 {project.permission_tier.toUpperCase()}
               </Badge>
             </div>
@@ -278,7 +278,7 @@ export function ProjectCard({
               Delete <strong className="text-foreground">{project.repo_owner}/{project.repo_name}</strong>?
               This removes all analyses and onboarding content and cannot be undone.
             </p>
-            {deleteError && <p className="text-[11px] text-destructive">{deleteError}</p>}
+            {deleteError && <p className="text-[0.6875rem] text-destructive">{deleteError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="outline" size="sm" onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>
                 Cancel

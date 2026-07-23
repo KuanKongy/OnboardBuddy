@@ -16,6 +16,7 @@ import { DashboardPage } from "@/pages/DashboardPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
 import { GitHubOAuthCallbackPage } from "@/pages/GitHubOAuthCallbackPage";
+import { HelpPage } from "@/pages/HelpPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
@@ -123,6 +124,7 @@ export default function App() {
               <Route path="/import" element={<ImportPage />} />
               <Route path="/invitations" element={<InvitationsPage />} />
               <Route path="/settings" element={<AccountSettingsPage />} />
+              <Route path="/help" element={<HelpPage />} />
             </Route>
 
             <Route path="/projects/:id" element={<ProjectLayout />}>

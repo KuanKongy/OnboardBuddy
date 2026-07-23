@@ -255,14 +255,14 @@ export function TeamPage() {
                   placeholder="colleague@example.com"
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Label className="text-xs">Permission tier</Label>
                   <Select value={inviteTier} onValueChange={setInviteTier}>
-                    <SelectTrigger className="h-8 text-[13px]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -274,7 +274,7 @@ export function TeamPage() {
                 <div className="space-y-1">
                   <Label className="text-xs">Developer role</Label>
                   <Select value={inviteRole} onValueChange={setInviteRole}>
-                    <SelectTrigger className="h-8 text-[13px]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -285,7 +285,7 @@ export function TeamPage() {
                   </Select>
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-[0.6875rem] text-muted-foreground">
                 Permission tier controls what they can manage; developer role tailors their onboarding content by specialty.
               </p>
               {error && (
@@ -355,7 +355,7 @@ export function TeamPage() {
                   </p>
                   <Badge
                     variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
-                    className="mt-1.5 text-[11px] capitalize"
+                    className="mt-1.5 text-[0.6875rem] capitalize"
                   >
                     {member.permission_tier}
                   </Badge>
@@ -423,14 +423,14 @@ export function TeamPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <Avatar className="h-7 w-7">
-                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[11px] font-medium text-white`}>
+                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[0.6875rem] font-medium text-white`}>
                   {getInitials(manageMember?.email ?? "")}
                 </AvatarFallback>
               </Avatar>
               {manageMember?.email.split("@")[0]}
               <Badge
                 variant={tierBadgeVariant[manageMember?.permission_tier ?? ""] ?? "outline"}
-                className="text-[11px] capitalize"
+                className="text-[0.6875rem] capitalize"
               >
                 {manageMember?.permission_tier}
               </Badge>
@@ -480,7 +480,7 @@ export function TeamPage() {
                     <div className="space-y-1">
                       <Label className="text-xs">Permission tier</Label>
                       <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
-                        <SelectTrigger className="h-8 w-full text-[13px]">
+                        <SelectTrigger className="h-8 w-full text-[0.8125rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -489,13 +489,13 @@ export function TeamPage() {
                         </SelectContent>
                       </Select>
                       {!isOwner && (
-                        <p className="text-[11px] text-muted-foreground">Only the owner can change tiers.</p>
+                        <p className="text-[0.6875rem] text-muted-foreground">Only the owner can change tiers.</p>
                       )}
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">Developer role</Label>
                       <Select value={editRole} onValueChange={setEditRole}>
-                        <SelectTrigger className="h-8 w-full text-[13px]">
+                        <SelectTrigger className="h-8 w-full text-[0.8125rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -532,7 +532,7 @@ export function TeamPage() {
                   )}
                 </>
               ) : (
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-[0.6875rem] text-muted-foreground">
                   {manageMember.permission_tier === "owner"
                     ? "The project owner can't be modified."
                     : "You don't have permission to manage this member."}

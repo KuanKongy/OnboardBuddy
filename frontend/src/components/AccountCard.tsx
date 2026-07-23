@@ -36,7 +36,7 @@ export function AccountCard() {
         <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-medium text-foreground" title={name}>{name}</div>
+        <div className="truncate text-[0.8125rem] font-medium text-foreground" title={name}>{name}</div>
         <div className="truncate text-xs text-muted-foreground" title={title}>{title}</div>
       </div>
       <Button
