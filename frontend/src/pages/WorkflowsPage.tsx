@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Loader2, RefreshCw, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, Info, Loader2, RefreshCw, Sparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -18,6 +18,7 @@ import { ViewportFocus } from "@/components/graph/ViewportFocus";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   fetchWorkflowGraph,
   fetchWorkflowsList,
@@ -25,6 +26,7 @@ import {
   type WorkflowSummary,
 } from "@/lib/graphData";
 import { layoutGraph } from "@/lib/graphLayout";
+import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
 import { fetchNodeDetail, type NodeDetail } from "@/lib/graphData";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
@@ -67,23 +69,23 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
       <div className="flex items-center gap-2">
         {data.order !== null && (
           <span
-            className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
+            className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold"
             style={{ color, background: `color-mix(in oklab, ${color} 16%, transparent)` }}
           >
             {data.order}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-foreground" title={data.label}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] font-medium text-foreground" title={data.label}>
           {data.label}
         </span>
         <span
-          className="shrink-0 rounded px-1 py-0.5 text-[9.5px] font-semibold uppercase tracking-wide"
+          className="shrink-0 rounded px-1 py-0.5 text-[0.59375rem] font-semibold uppercase tracking-wide"
           style={{ color, background: `color-mix(in oklab, ${color} 14%, transparent)` }}
         >
           {data.stepKind.replace(/_/g, " ")}
         </span>
       </div>
-      <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground" title={data.filePath}>
+      <p className="mt-0.5 truncate text-[0.65625rem] text-muted-foreground" title={data.filePath}>
         {data.filePath}
       </p>
     </div>
@@ -213,7 +215,7 @@ export function WorkflowsPage() {
         subtitle="Traced request flows — from the entry point through every function to its side effects, ranked by how critical they are."
         actions={
           detail ? (
-            <Badge variant="outline" className="text-[11px]">
+            <Badge variant="outline" className="text-[0.6875rem]">
               {detail.workflow.trigger_type} · {detail.workflow.confidence} confidence
             </Badge>
           ) : undefined
@@ -247,7 +249,17 @@ export function WorkflowsPage() {
         <div className="grid gap-3 lg:grid-cols-[250px_1fr]">
           {/* workflow rail — ranked most-critical first */}
           <div className="graph-canvas overflow-y-auto !bg-card p-2" data-tour="workflow-list">
-            <p className="section-label px-2 pb-1.5 pt-1">Traced flows ({workflows.length}) — most critical first</p>
+            <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
+              <p className="section-label">Traced flows ({workflows.length}) — most critical first</p>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                    <Info className="h-3 w-3" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-left">{RANKING_EXPLANATION}</TooltipContent>
+              </Tooltip>
+            </div>
             <div className="space-y-0.5">
               {workflows.map((wf, rank) => (
                 <button
@@ -261,11 +273,11 @@ export function WorkflowsPage() {
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
-                  <span className="mt-0.5 w-4 shrink-0 text-right text-[10px] tabular-nums opacity-50">{rank + 1}</span>
+                  <span className="mt-0.5 w-4 shrink-0 text-right text-[0.625rem] tabular-nums opacity-50">{rank + 1}</span>
                   <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                   <span className="min-w-0">
-                    <span className="block truncate text-[12.5px] font-medium" title={wf.title}>{wf.title}</span>
-                    <span className="block text-[11px] opacity-60">
+                    <span className="block truncate text-[0.78125rem] font-medium" title={wf.title}>{wf.title}</span>
+                    <span className="block text-[0.6875rem] opacity-60">
                       {wf.trigger_type} · {wf.step_count} steps
                     </span>
                   </span>
@@ -278,7 +290,7 @@ export function WorkflowsPage() {
           <div>
             {/* Why this flow matters — plain-language ranking reasons */}
             {selectedSummary && (selectedSummary.purpose || (selectedSummary.reasons?.length ?? 0) > 0) && (
-              <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[12px]">
+              <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
                 {selectedSummary.purpose && (
                   <p className="text-foreground">{selectedSummary.purpose}</p>
                 )}
@@ -324,18 +336,18 @@ export function WorkflowsPage() {
             {selectedStep && (
               <aside className="graph-canvas overflow-y-auto !bg-card p-4">
                 <p className="section-label mb-2">Step {selectedStep.stepOrder}</p>
-                <p className="font-mono text-[13px] font-medium text-foreground">
+                <p className="font-mono text-[0.8125rem] font-medium text-foreground">
                   {selectedStep.symbolName ?? selectedStep.filePath}
                 </p>
-                <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                <p className="mt-0.5 font-mono text-[0.6875rem] text-muted-foreground">
                   {selectedStep.filePath}
                   {selectedStep.lineStart && ` · L${selectedStep.lineStart}${selectedStep.lineEnd ? `–${selectedStep.lineEnd}` : ""}`}
                 </p>
-                <Badge variant="secondary" className="mt-2 text-[10px] uppercase">{selectedStep.stepKind.replace(/_/g, " ")}</Badge>
-                <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">{selectedStep.description}</p>
+                <Badge variant="secondary" className="mt-2 text-[0.625rem] uppercase">{selectedStep.stepKind.replace(/_/g, " ")}</Badge>
+                <p className="mt-3 text-[0.8125rem] leading-relaxed text-muted-foreground">{selectedStep.description}</p>
 
                 {stepDetail?.doc?.summary && (
-                  <p className="mt-3 text-[12.5px] leading-relaxed text-foreground">
+                  <p className="mt-3 text-[0.78125rem] leading-relaxed text-foreground">
                     <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
                     {stepDetail.doc.summary}
                   </p>
@@ -343,14 +355,14 @@ export function WorkflowsPage() {
                 {(stepDetail?.side_effects?.length ?? 0) > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1">
                     {stepDetail!.side_effects!.map((se, i) => (
-                      <Badge key={i} variant="outline" className="h-5 px-1.5 text-[10px]" title={se.target ?? undefined}>
+                      <Badge key={i} variant="outline" className="h-5 px-1.5 text-[0.625rem]" title={se.target ?? undefined}>
                         {se.type.replace(/_/g, " ")}
                       </Badge>
                     ))}
                   </div>
                 )}
                 {stepDetail?.doc?.signature && (
-                  <pre className="mt-3 overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] leading-relaxed text-foreground">
+                  <pre className="mt-3 overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[0.6875rem] leading-relaxed text-foreground">
                     {stepDetail.doc.signature}
                   </pre>
                 )}

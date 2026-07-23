@@ -18,9 +18,10 @@ import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from "reac
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { useAuth } from "@/contexts/AuthContext";
 import { ProjectProvider, useProject } from "@/contexts/ProjectContext";
-import { PackagesProvider } from "@/contexts/PackagesContext";
+import { PackagesProvider, usePackages } from "@/contexts/PackagesContext";
 import { PackageSelector } from "@/components/PackageSelector";
-import { dismissTour, tourDismissed } from "@/lib/tourState";
+import { pipelineProgress } from "@/lib/pipelineProgress";
+import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -164,6 +165,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
 
 function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => void; onShowShortcuts: () => void }) {
   const { project, loading } = useProject();
+  const { activeJobs } = usePackages();
   const { id } = useParams<{ id: string }>();
   const { setOpen } = useSidebar();
   const { pathname } = useLocation();
@@ -191,6 +193,27 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
               <GitBranch className="h-2.5 w-2.5" />
               {project.branch}
             </Badge>
+            {activeJobs.length > 0 && (() => {
+              const job = activeJobs[0]!;
+              const progress = pipelineProgress(job);
+              return (
+                <Link
+                  to={`/projects/${id}`}
+                  onClick={() => setOpen(false)}
+                  className={`mt-1.5 flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] font-medium transition-colors ${
+                    job.stalled
+                      ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
+                      : "border-border bg-muted/40 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                  }`}
+                >
+                  <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                  <span className="min-w-0 flex-1 truncate">
+                    {job.stalled ? "run stalled" : progress.stageLabel ?? "Working…"}
+                  </span>
+                  {!job.stalled && <span className="shrink-0 tabular-nums">{progress.pct}%</span>}
+                </Link>
+              );
+            })()}
             <PackageSelector />
           </div>
         ) : null}
@@ -216,7 +239,7 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
                   end={item.end}
                   onClick={() => setOpen(false)}
                   data-tour={`nav-${item.to || "overview"}`}
-                  className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                  className={`flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium transition-colors ${
                     isActive
                       ? "bg-accent text-accent-foreground"
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -238,7 +261,7 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
       <div className="px-2 pt-1.5">
         <button
           onClick={onStartTour}
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <HelpCircle className="h-3.5 w-3.5" />
           Take a tour
@@ -246,11 +269,19 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
         <button
           onClick={onShowShortcuts}
           title="Also opens with ?"
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <Keyboard className="h-3.5 w-3.5" />
           Keyboard shortcuts
         </button>
+        <Link
+          to="/help"
+          onClick={() => setOpen(false)}
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          Help &amp; FAQ
+        </Link>
       </div>
       <div className="flex items-center gap-2 px-2 py-2">
         <div className="min-w-0 flex-1">
@@ -292,6 +323,7 @@ function ProjectLayoutContent() {
   // the project to load so the tour never spotlights a spinner.
   useEffect(() => {
     if (loading || error || !user) return;
+    if (consumeTourRequest("project")) { setTourOpen(true); return; }
     if (tourDismissed("project", user.id)) return;
     setTourOpen(true);
   }, [loading, error, user]);

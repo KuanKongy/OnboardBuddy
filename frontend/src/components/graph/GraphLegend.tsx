@@ -10,7 +10,15 @@ import { NODE_KIND_INFO } from "@/lib/graphNodeType";
 // source of truth shared with the on-node badge — so a new kind can't be
 // added there and silently miss the legend.
 
-export function GraphLegend({ presentKinds }: { presentKinds?: string[] }) {
+export function GraphLegend({
+  presentKinds,
+  hiddenKinds,
+  onToggleKind,
+}: {
+  presentKinds?: string[];
+  hiddenKinds?: Set<string>;
+  onToggleKind?: (kind: string) => void;
+}) {
   // Start collapsed on a user's first visit so the legend doesn't fight the
   // first-visit hint (and the Controls/MiniMap) for canvas space.
   const [expanded, setExpanded] = useState(() => isGraphHintDismissed());
@@ -43,7 +51,7 @@ export function GraphLegend({ presentKinds }: { presentKinds?: string[] }) {
           </p>
 
           <div className="flex items-center gap-1.5">
-            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground">
+            <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-primary text-[0.5rem] font-bold text-primary-foreground">
               ▶
             </span>
             <span className="text-muted-foreground">Entry point — where app flow starts</span>
@@ -51,14 +59,35 @@ export function GraphLegend({ presentKinds }: { presentKinds?: string[] }) {
 
           {kinds.length > 0 && (
             <div>
-              <p className="mb-1 font-medium text-foreground">Node kind</p>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <p className="font-medium text-foreground">Node kind</p>
+                {hiddenKinds && hiddenKinds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => hiddenKinds.forEach((k) => onToggleKind?.(k))}
+                    className="text-[0.65625rem] font-medium text-primary hover:underline"
+                  >
+                    Show all
+                  </button>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-                {kinds.map((kind) => (
-                  <div key={kind.type} className="flex items-center gap-1.5">
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded border ${kind.swatchClasses}`} />
-                    <span className="truncate text-muted-foreground">{kind.label}</span>
-                  </div>
-                ))}
+                {kinds.map((kind) => {
+                  const isHidden = hiddenKinds?.has(kind.type) ?? false;
+                  return (
+                    <button
+                      key={kind.type}
+                      type="button"
+                      aria-pressed={!isHidden}
+                      onClick={() => onToggleKind?.(kind.type)}
+                      title={isHidden ? `Show ${kind.label} nodes` : `Hide ${kind.label} nodes`}
+                      className={`flex items-center gap-1.5 rounded px-0.5 text-left transition-opacity hover:opacity-100 ${isHidden ? "opacity-40" : "opacity-100"}`}
+                    >
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded border ${kind.swatchClasses}`} />
+                      <span className="truncate text-muted-foreground">{kind.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}

@@ -146,7 +146,7 @@ export function AnalyzeConfigForm({
           value={branch}
           onValueChange={(v) => onChange({ ...config, branch: v, commit: "" })}
         >
-          <SelectTrigger id="analyze-branch" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-branch" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {(branches.length > 0 ? branches : [branch]).map((b) => (
               <SelectItem key={b} value={b}>
@@ -164,7 +164,7 @@ export function AnalyzeConfigForm({
           value={config.commit || "head"}
           onValueChange={(v) => onChange({ ...config, commit: v === "head" ? "" : v })}
         >
-          <SelectTrigger id="analyze-commit" className="h-8 w-full min-w-0 text-[13px]">
+          <SelectTrigger id="analyze-commit" className="h-8 w-full min-w-0 text-[0.8125rem]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -186,7 +186,7 @@ export function AnalyzeConfigForm({
           value={config.scopeId}
           onValueChange={(v) => onChange({ ...config, scopeId: v })}
         >
-          <SelectTrigger id="analyze-scope" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-scope" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="whole">Whole repository</SelectItem>
             {scopes.filter((s) => s.path_prefix !== "").map((s) => (
@@ -205,7 +205,7 @@ export function AnalyzeConfigForm({
               value={config.scopePath}
               onChange={(e) => onChange({ ...config, scopePath: e.target.value })}
               placeholder="e.g. backend/ or packages/server"
-              className="h-8 font-mono text-[12px]"
+              className="h-8 font-mono text-[0.75rem]"
             />
           </>
         )}
@@ -217,7 +217,7 @@ export function AnalyzeConfigForm({
           value={config.depth || "default"}
           onValueChange={(v) => onChange({ ...config, depth: v === "default" ? "" : v })}
         >
-          <SelectTrigger id="analyze-depth" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Project default</SelectItem>
             {DEPTHS.map((d) => (
@@ -233,7 +233,7 @@ export function AnalyzeConfigForm({
           value={config.role || "default"}
           onValueChange={(v) => onChange({ ...config, role: v === "default" ? "" : v })}
         >
-          <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[13px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Project default role</SelectItem>
             {ROLES.map((r) => (
@@ -241,7 +241,7 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-muted-foreground">
+        <p className="text-[0.6875rem] text-muted-foreground">
           The analysis itself is role-independent; the role shapes which onboarding
           package is generated first. Other roles can be generated later without re-analyzing.
         </p>

@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, RefreshCw, Search, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Info, Loader2, Maximize2, Minimize2, RefreshCw, Search, Sparkles, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -26,6 +26,9 @@ import {
   type ArchitectureResponse,
 } from "@/lib/architectureData";
 import { layoutGraph } from "@/lib/graphLayout";
+import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 
 const nodeTypes = { cluster: ClusterNode };
@@ -39,6 +42,7 @@ export function ArchitecturePage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
 
   function load() {
     if (!id) return;
@@ -55,6 +59,15 @@ export function ArchitecturePage() {
 
   // Esc closes the component details panel (pairs with the animated fit-out).
   useHotkeys({ Escape: () => setSelectedId(null) }, selectedId !== null);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [fullscreen]);
 
   // Deep link from the capabilities hub: ?cluster=<stable_key> preselects
   // that component (cluster ids are stable keys).
@@ -153,16 +166,26 @@ export function ArchitecturePage() {
   const selected = data?.clusters.find((c) => c.id === selectedId) ?? null;
 
   return (
-    <div style={{ "--graph-chrome": "190px" } as React.CSSProperties}>
+    <div style={{ "--graph-chrome": fullscreen ? "90px" : "190px" } as React.CSSProperties}>
       <div data-tour="architecture-header">
         <PageHeader
           title="Architecture"
           subtitle="How the codebase is organized into layers — click a component to see what it does and what it talks to."
           actions={
             data ? (
-              <Badge variant="outline" className="text-[11px] tabular-nums">
-                {data.clusters.length} components · {data.edges.length} connections
-              </Badge>
+              <>
+                <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
+                  {data.clusters.length} components · {data.edges.length} connections
+                </Badge>
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => setFullscreen((v) => !v)}
+                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                >
+                  {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                </Button>
+              </>
             ) : undefined
           }
         />
@@ -206,7 +229,7 @@ export function ArchitecturePage() {
               {presentKinds.map((kind) => {
                 const palette = CLUSTER_KIND_PALETTE[kind] ?? "shared";
                 return (
-                  <span key={kind} className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span key={kind} className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                     <span className="h-2 w-2 rounded-full" style={{ background: `var(--node-${palette})` }} />
                     {CLUSTER_KIND_LABELS[kind] ?? kind}
                   </span>
@@ -214,13 +237,13 @@ export function ArchitecturePage() {
               })}
             </div>
             {search && (
-              <span className="text-[11px] tabular-nums text-muted-foreground">
+              <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
                 {visibleClusters.length} / {data.clusters.length}
               </span>
             )}
           </div>
 
-          <div className={selected ? "grid gap-3 lg:grid-cols-[1fr_320px]" : ""}>
+          <div className={cn(selected ? "grid gap-3 lg:grid-cols-[1fr_320px]" : "", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
             <div className="graph-canvas">
               <ReactFlowProvider>
                 <ReactFlow
@@ -238,6 +261,7 @@ export function ArchitecturePage() {
                   fitViewOptions={{ padding: 0.15 }}
                   minZoom={0.2}
                   proOptions={{ hideAttribution: true }}
+                  key={String(fullscreen)}
                 >
                   <ViewportFocus selectedNodeId={selectedId} fitPadding={0.15} />
                   <Background variant={BackgroundVariant.Dots} gap={22} size={1} color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.85 0.008 265)"} />
@@ -259,7 +283,7 @@ export function ArchitecturePage() {
                   <div className="min-w-0">
                     <h2 className="truncate text-sm font-semibold text-foreground">{selected.label}</h2>
                     <span
-                      className="mt-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      className="mt-1 inline-block rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide"
                       style={{
                         color: `var(--node-${CLUSTER_KIND_PALETTE[selected.kind] ?? "shared"})`,
                         background: `color-mix(in oklab, var(--node-${CLUSTER_KIND_PALETTE[selected.kind] ?? "shared"}) 14%, transparent)`,
@@ -275,8 +299,8 @@ export function ArchitecturePage() {
 
                 {selected.summary && (
                   <div className="mb-3">
-                    <p className="text-[13px] leading-relaxed text-muted-foreground">{selected.summary}</p>
-                    <p className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-muted-foreground/70">
+                    <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{selected.summary}</p>
+                    <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
                       {selected.summarySource === "semantic" ? (
                         <>
                           <Sparkles className="h-2.5 w-2.5" /> AI summary ({selected.confidence} confidence)
@@ -288,12 +312,22 @@ export function ArchitecturePage() {
                   </div>
                 )}
 
-                <p className="section-label mb-1.5">Criticality</p>
+                <div className="mb-1.5 flex items-center gap-1.5">
+                  <p className="section-label">Criticality</p>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                        <Info className="h-3 w-3" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-left">{RANKING_EXPLANATION}</TooltipContent>
+                  </Tooltip>
+                </div>
                 <div className="mb-3 flex items-center gap-2">
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
                     <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.round(selected.criticalScore * 100))}%` }} />
                   </div>
-                  <span className="text-[11px] tabular-nums text-muted-foreground">
+                  <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
                     {(selected.criticalScore * 100).toFixed(0)}%
                   </span>
                 </div>
@@ -301,7 +335,7 @@ export function ArchitecturePage() {
                 <p className="section-label mb-1.5">Files ({selected.members.length})</p>
                 <ul className="space-y-0.5">
                   {selected.members.slice(0, 30).map((m) => (
-                    <li key={m.key} className="truncate font-mono text-[11.5px]" title={m.filePath ?? m.key}>
+                    <li key={m.key} className="truncate font-mono text-[0.71875rem]" title={m.filePath ?? m.key}>
                       <Link
                         to={`/projects/${id}/dependencies?focus=${encodeURIComponent(m.filePath ?? m.key)}`}
                         className="text-muted-foreground hover:text-primary hover:underline"
@@ -311,7 +345,7 @@ export function ArchitecturePage() {
                     </li>
                   ))}
                   {selected.members.length > 30 && (
-                    <li className="text-[11px] text-muted-foreground/70">+ {selected.members.length - 30} more</li>
+                    <li className="text-[0.6875rem] text-muted-foreground/70">+ {selected.members.length - 30} more</li>
                   )}
                 </ul>
               </aside>

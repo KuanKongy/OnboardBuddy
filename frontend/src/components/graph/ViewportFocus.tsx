@@ -54,7 +54,7 @@ export function ViewportFocus({
       if (selectedNodeId) {
         const node = getNode(selectedNodeId);
         if (!node) return;
-        const w = node.width ?? 240; // ModuleNode is w-60
+        const w = node.width ?? 240; // ModuleNode is w-[240px]
         const h = node.height ?? 56;
         setCenter(node.position.x + w / 2, node.position.y + h / 2, { zoom, duration: 500 });
       } else {

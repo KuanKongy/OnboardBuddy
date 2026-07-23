@@ -27,7 +27,7 @@ import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 
-const PRIVACY_MODES = [
+export const PRIVACY_MODES = [
   { key: "full_ai", label: "Full AI", hint: "Code snippets + facts go to the LLM — best quality." },
   { key: "facts_only_ai", label: "Facts-only AI", hint: "No code leaves the system — only extracted facts and structure." },
   { key: "ai_disabled", label: "AI disabled", hint: "No LLM calls at all; deterministic outputs only." },
@@ -260,7 +260,7 @@ export function ProjectSettingsPage() {
       <PageHeader
         title="Project settings"
         subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
-        actions={<Badge variant="outline" className="text-[11px] capitalize">{project.permission_tier}</Badge>}
+        actions={<Badge variant="outline" className="text-[0.6875rem] capitalize">{project.permission_tier}</Badge>}
       />
 
       {error && (
@@ -278,11 +278,11 @@ export function ProjectSettingsPage() {
             <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
             <div className="space-y-1.5">
               <div>
-                <Label className="text-[11px] text-muted-foreground">Repository</Label>
+                <Label className="text-[0.6875rem] text-muted-foreground">Repository</Label>
                 <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
               </div>
               <div>
-                <Label className="text-[11px] text-muted-foreground">Branch</Label>
+                <Label className="text-[0.6875rem] text-muted-foreground">Branch</Label>
                 <div className="flex items-center gap-1 text-xs text-foreground">
                   <GitBranch className="h-3 w-3 text-muted-foreground" />
                   {project.branch}
@@ -296,7 +296,7 @@ export function ProjectSettingsPage() {
           <CardContent className="p-3">
             <h3 className="mb-2 text-xs font-medium text-foreground">Default developer role</h3>
             <Select value={defaultRole} onValueChange={setDefaultRole} disabled={!canEdit}>
-              <SelectTrigger className="h-8 text-[13px]">
+              <SelectTrigger className="h-8 text-[0.8125rem]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -319,7 +319,7 @@ export function ProjectSettingsPage() {
               placeholder={"node_modules/\ndist/\n.env"}
               rows={4}
               disabled={!canEdit}
-              className="text-[13px]"
+              className="text-[0.8125rem]"
             />
             <p className="mt-1 text-xs text-muted-foreground">
               One path per line. These will be excluded from analysis.
@@ -372,7 +372,7 @@ export function ProjectSettingsPage() {
                   />
                   <span>
                     <span className="block text-xs font-medium text-foreground">{mode.label}</span>
-                    <span className="block text-[11px] text-muted-foreground">{mode.hint}</span>
+                    <span className="block text-[0.6875rem] text-muted-foreground">{mode.hint}</span>
                   </span>
                 </button>
               ))}
@@ -381,7 +381,7 @@ export function ProjectSettingsPage() {
               <div className="min-w-0 space-y-1">
                 <Label className="text-xs">Analysis depth</Label>
                 <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
                     <SelectItem value="standard">Standard — balanced</SelectItem>
@@ -412,7 +412,7 @@ export function ProjectSettingsPage() {
                   onChange={(e) => setBudgetCalls(e.target.value)}
                   placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
                   disabled={!canEdit}
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="space-y-1">
@@ -423,13 +423,13 @@ export function ProjectSettingsPage() {
                   onChange={(e) => setBudgetTokens(e.target.value)}
                   placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
                   disabled={!canEdit}
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="min-w-0 space-y-1">
                 <Label className="text-xs">When exceeded</Label>
                 <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 w-full min-w-0 text-[13px]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pause">Pause — resume later</SelectItem>
                     <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
@@ -438,7 +438,7 @@ export function ProjectSettingsPage() {
                 </Select>
               </div>
             </div>
-            <p className="mt-1.5 text-[11px] text-muted-foreground">
+            <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
               Empty fields use the {analysisDepth} depth's built-in limits
               ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
               Live spend shows in the analysis status.
@@ -451,8 +451,8 @@ export function ProjectSettingsPage() {
             <h3 className="mb-1 text-xs font-medium text-foreground">Automation</h3>
             <div className="flex items-start justify-between gap-3">
               <div>
-                <p className="text-[13px] font-medium text-foreground">Re-analyze on push</p>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                <p className="text-[0.8125rem] font-medium text-foreground">Re-analyze on push</p>
+                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                   When GitHub pushes to a branch that has onboarding packages, run an incremental
                   re-analysis per affected scope. Changed sections get stale badges — packages are
                   never rebuilt automatically, so there's no surprise AI spend. Requires the GitHub
@@ -483,7 +483,7 @@ export function ProjectSettingsPage() {
         <Card>
           <CardContent className="p-3">
             <h3 className="mb-1 text-xs font-medium text-foreground">Project LLM API key</h3>
-            <p className="mb-2 text-[11px] text-muted-foreground">
+            <p className="mb-2 text-[0.6875rem] text-muted-foreground">
               Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
               shown again, and usage is visible to the whole team.
             </p>
@@ -505,7 +505,7 @@ export function ProjectSettingsPage() {
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
                   placeholder="sk-or-…"
-                  className="h-8 flex-1 text-[13px]"
+                  className="h-8 flex-1 text-[0.8125rem]"
                   autoComplete="off"
                 />
                 <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
@@ -523,15 +523,15 @@ export function ProjectSettingsPage() {
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-xs font-medium text-foreground">Ranking weights</h3>
               {activeWeights?.customized && (
-                <Badge variant="outline" className="text-[11px]">customized</Badge>
+                <Badge variant="outline" className="text-[0.6875rem]">customized</Badge>
               )}
             </div>
-            <p className="mb-2 text-[11px] text-muted-foreground">
+            <p className="mb-2 text-[0.6875rem] text-muted-foreground">
               How much each signal counts toward "critical for this role". Changes apply instantly —
               scores are re-projected, never re-analyzed.
             </p>
             <Select value={weightRole} onValueChange={setWeightRole}>
-              <SelectTrigger className="mb-3 h-8 w-[180px] text-[13px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {(weightRoles ?? []).map((r) => (
                   <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
@@ -542,7 +542,7 @@ export function ProjectSettingsPage() {
               <div className="space-y-2">
                 {WEIGHT_VIEWS.map((view) => (
                   <div key={view} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-[11.5px] text-muted-foreground">
+                    <span className="w-28 shrink-0 text-[0.71875rem] text-muted-foreground">
                       {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
                     </span>
                     <input
@@ -556,7 +556,7 @@ export function ProjectSettingsPage() {
                       className="h-1.5 flex-1 accent-[var(--primary)]"
                       aria-label={`${WEIGHT_LABELS[view] ?? view} weight`}
                     />
-                    <span className="w-10 shrink-0 text-right text-[11.5px] tabular-nums text-foreground">
+                    <span className="w-10 shrink-0 text-right text-[0.71875rem] tabular-nums text-foreground">
                       {Math.round((activeWeights.weights[view] ?? 0) * 100)}%
                     </span>
                   </div>
@@ -564,7 +564,7 @@ export function ProjectSettingsPage() {
                 {(() => {
                   const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
                   return (
-                    <p className={`text-right text-[11px] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
+                    <p className={`text-right text-[0.6875rem] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
                       Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
                     </p>
                   );
@@ -609,7 +609,7 @@ export function ProjectSettingsPage() {
                   onChange={(e) => setFileLimit(e.target.value)}
                   placeholder="unchanged if blank"
                   disabled={!canEdit}
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
               <div className="space-y-1">
@@ -620,7 +620,7 @@ export function ProjectSettingsPage() {
                   onChange={(e) => setLocLimit(e.target.value)}
                   placeholder="unchanged if blank"
                   disabled={!canEdit}
-                  className="h-8 text-[13px]"
+                  className="h-8 text-[0.8125rem]"
                 />
               </div>
             </div>
@@ -690,7 +690,7 @@ export function ProjectSettingsPage() {
             value={deleteConfirm}
             onChange={(e) => setDeleteConfirm(e.target.value)}
             placeholder={project.repo_name}
-            className="h-8 text-[13px]"
+            className="h-8 text-[0.8125rem]"
           />
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => { setDeleteOpen(false); setDeleteConfirm(""); }}>Cancel</Button>

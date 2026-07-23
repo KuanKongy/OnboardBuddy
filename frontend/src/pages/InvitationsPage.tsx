@@ -104,7 +104,7 @@ export function InvitationsPage() {
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr]">
           {/* Left panel */}
           <div className="space-y-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <p className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
               Active Invitations ({invitations.length})
             </p>
             {invitations.map((inv) => (
@@ -129,18 +129,18 @@ export function InvitationsPage() {
                 <CardContent className="p-3">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="text-[13px] font-medium text-foreground">{inv.repo_name}</p>
+                      <p className="text-[0.8125rem] font-medium text-foreground">{inv.repo_name}</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
                         Invited by {inv.invited_by_email || "a team member"}
                       </p>
                     </div>
-                    <Badge variant="secondary" className="text-[11px] capitalize">
+                    <Badge variant="secondary" className="text-[0.6875rem] capitalize">
                       {inv.permission_tier}
                     </Badge>
                   </div>
                   <div className="mt-1.5 flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[11px]">Pending</Badge>
-                    <Badge variant="outline" className="text-[11px] capitalize">
+                    <Badge variant="outline" className="text-[0.6875rem]">Pending</Badge>
+                    <Badge variant="outline" className="text-[0.6875rem] capitalize">
                       {inv.developer_role
                         ? `${inv.developer_role} role`
                         : "Role not selected"}
@@ -164,13 +164,13 @@ export function InvitationsPage() {
 
                 <div className="mt-3 flex gap-3">
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
-                    <p className="text-[11px] text-muted-foreground">Permission</p>
+                    <p className="text-[0.6875rem] text-muted-foreground">Permission</p>
                     <p className="text-xs font-medium capitalize text-foreground">
                       {selected.permission_tier}
                     </p>
                   </div>
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
-                    <p className="text-[11px] text-muted-foreground">Organization</p>
+                    <p className="text-[0.6875rem] text-muted-foreground">Organization</p>
                     <p className="text-xs font-medium text-foreground">{selected.repo_owner}</p>
                   </div>
                 </div>

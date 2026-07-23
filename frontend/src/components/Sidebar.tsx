@@ -12,6 +12,7 @@ export const dashboardNavItems = [
   { to: "/list", label: "Project list", icon: List },
   { to: "/invitations", label: "Invitations", icon: Mail },
   { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/help", label: "Help & FAQ", icon: HelpCircle },
 ];
 
 export function Sidebar({
@@ -46,7 +47,7 @@ export function Sidebar({
               to={item.to}
               onClick={() => setOpen(false)}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
+                `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium transition-colors ${
                   isActive
                     ? "bg-accent text-accent-foreground"
                     : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -66,7 +67,7 @@ export function Sidebar({
       <div className="px-2 pt-1.5">
         <button
           onClick={() => { setOpen(false); onStartTour(); }}
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <HelpCircle className="h-3.5 w-3.5" />
           Take a tour
@@ -74,7 +75,7 @@ export function Sidebar({
         <button
           onClick={onShowShortcuts}
           title="Also opens with ?"
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <Keyboard className="h-3.5 w-3.5" />
           Keyboard shortcuts

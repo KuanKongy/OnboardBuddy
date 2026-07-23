@@ -29,7 +29,8 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   return (
     <div
       className={cn(
-        "w-60 rounded-lg border bg-card px-3 py-2.5 shadow-md transition-opacity",
+        "w-[240px] rounded-lg border border-l-4 bg-card px-3 py-2.5 shadow-md transition-opacity",
+        typeInfo.accentClass,
         data.selected
           ? "border-primary ring-2 ring-ring"
           : "border-border hover:border-muted-foreground/40",
@@ -40,13 +41,13 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !bg-muted-foreground" />
 
       <div className="mb-1 flex items-center gap-1.5">
-        <span className="flex-1 truncate text-[13px] font-semibold text-foreground" title={data.label}>
+        <span className="flex-1 truncate text-[0.8125rem] font-semibold text-foreground" title={data.label}>
           {data.label}
         </span>
         {data.selected && <Star className="h-3 w-3 flex-shrink-0 fill-primary text-primary" />}
         <span
           className={cn(
-            "shrink-0 rounded border px-1 py-0.5 text-[11px] font-bold uppercase tracking-wide",
+            "shrink-0 rounded border px-1 py-0.5 text-[0.6875rem] font-bold uppercase tracking-wide",
             typeInfo.colorClasses,
           )}
         >
@@ -58,15 +59,15 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
 
       {/* {data.selected && complexity && (
         <div className="mb-2 flex flex-wrap items-center gap-1">
-          <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/20 text-orange-400">
-          <span className="rounded px-1.5 py-0.5 text-[11px] font-medium bg-orange-500/20 text-orange-700 dark:text-orange-400">
+          <span className="rounded px-1.5 py-0.5 text-[0.625rem] font-medium bg-orange-500/20 text-orange-400">
+          <span className="rounded px-1.5 py-0.5 text-[0.6875rem] font-medium bg-orange-500/20 text-orange-700 dark:text-orange-400">
             {complexity}
           </span>
         </div>
       )} */}
 
       <div
-        className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground"
+        className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground"
         title={`Imports ${data.importCount} project file${data.importCount === 1 ? "" : "s"}${
           data.externalImportCount ? ` (+${data.externalImportCount} external)` : ""
         }; imported by ${data.dependentCount}`}
