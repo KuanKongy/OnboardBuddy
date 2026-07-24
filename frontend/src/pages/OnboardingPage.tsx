@@ -210,6 +210,20 @@ function initialBlockExpansion(section: OnboardingSection): boolean[] {
 }
 
 /**
+ * The generator opens every section with a "**TL;DR:** …" paragraph
+ * (Diátaxis presentation rule 2); the reader renders it as a callout box
+ * instead of body prose. Returns null when the body doesn't start with one.
+ */
+function splitTldr(body: string): { tldr: string; rest: string } | null {
+  const trimmed = body.trimStart();
+  if (!trimmed.startsWith("**TL;DR:**")) return null;
+  const paraEnd = trimmed.indexOf("\n\n");
+  const tldrPara = paraEnd === -1 ? trimmed : trimmed.slice(0, paraEnd);
+  const rest = paraEnd === -1 ? "" : trimmed.slice(paraEnd + 2);
+  return { tldr: tldrPara.replace(/^\*\*TL;DR:\*\*\s*/, ""), rest };
+}
+
+/**
  * Sections that retell what an interactive tab already shows link to it
  * (audit §8): the prose is the narrative, the tab is the reference.
  */
@@ -328,6 +342,19 @@ function SectionView({
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
+                {(() => {
+                  if (!isLead) return null;
+                  const split = splitTldr(stripLeadingDuplicateHeading(block.body, section.label));
+                  if (!split) return null;
+                  return (
+                    <div className="mb-3 rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
+                      <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">TL;DR</span>
+                      <ReactMarkdown components={{ p: ({ children }) => <span>{children}</span> }}>
+                        {renderReceiptMarkers(split.tldr, block.receipts)}
+                      </ReactMarkdown>
+                    </div>
+                  );
+                })()}
                 <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
                   <ReactMarkdown
                     components={{
@@ -366,7 +393,11 @@ function SectionView({
                     }}
                   >
                     {renderReceiptMarkers(
-                      isLead ? stripLeadingDuplicateHeading(block.body, section.label) : block.body,
+                      (() => {
+                        if (!isLead) return block.body;
+                        const lead = stripLeadingDuplicateHeading(block.body, section.label);
+                        return splitTldr(lead)?.rest ?? lead;
+                      })(),
                       block.receipts,
                     )}
                   </ReactMarkdown>
