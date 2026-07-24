@@ -28,6 +28,8 @@ import { scanConfigNodes } from './engine/configScanner.js';
 import { extractConfigFlows } from './engine/configFlowExtractor.js';
 import { composeJourneys } from './engine/journeyComposer.js';
 import { validateGoldenJourneys } from './engine/journeyGate.js';
+import { selectModel, isAutoSelection, overridesForSelection } from './ai/modelSelector.js';
+import { checkDocHealth } from './engine/docHealthCheck.js';
 import { ingestDocs } from './engine/docsIngester.js';
 import {
   buildEvidenceGraph,
@@ -582,6 +584,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         count: unknownExternalPkgs.length,
       });
     }
+    // Doc-vs-code staleness (step 3 trust-panel overlay): docs claiming
+    // routes or env vars the extraction can't find are flagged, not ignored.
+    const docConflicts = checkDocHealth({
+      docNodes: docs.nodes,
+      entrypoints,
+      envVarNames: configFlows.envVars.flatMap((f) => f.vars.map((v) => v.name)),
+    });
+    honestyUnknowns.push(...docConflicts.map((c) => ({ ...c })));
     if (honestyUnknowns.length > 0) {
       await query(
         `UPDATE analysis_snapshots SET unknowns = unknowns || $2::jsonb WHERE id = $1`,
@@ -690,8 +700,20 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       await query(`DELETE FROM snapshot_semantic_records WHERE snapshot_id = $1`, [snapshotId]);
       await query(`DELETE FROM capabilities WHERE snapshot_id = $1`, [snapshotId]);
 
+      // Auto model rotation (user directive 2026-07-24): unless the project
+      // pins a model, probe OpenRouter's per-provider endpoints and pick the
+      // fastest structured-output-capable model right now — privacy is
+      // enforced request-side via provider.data_collection='deny'.
+      let modelTierOverrides: unknown = project.model_tier_overrides;
+      if (isAutoSelection(modelTierOverrides)) {
+        const selection = await selectModel({ projectId });
+        if (selection.rankings.length > 0) {
+          modelTierOverrides = overridesForSelection(selection);
+          await updateStep(`Model: ${selection.model.split('/')[1] ?? selection.model} (live throughput pick)`, 64);
+        }
+      }
       const tierConfig = resolveTierConfig({
-        modelTierOverrides: project.model_tier_overrides,
+        modelTierOverrides,
         modelFailureBehavior: project.model_failure_behavior,
       });
       const budget = await new BudgetEnforcer({

@@ -17,6 +17,7 @@ import { mapLimit } from '../lib/parallel.js';
 import { AiClient, AiPausedError } from './ai/aiClient.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
 import { resolveTierConfig } from './ai/modelTiers.js';
+import { selectModel, isAutoSelection, overridesForSelection } from './ai/modelSelector.js';
 import { markPhase } from './ai/checkpoints.js';
 import type { PrivacyMode } from './ai/privacy.js';
 import type { SemanticDepth } from './engine/budgets.js';
@@ -190,10 +191,18 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       stopBehavior: snap.budget_stop_behavior,
     }).load();
     budgetRef = budget;
+    // Auto model rotation: generation follows the same live-throughput pick
+    // as analysis (5-min selection cache keeps a chained analyze→generate
+    // run on one model).
+    let generationOverrides: unknown = snap.model_tier_overrides;
+    if (isAutoSelection(generationOverrides)) {
+      const selection = await selectModel({ projectId });
+      if (selection.rankings.length > 0) generationOverrides = overridesForSelection(selection);
+    }
     const ai = new AiClient({
       projectId, snapshotId, jobId, privacyMode, budget,
       tierConfig: resolveTierConfig({
-        modelTierOverrides: snap.model_tier_overrides,
+        modelTierOverrides: generationOverrides,
         modelFailureBehavior: snap.model_failure_behavior,
       }),
     });

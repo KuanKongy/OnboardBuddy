@@ -37,8 +37,10 @@ import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState"
 import { useProgress } from "@/lib/useProgress";
 import {
   ROLES,
+  ROLE_READING_ORDER,
   SECTION_GROUPS,
   SECTION_NAV_ORDER,
+  SECTION_WHY,
   fetchOnboardingPackage,
   regenerateSection,
 } from "@/lib/onboardingData";
@@ -1272,6 +1274,8 @@ export function OnboardingPage() {
                       if (u.kind === "unknown_external_calls")
                         return `calls into unmodeled packages: ${(u.packages ?? []).slice(0, 5).join(", ")}`;
                       if (u.kind === "journey_gap") return `journey not composed: ${u.expected}${u.queue ? ` (${u.queue})` : ""}`;
+                      if (u.kind === "doc_conflict")
+                        return `docs out of date: ${(u as { doc?: string }).doc ?? "?"} mentions ${(u as { claim?: string }).claim ?? "?"} (${(u as { class?: string }).class ?? "claim"} not found)`;
                       return u.kind.replace(/_/g, " ");
                     })
                     .join(" · ")}
@@ -1352,6 +1356,37 @@ export function OnboardingPage() {
               {presentSectionIds.length} read
             </p>
           )}
+          {/* Suggested for you (step-3 overlay): the role's reading order —
+              journeys interleave modes, so the shelf order below is NOT the
+              reading order. Next 3 unread, resume-aware. */}
+          {!isMissing && readSections !== null && (() => {
+            const order = ROLE_READING_ORDER[pkg?.role ?? "general"] ?? ROLE_READING_ORDER.general!;
+            const nextUp = order
+              .filter((id) => presentSectionIds.includes(id) && !readSections.includes(id))
+              .slice(0, 3);
+            if (nextUp.length === 0) return null;
+            return (
+              <div className="mb-3 rounded-md border border-primary/20 bg-primary/5 px-2 py-2">
+                <p className="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-primary/80">
+                  Suggested for you{pkg?.role && pkg.role !== "general" ? ` (${pkg.role})` : ""}
+                </p>
+                <div className="space-y-1">
+                  {nextUp.map((id) => (
+                    <button
+                      key={id}
+                      onClick={() => setActiveSectionId(id)}
+                      className="block w-full rounded px-1.5 py-1 text-left hover:bg-primary/10"
+                    >
+                      <span className="block text-[0.75rem] font-medium text-foreground">{sectionLabelFor(id)}</span>
+                      {SECTION_WHY[id] && (
+                        <span className="block text-[0.6875rem] leading-snug text-muted-foreground">{SECTION_WHY[id]}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <nav className="space-y-3">
             {(() => {
               // Missing packages preview only the current 12-section layout;
@@ -1367,6 +1402,9 @@ export function OnboardingPage() {
                     <p className="mb-1 px-2 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground/50">
                       {group.label}
                     </p>
+                    {group.blurb && (
+                      <p className="mb-1 px-2 text-[0.625rem] leading-snug text-muted-foreground/60">{group.blurb}</p>
+                    )}
                     <div className="space-y-0.5">
                       {idsInGroup.map((navId) => {
                         const idx = filteredNavIds.indexOf(navId);

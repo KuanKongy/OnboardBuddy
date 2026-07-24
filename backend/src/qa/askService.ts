@@ -13,6 +13,7 @@ import { query } from '../lib/db.js';
 import { AiClient } from '../worker/ai/aiClient.js';
 import { BudgetEnforcer } from '../worker/ai/budgetEnforcer.js';
 import { resolveTierConfig } from '../worker/ai/modelTiers.js';
+import { selectModel, isAutoSelection, overridesForSelection } from '../worker/ai/modelSelector.js';
 import { AiDisabledError, type PrivacyMode } from '../worker/ai/privacy.js';
 import type { AiProvider } from '../worker/ai/provider.js';
 import type { SemanticDepth } from '../worker/engine/budgets.js';
@@ -189,6 +190,13 @@ export async function answerQuestion(input: AskInput): Promise<AskAnswer> {
     budgetOverrides: snapshot.budgetOverrides,
     stopBehavior: 'fail',
   }).load();
+  // Ask follows the auto rotation too; the 5-min selection cache makes this
+  // a no-op cost on interactive latency after the first question.
+  let askOverrides: unknown = snapshot.modelTierOverrides;
+  if (isAutoSelection(askOverrides)) {
+    const selection = await selectModel({ projectId: input.projectId });
+    if (selection.rankings.length > 0) askOverrides = overridesForSelection(selection);
+  }
   const ai = new AiClient({
     projectId: input.projectId,
     snapshotId: snapshot.snapshotId,
@@ -196,7 +204,7 @@ export async function answerQuestion(input: AskInput): Promise<AskAnswer> {
     budget,
     provider: input.provider,
     tierConfig: resolveTierConfig({
-      modelTierOverrides: snapshot.modelTierOverrides,
+      modelTierOverrides: askOverrides,
       modelFailureBehavior: snapshot.modelFailureBehavior,
     }),
   });

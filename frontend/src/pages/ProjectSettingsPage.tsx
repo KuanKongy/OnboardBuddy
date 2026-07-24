@@ -43,11 +43,15 @@ const WEIGHT_VIEWS = [
 ] as const;
 
 // Mirrors backend SELECTABLE_MODELS (ai/modelTiers.ts) — the vetted model
-// choices; one selection drives both chat tiers.
-const DEFAULT_ANALYSIS_MODEL = "google/gemini-2.5-flash-lite";
+// choices; one selection drives both chat tiers. "auto" probes OpenRouter's
+// per-provider throughput before each job and picks the fastest model whose
+// providers meet the privacy filter (data_collection: deny).
+const DEFAULT_ANALYSIS_MODEL = "auto";
 const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (default — fast, 1M context)" },
+  { id: "auto", label: "Auto — fastest private provider right now (default)" },
+  { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (fast, 1M context)" },
   { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (1M context)" },
+  { id: "meta-llama/llama-4-scout", label: "Llama 4 Scout (fastest bursts, smaller context)" },
 ];
 
 // Mirrors backend DEPTH_BUDGETS (engine/budgets.ts) so the inputs show the
