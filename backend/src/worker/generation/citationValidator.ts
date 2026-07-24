@@ -53,6 +53,13 @@ export async function validateGeneratedOutput(params: {
   bundle: EvidenceBundleV2;
   output: GeneratedOutput;
   snapshotId: string;
+  /**
+   * Diátaxis mode of the section under validation. Reference sections carry
+   * deterministic backbones — their claims LEGITIMATELY go uncited (the
+   * facts are spliced in from SQL, not asserted by the model), so the
+   * majority-uncited hard-fail and the empty-claims low grade don't apply.
+   */
+  mode?: 'explanation' | 'tutorial' | 'howto' | 'reference';
 }): Promise<ValidationOutcome> {
   const { bundle, output } = params;
   const issues: string[] = [];
@@ -149,18 +156,25 @@ export async function validateGeneratedOutput(params: {
   // now reflects how much of the section is well-supported.
   let confidence: 'high' | 'medium' | 'low';
   if (adjustedClaims.length === 0) {
-    confidence = 'low';
+    // Reference sections are graded on their deterministic backbone, not on
+    // model claims — code-derived tables with no complaints are solid.
+    confidence = params.mode === 'reference' ? (issues.length === 0 ? 'high' : 'medium') : 'low';
   } else {
     const lowShare = adjustedClaims.filter((c) => c.confidence === 'low').length / adjustedClaims.length;
     const highShare = adjustedClaims.filter((c) => c.confidence === 'high').length / adjustedClaims.length;
     confidence = lowShare > 0.3 ? 'low' : highShare >= 0.6 && lowShare === 0 ? 'high' : 'medium';
     if (CONFIDENCE_RANK[output.confidence] < CONFIDENCE_RANK[confidence]) confidence = output.confidence;
+    // Reference floor: the spliced backbone is code-derived truth — a clean
+    // validation never grades below medium just because annotations are thin.
+    if (params.mode === 'reference' && issues.length === 0 && confidence === 'low') confidence = 'medium';
   }
 
   const hardFailure =
     unresolvableChains > 0 ||
     (citedIds.size > 0 && unknownIds.length * 2 > citedIds.size) ||
-    (output.claims.length > 0 && uncited * 2 > output.claims.length);
+    // Reference mode: uncited claims are the contract (backbone facts), not
+    // a failure signature.
+    (params.mode !== 'reference' && output.claims.length > 0 && uncited * 2 > output.claims.length);
 
   return {
     hardFailure,

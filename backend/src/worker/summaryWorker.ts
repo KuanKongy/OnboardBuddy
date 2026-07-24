@@ -22,7 +22,7 @@ import type { PrivacyMode } from './ai/privacy.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import type { DeveloperRole } from './semantic/projections.js';
 import { settlePackageStaleness } from './incrementalAnalyzer.js';
-import { SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
+import { SECTION_SPECS, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
 import { generateDeterministicSection } from './generation/deterministicSectionGenerator.js';
 import { generateTutorials } from './generation/tutorialGenerator.js';
@@ -202,6 +202,13 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
 
     if (regenerateSectionType) {
       // ── regenerate_section: one section, same snapshot, replace content ──
+      // Legacy section types (pre-Diátaxis packages) have no spec anymore —
+      // regenerating them individually is impossible; the whole package
+      // regenerates into the new 12-section layout instead.
+      if (!(regenerateSectionType in SECTION_SPECS)) {
+        await updateJob('failed', `Section type "${regenerateSectionType}" is from a previous layout — regenerate the whole package instead`, 100);
+        return;
+      }
       await updateJob('running', `Regenerating: ${regenerateSectionType}`, 40);
       const result = await generateSection({
         ai, snapshotId, projectId, packageId, role,
@@ -216,6 +223,16 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       console.log(`[summary-worker] regenerated ${regenerateSectionType} (section=${result.sectionId}, issues=${result.validation.issues.length})`);
       return;
     }
+
+    // Layout migration: full generation replaces the package wholesale —
+    // section rows from a previous layout and tutorials orphaned by workflow
+    // re-extraction (workflow_id nulled by ON DELETE SET NULL) would
+    // otherwise accumulate beside the fresh set. Idempotent on resume.
+    await query(
+      `DELETE FROM package_sections WHERE package_id = $1 AND NOT (type = ANY($2))`,
+      [packageId, [...SECTION_TYPES]],
+    );
+    await query(`DELETE FROM tutorials WHERE package_id = $1 AND workflow_id IS NULL`, [packageId]);
 
     // Resume support: a retry of this job row skips work it already persisted.
     const checkpointRes = await query(`SELECT checkpoint FROM analysis_jobs WHERE id = $1`, [jobId]);
@@ -232,9 +249,10 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       checkpoint: { completedSections: [...completedSections], tutorialsDone },
     });
 
-    // ── tutorials ∥ sections (Track D): only role_path reads tutorials (its
-    //    deterministic query), so it alone waits for them — the other ten
-    //    sections generate concurrently with the tutorial pass.
+    // ── tutorials ∥ sections (Track D): no section reads tutorials anymore
+    //    (role_path retired by the Diátaxis redesign; the reading-order
+    //    overlay replaces it in step 3), so all sections generate fully
+    //    concurrent with the tutorial pass.
     let budgetDegraded = false;
     const tutorialsPromise: Promise<void> = tutorialsDone
       ? Promise.resolve()
@@ -264,7 +282,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     //    concurrently — each persists as soon as it finishes, so the reader
     //    can show sections while the rest are still generating.
     const pending = SECTION_TYPES.filter((t) => !completedSections.has(t));
-    const sectionConcurrency = Number(process.env.SECTION_CONCURRENCY ?? 11);
+    const sectionConcurrency = Number(process.env.SECTION_CONCURRENCY ?? 12);
     let done = 0;
     const runSection = async (sectionType: SectionType): Promise<void> => {
       const result = await generateSection({
@@ -284,12 +302,9 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     try {
       if (pending.length > 0) {
         await updateJob('running', `Generating sections (0/${pending.length})`, 15);
-        await mapLimit(pending.filter((t) => t !== 'role_path'), sectionConcurrency, runSection);
+        await mapLimit(pending, sectionConcurrency, runSection);
       }
       await tutorialsPromise;
-      if (pending.includes('role_path' as SectionType)) {
-        await runSection('role_path' as SectionType);
-      }
     } catch (err) {
       // The tutorials promise must not dangle as an unhandled rejection
       // when a section throws first.

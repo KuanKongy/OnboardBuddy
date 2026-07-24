@@ -1,43 +1,79 @@
 /**
- * Per-section generation specs (doc/Pipeline.md "Generation" table): each
- * section has its own deterministic query, semantic retrieval views, and
- * prompt instructions — sections are generated one at a time, never in
- * one giant call. Diagram-bearing sections get Mermaid derived from
- * deterministic data only.
+ * Per-section generation specs — the 12-section Diátaxis architecture
+ * (doc/ONBOARDING_QUALITY_LATENCY_PLAN.md "The new architecture"). Four
+ * chapters, one documentation mode each; every spec declares its chapter +
+ * mode (the generator applies the mode's voice scaffold), its deterministic
+ * query, retrieval views, anchor diagrams, and depth budget. CONSULT
+ * sections carry a deterministic markdown backbone the model annotates but
+ * never edits. Sections are generated one at a time, never in one giant
+ * call; diagrams derive from deterministic data only.
  */
 
 import { query } from '../../lib/db.js';
 import type { ViewType } from '../semantic/embeddingViews.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import { loadRoleProjections, critical25, type ProjectedTarget } from './roleProjection.js';
-import { architectureDiagram, schemaDiagram, workflowSequenceDiagram, type DiagramSpec } from './diagrams.js';
+import {
+  architectureDiagram, erDiagram, envExternalServices, topologyDiagram,
+  workflowSequenceDiagram, type DiagramSpec, type DiagramStep,
+} from './diagrams.js';
+import {
+  loadConfigFacts, buildRoutesJobsBackbone, buildDataModelBackbone, buildGuardrailsBackbone,
+  type ConfigFacts,
+} from './referenceBackbones.js';
 
 export const SECTION_TYPES = [
-  'start_here', 'architecture', 'entry_points', 'critical_25', 'capability_map',
-  'role_path', 'workflow_guide', 'data_schema', 'safety_rails',
-  'dependency_graph', 'doc_health',
+  // ORIENT
+  'big_picture', 'concepts',
+  // UNDERSTAND
+  'architecture_deep', 'traced_flows', 'code_map', 'capabilities',
+  // DO
+  'setup_run', 'first_change', 'common_tasks',
+  // CONSULT
+  'routes_jobs', 'data_model', 'guardrails_ops',
 ] as const;
 
 export type SectionType = (typeof SECTION_TYPES)[number];
 
+export type Chapter = 'orient' | 'understand' | 'do' | 'consult';
+export type SectionMode = 'explanation' | 'tutorial' | 'howto' | 'reference';
+
+export const CHAPTERS: Record<Chapter, { title: string; blurb: string }> = {
+  orient: {
+    title: 'Orient',
+    blurb: 'What this system is and the vocabulary it thinks in — read first, ~10 minutes.',
+  },
+  understand: {
+    title: 'Understand',
+    blurb: 'The deep middle: subsystems, end-to-end flows, the files that matter, and what the product does.',
+  },
+  do: {
+    title: 'Do',
+    blurb: 'Hands on: run it, make your first change, and the recipes for this repo\'s recurring tasks.',
+  },
+  consult: {
+    title: 'Consult',
+    blurb: 'Reference tables generated from code facts — routes, jobs, data model, guardrails. Look things up; don\'t read linearly.',
+  },
+};
+
 /**
- * Canonical display titles (Design.md package structure). Section titles are
- * standardized — the LLM's title suggestion is ignored so packages always
- * read the same (bug: half the sections showed raw type strings like
- * "role_path", the other half LLM-invented titles).
+ * Canonical display titles. Section titles are standardized — the LLM's
+ * title suggestion is ignored so packages always read the same.
  */
 export const SECTION_TITLES: Record<SectionType, string> = {
-  start_here: 'Start Here: Repository Overview',
-  architecture: 'Architecture & Boundaries',
-  entry_points: 'Entry Points and Why They Matter',
-  critical_25: 'Critical 25% Learning Path',
-  capability_map: 'Capability Map',
-  role_path: 'Your Role-Based Path',
-  workflow_guide: 'Workflow Guides',
-  data_schema: 'Data Schema & Source of Truth',
-  safety_rails: 'Safety Rails & Risky Areas',
-  dependency_graph: 'Dependency & Coupling Reference',
-  doc_health: 'Documentation Health',
+  big_picture: 'The Big Picture',
+  concepts: 'Concepts & Vocabulary',
+  architecture_deep: 'Architecture in Depth',
+  traced_flows: 'Traced Flows: End to End',
+  code_map: 'Code Map: Files That Matter',
+  capabilities: 'Capabilities: What It Does',
+  setup_run: 'Set Up & Run It',
+  first_change: 'Your First Change',
+  common_tasks: 'Common Tasks',
+  routes_jobs: 'Routes, Jobs & Webhooks',
+  data_model: 'Data Model',
+  guardrails_ops: 'Guardrails & Operations',
 };
 
 export interface SectionDeps {
@@ -46,14 +82,50 @@ export interface SectionDeps {
   role: DeveloperRole;
   /** Loaded once per package generation and shared across sections. */
   projections: ProjectedTarget[];
+  /** Depth-contract size class, from the snapshot's symbol count. */
+  sizeClass: 'small' | 'mid' | 'large';
+}
+
+/** Output budgets by repo size class (depth contract — plan rule 7). */
+export interface OutputBudget {
+  small: number;
+  mid: number;
+  large: number;
 }
 
 export interface SectionSpec {
+  chapter: Chapter;
+  mode: SectionMode;
   views: ViewType[];
   retrievalTask: (role: DeveloperRole) => string;
   instructions: string;
   deterministic: (deps: SectionDeps) => Promise<Record<string, unknown>>;
   diagrams?: (deps: SectionDeps) => Promise<DiagramSpec[]>;
+  /**
+   * CONSULT only: deterministic markdown the generator splices in where the
+   * model writes [[backbone]] (appended after the intro if the marker is
+   * missing). The model annotates around it; the facts stay byte-stable.
+   */
+  backbone?: (deps: SectionDeps) => Promise<string>;
+  /**
+   * Deterministic coverage check against the section's own facts — the
+   * model intermittently ships a TL;DR and stops (measured ~50% collapse on
+   * enumeration-heavy sections). Returned issues trigger the existing
+   * stricter retry with a concrete "you covered X of Y" complaint.
+   */
+  completenessCheck?: (content: string, deterministic: Record<string, unknown>) => string[];
+  outputBudget: OutputBudget;
+}
+
+/** Items named in the facts that the prose never mentions. */
+function missingItems(content: string, wanted: string[], label: string, minShare = 0.7): string[] {
+  if (wanted.length === 0) return [];
+  const missing = wanted.filter((w) => w && !content.includes(w));
+  const covered = wanted.length - missing.length;
+  if (covered >= Math.ceil(wanted.length * minShare)) return [];
+  return [
+    `INCOMPLETE: you covered ${covered} of ${wanted.length} required ${label} — the section must cover them all. Missing: ${missing.slice(0, 12).join(', ')}`,
+  ];
 }
 
 const projectionRow = (t: ProjectedTarget) => ({
@@ -90,10 +162,8 @@ async function humanizeProjectionRows(
 }
 
 /**
- * "Which tests protect you" (audit §9/P2 16): tested-key -> test-file keys
- * from the graph's `tests` edges. Feeds critical_25's first-change exercise
- * and safety_rails' per-risk guard lines — a named test is a mechanical
- * fact, "well tested" is not.
+ * "Which tests protect you": tested-key -> test-file keys from the graph's
+ * `tests` edges. A named test is a mechanical fact, "well tested" is not.
  */
 async function testGuardsFor(snapshotId: string): Promise<Record<string, string[]>> {
   const rows = (await query(
@@ -112,64 +182,142 @@ async function testGuardsFor(snapshotId: string): Promise<Record<string, string[
   return guards;
 }
 
+/** Journeys (composed + config) with their steps — the flow layer above raw workflows. */
+async function loadJourneys(snapshotId: string, limit = 8): Promise<Array<Record<string, unknown>>> {
+  return (await query(
+    `SELECT w.title, w.trigger_type, w.purpose, w.confidence,
+            w.metadata->'journey'->'member_titles' AS member_titles,
+            json_agg(json_build_object('order', ws.step_order, 'file', ws.file_path, 'symbol', ws.symbol_name,
+                                       'kind', ws.step_kind, 'description', ws.deterministic_description)
+                     ORDER BY ws.step_order) AS steps
+     FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
+     WHERE w.snapshot_id = $1 AND w.trigger_type IN ('journey', 'dev_command', 'ci_pipeline')
+     GROUP BY w.id
+     ORDER BY (w.metadata->>'importance_score')::float DESC NULLS LAST
+     LIMIT $2`,
+    [snapshotId, limit],
+  )).rows;
+}
+
+const snapshotCounts = async (snapshotId: string) =>
+  (await query(
+    `SELECT file_count, symbol_count, workflow_count, language_inventory FROM analysis_snapshots WHERE id = $1`,
+    [snapshotId],
+  )).rows[0];
+
 export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
-  start_here: {
+  // ═══ ORIENT ═══════════════════════════════════════════════════════════════
+
+  big_picture: {
+    chapter: 'orient',
+    mode: 'explanation',
     views: ['purpose', 'domain'],
-    retrievalTask: (role) => `Repo purpose, tech stack, how to run and test it, and the first files a ${role} developer should read.`,
+    retrievalTask: () => 'What this system is end to end: its purpose, runtime processes, product journeys, and external services.',
     instructions: [
-      'Orient a ROLE developer joining this codebase. Structure exactly as:',
-      '(1) "## What this is" — 2-4 sentences: what the system concretely does end to end and the stack, stated from the languageInventory, clusters and entrypoint evidence (name the languages, runtime processes and storage you can see — no marketing framing).',
-      '(2) "## Run & verify" — the exact build/run/test commands, but ONLY commands present verbatim in the evidence (README/doc receipts, package.json scripts, compose files listed in runSurface). Cite the receipt for each command. If evidence contains no commands, write exactly: "Run commands are not derivable from the analyzed evidence — check the README." Never invent a command.',
-      '(3) "## The lay of the land" — the top clusters with their real file counts and one factual sentence each on what lives there.',
-      '(4) "## Read these first" — 5-7 files ORDERED for the ROLE. Each entry: the path plus a concrete, evidence-backed reason (fan-in, workflow participation, what it orchestrates). A reason must say what the file DOES, never that it is "key/important". Do not fill the list with UI pages unless the role is frontend.',
+      'Explain what this system IS — the reader has never seen it. The anchor diagram (runtime topology) opens the section; refer to it, never contradict it.',
+      'Cover, as flowing prose with a few short headers: (1) what the system does end to end and for whom, from the evidence; (2) the runtime shape — each compose service/process and its job, plus the external services (from the topology facts); (3) the product journeys BY NAME (the journeys data is authoritative — walk the 2-4 most important in one paragraph each: what enters, what crosses which boundary, what comes out); (4) why the system is shaped this way — the 2-3 structural decisions visible in the evidence (queues between phases, content-addressing, separate worker), each with its receipt.',
+      'No instructions, no tables, no file inventories — link forward: details live in Architecture in Depth, commands in Set Up & Run It, lookup tables in the Consult chapter.',
     ].join(' '),
     deterministic: async (deps) => {
-      const snap = (await query(
-        `SELECT file_count, symbol_count, workflow_count, language_inventory FROM analysis_snapshots WHERE id = $1`,
-        [deps.snapshotId],
-      )).rows[0];
-      // Member counts included so "N files" in prose is a provided number,
-      // never model arithmetic (a regeneration invented "approximately 64
-      // files" for a 23-file cluster when counts weren't supplied).
-      const clusters = (await query(
-        `SELECT c.label, c.kind, c.critical_score,
-                (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
-         FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC LIMIT 8`,
-        [deps.snapshotId],
-      )).rows;
-      const entrypoints = (await query(
-        `SELECT e.trigger_type, e.method, e.route_path, n.file_path FROM entrypoints e JOIN graph_nodes n ON n.id = e.node_id WHERE e.snapshot_id = $1 LIMIT 15`,
-        [deps.snapshotId],
-      )).rows;
-      // Build/run surface: compose files, manifests, READMEs — the files a
-      // "Run & verify" section may cite commands from.
-      const runSurface = (await query(
-        `SELECT file_path, category FROM repository_files
-         WHERE snapshot_id = $1 AND (
-           file_path ILIKE '%docker-compose%' OR file_path ILIKE '%makefile%'
-           OR file_path = 'package.json' OR file_path ILIKE '%/package.json'
-           OR file_path ILIKE 'readme%' OR file_path ILIKE '%/readme%'
-         )
-         ORDER BY length(file_path) LIMIT 12`,
-        [deps.snapshotId],
-      )).rows;
+      const facts = await loadConfigFacts(deps.snapshotId);
       return {
-        snapshot: snap,
-        topClusters: clusters,
-        entrypoints,
-        runSurface,
-        topForRole: deps.projections.filter((p) => p.targetType === 'file' || p.targetType === 'symbol').slice(0, 10).map(projectionRow),
+        snapshot: await snapshotCounts(deps.snapshotId),
+        topology: facts.topology,
+        externalServices: envExternalServices(facts.envFiles.flatMap((f) => f.vars.map((v) => v.name))),
+        journeys: await loadJourneys(deps.snapshotId, 6),
+        topClusters: (await query(
+          `SELECT c.label, c.kind,
+                  (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
+           FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC LIMIT 8`,
+          [deps.snapshotId],
+        )).rows,
       };
     },
+    diagrams: async (deps) => {
+      const facts = await loadConfigFacts(deps.snapshotId);
+      if (facts.topology) {
+        const externals = envExternalServices(facts.envFiles.flatMap((f) => f.vars.map((v) => v.name)));
+        return [{ kind: 'topology', mermaid: topologyDiagram(facts.topology.services, externals) }];
+      }
+      // No compose file: fall back to the cluster map so the anchor rule holds.
+      const clusters = (await query(
+        `SELECT stable_key, label, kind FROM architecture_clusters WHERE snapshot_id = $1`,
+        [deps.snapshotId],
+      )).rows as Array<{ stable_key: string; label: string; kind: string }>;
+      const edges = (await query(
+        `SELECT sc.stable_key AS source_key, tc.stable_key AS target_key, e.type, e.weight
+         FROM architecture_edges e
+         JOIN architecture_clusters sc ON sc.id = e.source_cluster_id
+         JOIN architecture_clusters tc ON tc.id = e.target_cluster_id
+         WHERE e.snapshot_id = $1`,
+        [deps.snapshotId],
+      )).rows as Array<{ source_key: string; target_key: string; type: string; weight: number }>;
+      return [{
+        kind: 'architecture',
+        mermaid: architectureDiagram(
+          clusters.map((c) => ({ stableKey: c.stable_key, label: c.label, kind: c.kind })),
+          edges.map((e) => ({ sourceClusterKey: e.source_key, targetClusterKey: e.target_key, type: e.type, weight: e.weight })),
+        ),
+      }];
+    },
+    outputBudget: { small: 4_000, mid: 6_000, large: 8_000 },
   },
 
-  architecture: {
+  concepts: {
+    chapter: 'orient',
+    mode: 'explanation',
+    views: ['domain', 'purpose'],
+    retrievalTask: () => 'The domain vocabulary this codebase thinks in: its core nouns, what each means here, and where each lives.',
+    instructions: [
+      'Define the load-bearing vocabulary — the nouns a new joiner must know to follow any conversation about this code. Select 10-18 terms FROM THE EVIDENCE: schema table names, capability names, recurring record/workflow nouns, config concepts. Prefer terms this codebase uses with a SPECIFIC meaning over generic industry words.',
+      'Format: "### term" then 2-4 sentences: what it means IN THIS SYSTEM (not the dictionary meaning), where it lives (the table and/or module, from the evidence), and how it relates to neighboring terms. Cite a receipt per term.',
+      'Order terms so each definition only uses terms already defined. Close with one short paragraph on how the 3-4 most central terms connect end to end.',
+    ].join(' '),
+    deterministic: async (deps) => ({
+      schemaTables: (await query(
+        `SELECT name, file_path, metadata->'references' AS refs FROM graph_nodes
+         WHERE snapshot_id = $1 AND type = 'schema' ORDER BY line_start NULLS LAST LIMIT 45`,
+        [deps.snapshotId],
+      )).rows,
+      capabilities: (await query(
+        `SELECT name, description FROM capabilities WHERE snapshot_id = $1 LIMIT 12`,
+        [deps.snapshotId],
+      )).rows,
+      clusters: (await query(
+        `SELECT label, kind FROM architecture_clusters WHERE snapshot_id = $1 ORDER BY critical_score DESC LIMIT 10`,
+        [deps.snapshotId],
+      )).rows,
+      journeyTitles: (await query(
+        `SELECT title, purpose FROM workflows WHERE snapshot_id = $1 AND trigger_type = 'journey'`,
+        [deps.snapshotId],
+      )).rows,
+      envVarNames: (await loadConfigFacts(deps.snapshotId)).envFiles.flatMap((f) => f.vars.map((v) => v.name)).slice(0, 40),
+    }),
+    completenessCheck: (content) => {
+      const terms = (content.match(/### /g) ?? []).length;
+      return terms >= 8 ? [] : [`INCOMPLETE: only ${terms} "### term" entries — define at least 10 load-bearing terms from the evidence.`];
+    },
+    outputBudget: { small: 5_000, mid: 8_000, large: 11_000 },
+  },
+
+  // ═══ UNDERSTAND ═══════════════════════════════════════════════════════════
+
+  architecture_deep: {
+    chapter: 'understand',
+    mode: 'explanation',
     views: ['purpose', 'dependency'],
-    retrievalTask: () => 'System architecture: layers, boundaries, and how the main modules relate.',
-    instructions: 'Lead with "## How a request flows": narrate ONE real end-to-end path across cluster boundaries using the clusterEdges and their workflow crossings — name the clusters it passes through in order. Then one factual line per major cluster (its role, from deterministic_summary — no generic "handles business logic" filler). Keep it short: this section is the narrative companion to the interactive Architecture tab, which holds the full cluster map — close by saying exactly that. The attached Mermaid diagram is derived from the same data — describe it, do not contradict it.',
+    retrievalTask: () => 'System architecture in depth: each subsystem\'s responsibility, boundaries, crossings, and the design decisions behind them.',
+    instructions: [
+      'The anchor diagram (cluster map) opens the section — the prose walks it. Open with "## How a request flows": ONE real end-to-end path across cluster boundaries using clusterEdges and their workflow crossings, naming clusters in order.',
+      'Then one "## <cluster label>" subsection PER major cluster (cover every cluster in the evidence with more than 2 files): its responsibility (from deterministic_summary — no "handles business logic" filler), its real file count, what crosses its boundary in and out (from clusterEdges), and the design decisions visible in the evidence for it — state each decision as decision → consequence ("transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock") with a receipt. Admitting trade-offs is correct here; inventing them is not.',
+      'Close with "## Tensions to know about": 2-3 places where the evidence shows coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes).',
+      'The interactive Architecture tab holds the full drill-down graph — say so once at the end, not per cluster.',
+    ].join(' '),
     deterministic: async (deps) => ({
       clusters: (await query(
-        `SELECT stable_key, label, kind, critical_score, deterministic_summary FROM architecture_clusters WHERE snapshot_id = $1 ORDER BY critical_score DESC`,
+        `SELECT c.label, c.kind, c.critical_score, c.deterministic_summary,
+                (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
+         FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC`,
         [deps.snapshotId],
       )).rows,
       clusterEdges: (await query(
@@ -178,6 +326,12 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
          JOIN architecture_clusters sc ON sc.id = e.source_cluster_id
          JOIN architecture_clusters tc ON tc.id = e.target_cluster_id
          WHERE e.snapshot_id = $1 ORDER BY e.weight DESC LIMIT 30`,
+        [deps.snapshotId],
+      )).rows,
+      centralNodes: (await query(
+        `SELECT stable_key, name, (metadata->>'dependentCount')::int AS dependents
+         FROM graph_nodes WHERE snapshot_id = $1 AND (metadata->>'dependentCount')::int > 0
+         ORDER BY 3 DESC LIMIT 12`,
         [deps.snapshotId],
       )).rows,
     }),
@@ -202,285 +356,406 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         ),
       }];
     },
+    outputBudget: { small: 6_000, mid: 10_000, large: 15_000 },
   },
 
-  entry_points: {
-    views: ['purpose'],
-    retrievalTask: (role) => `The entry points (routes, jobs, CLI commands) a ${role} developer must understand.`,
-    instructions: 'List the important entry points grouped by trigger type. Route paths in the evidence are FULL mounted paths — reproduce them exactly, never abbreviate to sub-router paths. For each: exact file/symbol, what triggers it, connected workflow, and one sentence on purpose ONLY when the purpose is visible in the handler/workflow evidence — otherwise omit the purpose line instead of inventing one. Order by criticality for the ROLE and cover different routers rather than exhaustively listing one file\'s CRUD.',
+  traced_flows: {
+    chapter: 'understand',
+    mode: 'explanation',
+    views: ['purpose', 'operations'],
+    retrievalTask: () => 'End-to-end flows: what each product journey does step by step across boundaries, and why each hop exists.',
+    instructions: [
+      'Walk the provided journeys end to end — journeys are the authoritative flow layer (they already stitch route -> queue -> worker hops; member workflows are the drill-down). One "## <journey title>" per journey, most important first; each journey\'s sequence diagram is attached in order — refer to it.',
+      'Per journey: one sentence on what it accomplishes, then the steps IN ORDER — for each hop name the real file::symbol, what happens there (from the step description and record evidence), and when a hop crosses a boundary (queue, redirect, service) say so explicitly. After the steps, one "Why this design" note per non-obvious structural choice visible in the flow (a queue between phases, an auth guard placement) with its receipt.',
+      'Use only traced steps — never invent steps. Describe failure handling only from visible evidence; if none is visible for a journey, write "failure handling not visible in the trace".',
+      'When a step WRITES data, say so explicitly — do not soften writes into reads.',
+    ].join(' '),
     deterministic: async (deps) => ({
-      entrypoints: (await query(
-        `SELECT e.trigger_type, e.method, e.route_path, n.file_path, n.name AS symbol,
-                w.title AS workflow_title
-         FROM entrypoints e
-         JOIN graph_nodes n ON n.id = e.node_id
-         LEFT JOIN workflows w ON w.entrypoint_id = e.id
-         WHERE e.snapshot_id = $1 ORDER BY e.trigger_type LIMIT 30`,
+      journeys: await loadJourneys(deps.snapshotId, 5),
+      // Members give the model per-hop drill-down steps for the narrative.
+      memberWorkflows: (await query(
+        `SELECT w.title, w.trigger_type, w.purpose,
+                json_agg(json_build_object('order', ws.step_order, 'file', ws.file_path, 'symbol', ws.symbol_name,
+                                           'kind', ws.step_kind, 'description', ws.deterministic_description)
+                         ORDER BY ws.step_order) AS steps
+         FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
+         WHERE w.snapshot_id = $1 AND w.stable_key IN (
+           SELECT jsonb_array_elements_text(metadata->'journey'->'members')
+           FROM workflows WHERE snapshot_id = $1 AND trigger_type = 'journey'
+         )
+         GROUP BY w.id LIMIT 12`,
         [deps.snapshotId],
       )).rows,
     }),
+    completenessCheck: (content, det) => {
+      const titles = (det.journeys as Array<{ title?: string }> ?? []).map((j) => j.title ?? '');
+      return missingItems(content, titles, 'journeys', 1);
+    },
+    diagrams: async (deps) => {
+      const journeys = (await query(
+        `SELECT w.title, json_agg(json_build_object('stepOrder', ws.step_order, 'filePath', ws.file_path,
+                                                    'symbolName', ws.symbol_name, 'stepKind', ws.step_kind,
+                                                    'description', ws.deterministic_description)
+                                  ORDER BY ws.step_order) AS steps
+         FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
+         WHERE w.snapshot_id = $1 AND w.trigger_type = 'journey'
+         GROUP BY w.id
+         ORDER BY (w.metadata->>'importance_score')::float DESC NULLS LAST
+         LIMIT 4`,
+        [deps.snapshotId],
+      )).rows as Array<{ title: string; steps: DiagramStep[] }>;
+      return journeys.map((j) => ({ kind: 'sequence' as const, mermaid: workflowSequenceDiagram(j.title, j.steps) }));
+    },
+    outputBudget: { small: 6_000, mid: 10_000, large: 14_000 },
   },
 
-  critical_25: {
-    views: ['purpose', 'domain'],
-    retrievalTask: (role) => `Why the most critical files and symbols matter to a ${role} developer.`,
+  code_map: {
+    chapter: 'understand',
+    mode: 'explanation',
+    views: ['purpose', 'dependency'],
+    retrievalTask: (role) => `The files that matter most and why — what each does, its key functions, and how they connect, for a ${role} developer.`,
     instructions: [
-      'Write the Critical 25% as an ORDERED LEARNING PATH, not an inventory.',
-      'Open with one sentence of honest coverage using ONLY the provided coverage numbers: "This path covers N of M symbols and X of Y traced workflows — the top ~25% by composite criticality; everything else stays browsable in the Dependencies tab."',
-      'Then 5-8 numbered stops in reading order for the ROLE. Each stop = one item from the provided critical25 data: what it does (from evidence), why it ranks here (quote its ranking reasons — fan-in, workflow participation, side effects), and what depends on it. Engineering facts only — no invented product or user consequences.',
-      'Then "## Your first change" — end the path with one small, concrete, low-risk change a ROLE developer could make in a file from this path (derived from the evidence — e.g. extend an existing pattern visible in a snippet), and the EXACT test file from testGuards that verifies that area. If testGuards has no test for any path file, say plainly that tests for these areas are not visible in the analysis instead of inventing a verification step.',
-      'Close with "## What this path leaves out" — one short paragraph naming the biggest areas NOT in the path (from the cluster evidence) and why deferring them is safe.',
+      'A guided map of the files that matter, GROUPED BY SUBSYSTEM (the groups come from fileGroups — never present a flat ranked list; ranking selected the entries, grouping presents them).',
+      'One "## <subsystem>" per group. Per file: `path` as a sub-heading or bold lead, then 1-2 sentences on why it matters HERE (from its record evidence: what it orchestrates, who depends on it — the dependents number is provided), then its key functions in the micro-format: `name(signature)` — one-liner · params worth knowing · returns · gotcha (only when the evidence shows one). Then one line: what calls it / what it calls (from the evidence).',
+      'Cover every file in fileGroups. Numbers (dependents, counts) come verbatim from the facts. No scores in prose.',
     ].join(' '),
     deterministic: async (deps) => {
-      const top = critical25(deps.projections);
-      const snap = (await query(
-        `SELECT symbol_count, file_count, workflow_count FROM analysis_snapshots WHERE id = $1`,
+      // Files come straight from criticality_scores: the role projections
+      // carry only a handful of file targets (they're symbol/workflow-heavy),
+      // which starved the map — the live run produced a 2-file code_map.
+      const ranked = (await query(
+        `SELECT DISTINCT ON (stable_key) stable_key, score, reasons
+         FROM criticality_scores
+         WHERE snapshot_id = $1 AND target_type = 'file'
+         ORDER BY stable_key, score DESC`,
         [deps.snapshotId],
-      )).rows[0] as { symbol_count: number | null; file_count: number | null; workflow_count: number | null } | undefined;
-      // Only guards for files/symbols actually on the path — the model must
-      // name a real test, not decorate every stop with the same suite.
-      const guards = await testGuardsFor(deps.snapshotId);
-      const pathKeys = new Set([...top.values()].flat().map((t) => t.stableKey));
-      const testGuards = Object.fromEntries(
-        Object.entries(guards).filter(([target]) =>
-          pathKeys.has(target) || [...pathKeys].some((k) => k.startsWith(`${target}#`) || target.startsWith(`${k.split('#')[0]}`)),
-        ),
-      );
-      const humanized = await Promise.all(
-        [...top.entries()].map(async ([type, targets]) =>
-          [type, await humanizeProjectionRows(deps.snapshotId, targets)] as const,
-        ),
-      );
+      )).rows as Array<{ stable_key: string; score: number; reasons: string[] }>;
+      const fileTargets = ranked
+        .sort((a, b) => Number(b.score) - Number(a.score))
+        .slice(0, 36)
+        .map((r) => ({ stableKey: r.stable_key, reasons: r.reasons ?? [] }));
+      const keys = fileTargets.map((t) => t.stableKey);
+      const memberships = keys.length > 0 ? (await query(
+        `SELECT n.stable_key, c.label
+         FROM architecture_cluster_members m
+         JOIN architecture_clusters c ON c.id = m.cluster_id
+         JOIN graph_nodes n ON n.id = m.node_id
+         WHERE c.snapshot_id = $1 AND n.stable_key = ANY($2)`,
+        [deps.snapshotId, keys],
+      )).rows as Array<{ stable_key: string; label: string }> : [];
+      const clusterOf = new Map(memberships.map((m) => [m.stable_key, m.label]));
+      const nodeFacts = keys.length > 0 ? (await query(
+        `SELECT stable_key, (metadata->>'dependentCount')::int AS dependents,
+                (metadata->>'importCount')::int AS imports, metadata->>'lineCount' AS line_count
+         FROM graph_nodes WHERE snapshot_id = $1 AND stable_key = ANY($2)`,
+        [deps.snapshotId, keys],
+      )).rows as Array<{ stable_key: string; dependents: number | null; imports: number | null; line_count: string | null }> : [];
+      const factsOf = new Map(nodeFacts.map((n) => [n.stable_key, n]));
+      const groups: Record<string, Array<Record<string, unknown>>> = {};
+      for (const t of fileTargets) {
+        const group = clusterOf.get(t.stableKey) ?? 'Other';
+        (groups[group] ??= []).push({
+          path: t.stableKey,
+          reasons: t.reasons.slice(0, 3),
+          dependents: factsOf.get(t.stableKey)?.dependents ?? null,
+          imports: factsOf.get(t.stableKey)?.imports ?? null,
+        });
+      }
       return {
-        critical25: Object.fromEntries(humanized),
-        testGuards,
-        coverage: {
-          totalSymbols: snap?.symbol_count ?? null,
-          totalFiles: snap?.file_count ?? null,
-          totalWorkflows: snap?.workflow_count ?? null,
-          selectedSymbols: top.get('symbol')?.length ?? 0,
-          selectedFiles: top.get('file')?.length ?? 0,
-          selectedWorkflows: top.get('workflow')?.length ?? 0,
-        },
+        fileGroups: groups,
+        keySymbols: (critical25(deps.projections).get('symbol') ?? []).slice(0, 30).map(projectionRow),
       };
     },
+    completenessCheck: (content, det) => {
+      const groups = det.fileGroups as Record<string, Array<{ path: string }>>;
+      const paths = Object.values(groups ?? {}).flat().map((f) => f.path);
+      return missingItems(content, paths, 'mapped files');
+    },
+    outputBudget: { small: 7_000, mid: 12_000, large: 17_000 },
   },
 
-  capability_map: {
+  capabilities: {
+    chapter: 'understand',
+    mode: 'explanation',
     views: ['domain'],
-    retrievalTask: () => 'The business capabilities this product provides and where each lives in the code.',
-    instructions: 'Describe each business capability: what user value it delivers, which workflows implement it, and which modules own it. This is business context, not code documentation. If a capability has no userValue in the evidence, omit that line entirely — never print "N/A". Refer to workflows and modules by their human-readable titles; internal keys (wf:…, cluster:…) must never appear in the output.',
-    deterministic: async (deps) => ({
-      capabilities: (await query(
+    retrievalTask: () => 'The product capabilities: what the system does for its users and where each capability lives in the code.',
+    instructions: [
+      'Describe each capability the system provides: what user value it delivers, which journeys/workflows implement it, which clusters/modules own it, and the 1-2 seams you would touch to EXTEND it (from the member evidence — the files where that capability\'s behavior is decided).',
+      'This is business context anchored in code, not code documentation. If a capability has no userValue in the evidence, omit that line entirely — never print "N/A". Refer to workflows and modules by their human-readable titles; internal keys (wf:…, cluster:…) must never appear in the output.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      const rows = (await query(
         `SELECT c.name, c.description, c.confidence, c.metadata->>'userValue' AS user_value,
                 json_agg(json_build_object('type', cm.member_type, 'key', cm.stable_key)) AS members
          FROM capabilities c
          LEFT JOIN capability_members cm ON cm.capability_id = c.id
          WHERE c.snapshot_id = $1 GROUP BY c.id`,
         [deps.snapshotId],
-      )).rows,
-      workflows: (await query(
-        `SELECT stable_key, title, purpose FROM workflows WHERE snapshot_id = $1 LIMIT 15`,
-        [deps.snapshotId],
-      )).rows,
-    }),
-  },
-
-  role_path: {
-    views: ['purpose', 'domain'],
-    retrievalTask: (role) => `An ordered learning path for a new ${role} developer: what to study first and why.`,
-    instructions: 'Produce an ordered learning path THROUGH THE CODEBASE for a ROLE developer — this is how a developer learns the code, NOT the product\'s end-user page journey. 5-10 steps, each naming concrete files/workflows/tutorials with the reason it comes at that position; span the codebase\'s areas (backend, worker, frontend) per the projections rather than walking the app\'s UI screens. Use the role projection ordering and capabilities as the backbone. Refer to workflows by their human title (provided as `title` on workflow entries); internal keys (wf:…, cluster:…) must never appear in the output.',
-    deterministic: async (deps) => {
+      )).rows as Array<{ members: Array<Record<string, unknown>> | null } & Record<string, unknown>>;
       return {
-        roleOrdering: await humanizeProjectionRows(deps.snapshotId, deps.projections.slice(0, 12)),
-        capabilities: (await query(
-          `SELECT name, description FROM capabilities WHERE snapshot_id = $1`,
-          [deps.snapshotId],
-        )).rows,
-        tutorials: (await query(
-          `SELECT title, summary FROM tutorials WHERE snapshot_id = $1 AND status <> 'failed' LIMIT 10`,
+        // Unbounded member lists flooded the facts budget and starved the
+        // prose — a capability's identity is its top seams, not every file.
+        capabilities: rows.map((r) => ({ ...r, members: (r.members ?? []).slice(0, 12) })),
+        journeys: (await query(
+          `SELECT title, purpose FROM workflows WHERE snapshot_id = $1 AND trigger_type IN ('journey', 'dev_command') LIMIT 10`,
           [deps.snapshotId],
         )).rows,
       };
     },
-  },
-
-  workflow_guide: {
-    views: ['purpose', 'operations'],
-    retrievalTask: () => 'End-to-end request flows: what each traced workflow does step by step.',
-    instructions: 'One subsection per workflow: trigger, the traced steps in order (file::symbol with the step kind), side effects, and failure handling. Use only traced steps — never invent steps. Describe failure handling only from visible evidence (status codes, catch blocks in snippets); if none is visible, write "failure handling not visible in the trace". When a step WRITES data, say so explicitly — do not soften writes into reads.',
-    deterministic: async (deps) => ({
-      workflows: (await query(
-        `SELECT w.stable_key, w.title, w.trigger_type, w.purpose, w.confidence,
-                json_agg(json_build_object('order', ws.step_order, 'file', ws.file_path, 'symbol', ws.symbol_name,
-                                           'kind', ws.step_kind, 'description', ws.deterministic_description)
-                         ORDER BY ws.step_order) AS steps
-         FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
-         WHERE w.snapshot_id = $1 GROUP BY w.id
-         ORDER BY COALESCE((SELECT max(cs.score) FROM criticality_scores cs
-                            WHERE cs.snapshot_id = w.snapshot_id AND cs.target_type = 'workflow'
-                              AND cs.stable_key = w.stable_key), 0) DESC
-         LIMIT 8`,
-        [deps.snapshotId],
-      )).rows,
-    }),
-    diagrams: async (deps) => {
-      const workflows = (await query(
-        `SELECT w.title, json_agg(json_build_object('stepOrder', ws.step_order, 'filePath', ws.file_path,
-                                                    'symbolName', ws.symbol_name, 'stepKind', ws.step_kind,
-                                                    'description', ws.deterministic_description)
-                                  ORDER BY ws.step_order) AS steps
-         FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
-         WHERE w.snapshot_id = $1 GROUP BY w.id
-         ORDER BY COALESCE((SELECT max(cs.score) FROM criticality_scores cs
-                            WHERE cs.snapshot_id = w.snapshot_id AND cs.target_type = 'workflow'
-                              AND cs.stable_key = w.stable_key), 0) DESC
-         LIMIT 3`,
-        [deps.snapshotId],
-      )).rows as Array<{ title: string; steps: Array<{ stepOrder: number; filePath: string; symbolName: string | null; stepKind: string | null; description: string }> }>;
-      return workflows.map((w) => ({ kind: 'sequence' as const, mermaid: workflowSequenceDiagram(w.title, w.steps) }));
+    completenessCheck: (content, det) => {
+      const caps = (det.capabilities as Array<{ name?: string }> ?? []).map((c) => c.name ?? '');
+      return missingItems(content, caps, 'capabilities', 1);
     },
+    outputBudget: { small: 4_000, mid: 7_000, large: 9_000 },
   },
 
-  data_schema: {
-    views: ['operations', 'dependency'],
-    retrievalTask: () => 'The data model: source-of-truth objects and who reads or writes them.',
+  // ═══ DO ═══════════════════════════════════════════════════════════════════
+
+  setup_run: {
+    chapter: 'do',
+    mode: 'tutorial',
+    views: ['purpose'],
+    retrievalTask: () => 'How to set up and run this project locally: prerequisites, environment, run commands, and how to verify each step.',
     instructions: [
-      'Document the data layer from the provided inventory.',
-      'The total table count you state MUST be the provided schemaTableCount verbatim — never count the list yourself (it may be truncated; schemaNodesTruncated says so).',
-      'Name the migration/schema file(s) as the source of truth once — do not repeat the same file path per table.',
-      'Group tables into 3-6 domains by name and describe each group in one sentence.',
-      'For the most-accessed tables, say which code writes them (dbSideEffects evidence).',
-      'Say plainly when column-level details are not in the evidence.',
+      'A guaranteed-success first run. Steps come ONLY from evidence: compose files (the topology facts and devJourneys are parsed from them), package scripts, README receipts, and env templates. If evidence contains no run path, say exactly that and stop — never invent a command.',
+      'Structure: "## Prerequisites" (tools implied by the evidence: docker for compose, node version if declared) → "## Configure" (the env file(s) to create, citing the template names — never values) → "## Run" (numbered steps; each step = ONE command in a code block + a "You should see:" verify line grounded in evidence — ports from the topology, service names, log strings only if a receipt shows them) → "## Run the tests" (the one-command test path from devJourneys, with its verify line) → "## If it breaks" (2-3 failure boxes ONLY from visible evidence: a required env var, a port in use, a missing file the compose mounts).',
+      'Every promised result must be checkable. One unbranching path — no alternatives, no "you could also".',
     ].join(' '),
     deterministic: async (deps) => {
-      const schemaNodes = (await query(
-        `SELECT stable_key, name, file_path FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema' ORDER BY name LIMIT 60`,
-        [deps.snapshotId],
-      )).rows;
-      const schemaTableCount = Number(
-        ((await query(
-          `SELECT count(*)::int AS n FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema'`,
-          [deps.snapshotId],
-        )).rows[0] as { n: number }).n,
-      );
+      const facts = await loadConfigFacts(deps.snapshotId);
       return {
-        // The old query fed the model a silently LIMIT-truncated list; it
-        // "counted" 25 tables in a 37-table schema and shipped the number.
-        schemaTableCount,
-        schemaNodesTruncated: schemaNodes.length < schemaTableCount,
-        schemaNodes,
-        dbSideEffects: (await query(
-          `SELECT s.type, s.target, n.file_path FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
-           WHERE s.snapshot_id = $1 AND s.type IN ('database_read', 'database_write') LIMIT 20`,
+        topology: facts.topology,
+        testTopology: facts.testTopology,
+        envFiles: facts.envFiles.map((f) => ({ path: f.path, varNames: f.vars.map((v) => v.name) })),
+        packageScripts: facts.packageScripts,
+        devJourneys: (await query(
+          `SELECT w.title, w.purpose,
+                  json_agg(json_build_object('order', ws.step_order, 'description', ws.deterministic_description) ORDER BY ws.step_order) AS steps
+           FROM workflows w JOIN workflow_steps ws ON ws.workflow_id = w.id
+           WHERE w.snapshot_id = $1 AND w.trigger_type = 'dev_command' GROUP BY w.id`,
+          [deps.snapshotId],
+        )).rows,
+        runSurface: (await query(
+          `SELECT file_path, category FROM repository_files
+           WHERE snapshot_id = $1 AND (
+             file_path ILIKE '%docker-compose%' OR file_path ILIKE '%makefile%'
+             OR file_path = 'package.json' OR file_path ILIKE '%/package.json'
+             OR file_path ILIKE 'readme%' OR file_path ILIKE '%/readme%'
+           )
+           ORDER BY length(file_path) LIMIT 12`,
           [deps.snapshotId],
         )).rows,
       };
     },
+    outputBudget: { small: 4_000, mid: 6_000, large: 8_000 },
+  },
+
+  first_change: {
+    chapter: 'do',
+    mode: 'tutorial',
+    views: ['purpose', 'dependency'],
+    retrievalTask: (role) => `A safe, real first change a new ${role} developer could make: where, what pattern to follow, and how to verify it.`,
+    instructions: [
+      'Design ONE starter exercise — a small, real, safe change in this repo — from the evidence: prefer an area that (a) appears in safeCandidates (moderate rank, low dependents), (b) has a test in testGuards, and (c) follows an existing visible pattern (an exemplar snippet in the receipts).',
+      'Structure: "## The exercise" (one paragraph: what to add/change and why it is safe) → "## Files you will touch" (the exact files, each with one line on its role) → "## Steps" (numbered, imperative, one action each; point at the exemplar pattern to copy from with its receipt; state the expected diff shape — which file gains roughly how many lines where) → "## Verify" (the EXACT test file/command from the evidence; if testGuards has no test for the area, say plainly that tests are not visible and give the manual check instead) → "## What this teaches" (2-3 sentences connecting what they just touched to the bigger flows).',
+      'The reader must succeed: no forks, no optional paths, no invented commands.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      const guards = await testGuardsFor(deps.snapshotId);
+      const midRank = deps.projections
+        .filter((p) => p.targetType === 'file')
+        .slice(3, 25)
+        .map(projectionRow);
+      return {
+        safeCandidates: midRank,
+        testGuards: guards,
+        churnedFiles: (await query(
+          `SELECT stable_key, metadata->'churn'->>'commitCount90d' AS commits_90d
+           FROM repository_files WHERE snapshot_id = $1
+             AND (metadata->'churn'->>'commitCount90d')::int > 0
+           ORDER BY (metadata->'churn'->>'commitCount90d')::int DESC LIMIT 12`,
+          [deps.snapshotId],
+        )).rows,
+      };
+    },
+    outputBudget: { small: 3_500, mid: 5_000, large: 6_500 },
+  },
+
+  common_tasks: {
+    chapter: 'do',
+    mode: 'howto',
+    views: ['purpose', 'dependency'],
+    retrievalTask: () => 'The recurring engineering tasks in this repo: how to add a route, a table, a job, a page, a test — following existing patterns.',
+    instructions: [
+      'How-to recipes for THIS repo\'s recurring tasks. The taskShapes data lists the task patterns detected in this repo with exemplar files — write ONE "## How to <goal>" recipe per shape (skip shapes with no exemplars). Assume competence: no basics, no theory, no motivation paragraphs.',
+      'Per recipe: goal-first title; then numbered steps in conditional-imperative voice ("If the route needs auth, wrap it in …"); each step names the REAL file to touch and points at the exemplar to copy from (cite its receipt); end with a one-line verification (the test pattern or command from the evidence).',
+      'Steps are for someone who knows how to code — they need the repo\'s way, not a tutorial. Link to Consult tables for full option lists instead of enumerating them.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      // Task shapes detected from repo structure — each with real exemplars.
+      const [routes, migrations, consumers, pages, tests] = await Promise.all([
+        query(
+          `SELECT n.file_path, count(*)::int AS routes FROM entrypoints e
+           JOIN graph_nodes n ON n.id = e.node_id
+           WHERE e.snapshot_id = $1 AND e.trigger_type = 'http_route'
+           GROUP BY 1 ORDER BY 2 DESC LIMIT 5`,
+          [deps.snapshotId],
+        ),
+        query(
+          `SELECT file_path FROM repository_files WHERE snapshot_id = $1 AND category IN ('migration', 'schema') LIMIT 4`,
+          [deps.snapshotId],
+        ),
+        query(
+          `SELECT n.file_path FROM entrypoints e JOIN graph_nodes n ON n.id = e.node_id
+           WHERE e.snapshot_id = $1 AND e.trigger_type = 'worker_job' LIMIT 4`,
+          [deps.snapshotId],
+        ),
+        query(
+          `SELECT n.file_path FROM entrypoints e JOIN graph_nodes n ON n.id = e.node_id
+           WHERE e.snapshot_id = $1 AND e.trigger_type = 'ui_route' LIMIT 5`,
+          [deps.snapshotId],
+        ),
+        query(
+          `SELECT file_path FROM repository_files WHERE snapshot_id = $1 AND category = 'test' ORDER BY file_path LIMIT 6`,
+          [deps.snapshotId],
+        ),
+      ]);
+      const facts = await loadConfigFacts(deps.snapshotId);
+      const taskShapes: Array<Record<string, unknown>> = [];
+      if (routes.rows.length > 0) taskShapes.push({ goal: 'add an API route', exemplars: routes.rows });
+      if (migrations.rows.length > 0) taskShapes.push({ goal: 'add or change a database table', exemplars: migrations.rows });
+      if (consumers.rows.length > 0) taskShapes.push({ goal: 'add a background job', exemplars: consumers.rows });
+      if (pages.rows.length > 0) taskShapes.push({ goal: 'add a UI page', exemplars: pages.rows });
+      if (tests.rows.length > 0) {
+        taskShapes.push({
+          goal: 'write and run a test',
+          exemplars: tests.rows,
+          testCommands: facts.packageScripts.flatMap((p) =>
+            Object.entries(p.scripts).filter(([k]) => /test/.test(k)).map(([k, v]) => `${k}: ${v}`)).slice(0, 4),
+        });
+      }
+      return { taskShapes };
+    },
+    completenessCheck: (content, det) => {
+      const goals = (det.taskShapes as Array<{ goal?: string }> ?? []).map((t) => t.goal ?? '');
+      return missingItems(content, goals, 'task recipes', 1);
+    },
+    outputBudget: { small: 5_000, mid: 8_000, large: 10_000 },
+  },
+
+  // ═══ CONSULT ══════════════════════════════════════════════════════════════
+
+  routes_jobs: {
+    chapter: 'consult',
+    mode: 'reference',
+    views: ['purpose'],
+    retrievalTask: () => 'Every route, queue, job type, and webhook — grouped for lookup.',
+    instructions: [
+      'Reference for lookup, not reading. Write: (1) a 2-3 sentence intro stating what the tables cover and how they are grouped, then the marker [[backbone]] on its own line (the deterministic route/queue/webhook tables are inserted there — you never write route tables yourself), then (2) "### Notes per group" — ONE factual line per route group naming its purpose, only where the evidence shows it (handler/workflow evidence); omit groups you cannot ground.',
+      'Route paths in your prose must be FULL mounted paths copied from the evidence. Never instruct, never opine — describe.',
+    ].join(' '),
+    deterministic: async (deps) => ({
+      routeCount: Number(((await query(
+        `SELECT count(*)::int AS n FROM entrypoints WHERE snapshot_id = $1 AND trigger_type = 'http_route' AND route_path IS NOT NULL`,
+        [deps.snapshotId],
+      )).rows[0] as { n: number } | undefined)?.n ?? 0),
+      queues: (await query(
+        `SELECT route_path AS queue_name FROM entrypoints WHERE snapshot_id = $1 AND trigger_type = 'worker_job'`,
+        [deps.snapshotId],
+      )).rows,
+      groupsPreview: (await query(
+        `SELECT e.route_path, e.method, w.title AS workflow FROM entrypoints e
+         LEFT JOIN workflows w ON w.entrypoint_id = e.id
+         WHERE e.snapshot_id = $1 AND e.trigger_type = 'http_route' AND e.route_path IS NOT NULL
+         ORDER BY e.route_path LIMIT 60`,
+        [deps.snapshotId],
+      )).rows,
+    }),
+    backbone: (deps) => buildRoutesJobsBackbone(deps.snapshotId),
+    outputBudget: { small: 2_500, mid: 3_500, large: 4_500 },
+  },
+
+  data_model: {
+    chapter: 'consult',
+    mode: 'reference',
+    views: ['operations', 'dependency'],
+    retrievalTask: () => 'The data model: what each table group stores and which invariants matter.',
+    instructions: [
+      'Reference for lookup. Write: (1) a 2-3 sentence intro naming the schema source file(s) and the total table count VERBATIM from schemaTableCount (never count yourself), then the marker [[backbone]] on its own line (the deterministic table inventory is inserted there — you never write the table list yourself), then (2) "### Table groups" — group the tables into 3-6 domains by name/relationships and give ONE factual line per group on what it stores and the key relationship, grounded in the refs/access evidence.',
+      'The anchor ER diagram is drawn from parsed foreign keys — refer to it; never contradict it. Say plainly that column-level detail beyond the evidence is not included.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      const schemaTableCount = Number(((await query(
+        `SELECT count(*)::int AS n FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema'`,
+        [deps.snapshotId],
+      )).rows[0] as { n: number } | undefined)?.n ?? 0);
+      return {
+        schemaTableCount,
+        tables: (await query(
+          `SELECT name, metadata->'references' AS refs FROM graph_nodes
+           WHERE snapshot_id = $1 AND type = 'schema' ORDER BY line_start NULLS LAST LIMIT 60`,
+          [deps.snapshotId],
+        )).rows,
+      };
+    },
+    backbone: (deps) => buildDataModelBackbone(deps.snapshotId),
     diagrams: async (deps) => {
       const tables = (await query(
-        `SELECT name FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema' LIMIT 20`,
+        `SELECT name, COALESCE(metadata->'references', '[]'::jsonb) AS refs
+         FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema'`,
         [deps.snapshotId],
-      )).rows as Array<{ name: string }>;
-      const accesses = (await query(
-        `SELECT tn.name AS table, sn.stable_key AS accessor, e.type AS mode
-         FROM graph_edges e
-         JOIN graph_nodes sn ON sn.id = e.source_node_id
-         JOIN graph_nodes tn ON tn.id = e.target_node_id
-         WHERE e.snapshot_id = $1 AND tn.type = 'schema' LIMIT 30`,
-        [deps.snapshotId],
-      )).rows as Array<{ table: string; accessor: string; mode: string }>;
-      if (tables.length === 0) return [];
-      return [{ kind: 'schema' as const, mermaid: schemaDiagram(tables, accesses) }];
+      )).rows as Array<{ name: string; refs: string[] }>;
+      const mermaid = erDiagram(tables.map((t) => ({ name: t.name, references: t.refs ?? [] })));
+      return mermaid ? [{ kind: 'er', mermaid }] : [];
     },
+    outputBudget: { small: 2_500, mid: 3_500, large: 4_500 },
   },
 
-  safety_rails: {
+  guardrails_ops: {
+    chapter: 'consult',
+    mode: 'reference',
     views: ['operations'],
-    retrievalTask: () => 'Risky areas: what requires extra caution, what tests to trust, dangerous side effects.',
+    retrievalTask: () => 'Operational guardrails: budgets, kill switches, privacy modes, secret handling, env configuration — what each protects and where it is enforced.',
     instructions: [
-      'Identify dangerous areas grounded in the evidence: modules with risky side effects, shared modules with wide blast radius, and external spend/integration paths.',
-      'Each risk must name the SPECIFIC hazard — what breaks, what data or money is at stake, which boundary is crossed — derived from the side-effect type and target. "Writes to the database" is a category, not a hazard; "an UPDATE on project_members changes who can access the project" is.',
-      'Treat external HTTP/model-API call sites (http_request / external_integration effects) as spend-and-availability risks, and queue/enqueue paths as retry/duplication risks.',
-      'For each risk, name the exact test file from testGuards that covers that area ("guarded by <test>"); when testGuards has none, write "no test covers this path in the analysis" — never imply coverage.',
-      'A .env.example or config template is documentation of required settings, not a secrets risk.',
-    ].join(' '),
-    deterministic: async (deps) => ({
-      riskySideEffects: (await query(
-        `SELECT s.type, s.target, n.file_path FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
-         WHERE s.snapshot_id = $1 ORDER BY s.type LIMIT 20`,
-        [deps.snapshotId],
-      )).rows,
-      testGuards: await testGuardsFor(deps.snapshotId),
-      configFiles: (await query(
-        `SELECT stable_key, category FROM repository_files WHERE snapshot_id = $1 AND category IN ('config', 'migration') LIMIT 15`,
-        [deps.snapshotId],
-      )).rows,
-    }),
-  },
-
-  dependency_graph: {
-    views: ['dependency'],
-    retrievalTask: () => 'The dependency structure: central modules, coupling points, import patterns.',
-    instructions: 'Explain the dependency structure: the highest fan-in modules and why they matter, key dependency chains, and coupling risks. For each keystone state the mechanical blast radius with the provided dependent count verbatim: "N files import X — a signature change breaks all of them." Mostly deterministic facts — keep interpretation tight. Close with one line noting the interactive Dependencies tab holds the full graph.',
-    deterministic: async (deps) => ({
-      centralNodes: (await query(
-        `SELECT stable_key, name, (metadata->>'dependentCount')::int AS dependents
-         FROM graph_nodes WHERE snapshot_id = $1 AND (metadata->>'dependentCount')::int > 0
-         ORDER BY 3 DESC LIMIT 15`,
-        [deps.snapshotId],
-      )).rows,
-      edgeCounts: (await query(
-        `SELECT type, count(*)::int AS n FROM graph_edges WHERE snapshot_id = $1 GROUP BY type ORDER BY n DESC`,
-        [deps.snapshotId],
-      )).rows,
-    }),
-  },
-
-  doc_health: {
-    views: ['purpose'],
-    retrievalTask: () => 'Documentation health: what is documented, what conflicts, what is missing.',
-    instructions: [
-      'Assess the REPOSITORY\'s documentation health — this section is about the repo\'s docs, never about this tool\'s own generation pipeline.',
-      '(1) Doc inventory: the doc files with how recently each changed (churn evidence); a doc untouched while its subject area churns is stale — say which.',
-      '(2) Coverage of critical code: from criticalDocCoverage, name the top-ranked symbols/files with no docstring — these are the highest-value documentation gaps. Describe importance by rank ("2nd most critical for this role"), never as a bare score.',
-      '(3) Conflicts: ONLY evidence flagged docs_conflict_with_code counts as "docs disagree with code".',
-      'pipelineFlaggedRecords are this tool\'s INTERNAL quality flags about its own generated records — if mentioned at all, one sentence ("N generated records were internally flagged for review"), never presented as the repo\'s docs conflicting with its code.',
-      'Constructive priorities, not blame.',
+      'Reference for lookup. Write: (1) a 2-3 sentence intro on what the tables cover, then the marker [[backbone]] on its own line (the deterministic env-var and guardrail-code tables are inserted there), then (2) "### What each guardrail protects" — for each guardrail SYMBOL in the backbone evidence, one factual line: what it protects and when it fires, ONLY where the record/receipt evidence shows it; omit symbols you cannot ground. Where the evidence shows an operational risk with no guardrail, state it as a gap.',
+      'Env var VALUES are never in the evidence and never in the output — names and documented purposes only.',
     ].join(' '),
     deterministic: async (deps) => {
-      const topProjected = deps.projections.slice(0, 10);
-      const docCoverage = topProjected.length > 0
-        ? (await query(
-            `SELECT stable_key, (metadata->>'jsdoc') IS NOT NULL AS documented
-             FROM graph_nodes WHERE snapshot_id = $1 AND stable_key = ANY($2)`,
-            [deps.snapshotId, topProjected.map((t) => t.stableKey)],
-          )).rows
-        : [];
+      const facts = await loadConfigFacts(deps.snapshotId);
       return {
-        docFiles: (await query(
-          `SELECT stable_key,
-                  metadata->'churn'->>'lastTouchedAt' AS last_touched,
-                  metadata->'churn'->>'commitCount90d' AS commits_90d
-           FROM repository_files WHERE snapshot_id = $1 AND category = 'doc' LIMIT 15`,
+        envFiles: facts.envFiles.map((f) => ({ path: f.path, varNames: f.vars.map((v) => v.name) })),
+        externalIntegrations: (await query(
+          `SELECT DISTINCT s.target FROM side_effects s
+           WHERE s.snapshot_id = $1 AND s.type IN ('external_integration', 'auth_check') AND s.target IS NOT NULL LIMIT 15`,
           [deps.snapshotId],
         )).rows,
-        // Renamed from flaggedRecords: prose kept presenting the pipeline's
-        // self-critique as "the repo's docs conflict with the code".
-        pipelineFlaggedRecords: (await query(
-          `SELECT ssr.stable_key, sr.flags FROM semantic_records sr
-           JOIN snapshot_semantic_records ssr ON ssr.record_id = sr.id
-           WHERE ssr.snapshot_id = $1 AND (sr.status = 'rejected' OR jsonb_array_length(sr.flags) > 0) LIMIT 20`,
-          [deps.snapshotId],
-        )).rows,
-        criticalDocCoverage: docCoverage,
-        topForRole: topProjected.map(projectionRow),
+        ci: facts.ci,
       };
     },
+    backbone: async (deps) => buildGuardrailsBackbone(deps.snapshotId, await loadConfigFacts(deps.snapshotId)),
+    outputBudget: { small: 2_500, mid: 3_500, large: 4_500 },
   },
 };
 
 /** Shared loader so every section reuses one projection pass. */
 export async function buildSectionDeps(snapshotId: string, projectId: string, role: DeveloperRole): Promise<SectionDeps> {
-  return { snapshotId, projectId, role, projections: await loadRoleProjections(snapshotId, projectId, role) };
+  const snap = (await query(
+    `SELECT symbol_count FROM analysis_snapshots WHERE id = $1`,
+    [snapshotId],
+  )).rows[0] as { symbol_count: number | null } | undefined;
+  return {
+    snapshotId, projectId, role,
+    projections: await loadRoleProjections(snapshotId, projectId, role),
+    sizeClass: sizeClassFor(snap?.symbol_count),
+  };
 }
+
+/** Depth-contract size class from the snapshot's symbol count. */
+export function sizeClassFor(symbolCount: number | null | undefined): keyof OutputBudget {
+  const n = symbolCount ?? 0;
+  if (n < 800) return 'small';
+  if (n < 3_000) return 'mid';
+  return 'large';
+}
+
+export type { ConfigFacts };

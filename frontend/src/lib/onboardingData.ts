@@ -1,28 +1,38 @@
 import { apiFetch } from "@/lib/api";
 import type { OnboardingPackage, PackageCard, SectionId } from "@/types/onboarding";
 
-/** Reading order for the eleven section types. */
+/** Shelf order for the 12 Diátaxis sections (chapter order). */
 export const SECTION_NAV_ORDER: readonly SectionId[] = [
-  "start-here",
-  "architecture",
-  "entry-points",
-  "critical-25",
-  "capability-map",
-  "workflows",
-  "role-path",
-  "data-schema",
-  "safety-rails",
-  "dependency-graph",
-  "doc-health",
+  "big-picture",
+  "concepts",
+  "architecture-deep",
+  "traced-flows",
+  "code-map",
+  "capabilities",
+  "setup-run",
+  "first-change",
+  "common-tasks",
+  "routes-jobs",
+  "data-model",
+  "guardrails-ops",
 ];
 
-/** Groups sections by theme for the reader nav; editorial grouping, not a
- * server concept. */
+/**
+ * The four Diátaxis chapters (mode-first shelf). The legacy tail keeps
+ * packages generated before the redesign navigable until they regenerate.
+ */
 export const SECTION_GROUPS: ReadonlyArray<{ label: string; ids: readonly SectionId[] }> = [
-  { label: "Orientation", ids: ["start-here", "architecture", "entry-points"] },
-  { label: "Core systems", ids: ["critical-25", "capability-map", "workflows", "data-schema"] },
-  { label: "Your role", ids: ["role-path"] },
-  { label: "Guardrails & health", ids: ["safety-rails", "dependency-graph", "doc-health"] },
+  { label: "Orient", ids: ["big-picture", "concepts"] },
+  { label: "Understand", ids: ["architecture-deep", "traced-flows", "code-map", "capabilities"] },
+  { label: "Do", ids: ["setup-run", "first-change", "common-tasks"] },
+  { label: "Consult", ids: ["routes-jobs", "data-model", "guardrails-ops"] },
+  {
+    label: "Previous layout",
+    ids: [
+      "start-here", "architecture", "entry-points", "critical-25", "capability-map",
+      "workflows", "role-path", "data-schema", "safety-rails", "dependency-graph", "doc-health",
+    ],
+  },
 ];
 
 export const ROLES = [

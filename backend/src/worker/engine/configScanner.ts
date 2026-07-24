@@ -52,7 +52,9 @@ export function scanConfigNodes(files: RepoFileRecord[], inventory: RepoInventor
           metadata: { configKind: file.category === 'migration' ? 'sql_migration' : 'schema', language: file.language },
         });
       }
-      // ...plus one schema node per created table.
+      // ...plus one schema node per created table. references = FK targets
+      // parsed from the table body — the deterministic ER backbone
+      // (data_model's anchor) draws real relationships, not just access edges.
       for (const table of extractCreatedTables(file)) {
         const key = schemaKey(file.relativePath, table.name);
         if (seen.has(key)) continue;
@@ -65,7 +67,11 @@ export function scanConfigNodes(files: RepoFileRecord[], inventory: RepoInventor
           lineStart: table.line,
           hash: file.hash,
           trustLevel: 'config',
-          metadata: { table: table.name, source: file.category },
+          metadata: {
+            table: table.name,
+            source: file.category,
+            ...(table.references.length > 0 ? { references: table.references } : {}),
+          },
         });
       }
     }
@@ -82,7 +88,11 @@ function readSnippet(file: RepoFileRecord): string | null {
   }
 }
 
-function extractCreatedTables(file: RepoFileRecord): Array<{ name: string; line: number }> {
+const REFERENCES_RE = /references\s+(?:"?(?:public|dbo)"?\.)?"?([a-zA-Z0-9_]+)"?/gi;
+
+function extractCreatedTables(
+  file: RepoFileRecord,
+): Array<{ name: string; line: number; references: string[] }> {
   if (file.language !== 'sql') return [];
   let text: string;
   try {
@@ -91,15 +101,33 @@ function extractCreatedTables(file: RepoFileRecord): Array<{ name: string; line:
     return [];
   }
 
-  const tables: Array<{ name: string; line: number }> = [];
-  const seen = new Set<string>();
+  // Two passes over the same regex: first collect table start offsets, then
+  // scan each table's body (start -> next start) for its FK references.
+  const starts: Array<{ name: string; index: number }> = [];
   let match: RegExpExecArray | null;
   CREATE_TABLE_RE.lastIndex = 0;
   while ((match = CREATE_TABLE_RE.exec(text)) !== null) {
-    const name = match[1]!;
+    starts.push({ name: match[1]!, index: match.index });
+  }
+
+  const tables: Array<{ name: string; line: number; references: string[] }> = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < starts.length; i++) {
+    const { name, index } = starts[i]!;
     if (seen.has(name)) continue;
     seen.add(name);
-    tables.push({ name, line: text.slice(0, match.index).split('\n').length });
+    const body = text.slice(index, starts[i + 1]?.index ?? text.length);
+    const references = new Set<string>();
+    let ref: RegExpExecArray | null;
+    REFERENCES_RE.lastIndex = 0;
+    while ((ref = REFERENCES_RE.exec(body)) !== null) {
+      if (ref[1] !== name) references.add(ref[1]!);
+    }
+    tables.push({
+      name,
+      line: text.slice(0, index).split('\n').length,
+      references: [...references],
+    });
   }
   return tables;
 }

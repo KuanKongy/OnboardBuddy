@@ -204,8 +204,14 @@ export function detectSideEffects(fileAnalyses: FileAnalysis[]): DetectedSideEff
           if (family.kind === 'message_publish') {
             // `getSummaryQueue().add('generate_summary', ...)` — the job name
             // is the target; the queue variable normalizes into the hint the
-            // journey composer stitches on.
-            const enqueue = callsStr.match(ENQUEUE_CALL_RE);
+            // journey composer stitches on. callsSymbols entries carry the
+            // callee WITHOUT arguments and sort before the snippet in
+            // callsStr, so prefer the first match that captured a job name.
+            let enqueue: RegExpMatchArray | null = null;
+            for (const m of callsStr.matchAll(new RegExp(ENQUEUE_CALL_RE.source, 'g'))) {
+              if (!enqueue) enqueue = m;
+              if (m[2]) { enqueue = m; break; }
+            }
             if (enqueue) {
               if (enqueue[2]) effect.target = enqueue[2];
               const hint = normalizeQueueToken(enqueue[1]!);

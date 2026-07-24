@@ -7,7 +7,7 @@
 import { isTestOrFixturePath } from '../engine/testPaths.js';
 
 export interface DiagramSpec {
-  kind: 'architecture' | 'sequence' | 'dataflow' | 'schema';
+  kind: 'architecture' | 'sequence' | 'dataflow' | 'schema' | 'topology' | 'er';
   mermaid: string;
 }
 
@@ -137,6 +137,115 @@ export function workflowDataflowDiagram(title: string, steps: DiagramStep[]): st
     const kind = steps[i]!.stepKind ?? 'step';
     lines.push(`  ${nodeIds[i - 1]} -->|${escapeLabel(kind)}| ${nodeIds[i]}`);
   }
+  return lines.join('\n');
+}
+
+// ── Runtime topology: compose services + env-derived external services ───────
+
+export interface TopologyService {
+  name: string;
+  ports?: string[];
+  dependsOn?: string[];
+  image?: string;
+}
+
+/**
+ * External managed services inferred from env var NAMES (never values) — a
+ * deterministic prefix/substring table, honest about its source ("from
+ * .env"). First matching rule wins per variable; labels dedupe.
+ */
+const ENV_SERVICE_RULES: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /SUPABASE/i, label: 'Supabase (Postgres + Auth)' },
+  { pattern: /^(DIRECT_)?DATABASE_URL$/i, label: 'Postgres' },
+  { pattern: /REDIS|UPSTASH/i, label: 'Redis' },
+  { pattern: /GITHUB/i, label: 'GitHub App/API' },
+  { pattern: /OPENROUTER/i, label: 'OpenRouter' },
+  { pattern: /OPENAI/i, label: 'OpenAI' },
+  { pattern: /ANTHROPIC/i, label: 'Anthropic' },
+  { pattern: /STRIPE/i, label: 'Stripe' },
+  { pattern: /^(AWS|S3)_/i, label: 'AWS' },
+  { pattern: /SENDGRID|RESEND|SMTP|MAILGUN/i, label: 'Email service' },
+  { pattern: /SENTRY/i, label: 'Sentry' },
+];
+
+export function envExternalServices(envVarNames: string[]): string[] {
+  const labels = new Set<string>();
+  for (const name of envVarNames) {
+    const rule = ENV_SERVICE_RULES.find((r) => r.pattern.test(name));
+    if (rule) labels.add(rule.label);
+  }
+  // Supabase IS the Postgres — don't draw the database twice.
+  if (labels.has('Supabase (Postgres + Auth)')) labels.delete('Postgres');
+  return [...labels];
+}
+
+/**
+ * The big_picture anchor: compose services (with their real wiring) plus the
+ * external services the env names imply. Everything drawn is a parsed fact.
+ */
+export function topologyDiagram(
+  services: TopologyService[],
+  externalServices: string[],
+): string {
+  const lines = ['flowchart LR'];
+  lines.push('  subgraph runtime["docker compose services"]');
+  for (const s of services) {
+    const detail = s.ports?.length ? ` :${s.ports.map((p) => p.split(':')[0]).join(', :')}` : '';
+    lines.push(`    ${mermaidId(`svc_${s.name}`)}["${escapeLabel(`${s.name}${detail}`)}"]`);
+  }
+  lines.push('  end');
+  for (const s of services) {
+    for (const dep of s.dependsOn ?? []) {
+      if (!services.some((o) => o.name === dep)) continue;
+      lines.push(`  ${mermaidId(`svc_${s.name}`)} -->|depends on| ${mermaidId(`svc_${dep}`)}`);
+    }
+  }
+  if (externalServices.length > 0) {
+    lines.push('  subgraph external["external services (from .env names)"]');
+    for (const label of externalServices) {
+      lines.push(`    ${mermaidId(`ext_${label}`)}(["${escapeLabel(label)}"])`);
+    }
+    lines.push('  end');
+    lines.push('  runtime -.-> external');
+  }
+  return lines.join('\n');
+}
+
+// ── ER diagram: real FK relationships from schema parsing ────────────────────
+
+const MAX_ER_TABLES = 22;
+
+export function erDiagram(
+  tables: Array<{ name: string; references: string[] }>,
+): string {
+  // Prioritize connected tables (in+out FK degree); isolated tables list in
+  // the section body instead of cluttering the diagram.
+  const degree = new Map<string, number>();
+  const known = new Set(tables.map((t) => t.name));
+  for (const t of tables) {
+    for (const ref of t.references) {
+      if (!known.has(ref)) continue;
+      degree.set(t.name, (degree.get(t.name) ?? 0) + 1);
+      degree.set(ref, (degree.get(ref) ?? 0) + 1);
+    }
+  }
+  const kept = new Set(
+    [...degree.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_ER_TABLES).map(([n]) => n),
+  );
+  const lines = ['erDiagram'];
+  const seenPairs = new Set<string>();
+  for (const t of tables) {
+    if (!kept.has(t.name)) continue;
+    for (const ref of t.references) {
+      if (!kept.has(ref) || ref === t.name) continue;
+      const pair = `${ref}->${t.name}`;
+      if (seenPairs.has(pair)) continue;
+      seenPairs.add(pair);
+      // parent ||--o{ child : "" — the child's FK points at the parent.
+      lines.push(`  ${mermaidId(ref)} ||--o{ ${mermaidId(t.name)} : ""`);
+    }
+  }
+  if (lines.length === 1) return '';
   return lines.join('\n');
 }
 

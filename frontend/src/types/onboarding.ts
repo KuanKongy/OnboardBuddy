@@ -3,6 +3,20 @@ export type ConfidenceLevel = "high" | "medium" | "low";
 export type SectionStatus = "complete" | "stale" | "missing";
 
 export type SectionId =
+  // Diátaxis layout (12 sections, 4 chapters)
+  | "big-picture"
+  | "concepts"
+  | "architecture-deep"
+  | "traced-flows"
+  | "code-map"
+  | "capabilities"
+  | "setup-run"
+  | "first-change"
+  | "common-tasks"
+  | "routes-jobs"
+  | "data-model"
+  | "guardrails-ops"
+  // Legacy layout — packages generated before the redesign still render
   | "start-here"
   | "architecture"
   | "entry-points"
