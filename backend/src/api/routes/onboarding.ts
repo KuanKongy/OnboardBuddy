@@ -2,6 +2,7 @@ import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
 import { CANDIDATE_WEIGHTS } from "../../worker/engine/candidateRanker.js";
+import { CHAPTERS, SECTION_SPECS, SECTION_TYPES, type SectionType } from "../../worker/generation/sectionSpecs.js";
 import {
   ageLabelFrom,
   claimForReceipt,
@@ -860,15 +861,17 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
       return;
     }
 
+    // Chapter (shelf) order, not insertion order — the export mirrors the
+    // reader's nav. Legacy types sort after the current layout.
     const sectionsResult = await query(
-      `SELECT id, title, content
+      `SELECT id, title, content, type
        FROM package_sections
        WHERE package_id = $1
-       ORDER BY created_at ASC`,
-      [pkg.id],
+       ORDER BY COALESCE(array_position($2::text[], type::text), 999), created_at ASC`,
+      [pkg.id, [...SECTION_TYPES]],
     );
 
-    const sections = sectionsResult.rows as { id: string; title: string; content: string }[];
+    const sections = sectionsResult.rows as { id: string; title: string; content: string; type: string }[];
 
     // Inline citation markers become plain "(path:line)" citations in the
     // exported file — marker syntax is a reader-UI affordance.
@@ -889,7 +892,13 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
     }
 
     const lines: string[] = [`# OnboardBuddy - Onboarding Package (${pkg.role})\n`];
+    let lastChapter: string | null = null;
     for (const sec of sections) {
+      const chapter = SECTION_SPECS[sec.type as SectionType]?.chapter ?? null;
+      if (chapter && chapter !== lastChapter) {
+        lastChapter = chapter;
+        lines.push(`# ${CHAPTERS[chapter].title}\n\n${CHAPTERS[chapter].blurb}\n`);
+      }
       const body = inlineMarkersToText(sec.content, receiptsBySection.get(sec.id) ?? new Map());
       lines.push(`## ${sec.title}\n\n${body}\n`);
     }

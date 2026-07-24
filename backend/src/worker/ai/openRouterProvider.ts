@@ -131,15 +131,18 @@ export class OpenRouterProvider implements AiProvider {
     // decode on the default route varied 12–124 tok/s for the same model.
     // 'throughput' asks OpenRouter to prefer the fastest upstream. Set
     // OPENROUTER_PROVIDER_SORT="" to disable (e.g. non-OpenRouter base URL).
-    // data_collection 'deny' is the privacy half of "sort by privacy then
-    // throughput": OpenRouter excludes providers that retain/train on
-    // prompts (the only machine-enforceable policy signal — the endpoints
-    // API exposes no per-provider retention fields). Set
-    // OPENROUTER_DATA_COLLECTION="" to disable.
+    // Privacy filter (user decision 2026-07-24): route ONLY to Zero Data
+    // Retention endpoints — OpenRouter enforces `zdr: true` server-side
+    // (verified live: all three rotation models route under it; gemini →
+    // Google, deepseek → Novita, scout → Groq). data_collection 'deny'
+    // rides along as belt-and-braces. Set OPENROUTER_ZDR=false /
+    // OPENROUTER_DATA_COLLECTION="" to loosen.
     const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
+    const zdr = (process.env.OPENROUTER_ZDR ?? 'true') !== 'false';
     const dataCollection = process.env.OPENROUTER_DATA_COLLECTION ?? 'deny';
     const providerPrefs = {
       ...(sort ? { sort } : {}),
+      ...(zdr ? { zdr: true } : {}),
       ...(dataCollection ? { data_collection: dataCollection } : {}),
     };
     return {

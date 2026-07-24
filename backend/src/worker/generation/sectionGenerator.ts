@@ -7,6 +7,7 @@
  * generation_context. Everything starts as draft.
  */
 
+import { createHash } from 'node:crypto';
 import { query } from '../../lib/db.js';
 import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
@@ -22,7 +23,7 @@ import {
 } from './citationMarkers.js';
 import { lintVoice } from './voiceLint.js';
 
-export const SECTION_PROMPT_VERSION = 'section-v4';
+export const SECTION_PROMPT_VERSION = 'section-v5';
 
 const SECTION_OUTPUT_SCHEMA = {
   type: 'object',
@@ -77,6 +78,8 @@ export interface GenerateSectionResult {
   validation: ValidationOutcome;
   retried: boolean;
   runId: string | null;
+  /** True when the section was reused byte-identically from the cache. */
+  cached?: boolean;
 }
 
 export async function generateSection(params: GenerateSectionParams): Promise<GenerateSectionResult> {
@@ -120,6 +123,52 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     if (detIdx >= 28) break;
   }
 
+  // Section cache (plan step 5): key = the DETERMINISTIC inputs that shape
+  // the output — spec prompt + mode, role, depth budget, deterministic
+  // facts, and the spliced backbone. Retrieval (records/receipts) is
+  // deliberately EXCLUDED: its top-K set wobbles run-to-run (measured: even
+  // byte-stable data_model missed the cache on set churn alone), which
+  // would turn the cache into a coin flip. Consequence, accepted and
+  // documented: a section regenerates when its facts or the prompt change —
+  // which is when re-analysis actually moved the ground truth — not when
+  // similarity search reshuffles. Unchanged facts ⇒ byte-identical reuse at
+  // zero LLM cost (the M4 stochasticity complaint, answered mechanically).
+  const backboneMarkdown = spec.backbone ? await spec.backbone(params.deps) : null;
+  const evidenceHash = createHash('sha256').update(JSON.stringify({
+    v: SECTION_PROMPT_VERSION,
+    type: params.sectionType,
+    role: params.role,
+    mode: spec.mode,
+    budget: spec.outputBudget[params.deps.sizeClass],
+    instructions: spec.instructions,
+    deterministic: deterministicContext,
+    backbone: backboneMarkdown,
+  })).digest('hex');
+
+  const cachedRow = (await query(
+    `SELECT id, content, diagrams, confidence, unknowns
+     FROM package_sections
+     WHERE snapshot_id = $1 AND type = $2 AND role = $3
+       AND generation_context->>'evidence_hash' = $4
+       AND COALESCE(generation_context->'validation'->>'hardFailure', 'false') <> 'true'
+     ORDER BY created_at DESC LIMIT 1`,
+    [params.snapshotId, params.sectionType, params.role, evidenceHash],
+  )).rows[0] as { id: string; content: string; diagrams: unknown; confidence: 'high' | 'medium' | 'low'; unknowns: unknown } | undefined;
+  if (cachedRow) {
+    const sectionId = await persistCachedSection(params, cachedRow, evidenceHash);
+    return {
+      sectionId,
+      validation: {
+        hardFailure: false, issues: [], adjustedClaims: [], usedReceiptIds: [],
+        confidence: cachedRow.confidence,
+        unknowns: Array.isArray(cachedRow.unknowns) ? cachedRow.unknowns as ValidationOutcome['unknowns'] : [],
+      },
+      retried: false,
+      runId: null,
+      cached: true,
+    };
+  }
+
   // Receipts get short aliases (r1, r2, …) in the prompt — small models
   // mangle raw UUIDs, which used to surface as "unknown receipt id" hard
   // failures and dropped citations. Aliases map back to UUIDs before
@@ -157,6 +206,38 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     };
   }
 
+  // Section critique (plan step 5): a cheap-tier judge reads each claim
+  // against its cited receipts — exactly the record-critique pattern at the
+  // section level. Contradicted/mostly-unsupported output gets ONE more
+  // regeneration with the judge's reasons attached; whatever remains
+  // downgrades confidence and lands in generation_context, never silently.
+  let critique = await runSectionCritique(params, output, bundle, aliasToId);
+  if (critique && (critique.contradicted > 0 || critique.unsupported * 2 > critique.judged)) {
+    retried = true;
+    const issues = critique.verdicts
+      .filter((v) => v.verdict !== 'supported')
+      .map((v) => `CRITIQUE ${v.verdict}: "${v.claim.slice(0, 140)}" — ${v.reason}`);
+    const rewritten = await callModel(params, bundle, issues, aliasToId);
+    output = rewritten.output;
+    runId = rewritten.runId;
+    validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
+    voice = lintVoice(output.contentMarkdown ?? '');
+    coverage = completeness(output);
+    critique = await runSectionCritique(params, output, bundle, aliasToId);
+    if (critique && critique.contradicted > 0) {
+      const order: Array<'high' | 'medium' | 'low'> = ['high', 'medium', 'low'];
+      const downgraded = order[Math.min(order.indexOf(validation.confidence) + 1, 2)]!;
+      validation = {
+        ...validation,
+        confidence: downgraded,
+        unknowns: [...validation.unknowns, {
+          kind: 'critique_contradiction',
+          detail: critique.verdicts.find((v) => v.verdict === 'contradicted')?.claim.slice(0, 160) ?? null,
+        }],
+      };
+    }
+  }
+
   // Prose aliases become inline [[receipt:<uuid>]] markers for persisted
   // receipts; the rest are stripped — never ship labels the reader can't
   // resolve.
@@ -182,7 +263,6 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   // missing marker appends the backbone after the intro: facts are never
   // lost to a model that forgot the marker.
   if (spec.backbone) {
-    const backboneMarkdown = await spec.backbone(params.deps);
     const content = output.contentMarkdown ?? '';
     if (backboneMarkdown) {
       output = {
@@ -200,8 +280,129 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
 
   const sectionId = await persistSection(
     params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits,
+    evidenceHash, critique,
   );
   return { sectionId, validation, retried, runId };
+}
+
+// ─── Section critique (cheap tier) ───────────────────────────────────────────
+
+interface CritiqueOutcome {
+  judged: number;
+  supported: number;
+  unsupported: number;
+  contradicted: number;
+  verdicts: Array<{ claim: string; verdict: 'supported' | 'unsupported' | 'contradicted'; reason: string }>;
+}
+
+const CRITIQUE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdicts'],
+  properties: {
+    verdicts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['claim', 'verdict', 'reason'],
+        properties: {
+          claim: { type: 'string' },
+          verdict: { enum: ['supported', 'unsupported', 'contradicted'] },
+          reason: { type: 'string' },
+        },
+      },
+    },
+  },
+};
+
+/** Judges each cited claim against its receipts. Null when nothing to judge. */
+async function runSectionCritique(
+  params: GenerateSectionParams,
+  output: GeneratedOutput,
+  bundle: EvidenceBundleV2,
+  aliasToId: Map<string, string>,
+): Promise<CritiqueOutcome | null> {
+  const cited = (output.claims ?? []).filter((c) => c.receiptIds.length > 0).slice(0, 20);
+  if (cited.length === 0) return null;
+  const idToAlias = new Map([...aliasToId.entries()].map(([a, id]) => [id, a]));
+  const byId = new Map(bundle.receipts.map((r) => [r.receiptId, r]));
+  const lines = cited.map((c, i) => {
+    const evidence = c.receiptIds.map((id) => {
+      const r = byId.get(id);
+      if (!r) return `  (${idToAlias.get(id) ?? id}: not in bundle)`;
+      const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
+      return `  [${idToAlias.get(id) ?? id}] ${where}: ${(r.snippet ?? '(no snippet)').slice(0, 500)}`;
+    }).join('\n');
+    return `CLAIM ${i + 1}: ${c.claim}\n${evidence}`;
+  });
+  try {
+    const response = await params.ai.call<{ verdicts: CritiqueOutcome['verdicts'] }>({
+      tier: 'cheap',
+      targetType: 'section_critique',
+      sectionType: params.sectionType,
+      packageId: params.packageId,
+      promptVersion: SECTION_PROMPT_VERSION,
+      schemaName: 'section_critique_v1',
+      schema: CRITIQUE_SCHEMA,
+      system: 'You are a strict fact-checker. For each claim, judge STRICTLY against the quoted receipt evidence only: "supported" (the evidence shows it), "unsupported" (the evidence neither shows nor denies it), "contradicted" (the evidence shows otherwise). One verdict per claim, same order. Reasons are one short sentence naming what the evidence does or does not show.',
+      user: lines.join('\n\n'),
+      maxOutputTokens: 2_000 + 120 * cited.length,
+    });
+    const verdicts = (response.value?.verdicts ?? []).slice(0, cited.length);
+    return {
+      judged: verdicts.length,
+      supported: verdicts.filter((v) => v.verdict === 'supported').length,
+      unsupported: verdicts.filter((v) => v.verdict === 'unsupported').length,
+      contradicted: verdicts.filter((v) => v.verdict === 'contradicted').length,
+      verdicts,
+    };
+  } catch (err) {
+    // Critique is a quality layer, not a gate — its own failure never blocks
+    // the section.
+    console.warn(`[sectionGenerator] critique failed for ${params.sectionType}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/** Byte-identical reuse: clone the cached row and its receipt copies. */
+async function persistCachedSection(
+  params: GenerateSectionParams,
+  cached: { id: string; content: string; diagrams: unknown; confidence: 'high' | 'medium' | 'low'; unknowns: unknown },
+  evidenceHash: string,
+): Promise<string> {
+  await query(`DELETE FROM package_sections WHERE package_id = $1 AND type = $2`, [params.packageId, params.sectionType]);
+  const row = (await query(
+    `INSERT INTO package_sections
+       (package_id, snapshot_id, generation_run_id, type, title, content, diagrams,
+        confidence, review_status, analyzed_commit, role, unknowns, generation_context)
+     VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, 'draft', $8, $9, $10, $11)
+     RETURNING id`,
+    [params.packageId, params.snapshotId, params.sectionType,
+     SECTION_TITLES[params.sectionType] ?? params.sectionType, cached.content,
+     JSON.stringify(cached.diagrams ?? []), cached.confidence, params.commitHash, params.role,
+     JSON.stringify(cached.unknowns ?? []),
+     JSON.stringify({
+       prompt_version: SECTION_PROMPT_VERSION,
+       evidence_hash: evidenceHash,
+       cached_from_section_id: cached.id,
+       mode: 'cache_hit',
+     })],
+  )).rows[0] as { id: string };
+  // Receipt copies follow the content — the receipt viewer and staleness
+  // tracking work identically on a cache hit.
+  await query(
+    `INSERT INTO source_receipts
+       (project_id, snapshot_id, receipt_kind, trust_level, section_id, node_id, workflow_id,
+        node_stable_key, file_path, symbol_name, line_start, line_end, snippet,
+        detection_expression, referenced_record_id, commit_hash, claim, metadata)
+     SELECT project_id, snapshot_id, receipt_kind, trust_level, $2, node_id, workflow_id,
+            node_stable_key, file_path, symbol_name, line_start, line_end, snippet,
+            detection_expression, referenced_record_id, commit_hash, claim, metadata
+     FROM source_receipts WHERE section_id = $1`,
+    [cached.id, row.id],
+  );
+  return row.id;
 }
 
 async function callModel(
@@ -312,13 +513,25 @@ async function persistSection(
   inline: RewriteResult,
   unverified: UnverifiedMarkResult,
   voiceHits: string[],
+  evidenceHash: string,
+  critique: CritiqueOutcome | null,
 ): Promise<string> {
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
+    evidence_hash: evidenceHash,
     views: SECTION_SPECS[params.sectionType].views,
     retrieval: bundle.deterministicContext.retrievalStats ?? null,
     validation: { issues: validation.issues, retried, hardFailure: validation.hardFailure },
     claims: validation.adjustedClaims,
+    critique: critique
+      ? {
+          judged: critique.judged,
+          supported: critique.supported,
+          unsupported: critique.unsupported,
+          contradicted: critique.contradicted,
+          rejected: critique.verdicts.filter((v) => v.verdict !== 'supported').slice(0, 6),
+        }
+      : null,
     inline_citations: {
       resolved: inline.resolved.length,
       dropped: inline.dropped,

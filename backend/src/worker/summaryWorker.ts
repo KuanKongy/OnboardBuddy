@@ -8,7 +8,8 @@
  * revalidate, replace content, keep the old generation run for audit.
  */
 
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, Queue } from 'bullmq';
+import { startQueueWatchdog } from '../lib/queueWatchdog.js';
 import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
@@ -286,6 +287,12 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
           tutorialsDone = true;
           await saveCheckpoint();
         })();
+    // Mark the rejection handled the moment the promise exists: if TUTORIALS
+    // trip the budget while sections are still in flight, the rejection
+    // otherwise reaches end-of-turn unhandled and Node kills the whole
+    // worker (observed live: exit 1 on BudgetExceededError). The real await
+    // below still observes the error for pause/degrade handling.
+    tutorialsPromise.catch(() => {});
 
     // ── sections: one call each (spec: never one giant call), generated
     //    concurrently — each persists as soon as it finishes, so the reader
@@ -302,10 +309,11 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         confidence: result.validation.confidence,
         issues: result.validation.issues.length,
         retried: result.retried,
+        cached: result.cached === true,
       };
       completedSections.add(sectionType);
       done += 1;
-      await updateJob('running', `Generated section: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
+      await updateJob('running', `Generated section: ${sectionType}${result.cached ? ' (cached)' : ''} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
       await saveCheckpoint();
     };
     try {
@@ -415,32 +423,52 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   }
 }
 
-export const summaryWorker = new Worker<SummaryJobData>(
-  SUMMARY_QUEUE,
-  processSummaryJob,
-  {
-    connection,
-    concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
-    drainDelay: 5000,
-    stalledInterval: 120_000,
-    lockDuration: 600_000,
-    removeOnComplete: { count: 5 },
-    removeOnFail: { count: 5 },
+function createSummaryWorker(): Worker<SummaryJobData> {
+  const w = new Worker<SummaryJobData>(
+    SUMMARY_QUEUE,
+    processSummaryJob,
+    {
+      connection,
+      concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
+      drainDelay: 5000,
+      stalledInterval: 120_000,
+      lockDuration: 600_000,
+      removeOnComplete: { count: 5 },
+      removeOnFail: { count: 5 },
+    },
+  );
+
+  w.on('completed', (job: Job<SummaryJobData>) => {
+    console.log(`[summary-worker] completed job ${job.id}`);
+  });
+
+  w.on('failed', (job: Job<SummaryJobData> | undefined, err: Error) => {
+    console.error(`[summary-worker] failed job ${job?.id}:`, err.message);
+  });
+
+  // Connection-level errors were invisible — a dead blocking socket looked like
+  // an idle worker. Log them so "listening but deaf" is diagnosable.
+  w.on('error', (err: Error) => {
+    console.error('[summary-worker] worker error:', err.message);
+  });
+  return w;
+}
+
+export let summaryWorker = createSummaryWorker();
+
+// Dead-consumer self-heal (see lib/queueWatchdog.ts): recreate the consumer
+// in-process when queued jobs sit while nothing is active.
+const summaryQueueForWatchdog = new Queue(SUMMARY_QUEUE, { connection });
+startQueueWatchdog({
+  queueName: SUMMARY_QUEUE,
+  sample: async () => ({
+    waiting: await summaryQueueForWatchdog.getWaitingCount(),
+    active: await summaryQueueForWatchdog.getActiveCount(),
+  }),
+  recreate: async () => {
+    await summaryWorker.close().catch(() => {});
+    summaryWorker = createSummaryWorker();
   },
-);
-
-summaryWorker.on('completed', (job: Job<SummaryJobData>) => {
-  console.log(`[summary-worker] completed job ${job.id}`);
-});
-
-summaryWorker.on('failed', (job: Job<SummaryJobData> | undefined, err: Error) => {
-  console.error(`[summary-worker] failed job ${job?.id}:`, err.message);
-});
-
-// Connection-level errors were invisible — a dead blocking socket looked like
-// an idle worker. Log them so "listening but deaf" is diagnosable.
-summaryWorker.on('error', (err: Error) => {
-  console.error('[summary-worker] worker error:', err.message);
 });
 
 console.log(`[summary-worker] listening on queue "${SUMMARY_QUEUE}"`);

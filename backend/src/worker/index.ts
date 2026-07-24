@@ -8,7 +8,8 @@ import 'dotenv/config';
 
 dns.setDefaultResultOrder('ipv4first');
 
-import { Worker, Job } from 'bullmq';
+import { Worker, Job, Queue } from 'bullmq';
+import { startQueueWatchdog } from '../lib/queueWatchdog.js';
 import { ANALYSIS_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
@@ -848,38 +849,70 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
   }
 }
 
-const worker = new Worker<AnalysisJobData>(
-  ANALYSIS_QUEUE,
-  async (job: Job<AnalysisJobData>) => {
-    if (job.data.task === 'preflight') {
-      await processPreflightJob(job);
-    } else {
-      await processAnalysisJob(job);
-    }
-  },
-  {
-    connection,
-    concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
-    drainDelay: Number(process.env.WORKER_POLL_INTERVAL_MS ?? 30000),
-    stalledInterval: 120_000,
-    lockDuration: 600_000,
-    removeOnComplete: { count: 5 },
-    removeOnFail: { count: 5 },
-  },
-);
+function createAnalysisWorker(): Worker<AnalysisJobData> {
+  const w = new Worker<AnalysisJobData>(
+    ANALYSIS_QUEUE,
+    async (job: Job<AnalysisJobData>) => {
+      if (job.data.task === 'preflight') {
+        await processPreflightJob(job);
+      } else {
+        await processAnalysisJob(job);
+      }
+    },
+    {
+      connection,
+      concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
+      drainDelay: Number(process.env.WORKER_POLL_INTERVAL_MS ?? 30000),
+      stalledInterval: 120_000,
+      lockDuration: 600_000,
+      removeOnComplete: { count: 5 },
+      removeOnFail: { count: 5 },
+    },
+  );
 
-worker.on('completed', (job: Job<AnalysisJobData>) => {
-  console.log(`[worker] job ${job.id} completed (project=${job.data.projectId})`);
+  w.on('completed', (job: Job<AnalysisJobData>) => {
+    console.log(`[worker] job ${job.id} completed (project=${job.data.projectId})`);
+  });
+
+  w.on('failed', (job: Job<AnalysisJobData> | undefined, err: Error) => {
+    console.error(`[worker] job ${job?.id} failed (project=${job?.data.projectId}):`, err.message);
+  });
+
+  // Connection-level errors were invisible — a dead blocking socket looked like
+  // an idle worker. Log them so "listening but deaf" is diagnosable.
+  w.on('error', (err: Error) => {
+    console.error('[worker] worker error:', err.message);
+  });
+  return w;
+}
+
+let worker = createAnalysisWorker();
+
+// Last-resort guards: a stray rejection from one job's async fan-out must
+// never take down the consumer for every other project (observed live:
+// a dangling BudgetExceededError exited the process). Job-level handling
+// stays the real error path; these only log-and-survive.
+process.on('unhandledRejection', (reason) => {
+  console.error('[worker] UNHANDLED REJECTION (kept alive):', reason instanceof Error ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[worker] UNCAUGHT EXCEPTION (kept alive):', err.stack ?? err.message);
 });
 
-worker.on('failed', (job: Job<AnalysisJobData> | undefined, err: Error) => {
-  console.error(`[worker] job ${job?.id} failed (project=${job?.data.projectId}):`, err.message);
-});
-
-// Connection-level errors were invisible — a dead blocking socket looked like
-// an idle worker. Log them so "listening but deaf" is diagnosable.
-worker.on('error', (err: Error) => {
-  console.error('[worker] worker error:', err.message);
+// Dead-consumer self-heal: two consecutive waiting-with-no-active samples
+// mean this consumer is deaf (the post-restart quirk) — close and recreate
+// it in-process instead of waiting for a human `docker restart`.
+const analysisQueueForWatchdog = new Queue(ANALYSIS_QUEUE, { connection });
+startQueueWatchdog({
+  queueName: ANALYSIS_QUEUE,
+  sample: async () => ({
+    waiting: await analysisQueueForWatchdog.getWaitingCount(),
+    active: await analysisQueueForWatchdog.getActiveCount(),
+  }),
+  recreate: async () => {
+    await worker.close().catch(() => {});
+    worker = createAnalysisWorker();
+  },
 });
 
 /**
