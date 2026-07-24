@@ -558,9 +558,25 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
       ),
     ]);
 
-    const ranking = rankingResult.rows[0] as
+    let ranking = rankingResult.rows[0] as
       | { composite_score: string | number; scores: Record<string, number>; ranking_reasons: string[] }
       | undefined;
+    // "Not ranked in this snapshot" on a clickable symbol reads as a gap in
+    // the product (audit §4.1). Symbols outside the ranked set inherit their
+    // FILE's rank, labeled as such — file-level ranking covers every file.
+    let rankingScope: "direct" | "file_fallback" = "direct";
+    if (!ranking && !isFileNode && typeof nodeRow.stable_key === "string") {
+      const fileKey = nodeRow.stable_key.split("#")[0];
+      ranking = (await query(
+        `SELECT score AS composite_score, score_breakdown AS scores, reasons AS ranking_reasons
+         FROM criticality_scores
+         WHERE snapshot_id = $1 AND stable_key = $2 AND target_type = 'file'
+           AND phase = 'candidate' AND view = 'candidate' AND role = 'general'
+         LIMIT 1`,
+        [snapshotId, fileKey],
+      )).rows[0] as typeof ranking;
+      if (ranking) rankingScope = "file_fallback";
+    }
     const record = recordResult.rows[0] as
       | { summary: string; confidence: string; facts_only: boolean; record: Record<string, unknown> }
       | undefined;
@@ -576,6 +592,7 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         ...node,
         connected_workflows: workflowsResult.rows,
         composite_score: ranking ? Number(ranking.composite_score) : null,
+        ranking_scope: ranking ? rankingScope : null,
         ranking_reasons: ranking?.ranking_reasons ?? [],
         callers: callersResult.rows,
         callees: calleesResult.rows,

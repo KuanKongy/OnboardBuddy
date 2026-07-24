@@ -806,9 +806,21 @@ function extractVariableStatement(
       base.isTrivial = isTrivialBody(fn.body, calls.length);
     } else {
       if (decl.type) base.typeAnnotation = decl.type.getText(sf);
-      if (decl.initializer) base.initializer = decl.initializer.getText(sf);
-      // Plain constants/values are trivial by definition — facts say it all.
-      base.isTrivial = true;
+      if (decl.initializer) {
+        base.initializer = decl.initializer.getText(sf);
+        // `const worker = new Worker(QUEUE, async (job) => run(job))`
+        // carries real control flow in its closure argument — without
+        // these calls the queue-consumer entrypoint seeds a dead node and
+        // the background pipeline never traces as a workflow (audit P2 §15).
+        const calls = extractCallSymbols(decl.initializer, sf);
+        if (calls.length > 0) {
+          base.callsSymbols = calls;
+          const resolvedCalls = extractResolvedCalls(decl.initializer, sf, ctx);
+          if (resolvedCalls.length > 0) base.resolvedCalls = resolvedCalls;
+        }
+      }
+      // Plain constants/values are trivial — call-bearing initializers are not.
+      base.isTrivial = base.callsSymbols === undefined;
     }
 
     base.bodyHash = hashBody(decl.getText(sf));

@@ -49,17 +49,20 @@ export interface SemanticRecordBody {
   boundary_rationale?: string | null;    // cluster
 }
 
-// Prompt versions (doc/Pipeline.md "Prompts"); bumping one invalidates its cache slice.
+// Prompt versions (doc/Pipeline.md "Prompts"); bumping one invalidates its
+// cache slice. v2 bump (audit §3.8): the voice contract below joined
+// OUTPUT_RULES — without the bump a fresh analysis would keep serving the
+// cached "enhances user engagement"-era summaries.
 export const PROMPT_VERSIONS = {
-  symbol: 'symbol-record-v1',
-  file: 'file-synthesis-v1',
-  module: 'module-synthesis-v1',
-  service: 'service-synthesis-v1',
-  system: 'system-synthesis-v1',
-  capability: 'capability-extraction-v2',
-  refinement: 'refinement-v1',
-  critique: 'critique-v1',
-  workflow: 'workflow-record-v1',
+  symbol: 'symbol-record-v2',
+  file: 'file-synthesis-v2',
+  module: 'module-synthesis-v2',
+  service: 'service-synthesis-v2',
+  system: 'system-synthesis-v2',
+  capability: 'capability-extraction-v3',
+  refinement: 'refinement-v2',
+  critique: 'critique-v2',
+  workflow: 'workflow-record-v2',
   rerank: 'rerank-v1',
   factsOnly: 'facts-only-v1', // deterministic, no LLM
 } as const;
@@ -68,7 +71,13 @@ export const PROMPT_VERSIONS = {
 export const OUTPUT_RULES =
   'Rules: use ONLY the provided evidence; cite receipt ids (r1, r2, ...) in claims; ' +
   'do not guess business intent beyond the evidence; docs receipts may be stale — code receipts win; ' +
-  'write "unknown" rather than inventing an answer.';
+  'write "unknown" rather than inventing an answer. ' +
+  // Voice contract (audit §3.8): these summaries surface in receipt viewers
+  // and tab panels — a 4-line SQL helper must never "enhance user engagement".
+  'Voice: flat declarative engineering prose; state what the code does mechanically. ' +
+  'FORBIDDEN: crucial, essential, seamless, vital, powerful, robust, comprehensive, ' +
+  '"enhances user …", "user engagement/satisfaction/retention", and any consequence ' +
+  'not mechanically derivable from the evidence.';
 
 // ── Structured-output schemas ────────────────────────────────────────────────
 // Strict mode: every property required; optionality is expressed as |null.

@@ -28,9 +28,11 @@ export interface WorkflowStep {
    * syntheticReturn marks the final response step that re-references the
    * trigger symbol (Express handlers respond after their callees run). The
    * graph route renders it as a distinct terminal node instead of an edge
-   * looping back to step 1.
+   * looping back to step 1. syntheticSeedEffect marks an effect step
+   * surfaced from the trigger's own body (writes/enqueues that the
+   * 'trigger' kind used to swallow).
    */
-  metadata?: { syntheticReturn?: boolean };
+  metadata?: { syntheticReturn?: boolean; syntheticSeedEffect?: boolean };
 }
 
 export interface ExtractedWorkflow {
@@ -251,6 +253,30 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
       const kind = isSeed ? 'trigger' : classifyStep(node, effects, signals);
       if (effects.length > 0 || signals.some((s) => EFFECT_SIGNALS.has(s))) effectCount++;
       pushStep(node, kind, describeStep(node, kind, ep, effects, signals));
+      // The seed is always a 'trigger', which used to swallow its own
+      // effects: a handler that INSERTs a job row and enqueues it traced as
+      // trigger -> reads -> response, with the write and the enqueue —
+      // the whole point of the flow — invisible (audit §5.4). Surface them
+      // as explicit steps on the same node.
+      if (isSeed) {
+        const seedEffectKinds = new Map<string, DetectedSideEffect>();
+        for (const e of effects) if (!seedEffectKinds.has(e.kind)) seedEffectKinds.set(e.kind, e);
+        for (const [effectKind, effect] of seedEffectKinds) {
+          const stepKind =
+            effectKind === 'database_write' ? 'data_write'
+            : effectKind === 'message_publish' ? 'async_work'
+            : null;
+          if (!stepKind) continue; // reads/noise stay implicit
+          pushStep(
+            node,
+            stepKind,
+            stepKind === 'data_write'
+              ? `Writes data${effect.target ? ` (${effect.target})` : ''} from ${node.name}`
+              : `Enqueues async work${effect.target ? ` (${effect.target})` : ''} from ${node.name}`,
+            { syntheticSeedEffect: true },
+          );
+        }
+      }
     }
 
     // Responses end a request flow — don't expand past them.
@@ -381,6 +407,7 @@ function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {
     return `${ep.method ?? 'HTTP'} ${ep.routePattern ?? seed.name}`;
   }
   if (ep.kind === 'ui_route') return `Page: ${seed.name}`;
+  if (ep.kind === 'message_consumer') return `Queue consumer: ${ep.routePattern ?? seed.name}`;
   return `${ep.kind.replace(/_/g, ' ')}: ${seed.name}`;
 }
 

@@ -60,6 +60,58 @@ const projectionRow = (t: ProjectedTarget) => ({
   targetType: t.targetType, stableKey: t.stableKey, score: Math.round(t.score * 1000) / 1000, reasons: t.reasons.slice(0, 4),
 });
 
+/**
+ * Models copy whatever identifier they see, no matter the instructions —
+ * wf:/cluster: stable keys leaked into three different sections before
+ * this became mechanical. Projection rows for synthesis targets
+ * (workflows, clusters) are served with their human title INSTEAD of the
+ * stable key; path-keyed rows keep their stableKey (it IS the human name).
+ */
+async function humanizeProjectionRows(
+  snapshotId: string,
+  targets: ProjectedTarget[],
+): Promise<Array<Record<string, unknown>>> {
+  const titles = new Map<string, string>();
+  for (const row of (await query(
+    `SELECT stable_key, title AS name FROM workflows WHERE snapshot_id = $1
+     UNION ALL
+     SELECT stable_key, label AS name FROM architecture_clusters WHERE snapshot_id = $1`,
+    [snapshotId],
+  )).rows as Array<{ stable_key: string; name: string }>) {
+    titles.set(row.stable_key, row.name);
+  }
+  return targets.map((t) => {
+    if (titles.has(t.stableKey)) {
+      const { stableKey: _hidden, ...rest } = projectionRow(t);
+      return { ...rest, title: titles.get(t.stableKey) };
+    }
+    return projectionRow(t);
+  });
+}
+
+/**
+ * "Which tests protect you" (audit §9/P2 16): tested-key -> test-file keys
+ * from the graph's `tests` edges. Feeds critical_25's first-change exercise
+ * and safety_rails' per-risk guard lines — a named test is a mechanical
+ * fact, "well tested" is not.
+ */
+async function testGuardsFor(snapshotId: string): Promise<Record<string, string[]>> {
+  const rows = (await query(
+    `SELECT tn.stable_key AS target_key, sn.stable_key AS test_key
+     FROM graph_edges e
+     JOIN graph_nodes sn ON sn.id = e.source_node_id
+     JOIN graph_nodes tn ON tn.id = e.target_node_id
+     WHERE e.snapshot_id = $1 AND e.type = 'tests'
+     LIMIT 80`,
+    [snapshotId],
+  )).rows as Array<{ target_key: string; test_key: string }>;
+  const guards: Record<string, string[]> = {};
+  for (const r of rows) {
+    (guards[r.target_key] ??= []).push(r.test_key);
+  }
+  return guards;
+}
+
 export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   start_here: {
     views: ['purpose', 'domain'],
@@ -114,7 +166,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   architecture: {
     views: ['purpose', 'dependency'],
     retrievalTask: () => 'System architecture: layers, boundaries, and how the main modules relate.',
-    instructions: 'Explain the architecture from the cluster map: each cluster\'s role, the typed edges between them, and how a request flows across boundaries. The attached Mermaid diagram is authoritative — describe it, do not contradict it.',
+    instructions: 'Lead with "## How a request flows": narrate ONE real end-to-end path across cluster boundaries using the clusterEdges and their workflow crossings — name the clusters it passes through in order. Then one factual line per major cluster (its role, from deterministic_summary — no generic "handles business logic" filler). Keep it short: this section is the narrative companion to the interactive Architecture tab, which holds the full cluster map — close by saying exactly that. The attached Mermaid diagram is derived from the same data — describe it, do not contradict it.',
     deterministic: async (deps) => ({
       clusters: (await query(
         `SELECT stable_key, label, kind, critical_score, deterministic_summary FROM architecture_clusters WHERE snapshot_id = $1 ORDER BY critical_score DESC`,
@@ -176,6 +228,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       'Write the Critical 25% as an ORDERED LEARNING PATH, not an inventory.',
       'Open with one sentence of honest coverage using ONLY the provided coverage numbers: "This path covers N of M symbols and X of Y traced workflows — the top ~25% by composite criticality; everything else stays browsable in the Dependencies tab."',
       'Then 5-8 numbered stops in reading order for the ROLE. Each stop = one item from the provided critical25 data: what it does (from evidence), why it ranks here (quote its ranking reasons — fan-in, workflow participation, side effects), and what depends on it. Engineering facts only — no invented product or user consequences.',
+      'Then "## Your first change" — end the path with one small, concrete, low-risk change a ROLE developer could make in a file from this path (derived from the evidence — e.g. extend an existing pattern visible in a snippet), and the EXACT test file from testGuards that verifies that area. If testGuards has no test for any path file, say plainly that tests for these areas are not visible in the analysis instead of inventing a verification step.',
       'Close with "## What this path leaves out" — one short paragraph naming the biggest areas NOT in the path (from the cluster evidence) and why deferring them is safe.',
     ].join(' '),
     deterministic: async (deps) => {
@@ -184,8 +237,23 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         `SELECT symbol_count, file_count, workflow_count FROM analysis_snapshots WHERE id = $1`,
         [deps.snapshotId],
       )).rows[0] as { symbol_count: number | null; file_count: number | null; workflow_count: number | null } | undefined;
+      // Only guards for files/symbols actually on the path — the model must
+      // name a real test, not decorate every stop with the same suite.
+      const guards = await testGuardsFor(deps.snapshotId);
+      const pathKeys = new Set([...top.values()].flat().map((t) => t.stableKey));
+      const testGuards = Object.fromEntries(
+        Object.entries(guards).filter(([target]) =>
+          pathKeys.has(target) || [...pathKeys].some((k) => k.startsWith(`${target}#`) || target.startsWith(`${k.split('#')[0]}`)),
+        ),
+      );
+      const humanized = await Promise.all(
+        [...top.entries()].map(async ([type, targets]) =>
+          [type, await humanizeProjectionRows(deps.snapshotId, targets)] as const,
+        ),
+      );
       return {
-        critical25: Object.fromEntries([...top.entries()].map(([type, targets]) => [type, targets.map(projectionRow)])),
+        critical25: Object.fromEntries(humanized),
+        testGuards,
         coverage: {
           totalSymbols: snap?.symbol_count ?? null,
           totalFiles: snap?.file_count ?? null,
@@ -221,18 +289,20 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   role_path: {
     views: ['purpose', 'domain'],
     retrievalTask: (role) => `An ordered learning path for a new ${role} developer: what to study first and why.`,
-    instructions: 'Produce an ordered learning path THROUGH THE CODEBASE for a ROLE developer — this is how a developer learns the code, NOT the product\'s end-user page journey. 5-10 steps, each naming concrete files/workflows/tutorials with the reason it comes at that position; span the codebase\'s areas (backend, worker, frontend) per the projections rather than walking the app\'s UI screens. Use the role projection ordering and capabilities as the backbone.',
-    deterministic: async (deps) => ({
-      roleOrdering: deps.projections.slice(0, 12).map(projectionRow),
-      capabilities: (await query(
-        `SELECT name, description FROM capabilities WHERE snapshot_id = $1`,
-        [deps.snapshotId],
-      )).rows,
-      tutorials: (await query(
-        `SELECT title, summary FROM tutorials WHERE snapshot_id = $1 AND status <> 'failed' LIMIT 10`,
-        [deps.snapshotId],
-      )).rows,
-    }),
+    instructions: 'Produce an ordered learning path THROUGH THE CODEBASE for a ROLE developer — this is how a developer learns the code, NOT the product\'s end-user page journey. 5-10 steps, each naming concrete files/workflows/tutorials with the reason it comes at that position; span the codebase\'s areas (backend, worker, frontend) per the projections rather than walking the app\'s UI screens. Use the role projection ordering and capabilities as the backbone. Refer to workflows by their human title (provided as `title` on workflow entries); internal keys (wf:…, cluster:…) must never appear in the output.',
+    deterministic: async (deps) => {
+      return {
+        roleOrdering: await humanizeProjectionRows(deps.snapshotId, deps.projections.slice(0, 12)),
+        capabilities: (await query(
+          `SELECT name, description FROM capabilities WHERE snapshot_id = $1`,
+          [deps.snapshotId],
+        )).rows,
+        tutorials: (await query(
+          `SELECT title, summary FROM tutorials WHERE snapshot_id = $1 AND status <> 'failed' LIMIT 10`,
+          [deps.snapshotId],
+        )).rows,
+      };
+    },
   },
 
   workflow_guide: {
@@ -328,17 +398,20 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   safety_rails: {
     views: ['operations'],
     retrievalTask: () => 'Risky areas: what requires extra caution, what tests to trust, dangerous side effects.',
-    instructions: 'Identify dangerous areas grounded in the evidence: modules with risky side effects, invariants from the records, shared modules with wide blast radius, and the tests/config that guard them. For each: the concrete RISK.',
+    instructions: [
+      'Identify dangerous areas grounded in the evidence: modules with risky side effects, shared modules with wide blast radius, and external spend/integration paths.',
+      'Each risk must name the SPECIFIC hazard — what breaks, what data or money is at stake, which boundary is crossed — derived from the side-effect type and target. "Writes to the database" is a category, not a hazard; "an UPDATE on project_members changes who can access the project" is.',
+      'Treat external HTTP/model-API call sites (http_request / external_integration effects) as spend-and-availability risks, and queue/enqueue paths as retry/duplication risks.',
+      'For each risk, name the exact test file from testGuards that covers that area ("guarded by <test>"); when testGuards has none, write "no test covers this path in the analysis" — never imply coverage.',
+      'A .env.example or config template is documentation of required settings, not a secrets risk.',
+    ].join(' '),
     deterministic: async (deps) => ({
       riskySideEffects: (await query(
         `SELECT s.type, s.target, n.file_path FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
          WHERE s.snapshot_id = $1 ORDER BY s.type LIMIT 20`,
         [deps.snapshotId],
       )).rows,
-      testFiles: (await query(
-        `SELECT stable_key FROM repository_files WHERE snapshot_id = $1 AND category = 'test' LIMIT 15`,
-        [deps.snapshotId],
-      )).rows,
+      testGuards: await testGuardsFor(deps.snapshotId),
       configFiles: (await query(
         `SELECT stable_key, category FROM repository_files WHERE snapshot_id = $1 AND category IN ('config', 'migration') LIMIT 15`,
         [deps.snapshotId],
@@ -349,7 +422,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   dependency_graph: {
     views: ['dependency'],
     retrievalTask: () => 'The dependency structure: central modules, coupling points, import patterns.',
-    instructions: 'Explain the dependency structure: the highest fan-in modules and why they matter, key dependency chains, and coupling risks. Mostly deterministic facts — keep interpretation tight.',
+    instructions: 'Explain the dependency structure: the highest fan-in modules and why they matter, key dependency chains, and coupling risks. For each keystone state the mechanical blast radius with the provided dependent count verbatim: "N files import X — a signature change breaks all of them." Mostly deterministic facts — keep interpretation tight. Close with one line noting the interactive Dependencies tab holds the full graph.',
     deterministic: async (deps) => ({
       centralNodes: (await query(
         `SELECT stable_key, name, (metadata->>'dependentCount')::int AS dependents
@@ -367,20 +440,43 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   doc_health: {
     views: ['purpose'],
     retrievalTask: () => 'Documentation health: what is documented, what conflicts, what is missing.',
-    instructions: 'Assess documentation health from the deterministic facts: doc files present, records flagged docs_conflict_with_code or rejected, and undocumented critical areas. Constructive priorities, not blame.',
-    deterministic: async (deps) => ({
-      docFiles: (await query(
-        `SELECT stable_key FROM repository_files WHERE snapshot_id = $1 AND category = 'doc' LIMIT 15`,
-        [deps.snapshotId],
-      )).rows,
-      flaggedRecords: (await query(
-        `SELECT ssr.stable_key, sr.flags FROM semantic_records sr
-         JOIN snapshot_semantic_records ssr ON ssr.record_id = sr.id
-         WHERE ssr.snapshot_id = $1 AND (sr.status = 'rejected' OR jsonb_array_length(sr.flags) > 0) LIMIT 20`,
-        [deps.snapshotId],
-      )).rows,
-      topUndocumented: deps.projections.slice(0, 8).map(projectionRow),
-    }),
+    instructions: [
+      'Assess the REPOSITORY\'s documentation health — this section is about the repo\'s docs, never about this tool\'s own generation pipeline.',
+      '(1) Doc inventory: the doc files with how recently each changed (churn evidence); a doc untouched while its subject area churns is stale — say which.',
+      '(2) Coverage of critical code: from criticalDocCoverage, name the top-ranked symbols/files with no docstring — these are the highest-value documentation gaps. Describe importance by rank ("2nd most critical for this role"), never as a bare score.',
+      '(3) Conflicts: ONLY evidence flagged docs_conflict_with_code counts as "docs disagree with code".',
+      'pipelineFlaggedRecords are this tool\'s INTERNAL quality flags about its own generated records — if mentioned at all, one sentence ("N generated records were internally flagged for review"), never presented as the repo\'s docs conflicting with its code.',
+      'Constructive priorities, not blame.',
+    ].join(' '),
+    deterministic: async (deps) => {
+      const topProjected = deps.projections.slice(0, 10);
+      const docCoverage = topProjected.length > 0
+        ? (await query(
+            `SELECT stable_key, (metadata->>'jsdoc') IS NOT NULL AS documented
+             FROM graph_nodes WHERE snapshot_id = $1 AND stable_key = ANY($2)`,
+            [deps.snapshotId, topProjected.map((t) => t.stableKey)],
+          )).rows
+        : [];
+      return {
+        docFiles: (await query(
+          `SELECT stable_key,
+                  metadata->'churn'->>'lastTouchedAt' AS last_touched,
+                  metadata->'churn'->>'commitCount90d' AS commits_90d
+           FROM repository_files WHERE snapshot_id = $1 AND category = 'doc' LIMIT 15`,
+          [deps.snapshotId],
+        )).rows,
+        // Renamed from flaggedRecords: prose kept presenting the pipeline's
+        // self-critique as "the repo's docs conflict with the code".
+        pipelineFlaggedRecords: (await query(
+          `SELECT ssr.stable_key, sr.flags FROM semantic_records sr
+           JOIN snapshot_semantic_records ssr ON ssr.record_id = sr.id
+           WHERE ssr.snapshot_id = $1 AND (sr.status = 'rejected' OR jsonb_array_length(sr.flags) > 0) LIMIT 20`,
+          [deps.snapshotId],
+        )).rows,
+        criticalDocCoverage: docCoverage,
+        topForRole: topProjected.map(projectionRow),
+      };
+    },
   },
 };
 

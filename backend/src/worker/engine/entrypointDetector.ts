@@ -155,6 +155,34 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
       }
     }
 
+    // BullMQ-style queue consumers: `new Worker(QUEUE, handler)` registers
+    // the product's background pipeline with an inline closure — invisible
+    // to the named-export heuristic above, which is why the analyze
+    // pipeline never traced as a workflow (audit P2 §15). The first
+    // argument is a string literal or an UPPER_SNAKE constant; anything
+    // path-like is a worker_threads script, not a queue.
+    const seenQueues = new Set<string>();
+    for (const sym of fa.symbols) {
+      const src = `${sym.initializer ?? ''} ${sym.snippet ?? ''}`;
+      if (!src.includes('new Worker')) continue;
+      for (const m of src.matchAll(
+        /new\s+Worker\s*(?:<[^>]*>)?\s*\(\s*(?:['"`]([\w:.-]+)['"`]|([A-Z_][A-Z0-9_]*))\s*,/g,
+      )) {
+        const queueName = m[1] ?? m[2]!;
+        if (queueName.includes('/') || seenQueues.has(queueName)) continue;
+        seenQueues.add(queueName);
+        entrypoints.push({
+          nodeStableKey: relativePath,
+          kind: 'message_consumer',
+          routePattern: queueName,
+          filePath: relativePath,
+          symbolName: sym.name,
+          symbolStableKey: symbolKey(relativePath, sym.name),
+        });
+        foundEntrypoint = true;
+      }
+    }
+
     // Main entry files (only if no other entrypoint was already detected for this file)
     if (!foundEntrypoint && (relativePath.match(/(^|\/)index\.(ts|js|tsx|jsx)$/) || relativePath.match(/(^|\/)main\.(ts|js)$/))) {
       entrypoints.push({

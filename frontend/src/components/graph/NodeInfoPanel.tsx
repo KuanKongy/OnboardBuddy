@@ -194,7 +194,11 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                 <span className="text-lg font-semibold tabular-nums text-foreground">
                   {Math.round(detail.composite_score * 100)}
                 </span>
-                <span className="text-[0.65625rem] text-muted-foreground">/ 100 critical-path score</span>
+                <span className="text-[0.65625rem] text-muted-foreground">
+                  / 100 critical-path score
+                  {detail.ranking_scope === "file_fallback" &&
+                    " — from this symbol's file (symbol not individually ranked)"}
+                </span>
               </div>
             )}
             {detail.ranking_reasons.length > 0 && (

@@ -207,11 +207,25 @@ function initialBlockExpansion(section: OnboardingSection): boolean[] {
   return section.blocks.map((_, i) => i === 0);
 }
 
+/**
+ * Sections that retell what an interactive tab already shows link to it
+ * (audit §8): the prose is the narrative, the tab is the reference.
+ */
+const TAB_FOR_SECTION: Partial<Record<SectionId, { path: string; label: string }>> = {
+  architecture: { path: "architecture", label: "Explore the interactive cluster map in the Architecture tab" },
+  "dependency-graph": { path: "dependencies", label: "Browse the full symbol graph in the Dependencies tab" },
+  "capability-map": { path: "capabilities", label: "Open the Capabilities tab for flows and starting points" },
+  workflows: { path: "workflows", label: "See every traced flow in the Workflows tab" },
+  "data-schema": { path: "dependencies", label: "Trace table accessors in the Dependencies tab" },
+};
+
 function SectionView({
   section,
+  projectId,
   onReceiptClick,
 }: {
   section: OnboardingSection;
+  projectId?: string;
   onReceiptClick: (r: SourceReceipt) => void;
 }) {
   const [expanded, setExpanded] = useState<boolean[]>(() => initialBlockExpansion(section));
@@ -364,7 +378,7 @@ function SectionView({
 
       {/* Deterministic diagrams (Mermaid) embedded in this section */}
       {(section.diagrams ?? []).map((d, i) => (
-        <MermaidDiagram key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} />
+        <MermaidDiagram key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
       ))}
 
       {/* Honest unknowns: gaps stated plainly instead of invented content */}
@@ -382,6 +396,17 @@ function SectionView({
             ))}
           </ul>
         </div>
+      )}
+
+      {/* Tab deep-link: prose narrates, the tab is the reference (audit §8) */}
+      {projectId && TAB_FOR_SECTION[section.id] && (
+        <Link
+          to={`/projects/${projectId}/${TAB_FOR_SECTION[section.id]!.path}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-2 text-[0.78125rem] font-medium text-primary transition-colors hover:border-primary/50 hover:bg-accent/40"
+        >
+          {TAB_FOR_SECTION[section.id]!.label}
+          <ChevronRight className="h-3.5 w-3.5" />
+        </Link>
       )}
     </div>
   );
@@ -1391,7 +1416,7 @@ export function OnboardingPage() {
                     </Button>
                   </div>
                 )}
-                <SectionView section={activeSection} onReceiptClick={setReceiptModal} />
+                <SectionView section={activeSection} projectId={id} onReceiptClick={setReceiptModal} />
                 {(() => {
                   const navIdx = presentSectionIds.indexOf(activeSectionId);
                   const prevId = navIdx > 0 ? presentSectionIds[navIdx - 1] : null;
