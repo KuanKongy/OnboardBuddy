@@ -41,8 +41,10 @@ export function defaultTierModels(): Record<ModelTier, string[]> {
  * structured-output pipeline (strict JSON, omission handling, price row).
  */
 export const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (default — fast, 1M context)' },
+  { id: 'auto', label: 'Auto — fastest private provider right now (gemini/deepseek/scout)' },
+  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (fast, 1M context)' },
   { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash (1M context)' },
+  { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout (fastest bursts, smaller context)' },
 ];
 
 export const DEFAULT_FAILURE_BEHAVIOR: Record<ModelTier, FailureBehavior[]> = {
@@ -70,7 +72,12 @@ export function resolveTierConfig(overrides?: {
   if (tierModels && typeof tierModels === 'object') {
     for (const tier of TIERS) {
       const list = (tierModels as Record<string, unknown>)[tier];
-      if (Array.isArray(list) && list.length > 0 && list.every((m) => typeof m === 'string' && m.length > 0)) {
+      if (Array.isArray(list) && list.length > 0 && list.every((m) => typeof m === 'string' && m.length > 0)
+        // 'auto' is a selector sentinel, not a model id — call sites resolve
+        // it before building the tier config; if it leaks through (old
+        // callers, direct API writes), fall back to the env defaults rather
+        // than sending "auto" to OpenRouter.
+        && list[0] !== 'auto') {
         models[tier] = list as string[];
       }
     }
@@ -96,6 +103,7 @@ export function resolveTierConfig(overrides?: {
 const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> = {
   'google/gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
   'deepseek/deepseek-v4-flash': { input: 0.09, output: 0.18 },
+  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
 };
 
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {

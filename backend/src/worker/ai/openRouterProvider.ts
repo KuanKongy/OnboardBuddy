@@ -131,13 +131,23 @@ export class OpenRouterProvider implements AiProvider {
     // decode on the default route varied 12–124 tok/s for the same model.
     // 'throughput' asks OpenRouter to prefer the fastest upstream. Set
     // OPENROUTER_PROVIDER_SORT="" to disable (e.g. non-OpenRouter base URL).
+    // data_collection 'deny' is the privacy half of "sort by privacy then
+    // throughput": OpenRouter excludes providers that retain/train on
+    // prompts (the only machine-enforceable policy signal — the endpoints
+    // API exposes no per-provider retention fields). Set
+    // OPENROUTER_DATA_COLLECTION="" to disable.
     const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
+    const dataCollection = process.env.OPENROUTER_DATA_COLLECTION ?? 'deny';
+    const providerPrefs = {
+      ...(sort ? { sort } : {}),
+      ...(dataCollection ? { data_collection: dataCollection } : {}),
+    };
     return {
       model: req.model,
       messages: req.messages,
       ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
-      ...(sort ? { provider: { sort } } : {}),
+      ...(Object.keys(providerPrefs).length > 0 ? { provider: providerPrefs } : {}),
     };
   }
 
