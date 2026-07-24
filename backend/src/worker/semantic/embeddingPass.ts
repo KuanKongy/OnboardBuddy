@@ -11,7 +11,9 @@ import type { SemanticContext } from './context.js';
 import type { SemanticRecordBody, RecordLevel } from './recordTypes.js';
 import { viewsForRecord, renderView, kindForRecord, type ViewType, type ViewRenderContext } from './embeddingViews.js';
 
-const EMBED_BATCH_SIZE = 64;
+// 128 inputs/request (OpenAI allows 2,048; 128×1536-dim rows keeps each
+// multi-row INSERT under ~2MB) — Track C/D sizing.
+const EMBED_BATCH_SIZE = 128;
 /** Embeddings currently go to the OpenAI-compatible embeddings endpoint. */
 const EMBEDDINGS_PROVIDER = 'openai';
 
@@ -102,7 +104,7 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
     embedBatches.push(pending.slice(i, i + EMBED_BATCH_SIZE));
   }
-  await mapLimit(embedBatches, 3, async (batch) => {
+  await mapLimit(embedBatches, 8, async (batch) => {
     const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
     batches += 1;
     // One multi-row insert per batch — per-vector inserts were hundreds of
@@ -126,6 +128,7 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
         values,
       );
     }
+    await ctx.onProgress?.({ phase: 'embeddings', done: batches, total: embedBatches.length, detail: `Embedding records (${batches}/${embedBatches.length} batches)` });
   });
 
   return { embedded, skippedExisting, records: rows.length, batches };

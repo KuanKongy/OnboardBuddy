@@ -170,7 +170,16 @@ export function schemaForLevel(level: RecordLevel): JsonSchema {
 
 /** Batched symbol pass: one call returns records keyed by stable_key. */
 export function batchedSymbolSchema(): JsonSchema {
-  const single = recordSchema({ stable_key: str }) as { required: string[]; properties: Record<string, unknown> };
+  return batchedLevelSchema('symbol');
+}
+
+/**
+ * Batched variant for any record level: one call returns several records,
+ * each self-identifying via stable_key (latency overhaul Track B — file
+ * synthesis batches 12 files per call).
+ */
+export function batchedLevelSchema(level: RecordLevel): JsonSchema {
+  const single = recordSchema({ ...LEVEL_EXTRA_PROPERTIES[level], stable_key: str });
   return {
     type: 'object',
     additionalProperties: false,

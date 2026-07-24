@@ -74,12 +74,15 @@ export async function runRefinementPass(
     ].join('\n\n');
 
     const response = await ctx.ai.call<SemanticRecordBody>({
-      tier: 'strong',
+      // Structured record rewrite — cheap tier for JSON reliability (see
+      // capabilityPass note).
+      tier: 'cheap',
       targetType: 'refinement',
       promptVersion: PROMPT_VERSIONS.refinement,
       schemaName: `${target.record.recordLevel}_record`,
       schema: schemaForLevel(target.record.recordLevel),
       user: prompt,
+      maxOutputTokens: 6_000,
     });
     if (!response.value) return;
 

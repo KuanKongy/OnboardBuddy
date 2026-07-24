@@ -37,8 +37,13 @@ export const connection = buildConnection();
 
 const queueOpts: QueueOptions = { connection };
 
-export const ANALYSIS_QUEUE = 'analysis';
-export const SUMMARY_QUEUE = 'summary';
+// Dev isolation: teammates share one cloud Redis, so a stale worker on
+// another machine can steal (and 401-fail) jobs enqueued here. Setting
+// QUEUE_SUFFIX (e.g. "-alice") gives this machine's producers AND consumers
+// their own queue names. Default '' = shared team queues.
+const QUEUE_SUFFIX = process.env.QUEUE_SUFFIX ?? '';
+export const ANALYSIS_QUEUE = `analysis${QUEUE_SUFFIX}`;
+export const SUMMARY_QUEUE = `summary${QUEUE_SUFFIX}`;
 
 // Queues are created lazily on first use rather than at module load. BullMQ opens
 // a Redis connection as soon as a Queue is constructed, so eager top-level

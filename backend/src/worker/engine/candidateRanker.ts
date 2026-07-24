@@ -343,32 +343,38 @@ export async function persistCandidateRankings(
   nodeIdMap: Map<string, string>,
   workflowIdMap: Map<string, string>,
 ): Promise<number> {
-  let written = 0;
-  for (const r of rankings.slice(0, PERSIST_LIMIT)) {
-    const nodeId = r.targetType === 'workflow' ? null : nodeIdMap.get(r.stableKey);
-    const targetId = r.targetType === 'workflow' ? workflowIdMap.get(r.stableKey) : null;
-    if (r.targetType !== 'workflow' && !nodeId) continue;
+  // Chunked multi-VALUES upserts — the per-row loop cost ~500 round trips
+  // against the remote pooler (latency overhaul Track C).
+  const persistable = rankings.slice(0, PERSIST_LIMIT)
+    .map((r) => ({
+      r,
+      nodeId: r.targetType === 'workflow' ? null : nodeIdMap.get(r.stableKey) ?? null,
+      targetId: r.targetType === 'workflow' ? workflowIdMap.get(r.stableKey) ?? null : null,
+    }))
+    .filter(({ r, nodeId }) => r.targetType === 'workflow' || nodeId !== null);
 
+  const CHUNK = 250;
+  let written = 0;
+  for (let i = 0; i < persistable.length; i += CHUNK) {
+    const part = persistable.slice(i, i + CHUNK);
+    const values: unknown[] = [];
+    const tuples = part.map(({ r, nodeId, targetId }, j) => {
+      values.push(snapshotId, r.targetType, nodeId, targetId, r.stableKey, r.score,
+        JSON.stringify({ normalized: r.breakdown, raw: r.raw }), r.reasons);
+      const base = j * 8;
+      return `($${base + 1}, 'candidate', 'candidate', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, 'general', $${base + 6}, $${base + 7}, $${base + 8})`;
+    });
     await query(
       `INSERT INTO criticality_scores
          (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
-       VALUES ($1, 'candidate', 'candidate', $2, $3, $4, $5, 'general', $6, $7, $8)
+       VALUES ${tuples.join(', ')}
        ON CONFLICT (snapshot_id, phase, view, target_type, stable_key, COALESCE(role, ''))
        DO UPDATE SET score = EXCLUDED.score, score_breakdown = EXCLUDED.score_breakdown,
                      reasons = EXCLUDED.reasons, target_node_id = EXCLUDED.target_node_id,
                      target_id = EXCLUDED.target_id`,
-      [
-        snapshotId,
-        r.targetType,
-        nodeId ?? null,
-        targetId ?? null,
-        r.stableKey,
-        r.score,
-        JSON.stringify({ normalized: r.breakdown, raw: r.raw }),
-        r.reasons,
-      ],
+      values,
     );
-    written++;
+    written += part.length;
   }
   return written;
 }

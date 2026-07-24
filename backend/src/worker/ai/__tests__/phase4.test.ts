@@ -10,7 +10,7 @@ import {
   type StructuredRequest,
   type StructuredResult,
 } from '../provider.js';
-import { OpenRouterProvider } from '../openRouterProvider.js';
+import { OpenRouterProvider, coerceNullArrays } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
@@ -152,10 +152,55 @@ describe('phase 4 — model tiers', () => {
   });
 
   it('cost estimates scale with tokens and tier', () => {
-    expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.15, 1e-9);
-    // strong tracks the gpt-4o this deployment points OPENROUTER_MODEL_STRONG
-    // at (2.50 in / 10.00 out per Mtok) — keep in sync with TIER_PRICES_PER_MTOK.
-    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(12.5, 1e-9);
+    // cheap tracks llama-4-scout ($0.11 in / $0.34 out per Mtok), strong
+    // tracks deepseek-v4-flash ($0.09/$0.18) — keep in sync with
+    // TIER_PRICES_PER_MTOK.
+    expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.11, 1e-9);
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.27, 1e-9);
+  });
+});
+
+describe('phase 4 — null-array coercion (small-model quirk)', () => {
+  const schema = {
+    type: 'object',
+    properties: {
+      records: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            inputs_outputs: {
+              type: 'object',
+              properties: {
+                inputs: { type: 'array', items: { type: 'string' } },
+                outputs: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  it('replaces null with [] wherever the schema declares an array, at any depth', () => {
+    const value = { records: [{ name: 'a', inputs_outputs: { inputs: ['x'], outputs: null } }] };
+    const fixed = coerceNullArrays(value, schema) as { records: Array<{ inputs_outputs: { inputs: string[]; outputs: string[] } }> };
+    expect(fixed.records[0]!.inputs_outputs.outputs).to.deep.equal([]);
+    expect(fixed.records[0]!.inputs_outputs.inputs).to.deep.equal(['x']); // untouched
+    expect(validateAgainstSchema(fixed, schema)).to.deep.equal([]);
+  });
+
+  it('coerces a null top-level array and leaves non-array nulls alone', () => {
+    expect(coerceNullArrays(null, { type: 'array' })).to.deep.equal([]);
+    const value = { records: [{ name: null, inputs_outputs: { inputs: null, outputs: [] } }] };
+    const fixed = coerceNullArrays(value, schema) as { records: Array<{ name: unknown; inputs_outputs: { inputs: string[] } }> };
+    expect(fixed.records[0]!.name).to.equal(null); // string stays null — validator must still flag it
+    expect(fixed.records[0]!.inputs_outputs.inputs).to.deep.equal([]);
+  });
+
+  it('respects schemas that explicitly allow null arrays', () => {
+    expect(coerceNullArrays(null, { type: ['array', 'null'] })).to.equal(null);
   });
 });
 
@@ -314,7 +359,7 @@ describe('phase 4 — budget enforcer', () => {
       .to.deep.equal({ maxLlmCalls: 50, maxInputTokens: 100 });
   });
 
-  it('records usage cumulatively and persists to budget_usage', async () => {
+  it('records usage cumulatively in memory; flush persists to budget_usage', async () => {
     const log = installFakeDb();
     const budget = makeBudget();
     await budget.recordUsage({ inputTokens: 100, outputTokens: 10, costUsd: 0.01 });
@@ -322,8 +367,12 @@ describe('phase 4 — budget enforcer', () => {
     expect(budget.usage.llm_calls).to.equal(2);
     expect(budget.usage.input_tokens).to.equal(150);
     expect(budget.usage.estimated_cost_usd).to.equal(0.015);
+    // Persistence is amortized (Track C): two calls stay in memory until a
+    // flush threshold or an explicit phase-boundary flush.
+    expect(log.filter((q) => q.text.includes('SET budget_usage'))).to.have.length(0);
+    await budget.flush();
     const persist = log.filter((q) => q.text.includes('SET budget_usage'));
-    expect(persist).to.have.length(2);
+    expect(persist).to.have.length(1);
   });
 
   it('load() resumes from persisted counters', async () => {
@@ -373,6 +422,43 @@ describe('phase 4 — budget enforcer', () => {
       expect((err as KillSwitchError).jobStatus).to.equal('paused');
     }
   });
+
+  it('caches the kill-switch check for its TTL, then re-checks', async () => {
+    let nowMs = 1_000_000;
+    const log = installFakeDb({ jobStatus: 'running' });
+    const budget = new BudgetEnforcer({ snapshotId: 'snap-1', jobId: 'job-1', depth: 'standard', now: () => nowMs });
+    const killChecks = () => log.filter((q) => q.text.includes('FROM analysis_jobs')).length;
+    await budget.checkBeforeBatch();
+    expect(killChecks()).to.equal(1);
+    nowMs += 500; // inside TTL — no new SELECT
+    await budget.checkBeforeBatch();
+    expect(killChecks()).to.equal(1);
+    nowMs += 2_100; // past TTL — re-check
+    await budget.checkBeforeBatch();
+    expect(killChecks()).to.equal(2);
+  });
+
+  it('amortizes usage persistence: flushes at 10 calls, 5s, or explicitly', async () => {
+    let nowMs = 1_000_000;
+    const log = installFakeDb();
+    const budget = new BudgetEnforcer({ snapshotId: 'snap-1', depth: 'standard', now: () => nowMs });
+    const writes = () => log.filter((q) => q.text.includes('SET budget_usage')).length;
+    const delta = { inputTokens: 10, outputTokens: 5, costUsd: 0.001 };
+
+    for (let i = 0; i < 9; i++) await budget.recordUsage(delta);
+    expect(writes()).to.equal(0); // 9 calls, within 5s — nothing persisted
+    await budget.recordUsage(delta); // 10th call flushes
+    expect(writes()).to.equal(1);
+
+    nowMs += 6_000; // time-based flush on the next usage
+    await budget.recordUsage(delta);
+    expect(writes()).to.equal(2);
+
+    await budget.flush(); // explicit flush always writes
+    expect(writes()).to.equal(3);
+    // Limits are enforced from in-memory counters regardless of flushes.
+    expect(budget.usage.llm_calls).to.equal(11);
+  });
 });
 
 describe('phase 4 — AiClient', () => {
@@ -395,6 +481,10 @@ describe('phase 4 — AiClient', () => {
     expect(inserts).to.have.length(1);
     expect(finishes).to.have.length(1);
     expect(finishes[0]!.params?.[1]).to.equal('complete');
+    // Budget persistence is amortized (Track C): one call doesn't write the
+    // counters row; an explicit flush (phase boundary) does.
+    expect(log.some((q) => q.text.includes('SET budget_usage'))).to.equal(false);
+    await client.budget.flush();
     expect(log.some((q) => q.text.includes('SET budget_usage'))).to.equal(true);
   });
 
@@ -406,6 +496,19 @@ describe('phase 4 — AiClient', () => {
     const response = await client.call(baseRequest);
     expect(response.degraded).to.equal(false);
     expect(provider.completeCalls).to.have.length(3);
+  });
+
+  it('re-rolls a fresh attempt when structured output fails validation', async () => {
+    // Malformed JSON is stochastic (seen live on two different models for the
+    // same payload): a brand-new sample must be tried, not just the provider's
+    // internal in-conversation repair.
+    installFakeDb();
+    const provider = new FakeProvider();
+    provider.errors = [new StructuredOutputError('bad json after retry', '{"broken"')];
+    const client = makeClient(provider);
+    const response = await client.call({ ...baseRequest, schema: { type: 'object' }, schemaName: 'x' });
+    expect(response.degraded).to.equal(false);
+    expect(provider.completeCalls).to.have.length(2);
   });
 
   it("degrades to the tier's next model when the primary keeps failing", async () => {

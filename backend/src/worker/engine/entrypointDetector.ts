@@ -207,36 +207,48 @@ const TRIGGER_TYPE_BY_KIND: Record<DetectedEntrypoint['kind'], string> = {
   export: 'package_export',
 };
 
-/** Returns each persisted entrypoint's row id (workflows reference it). */
+/**
+ * Returns each persisted entrypoint's row id (workflows reference it).
+ * One multi-VALUES INSERT — the per-row loop cost a round trip per
+ * entrypoint against the remote pooler (latency overhaul Track C).
+ */
 export async function persistEntrypoints(
   snapshotId: string,
   entrypoints: DetectedEntrypoint[],
   nodeIdMap: Map<string, string>,
 ): Promise<Map<DetectedEntrypoint, string>> {
   const idMap = new Map<DetectedEntrypoint, string>();
+  const persistable = entrypoints
+    .map((ep) => ({
+      ep,
+      nodeId:
+        (ep.symbolStableKey ? nodeIdMap.get(ep.symbolStableKey) : undefined) ??
+        nodeIdMap.get(ep.nodeStableKey),
+    }))
+    .filter((e): e is { ep: DetectedEntrypoint; nodeId: string } => e.nodeId !== undefined);
+  if (persistable.length === 0) return idMap;
 
-  for (const ep of entrypoints) {
-    // Prefer the symbol-level node; fall back to the file node.
-    const nodeId =
-      (ep.symbolStableKey ? nodeIdMap.get(ep.symbolStableKey) : undefined) ??
-      nodeIdMap.get(ep.nodeStableKey);
-    if (!nodeId) continue;
-
+  const CHUNK = 500;
+  for (let i = 0; i < persistable.length; i += CHUNK) {
+    const part = persistable.slice(i, i + CHUNK);
+    const values: unknown[] = [];
+    const tuples = part.map(({ ep, nodeId }, j) => {
+      values.push(snapshotId, nodeId, TRIGGER_TYPE_BY_KIND[ep.kind], ep.method ?? null,
+        ep.routePattern ?? null, JSON.stringify({ symbolName: ep.symbolName }));
+      const base = j * 6;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`;
+    });
     const result = await query(
       `INSERT INTO entrypoints (snapshot_id, node_id, trigger_type, method, route_path, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6)
+       VALUES ${tuples.join(', ')}
        RETURNING id`,
-      [
-        snapshotId,
-        nodeId,
-        TRIGGER_TYPE_BY_KIND[ep.kind],
-        ep.method ?? null,
-        ep.routePattern ?? null,
-        JSON.stringify({ symbolName: ep.symbolName }),
-      ],
+      values,
     );
-    if (result.rows.length > 0) idMap.set(ep, result.rows[0].id as string);
+    const rows = result.rows as Array<{ id: string }>;
+    if (rows.length !== part.length) {
+      throw new Error(`persistEntrypoints: inserted ${rows.length} rows for ${part.length} entrypoints`);
+    }
+    rows.forEach((row, j) => idMap.set(part[j]!.ep, row.id));
   }
-
   return idMap;
 }

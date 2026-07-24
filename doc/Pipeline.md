@@ -167,9 +167,11 @@ Two LLM tiers plus embeddings, each a configurable model list (currently one mod
 
 | Tier | Used for | Default env |
 | --- | --- | --- |
-| `cheap` | symbol-level semantic pass, file-record synthesis, claim critique | `OPENROUTER_MODEL_CHEAP` (default `openai/gpt-4o-mini`) |
-| `strong` | synthesis, capabilities, refinement, reranking, sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (default `openai/gpt-4o-mini`; set e.g. `anthropic/claude-sonnet-4.5` for premium quality) |
+| `cheap` | ALL structured record work: symbol/file/module/service/system/workflow records, capabilities, refinement, claim critique, reranking | `OPENROUTER_MODEL_CHEAP` (this deployment: `meta-llama/llama-4-scout` — Groq-served, ~ms-fast strict-JSON; see DEVOPS "Latency model") |
+| `strong` | user-facing prose: sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (this deployment: `deepseek/deepseek-v4-flash`; set e.g. `anthropic/claude-sonnet-4.5` for premium quality) |
 | `embedding` | multi-view embeddings | `EMBEDDINGS_MODEL` (default `text-embedding-3-small`, 1536 dims) |
+
+The split is measured, not aspirational: structured extraction wants a model that emits valid JSON fast (small models via Groq do), while section/tutorial prose quality tracks the stronger model. Chat requests carry OpenRouter `provider.sort` routing (default `throughput`) and a hard per-attempt deadline (`LLM_REQUEST_TIMEOUT_MS`, 240s default); structured-output validation failures re-roll a fresh sample (up to 3) since malformed JSON is stochastic.
 
 On model failure/rate-limit, behavior is configurable per tier (`project_settings.model_failure_behavior`), analogous to budget stop behavior:
 

@@ -10,11 +10,14 @@ import { query } from '../../lib/db.js';
 import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES } from './recordTypes.js';
-import { setRecordStatus } from './recordStore.js';
+import { setRecordStatus, setRecordStatusBulk } from './recordStore.js';
 import { regenerateSymbolRecord } from './symbolPass.js';
 
-const RECORDS_PER_CRITIQUE_CALL = 8;
-const RECEIPT_SNIPPET_CAP = 800;
+// Sized for MEASURED OpenRouter decode (~30-120 tok/s): verdicts are
+// ~100-200 output tokens each, so 12/call keeps a batch under ~2.5k output
+// (≤60-90s even on a slow upstream) — throughput comes from concurrency.
+const RECORDS_PER_CRITIQUE_CALL = 12;
+const RECEIPT_SNIPPET_CAP = 1_200;
 
 export interface CritiqueResult {
   reviewed: number;
@@ -78,14 +81,18 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
   for (let i = 0; i < pending.length; i += RECORDS_PER_CRITIQUE_CALL) {
     batches.push(pending.slice(i, i + RECORDS_PER_CRITIQUE_CALL));
   }
-  await mapLimit(batches, 6, async (batch) => {
+  let batchesDone = 0;
+  await mapLimit(batches, 28, async (batch) => {
     const verdicts = await critiqueBatch(ctx, batch);
+    // Straightforward outcomes collect into ONE vectorized status write per
+    // batch (Track C); only the rare regenerate path stays per-record.
+    const statusUpdates: Array<{ id: string; status: 'usable' | 'rejected'; flags?: Array<Record<string, unknown>> }> = [];
     for (const record of batch) {
       result.reviewed += 1;
       const verdict = verdicts.get(record.stable_key);
       if (!verdict || verdict.verdict === 'usable') {
         // Missing verdict = reviewer did not flag it; do not reject on silence.
-        await setRecordStatus(record.id, 'usable');
+        statusUpdates.push({ id: record.id, status: 'usable' });
         result.usable += 1;
         continue;
       }
@@ -106,9 +113,12 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
           continue;
         }
       }
-      await setRecordStatus(record.id, 'rejected', [{ kind: 'record_rejected', notes: verdict.notes }]);
+      statusUpdates.push({ id: record.id, status: 'rejected', flags: [{ kind: 'record_rejected', notes: verdict.notes }] });
       result.rejected += 1;
     }
+    await setRecordStatusBulk(statusUpdates);
+    batchesDone += 1;
+    await ctx.onProgress?.({ phase: 'critique', done: batchesDone, total: batches.length, detail: `Verifying records (${batchesDone}/${batches.length} batches)` });
   });
   return result;
 }
@@ -147,12 +157,6 @@ async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Prom
     ].join('\n'));
   }
 
-  const prompt = [
-    'You are reviewing generated documentation records against their evidence receipts. For EACH record: verdict "usable" when its substantive claims are supported by the receipts, "rejected" when claims contradict the receipts or assert specifics with no receipt support. List failed claims verbatim. Vague-but-harmless wording is not grounds for rejection; fabricated specifics are.',
-    OUTPUT_RULES,
-    sections.join('\n\n'),
-  ].join('\n\n');
-
   const response = await ctx.ai.call<{ verdicts: Verdict[] }>({
     // Claim-vs-receipt verification is a constrained judgment task the cheap
     // tier handles; critique reviews EVERY pending record, so tier matters.
@@ -161,7 +165,16 @@ async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Prom
     promptVersion: PROMPT_VERSIONS.critique,
     schemaName: 'critique_verdicts',
     schema: CRITIQUE_SCHEMA,
-    user: prompt,
+    // Static reviewer contract lives in the system prefix (prompt cache).
+    system: [
+      'You are reviewing generated documentation records against their evidence receipts. For EACH record: verdict "usable" when its substantive claims are supported by the receipts, "rejected" when claims contradict the receipts or assert specifics with no receipt support. List failed claims verbatim. Vague-but-harmless wording is not grounds for rejection; fabricated specifics are.',
+      OUTPUT_RULES,
+    ].join('\n\n'),
+    user: sections.join('\n\n'),
+    // 4k floor: deepseek's reasoning tokens count against max_tokens; a
+    // tight cap made it burn the whole budget reasoning and return EMPTY
+    // content (observed live — 'provider returned an empty completion').
+    maxOutputTokens: 4_000 + 300 * batch.length,
   });
   return new Map((response.value?.verdicts ?? []).map((v) => [v.stable_key, v]));
 }

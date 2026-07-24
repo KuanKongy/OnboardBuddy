@@ -90,7 +90,11 @@ export interface RetrieveInput {
   embedQuery?: (text: string) => Promise<number[]>;
 }
 
-const DEFAULTS = { kPerView: 8, maxRecords: 40, maxReceipts: 15, maxHops: 2 as const };
+// Evidence budgets sized for the 1M-context tier (latency overhaul Track
+// B): sections were evidence-starved at 15 receipts/40 records when the
+// window was small; input at $0.09/M makes richer bundles nearly free.
+
+const DEFAULTS = { kPerView: 12, maxRecords: 64, maxReceipts: 40, maxHops: 2 as const };
 /** Criticality projection contributes at most this much next to similarity. */
 const CRITICALITY_BOOST_WEIGHT = 0.2;
 /** Base score for records that entered via graph expansion, decaying by hop. */

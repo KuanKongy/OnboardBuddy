@@ -3,11 +3,12 @@ import { __setQueryForTests } from '../../../lib/db.js';
 import type { EvidenceGraph, EvidenceNode } from '../../types/analysis.js';
 import { evidenceHashForSymbol, evidenceHashForChildren, depthLookupOrder, insertRecord, lookupRecord } from '../recordStore.js';
 import { planBatches, buildFactsOnlyBody } from '../symbolPass.js';
+import { MAX_SYMBOLS_PER_CALL } from '../../engine/budgets.js';
 import { groupClustersIntoServices } from '../synthesisPass.js';
 import { slugify } from '../capabilityPass.js';
 import { DEFAULT_ROLE_WEIGHTS, SEMANTIC_VIEWS, projectRoleScore, resolveRoleWeights } from '../projections.js';
 import { deterministicViewScores, deterministicRoleScores, selectRerankTargets, type RerankTarget } from '../semanticReranker.js';
-import { schemaForLevel, batchedSymbolSchema, renderSummary, PROMPT_VERSIONS } from '../recordTypes.js';
+import { schemaForLevel, batchedSymbolSchema, batchedLevelSchema, renderSummary, PROMPT_VERSIONS } from '../recordTypes.js';
 import { validateAgainstSchema } from '../../ai/jsonSchemaValidator.js';
 
 function makeNode(overrides: Partial<EvidenceNode> = {}): EvidenceNode {
@@ -97,26 +98,37 @@ describe('phase 5 — depth-layered cache lookup', () => {
   });
 });
 
-describe('phase 5 — symbol batching', () => {
-  it('caps batches at 15 symbols and never mixes files', () => {
+describe('phase 5 — symbol batching (cross-file, 1M-context sizing)', () => {
+  it('packs across files up to the symbol cap, keeping file locality', () => {
+    // 20 + 3 + 20 symbols across three files: per-file batching would make
+    // 4+ calls; cross-file packing fills every batch to the cap.
     const nodes = [
-      ...Array.from({ length: 20 }, (_, i) => makeNode({ stableKey: `a.ts#f${i}`, name: `f${i}` })),
-      ...Array.from({ length: 3 }, (_, i) => makeNode({ stableKey: `b.ts#g${i}`, name: `g${i}`, filePath: 'b.ts' })),
+      ...Array.from({ length: 20 }, (_, i) => makeNode({ stableKey: `a.ts#f${i}`, name: `f${i}`, lineStart: i })),
+      ...Array.from({ length: 3 }, (_, i) => makeNode({ stableKey: `b.ts#g${i}`, name: `g${i}`, filePath: 'b.ts', lineStart: i })),
+      ...Array.from({ length: 20 }, (_, i) => makeNode({ stableKey: `c.ts#h${i}`, name: `h${i}`, filePath: 'c.ts', lineStart: i })),
     ];
     const batches = planBatches(nodes);
-    expect(batches.length).to.equal(3); // 15 + 5 from a.ts, 3 from b.ts
-    for (const batch of batches) {
-      expect(batch.length).to.be.at.most(15);
-      expect(new Set(batch.map((n) => n.filePath)).size).to.equal(1);
+    expect(batches.length).to.equal(Math.ceil(43 / MAX_SYMBOLS_PER_CALL));
+    expect(batches.flat().length).to.equal(43); // nothing dropped
+    for (const batch of batches) expect(batch.length).to.be.at.most(MAX_SYMBOLS_PER_CALL);
+    // Locality: symbols are sorted by file, so each file occupies a run of
+    // CONSECUTIVE batches and files never interleave.
+    for (const file of ['a.ts', 'b.ts', 'c.ts']) {
+      const inBatches = batches
+        .map((batch, idx) => (batch.some((n) => n.filePath === file) ? idx : -1))
+        .filter((i) => i !== -1);
+      expect(inBatches.length).to.be.greaterThan(0);
+      expect(inBatches[inBatches.length - 1]! - inBatches[0]! + 1).to.equal(inBatches.length);
     }
   });
 
   it('splits batches when estimated input tokens exceed the request cap', () => {
-    const bigSnippet = 'x'.repeat(8_000); // ~2k tokens each
-    const nodes = Array.from({ length: 10 }, (_, i) => makeNode({ stableKey: `a.ts#f${i}`, name: `f${i}`, snippet: bigSnippet }));
+    const bigSnippet = 'x'.repeat(48_000); // ~12k tokens each (capped at MAX_SNIPPET_CHARS)
+    const nodes = Array.from({ length: 40 }, (_, i) => makeNode({ stableKey: `a.ts#f${i}`, name: `f${i}`, snippet: bigSnippet, lineStart: i }));
     const batches = planBatches(nodes);
     expect(batches.length).to.be.greaterThan(1);
-    expect(batches.flat().length).to.equal(10); // nothing dropped
+    expect(batches.flat().length).to.equal(40); // nothing dropped
+    for (const batch of batches) expect(batch.length).to.be.at.most(MAX_SYMBOLS_PER_CALL);
   });
 });
 
@@ -152,6 +164,17 @@ describe('phase 5 — record schemas', () => {
     expect(validateAgainstSchema({ records: [{ ...body, stable_key: 'a.ts#fn' }] }, schema)).to.deep.equal([]);
     const missing = validateAgainstSchema({ records: [body] }, schema);
     expect(missing.some((v) => v.path.includes('stable_key'))).to.equal(true);
+  });
+
+  it('batched level schema carries the level extras plus stable_key (file batches)', () => {
+    const schema = batchedLevelSchema('file');
+    const body = buildFactsOnlyBody({ graph: makeGraph([makeNode()]), sideEffects: [] }, makeNode());
+    const fileRecord = { ...body, key_symbols: ['a'], file_role: 'service', stable_key: 'a.ts' };
+    expect(validateAgainstSchema({ records: [fileRecord] }, schema)).to.deep.equal([]);
+    // Missing the file-level extras fails — the batch wrapper must not
+    // loosen the per-level contract.
+    const missingExtras = validateAgainstSchema({ records: [{ ...body, stable_key: 'a.ts' }] }, schema);
+    expect(missingExtras.length).to.be.greaterThan(0);
   });
 });
 

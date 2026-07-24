@@ -33,6 +33,7 @@ import {
 } from './engine/evidenceGraphBuilder.js';
 import { runPreflight } from './engine/preflightService.js';
 import { markPhase } from './ai/checkpoints.js';
+import { capturePriorSymbolRecords } from './semantic/recordStore.js';
 import { AiClient, AiPausedError } from './ai/aiClient.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError } from './ai/budgetEnforcer.js';
 import { resolveTierConfig } from './ai/modelTiers.js';
@@ -295,7 +296,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
   try {
     // 2. Download + extract zipball at the requested commit (default: branch head)
-    await updateStep('Downloading repository', 15);
+    await updateStep('Downloading repository', 10);
     const { repoRoot, commitHash, token } = await fetchRepoToTmp(project, projectId, tmpDir, job.data.commit, job.data.branch);
 
     // 2b. Stamp the resolved identity: head runs only resolve to a commit
@@ -365,7 +366,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
     // 3. Deterministic analysis: inventory, language guardrail input, AST,
     //    symbol extraction, dependency graph — scope-bounded
-    await updateStep('Analyzing codebase', 40);
+    await updateStep('Analyzing codebase', 22);
     const snapshot = await runAnalysis({
       projectId,
       triggeredBy: user_id,
@@ -416,7 +417,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     }
 
     // 6. Detectors + evidence-node scanners (symbol-level)
-    await updateStep('Detecting entrypoints and side effects', 55);
+    await updateStep('Detecting entrypoints and side effects', 34);
     const entrypoints = detectEntrypoints(snapshot.fileAnalyses);
     const sideEffects = detectSideEffects(snapshot.fileAnalyses);
     const configNodes = scanConfigNodes(snapshot.fileRecords, snapshot.inventory);
@@ -424,7 +425,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const docs = ingestDocs(snapshot.fileRecords, knownPaths);
 
     // 7. Build the full evidence graph
-    await updateStep('Building evidence graph', 65);
+    await updateStep('Building evidence graph', 40);
     const evidence = buildEvidenceGraph({
       fileAnalyses: snapshot.fileAnalyses,
       fileRecords: snapshot.fileRecords,
@@ -436,7 +437,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     });
 
     // 8. Persist snapshot + files + graph in one transaction
-    await updateStep('Persisting results', 75);
+    await updateStep('Persisting results', 46);
     const fileCount = snapshot.fileRecords.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
@@ -512,11 +513,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     });
 
     // 9. Entrypoints, side effects, workflows (call-graph traversal)
-    await updateStep('Persisting entrypoints and side effects', 82);
+    await updateStep('Persisting entrypoints and side effects', 54);
     const entrypointIdMap = await persistEntrypoints(snapshotId, entrypoints, nodeIdMap);
     await persistSideEffects(snapshotId, sideEffects, nodeIdMap);
 
-    await updateStep('Extracting workflows', 86);
+    await updateStep('Extracting workflows', 57);
     const workflows = extractWorkflows({ graph: evidence, entrypoints, sideEffects });
     const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
     await query(
@@ -533,7 +534,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
     // 10. Churn (GitHub API, degrades to 0-weight on any failure), then
     //     Phase A candidate ranking + depth gating
-    await updateStep('Fetching churn signals', 89);
+    await updateStep('Fetching churn signals', 59);
     let churn = new Map<string, ChurnStats>();
     try {
       // Preliminary churn-free ranking picks the top files worth a per-file
@@ -561,7 +562,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       console.warn(`[worker] churn fetch failed (project=${projectId}):`, err instanceof Error ? err.message : err);
     }
 
-    await updateStep('Ranking candidates', 93);
+    await updateStep('Ranking candidates', 61);
     const rankings = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows, churn });
     const rankedTargets = await persistCandidateRankings(snapshotId, rankings, nodeIdMap, workflowIdMap);
     const gating = gateSymbolsForDepth(analysis_depth, rankings, { graph: evidence, entrypoints, workflows });
@@ -574,7 +575,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     });
 
     // 11. Deterministic architecture clustering
-    await updateStep('Clustering architecture', 96);
+    await updateStep('Clustering architecture', 63);
     const architecture = clusterArchitecture({
       graph: evidence,
       inventory: snapshot.inventory,
@@ -594,7 +595,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const previous = await findPreviousSnapshot(scope.scopeId, snapshotId);
     const isIncremental = previous !== null && previous.commitHash !== commitHash;
     if (isIncremental) {
-      await updateStep('Diffing against previous snapshot', 96);
+      await updateStep('Diffing against previous snapshot', 65);
       await query(`UPDATE analysis_snapshots SET trigger_type = 'incremental' WHERE id = $1`, [snapshotId]);
       const diff = await runIncrementalDiff({
         projectId,
@@ -622,7 +623,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         await markPhase(snapshotId, phase, 'skipped', { reason: 'ai_disabled' });
       }
     } else {
-      await updateStep('Semantic analysis (LLM)', 97);
+      await updateStep('Semantic analysis (LLM)', 66);
+      // Track E: capture the previous mapping's record identity BEFORE the
+      // delete — unchanged symbols then re-map in bulk with zero lookups
+      // and zero LLM calls (the gate re-checks evidence/prompt/model/depth).
+      const priorSymbolRecords = await capturePriorSymbolRecords(snapshotId, previous?.snapshotId ?? null);
       // Clear snapshot-scoped semantic rows from a previous scan of this
       // commit (project-scoped semantic_records stay — they are the cache).
       await query(`DELETE FROM snapshot_semantic_records WHERE snapshot_id = $1`, [snapshotId]);
@@ -640,6 +645,28 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         stopBehavior: project.budget_stop_behavior,
       }).load();
       const ai = new AiClient({ projectId, snapshotId, jobId, privacyMode: privacy_mode, budget, tierConfig });
+
+      // Track F: semantic sub-phases own the 66→98 progress band with real
+      // batch counters — the job used to sit at a static percentage for the
+      // entire LLM phase. Throttled to ~1 write/1.5s; updateStep doubles as
+      // the kill-switch check, so pause responsiveness improves too.
+      const SEMANTIC_PCT_BAND: Record<string, [number, number]> = {
+        semantic_symbols: [66, 84], synthesis: [84, 90], capabilities: [90, 91],
+        refinement: [91, 92], critique: [92, 96], semantic_ranking: [96, 97], embeddings: [97, 98],
+      };
+      let lastProgressWriteMs = 0;
+      const onProgress = async (info: { phase: string; done: number; total: number; detail?: string }): Promise<void> => {
+        const nowMs = Date.now();
+        const atBoundary = info.done === 0 || info.done >= info.total;
+        if (!atBoundary && nowMs - lastProgressWriteMs < 1_500) return;
+        lastProgressWriteMs = nowMs;
+        const [lo, hi] = SEMANTIC_PCT_BAND[info.phase] ?? [66, 98];
+        const frac = info.total > 0 ? Math.min(1, info.done / info.total) : 0;
+        const pct = Math.min(98, Math.round(lo + (hi - lo) * frac));
+        const label = info.detail ?? `Semantic: ${info.phase.replace(/_/g, ' ')} (${info.done}/${info.total})`;
+        await updateStep(label, pct);
+      };
+
       const semanticCtx: SemanticContext = {
         ai,
         projectId,
@@ -658,6 +685,8 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         rankings,
         gating,
         inventory: snapshot.inventory,
+        priorSymbolRecords,
+        onProgress,
       };
 
       try {
@@ -669,6 +698,8 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
           );
         }
       } catch (err) {
+        // Amortized counters must survive every terminal path (Track C).
+        await budget.flush().catch(() => {});
         if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
           // Resumable: checkpointed phases + content-addressed records make
           // a re-run skip everything already paid for.
@@ -689,6 +720,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         }
         throw err;
       }
+      await budget.flush().catch(() => {});
     }
 
     // 13. Mark job complete

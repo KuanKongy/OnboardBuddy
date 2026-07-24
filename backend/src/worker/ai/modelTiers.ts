@@ -21,14 +21,16 @@ export interface TierConfig {
  *     EMBEDDINGS_MODEL in backend/.env — any OpenRouter model id works.
  *  2. Per project: project_settings.model_tier_overrides, e.g.
  *     {"strong": ["anthropic/claude-sonnet-4.5"]} (PUT /projects/:id/settings).
- * Both tiers default to gpt-4o-mini: a full analysis costs cents. Point the
- * strong tier at a premium model only when quality is worth ~20x the price.
+ * Both tiers default to DeepSeek V4 Flash (1M context, 65,536 max output,
+ * $0.09/M in, $0.18/M out): a full analysis costs cents, and the batch sizes
+ * in engine/budgets.ts are tuned to its context/output caps. Point the
+ * strong tier at a premium model only when quality is worth the price.
  */
 export function defaultTierModels(): Record<ModelTier, string[]> {
   return {
     // Legacy OPENROUTER_MODEL keeps working as the cheap-tier default.
-    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'openai/gpt-4o-mini'],
-    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'openai/gpt-4o-mini'],
+    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'deepseek/deepseek-v4-flash'],
+    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'deepseek/deepseek-v4-flash'],
     embedding: [process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'],
   };
 }
@@ -80,12 +82,14 @@ export function resolveTierConfig(overrides?: {
 // Coarse per-tier prices used for ai_generation_runs.estimated_cost_usd.
 // Deliberately not a per-model price table: these estimates feed the cost
 // UI and budget trend lines, not billing. USD per million tokens.
-// Cheap matches the gpt-4o-mini default; strong matches the gpt-4o this
-// deployment points OPENROUTER_MODEL_STRONG at (backend/.env) — keep the
-// row in sync with that env var per the note above.
+// Both chat tiers match the deepseek/deepseek-v4-flash default — keep the
+// rows in sync with the OPENROUTER_MODEL_* env vars per the note above.
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
-  cheap: { input: 0.15, output: 0.6 },
-  strong: { input: 2.5, output: 10 },
+  // cheap tier tracks meta-llama/llama-4-scout (Groq via OpenRouter): probe
+  // measured ~4.5-4.9k tok/s decode with valid strict-JSON — ~40x deepseek's
+  // production rate — for +$0.02/+$0.16 per Mtok.
+  cheap: { input: 0.11, output: 0.34 },
+  strong: { input: 0.09, output: 0.18 },
   embedding: { input: 0.02, output: 0 },
 };
 

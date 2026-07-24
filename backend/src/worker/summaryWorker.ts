@@ -120,6 +120,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   // Hoisted so the failure path can scope its package update to THIS run's
   // package — concurrent sibling generations must never be marked failed.
   let failedPackageId: string | null = null;
+  // Hoisted so the finally path can flush amortized budget counters.
+  let budgetRef: BudgetEnforcer | null = null;
 
   try {
     await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
@@ -187,6 +189,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       budgetOverrides: snap.budget_overrides,
       stopBehavior: snap.budget_stop_behavior,
     }).load();
+    budgetRef = budget;
     const ai = new AiClient({
       projectId, snapshotId, jobId, privacyMode, budget,
       tierConfig: resolveTierConfig({
@@ -229,64 +232,72 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       checkpoint: { completedSections: [...completedSections], tutorialsDone },
     });
 
-    // ── tutorials first (role_path sections reference them) ────────────────
+    // ── tutorials ∥ sections (Track D): only role_path reads tutorials (its
+    //    deterministic query), so it alone waits for them — the other ten
+    //    sections generate concurrently with the tutorial pass.
     let budgetDegraded = false;
-    if (!tutorialsDone) {
-      await updateJob('running', 'Generating request-flow tutorials', 12);
-      try {
-        const tutorialResult = await generateTutorials({
-          ai, snapshotId, projectId, packageId, role,
-          commitHash: snap.commit_hash, projections: deps.projections,
-        });
-        sectionMetrics.tutorials = tutorialResult;
-        // Walkthrough UI enrichment: tutorial step explanations map 1:1 onto
-        // workflow steps — copy them over instead of paying for a second pass.
-        await query(
-          `UPDATE workflow_steps ws SET explanation = ts.explanation
-           FROM tutorial_steps ts
-           JOIN tutorials t ON t.id = ts.tutorial_id
-           JOIN workflows w ON w.id = t.workflow_id
-           WHERE t.package_id = $1 AND ws.workflow_id = w.id AND ws.step_order = ts.step_order
-             AND ts.explanation <> ''`,
-          [packageId],
-        );
-        tutorialsDone = true;
-        await saveCheckpoint();
-      } catch (err) {
-        if (err instanceof BudgetExceededError && err.behavior === 'degrade') budgetDegraded = true;
-        else throw err;
-      }
-    }
+    const tutorialsPromise: Promise<void> = tutorialsDone
+      ? Promise.resolve()
+      : (async () => {
+          await updateJob('running', 'Generating request-flow tutorials', 12);
+          const tutorialResult = await generateTutorials({
+            ai, snapshotId, projectId, packageId, role,
+            commitHash: snap.commit_hash, projections: deps.projections,
+          });
+          sectionMetrics.tutorials = tutorialResult;
+          // Walkthrough UI enrichment: tutorial step explanations map 1:1 onto
+          // workflow steps — copy them over instead of paying for a second pass.
+          await query(
+            `UPDATE workflow_steps ws SET explanation = ts.explanation
+             FROM tutorial_steps ts
+             JOIN tutorials t ON t.id = ts.tutorial_id
+             JOIN workflows w ON w.id = t.workflow_id
+             WHERE t.package_id = $1 AND ws.workflow_id = w.id AND ws.step_order = ts.step_order
+               AND ts.explanation <> ''`,
+            [packageId],
+          );
+          tutorialsDone = true;
+          await saveCheckpoint();
+        })();
 
     // ── sections: one call each (spec: never one giant call), generated
     //    concurrently — each persists as soon as it finishes, so the reader
     //    can show sections while the rest are still generating.
     const pending = SECTION_TYPES.filter((t) => !completedSections.has(t));
-    if (!budgetDegraded && pending.length > 0) {
-      await updateJob('running', `Generating sections (0/${pending.length})`, 15);
-      let done = 0;
-      try {
-        await mapLimit(pending, Number(process.env.SECTION_CONCURRENCY ?? 4), async (sectionType) => {
-          const result = await generateSection({
-            ai, snapshotId, projectId, packageId, role, sectionType,
-            privacyMode, commitHash: snap.commit_hash, deps,
-          });
-          sectionMetrics[sectionType] = {
-            confidence: result.validation.confidence,
-            issues: result.validation.issues.length,
-            retried: result.retried,
-          };
-          completedSections.add(sectionType);
-          done += 1;
-          await updateJob('running', `Generated section: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
-          await saveCheckpoint();
-        });
-      } catch (err) {
-        if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
-          budgetDegraded = true; // keep what exists, stop LLM work
-        } else {
-          throw err;
-        }
+    const sectionConcurrency = Number(process.env.SECTION_CONCURRENCY ?? 11);
+    let done = 0;
+    const runSection = async (sectionType: SectionType): Promise<void> => {
+      const result = await generateSection({
+        ai, snapshotId, projectId, packageId, role, sectionType,
+        privacyMode, commitHash: snap.commit_hash, deps,
+      });
+      sectionMetrics[sectionType] = {
+        confidence: result.validation.confidence,
+        issues: result.validation.issues.length,
+        retried: result.retried,
+      };
+      completedSections.add(sectionType);
+      done += 1;
+      await updateJob('running', `Generated section: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
+      await saveCheckpoint();
+    };
+    try {
+      if (pending.length > 0) {
+        await updateJob('running', `Generating sections (0/${pending.length})`, 15);
+        await mapLimit(pending.filter((t) => t !== 'role_path'), sectionConcurrency, runSection);
+      }
+      await tutorialsPromise;
+      if (pending.includes('role_path' as SectionType)) {
+        await runSection('role_path' as SectionType);
+      }
+    } catch (err) {
+      // The tutorials promise must not dangle as an unhandled rejection
+      // when a section throws first.
+      await tutorialsPromise.catch(() => {});
+      if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
+        budgetDegraded = true; // keep what exists, stop LLM work
+      } else {
+        throw err;
       }
     }
     if (budgetDegraded) {
@@ -375,6 +386,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     throw err;
   } finally {
     clearInterval(heartbeat);
+    // Terminal flush: amortized counters must not trail the run (Track C).
+    await budgetRef?.flush().catch(() => {});
   }
 }
 

@@ -128,7 +128,9 @@ export class AiClient {
   constructor(private readonly options: AiClientOptions) {
     this.provider = options.provider ?? new OpenRouterProvider();
     this.tierConfig = options.tierConfig ?? resolveTierConfig();
-    this.semaphore = new Semaphore(options.maxConcurrency ?? Number(process.env.LLM_MAX_CONCURRENCY ?? 6));
+    // Flash-tier decode makes parallelism the throughput lever (latency
+    // overhaul Track D); env LLM_MAX_CONCURRENCY still wins.
+    this.semaphore = new Semaphore(options.maxConcurrency ?? Number(process.env.LLM_MAX_CONCURRENCY ?? 12));
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
@@ -136,6 +138,11 @@ export class AiClient {
   /** The embedding-tier model this client would use (embeddings table key). */
   get embeddingModel(): string {
     return this.tierConfig.models.embedding[0]!;
+  }
+
+  /** Budget enforcer behind this client — phase boundaries flush() it. */
+  get budget(): BudgetEnforcer {
+    return this.options.budget;
   }
 
   /** Text or structured completion, depending on whether `schema` is set. */
@@ -312,7 +319,12 @@ export class AiClient {
       try {
         return await fn();
       } catch (err) {
-        const retryable = err instanceof ProviderError && err.retryable;
+        // StructuredOutputError is retryable too: malformed JSON is largely
+        // stochastic (observed on BOTH deepseek and scout for the same
+        // capability payload) — a fresh sample usually lands where the
+        // in-conversation repair retry did not.
+        const retryable =
+          (err instanceof ProviderError && err.retryable) || err instanceof StructuredOutputError;
         if (!canRetry || !retryable || attempt >= this.maxRetries) throw err;
         await this.sleep(BACKOFF_BASE_MS * 2 ** attempt);
         attempt += 1;

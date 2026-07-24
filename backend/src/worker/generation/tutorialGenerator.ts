@@ -16,7 +16,8 @@ import { workflowDiagramKind, workflowSequenceDiagram, workflowDataflowDiagram, 
 
 export const TUTORIAL_PROMPT_VERSION = 'tutorial-v2';
 const DEFAULT_MAX_TUTORIALS = 4;
-const SNIPPET_CAP = 1_200;
+// 1M-context sizing (Track B): fuller step snippets, cheap at flash prices.
+const SNIPPET_CAP = 2_400;
 
 export interface GenerateTutorialsParams {
   ai: AiClient;
@@ -208,6 +209,7 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
     schemaName: 'tutorial',
     schema: TUTORIAL_SCHEMA,
     user: prompt,
+    maxOutputTokens: 8_000,
   });
   const output = response.value!;
   const explanationByOrder = new Map(output.steps.map((s) => [s.step_order, s.explanation]));
@@ -246,33 +248,58 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
      JSON.stringify({ prompt_version: TUTORIAL_PROMPT_VERSION, workflow: workflow.stable_key, goal: output.goal ?? '' })],
   )).rows[0] as { id: string }).id;
 
-  for (const step of steps) {
-    const stepId = ((await query(
-      `INSERT INTO tutorial_steps
-         (tutorial_id, step_order, node_id, file_path, symbol_name, line_start, line_end, snippet, explanation, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id`,
-      [tutorialId, step.step_order, step.node_id, step.file_path, step.symbol_name,
-       step.line_start, step.line_end, step.snippet?.slice(0, SNIPPET_CAP) ?? null,
-       explanationByOrder.get(step.step_order) ?? '',
-       JSON.stringify({ stepKind: step.step_kind })],
-    )).rows[0] as { id: string }).id;
+  if (steps.length === 0) return;
 
-    // Step receipt: the traced evidence this explanation rests on.
-    const receiptId = ((await query(
-      `INSERT INTO source_receipts
-         (project_id, snapshot_id, receipt_kind, trust_level, tutorial_step_id, node_id,
-          workflow_id, node_stable_key, node_hash, file_path, symbol_name, line_start,
-          line_end, snippet, commit_hash)
-       VALUES ($1, $2, 'workflow_step', 'code', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       RETURNING id`,
-      [params.projectId, params.snapshotId, stepId, step.node_id, workflow.id,
-       step.symbol_name ? `${step.file_path}#${step.symbol_name}` : step.file_path,
-       step.node_hash, step.file_path, step.symbol_name, step.line_start, step.line_end,
-       step.snippet?.slice(0, SNIPPET_CAP) ?? null, params.commitHash],
-    )).rows[0] as { id: string }).id;
-    await query(`UPDATE tutorial_steps SET receipt_ids = $2 WHERE id = $1`, [stepId, [receiptId]]);
-  }
+  // Bulk step persistence (Track C): 3 statements per tutorial instead of
+  // 3 per STEP (~21 steps × 3 = 63 round trips each before).
+  const stepValues: unknown[] = [];
+  const stepTuples = steps.map((step, i) => {
+    stepValues.push(
+      tutorialId, step.step_order, step.node_id, step.file_path, step.symbol_name,
+      step.line_start, step.line_end, step.snippet?.slice(0, SNIPPET_CAP) ?? null,
+      explanationByOrder.get(step.step_order) ?? '',
+      JSON.stringify({ stepKind: step.step_kind }),
+    );
+    const base = i * 10;
+    return `(${Array.from({ length: 10 }, (_, j) => `$${base + j + 1}`).join(', ')})`;
+  });
+  const stepRows = (await query(
+    `INSERT INTO tutorial_steps
+       (tutorial_id, step_order, node_id, file_path, symbol_name, line_start, line_end, snippet, explanation, metadata)
+     VALUES ${stepTuples.join(', ')}
+     RETURNING id, step_order`,
+    stepValues,
+  )).rows as Array<{ id: string; step_order: number }>;
+  const stepIdByOrder = new Map(stepRows.map((r) => [r.step_order, r.id]));
+
+  const receiptValues: unknown[] = [];
+  const receiptTuples = steps.map((step, i) => {
+    receiptValues.push(
+      params.projectId, params.snapshotId, stepIdByOrder.get(step.step_order)!, step.node_id,
+      workflow.id, step.symbol_name ? `${step.file_path}#${step.symbol_name}` : step.file_path,
+      step.node_hash, step.file_path, step.symbol_name, step.line_start, step.line_end,
+      step.snippet?.slice(0, SNIPPET_CAP) ?? null, params.commitHash,
+    );
+    const base = i * 13;
+    return `($${base + 1}, $${base + 2}, 'workflow_step', 'code', $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13})`;
+  });
+  const receiptRows = (await query(
+    `INSERT INTO source_receipts
+       (project_id, snapshot_id, receipt_kind, trust_level, tutorial_step_id, node_id,
+        workflow_id, node_stable_key, node_hash, file_path, symbol_name, line_start,
+        line_end, snippet, commit_hash)
+     VALUES ${receiptTuples.join(', ')}
+     RETURNING id, tutorial_step_id`,
+    receiptValues,
+  )).rows as Array<{ id: string; tutorial_step_id: string }>;
+
+  await query(
+    `UPDATE tutorial_steps ts
+     SET receipt_ids = ARRAY[u.receipt_id]::uuid[]
+     FROM jsonb_to_recordset($1::jsonb) AS u(step_id uuid, receipt_id uuid)
+     WHERE ts.id = u.step_id`,
+    [JSON.stringify(receiptRows.map((r) => ({ step_id: r.tutorial_step_id, receipt_id: r.id })))],
+  );
 }
 
 function isControlError(err: unknown): boolean {

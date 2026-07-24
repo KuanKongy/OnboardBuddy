@@ -472,24 +472,24 @@ export async function persistWorkflows(
     // Clear old steps in case this is an upsert
     await query(`DELETE FROM workflow_steps WHERE workflow_id = $1`, [workflowId]);
 
-    for (const step of wf.steps) {
+    // One multi-VALUES INSERT per workflow — per-step rows cost a round
+    // trip each across ~60 workflows × ~10 steps (Track C).
+    if (wf.steps.length > 0) {
+      const values: unknown[] = [];
+      const tuples = wf.steps.map((step, j) => {
+        values.push(
+          workflowId, step.stepOrder, nodeIdMap.get(step.nodeStableKey) ?? null, step.filePath,
+          step.symbolName ?? null, step.lineStart ?? null, step.lineEnd ?? null, step.stepKind,
+          step.deterministicDescription, '{}', JSON.stringify(step.metadata ?? {}),
+        );
+        const base = j * 11;
+        return `(${Array.from({ length: 11 }, (_, k) => `$${base + k + 1}`).join(', ')})`;
+      });
       await query(
         `INSERT INTO workflow_steps
            (workflow_id, step_order, node_id, file_path, symbol_name, line_start, line_end, step_kind, deterministic_description, role_relevance, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-        [
-          workflowId,
-          step.stepOrder,
-          nodeIdMap.get(step.nodeStableKey) ?? null,
-          step.filePath,
-          step.symbolName ?? null,
-          step.lineStart ?? null,
-          step.lineEnd ?? null,
-          step.stepKind,
-          step.deterministicDescription,
-          '{}',
-          JSON.stringify(step.metadata ?? {}),
-        ],
+         VALUES ${tuples.join(', ')}`,
+        values,
       );
     }
   }

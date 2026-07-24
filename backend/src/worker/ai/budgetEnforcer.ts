@@ -5,6 +5,15 @@
  * checked BEFORE each batch dispatch; runtime is checked between batches;
  * the kill switch (job set to paused/failed from the API) is honored at
  * the same boundary.
+ *
+ * Persistence is amortized (latency overhaul Track C): limits are ALWAYS
+ * enforced from the in-memory counters, but the budget_usage row is written
+ * only every FLUSH_EVERY_CALLS calls / FLUSH_INTERVAL_MS, at phase
+ * boundaries, and on budget events. A crash therefore loses at most a few
+ * calls' worth of cumulative counters — ai_generation_runs remains the
+ * exact per-call ground truth. The kill-switch SELECT is cached for
+ * KILL_SWITCH_TTL_MS: a pause takes effect within ~2s plus the in-flight
+ * batch, which is the documented "batch boundary" contract.
  */
 
 import { query } from '../../lib/db.js';
@@ -79,6 +88,10 @@ export interface BudgetEnforcerOptions {
   now?: () => number;
 }
 
+const FLUSH_EVERY_CALLS = 10;
+const FLUSH_INTERVAL_MS = 5_000;
+const KILL_SWITCH_TTL_MS = 2_000;
+
 export class BudgetEnforcer {
   readonly budget: DepthBudget;
   readonly stopBehavior: BudgetStopBehavior;
@@ -87,6 +100,9 @@ export class BudgetEnforcer {
   private readonly now: () => number;
   private readonly startedAtMs: number;
   private currentUsage: BudgetUsage = emptyUsage();
+  private unflushedCalls = 0;
+  private lastFlushMs = 0;
+  private lastKillCheckMs = 0;
 
   constructor(options: BudgetEnforcerOptions) {
     this.snapshotId = options.snapshotId;
@@ -98,6 +114,9 @@ export class BudgetEnforcer {
     // clock (the user raised the budget or retried deliberately), while
     // call/token counters stay cumulative for the snapshot.
     this.startedAtMs = this.now();
+    // First recordUsage shouldn't force an immediate write; first
+    // checkBeforeBatch SHOULD check the kill switch (lastKillCheckMs = 0).
+    this.lastFlushMs = this.startedAtMs;
   }
 
   /** Loads persisted counters so a resumed run keeps counting from where it stopped. */
@@ -124,8 +143,12 @@ export class BudgetEnforcer {
    * when dispatching `estimatedCalls` more calls would break a limit.
    */
   async checkBeforeBatch(estimatedCalls = 1): Promise<void> {
-    if (this.jobId) {
+    // The kill-switch SELECT used to run once per LLM call — a full extra
+    // round-trip per call. A short TTL keeps pause latency ~2s while
+    // removing it from the hot path.
+    if (this.jobId && this.now() - this.lastKillCheckMs >= KILL_SWITCH_TTL_MS) {
       const result = await query(`SELECT status FROM analysis_jobs WHERE id = $1`, [this.jobId]);
+      this.lastKillCheckMs = this.now();
       const status = (result.rows[0] as { status?: string } | undefined)?.status;
       if (status === 'paused' || status === 'failed') throw new KillSwitchError(status);
     }
@@ -149,15 +172,26 @@ export class BudgetEnforcer {
     this.currentUsage.input_tokens += delta.inputTokens;
     this.currentUsage.output_tokens += delta.outputTokens;
     this.currentUsage.estimated_cost_usd = round6(this.currentUsage.estimated_cost_usd + delta.costUsd);
-    await this.persist();
+    this.unflushedCalls += delta.calls ?? 1;
+    if (this.unflushedCalls >= FLUSH_EVERY_CALLS || this.now() - this.lastFlushMs >= FLUSH_INTERVAL_MS) {
+      await this.flush();
+    }
   }
 
+  /** Budget events are never amortized — a trip must be durably visible. */
   async recordEvent(event: Record<string, unknown>): Promise<void> {
     this.currentUsage.budget_events.push(event);
-    await this.persist();
+    await this.flush();
   }
 
-  private async persist(): Promise<void> {
+  /**
+   * Persists the in-memory counters. Callers flush at phase boundaries and
+   * in terminal/finally paths so the stored counters never trail by more
+   * than one batch window.
+   */
+  async flush(): Promise<void> {
+    this.unflushedCalls = 0;
+    this.lastFlushMs = this.now();
     await query(`UPDATE analysis_snapshots SET budget_usage = $2 WHERE id = $1`, [
       this.snapshotId,
       JSON.stringify(this.currentUsage),

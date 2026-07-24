@@ -171,24 +171,34 @@ export async function persistSideEffects(
   effects: DetectedSideEffect[],
   nodeIdMap: Map<string, string>,
 ): Promise<void> {
-  for (const eff of effects) {
-    // Prefer the symbol-level node; fall back to the file node.
-    const nodeId =
-      (eff.symbolStableKey ? nodeIdMap.get(eff.symbolStableKey) : undefined) ??
-      nodeIdMap.get(eff.nodeStableKey);
-    if (!nodeId) continue;
+  // One multi-VALUES INSERT per chunk — the per-row loop cost a round trip
+  // per effect against the remote pooler (latency overhaul Track C).
+  const persistable = effects
+    .map((eff) => ({
+      eff,
+      nodeId:
+        (eff.symbolStableKey ? nodeIdMap.get(eff.symbolStableKey) : undefined) ??
+        nodeIdMap.get(eff.nodeStableKey),
+    }))
+    .filter((e): e is { eff: DetectedSideEffect; nodeId: string } => e.nodeId !== undefined);
 
-    await query(
-      `INSERT INTO side_effects (snapshot_id, node_id, type, target, confidence, evidence, metadata)
-       VALUES ($1, $2, $3, $4, 'medium', $5, $6)`,
-      [
-        snapshotId,
-        nodeId,
-        EFFECT_TYPE_BY_KIND[eff.kind],
-        eff.target ?? null,
+  const CHUNK = 500;
+  for (let i = 0; i < persistable.length; i += CHUNK) {
+    const part = persistable.slice(i, i + CHUNK);
+    const values: unknown[] = [];
+    const tuples = part.map(({ eff, nodeId }, j) => {
+      values.push(
+        snapshotId, nodeId, EFFECT_TYPE_BY_KIND[eff.kind], eff.target ?? null,
         eff.evidence ?? `Detected ${eff.kind} pattern in ${eff.filePath}${eff.symbolName ? `::${eff.symbolName}` : ''}`,
         JSON.stringify({ symbolName: eff.symbolName, detectorKind: eff.kind }),
-      ],
+      );
+      const base = j * 6;
+      return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, 'medium', $${base + 5}, $${base + 6})`;
+    });
+    await query(
+      `INSERT INTO side_effects (snapshot_id, node_id, type, target, confidence, evidence, metadata)
+       VALUES ${tuples.join(', ')}`,
+      values,
     );
   }
 }
