@@ -19,7 +19,7 @@ const BEHAVIOR_RULES: Array<{ signal: string; pattern: RegExp }> = [
   { signal: 'queue_enqueue', pattern: /(queue|Queue)\w*\s*(\(\s*\))?\s*\.add\b/ },
   { signal: 'queue_consume', pattern: /new Worker\b|\.process\s*\(/ },
   { signal: 'http_request', pattern: /\bfetch\s*\(|axios\b|octokit\b/ },
-  { signal: 'auth_check', pattern: /jwt\.verify|jwtVerify|requireProjectAccess|verifyToken|authenticate/ },
+  { signal: 'auth_check', pattern: /jwt\.verify|jwtVerify|requireProjectAccess|verifyToken|authenticate|supabase\w*\.auth\.|\.signUp\s*\(|\.signInWith\w+\s*\(|\.signOut\s*\(|bcrypt\w*\.(hash|compare)/ },
   { signal: 'env_read', pattern: /process\.env\./ },
   { signal: 'response_output', pattern: /\bres\.(json|send|status)\b|Response\.json/ },
   { signal: 'filesystem', pattern: /\bfs\.|writeFile|readFile|createWriteStream/ },

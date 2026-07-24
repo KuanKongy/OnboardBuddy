@@ -42,4 +42,9 @@ describe('tutorialGenerator.pickDiverseWorkflows', () => {
     expect(workflowFamily('HTTP POST')).to.equal('write_route');
     expect(workflowFamily('worker_job')).to.equal('worker_job');
   });
+
+  it('journeys and dev commands form their own uncapped families (journey-first selection)', () => {
+    expect(workflowFamily('journey')).to.equal('journey');
+    expect(workflowFamily('dev_command')).to.equal('dev_command');
+  });
 });

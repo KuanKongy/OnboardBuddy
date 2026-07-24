@@ -1240,6 +1240,33 @@ export function OnboardingPage() {
               </Tooltip>
             </>
           )}
+          {/* Honesty rule (DETECTION_COVERAGE.md): what the analysis KNOWS it
+              doesn't know — dead-end traces, unmodeled packages, journey
+              gaps. Findable work, never silent holes. */}
+          {(pkg.coverage.detectionUnknowns?.length ?? 0) > 0 && (
+            <>
+              <span aria-hidden>·</span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="cursor-help text-warning underline decoration-dotted underline-offset-2">
+                    {pkg.coverage.detectionUnknowns!.length} known unknown
+                    {pkg.coverage.detectionUnknowns!.length === 1 ? "" : "s"}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-80">
+                  {pkg.coverage.detectionUnknowns!
+                    .map((u) => {
+                      if (u.kind === "trace_dead_ends") return `${u.count ?? "?"} traces reached no effect`;
+                      if (u.kind === "unknown_external_calls")
+                        return `calls into unmodeled packages: ${(u.packages ?? []).slice(0, 5).join(", ")}`;
+                      if (u.kind === "journey_gap") return `journey not composed: ${u.expected}${u.queue ? ` (${u.queue})` : ""}`;
+                      return u.kind.replace(/_/g, " ");
+                    })
+                    .join(" · ")}
+                </TooltipContent>
+              </Tooltip>
+            </>
+          )}
           <Link
             to={`/projects/${id}/dependencies`}
             className="ml-auto shrink-0 font-medium text-primary hover:underline"

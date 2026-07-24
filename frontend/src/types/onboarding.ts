@@ -97,6 +97,8 @@ export interface PackageCoverage {
   workflows: { total: number; covered: number };
   tutorialCount: number;
   languages: Record<string, unknown> | null;
+  /** Honesty rule: snapshot-level unknowns (trace dead-ends, unmodeled packages, journey gaps). */
+  detectionUnknowns?: Array<{ kind: string; count?: number; packages?: string[]; expected?: string; queue?: string }>;
   rankingSignals: Array<{ signal: string; weight: number }>;
 }
 

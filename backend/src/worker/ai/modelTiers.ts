@@ -29,11 +29,21 @@ export interface TierConfig {
 export function defaultTierModels(): Record<ModelTier, string[]> {
   return {
     // Legacy OPENROUTER_MODEL keeps working as the cheap-tier default.
-    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'deepseek/deepseek-v4-flash'],
-    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'deepseek/deepseek-v4-flash'],
+    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash-lite'],
+    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'google/gemini-2.5-flash-lite'],
     embedding: [process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'],
   };
 }
+
+/**
+ * Models a project may select in settings (model_tier_overrides UI). Kept
+ * deliberately short — every entry must have been validated against the
+ * structured-output pipeline (strict JSON, omission handling, price row).
+ */
+export const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
+  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (default — fast, 1M context)' },
+  { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash (1M context)' },
+];
 
 export const DEFAULT_FAILURE_BEHAVIOR: Record<ModelTier, FailureBehavior[]> = {
   cheap: ['retry', 'degrade'],
@@ -79,21 +89,22 @@ export function resolveTierConfig(overrides?: {
   return { models, failureBehavior };
 }
 
-// Coarse per-tier prices used for ai_generation_runs.estimated_cost_usd.
-// Deliberately not a per-model price table: these estimates feed the cost
-// UI and budget trend lines, not billing. USD per million tokens.
-// Both chat tiers match the deepseek/deepseek-v4-flash default — keep the
-// rows in sync with the OPENROUTER_MODEL_* env vars per the note above.
+// Prices used for ai_generation_runs.estimated_cost_usd — estimates for the
+// cost UI and budget trend lines, not billing. USD per million tokens.
+// Known models get exact rows; unknown models fall back to their tier row
+// (keep tier rows in sync with the defaultTierModels() defaults).
+const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> = {
+  'google/gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
+  'deepseek/deepseek-v4-flash': { input: 0.09, output: 0.18 },
+};
+
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
-  // cheap tier tracks meta-llama/llama-4-scout (Groq via OpenRouter): probe
-  // measured ~4.5-4.9k tok/s decode with valid strict-JSON — ~40x deepseek's
-  // production rate — for +$0.02/+$0.16 per Mtok.
-  cheap: { input: 0.11, output: 0.34 },
-  strong: { input: 0.09, output: 0.18 },
+  cheap: { input: 0.1, output: 0.4 },
+  strong: { input: 0.1, output: 0.4 },
   embedding: { input: 0.02, output: 0 },
 };
 
-export function estimateCostUsd(tier: ModelTier, inputTokens: number, outputTokens: number): number {
-  const price = TIER_PRICES_PER_MTOK[tier];
+export function estimateCostUsd(tier: ModelTier, inputTokens: number, outputTokens: number, model?: string): number {
+  const price = (model !== undefined ? MODEL_PRICES_PER_MTOK[model] : undefined) ?? TIER_PRICES_PER_MTOK[tier];
   return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
 }

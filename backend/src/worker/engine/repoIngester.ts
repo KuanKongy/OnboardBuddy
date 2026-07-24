@@ -156,7 +156,7 @@ function classifyCategory(relativePath: string, language: string): FileCategory 
   if (language === 'sql' || language === 'prisma' || base === 'schema.json') return 'schema';
   if (
     base === 'package.json' || base.startsWith('tsconfig') || base === 'dockerfile' ||
-    base === 'docker-compose.yml' || base === 'docker-compose.yaml' ||
+    base.startsWith('dockerfile.') || isComposeFile(base) ||
     /vite\.config|vitest\.config|eslint|prettier|babel\.config|jest\.config|rollup\.config|webpack\.config/.test(base) ||
     /(^|\/)\.github\/workflows\//.test(p) ||
     /\.env\.(example|sample|template)$/.test(base) ||
@@ -266,14 +266,19 @@ export async function scanRepositoryFiles(
   return records;
 }
 
+/** docker-compose.yml, docker-compose.test.yml, compose.yaml, … */
+function isComposeFile(baseLower: string): boolean {
+  return /^docker-compose[\w.-]*\.ya?ml$/.test(baseLower) || /^compose\.ya?ml$/.test(baseLower);
+}
+
 function isRootInventoryFile(rel: string): boolean {
   if (rel.includes('/')) {
     return /^\.github\/workflows\/[^/]+$/.test(rel);
   }
   const base = rel.toLowerCase();
   return (
-    base === 'package.json' || base === 'pnpm-workspace.yaml' || base === 'docker-compose.yml' ||
-    base === 'docker-compose.yaml' || base === 'vercel.json' || base === 'netlify.toml' ||
+    base === 'package.json' || base === 'pnpm-workspace.yaml' || isComposeFile(base) ||
+    base === 'vercel.json' || base === 'netlify.toml' ||
     base === 'procfile' || base === 'readme.md'
   );
 }
@@ -349,12 +354,14 @@ export async function detectRepoInventory(rootPath: string, records?: RepoFileRe
         const hint = FRAMEWORK_HINTS[dep];
         if (hint) frameworks.add(hint);
       }
-    } else if (base === 'docker-compose.yml' || base === 'docker-compose.yaml') {
+    } else if (isComposeFile(base)) {
       const services = parseComposeServices(r.absolutePath);
-      dockerServices.push(...services);
+      // Test composes (docker-compose.test.yml) are inventory 'compose' too,
+      // but only the main file feeds scope-proposal docker services.
+      if (!/test/i.test(base)) dockerServices.push(...services);
       configs.push({ path: r.relativePath, kind: 'compose', facts: { services: services.map((s) => s.name) } });
       frameworks.add('docker');
-    } else if (base === 'dockerfile') {
+    } else if (base === 'dockerfile' || base.startsWith('dockerfile.')) {
       configs.push({ path: r.relativePath, kind: 'docker', facts: {} });
       frameworks.add('docker');
     } else if (base.startsWith('tsconfig')) {

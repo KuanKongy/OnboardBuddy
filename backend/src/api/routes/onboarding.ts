@@ -545,7 +545,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     // and which signals ranked it. Every number is a count over stored
     // rows; nothing here passes through a model.
     const snapMeta = (await query(
-      `SELECT created_at, file_count, symbol_count, workflow_count, language_inventory
+      `SELECT created_at, file_count, symbol_count, workflow_count, language_inventory, unknowns
        FROM analysis_snapshots WHERE id = $1`,
       [pkg.snapshot_id],
     )).rows[0] as {
@@ -554,6 +554,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
       symbol_count: number;
       workflow_count: number;
       language_inventory: Record<string, unknown>;
+      unknowns: Array<Record<string, unknown>>;
     } | undefined;
 
     const citedAgg = (await query(
@@ -665,6 +666,10 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
               workflows: { total: snapMeta.workflow_count, covered: citedAgg?.workflows_covered ?? 0 },
               tutorialCount: citedAgg?.tutorial_count ?? 0,
               languages: snapMeta.language_inventory ?? null,
+              // Honesty rule (DETECTION_COVERAGE.md): snapshot-level unknowns
+              // (trace dead-ends, unmodeled packages, journey gaps) are shown,
+              // never silently dropped.
+              detectionUnknowns: Array.isArray(snapMeta.unknowns) ? snapMeta.unknowns : [],
               rankingSignals: Object.entries(CANDIDATE_WEIGHTS).map(([signal, weight]) => ({
                 signal,
                 weight,

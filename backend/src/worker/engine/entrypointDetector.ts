@@ -160,24 +160,34 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
     // to the named-export heuristic above, which is why the analyze
     // pipeline never traced as a workflow (audit P2 §15). The first
     // argument is a string literal or an UPPER_SNAKE constant; anything
-    // path-like is a worker_threads script, not a queue.
+    // path-like is a worker_threads script, not a queue. When the second
+    // argument is a bare identifier (`new Worker(Q, processJob)`), the
+    // referenced function is the real seed: the const holding the Worker
+    // has no outgoing call edges, so seeding it traced one step and the
+    // whole consumer workflow was dropped (the SUMMARY-consumer gap,
+    // doc/DETECTION_COVERAGE.md §1).
     const seenQueues = new Set<string>();
     for (const sym of fa.symbols) {
       const src = `${sym.initializer ?? ''} ${sym.snippet ?? ''}`;
       if (!src.includes('new Worker')) continue;
       for (const m of src.matchAll(
-        /new\s+Worker\s*(?:<[^>]*>)?\s*\(\s*(?:['"`]([\w:.-]+)['"`]|([A-Z_][A-Z0-9_]*))\s*,/g,
+        /new\s+Worker\s*(?:<[^>]*>)?\s*\(\s*(?:['"`]([\w:.-]+)['"`]|([A-Z_][A-Z0-9_]*))\s*,\s*([A-Za-z_$][\w$]*)?/g,
       )) {
         const queueName = m[1] ?? m[2]!;
         if (queueName.includes('/') || seenQueues.has(queueName)) continue;
         seenQueues.add(queueName);
+        const handlerName = m[3] && m[3] !== 'async' && m[3] !== 'function'
+          ? m[3] : undefined;
+        const handlerSym = handlerName
+          ? fa.symbols.find((s) => s.name === handlerName)
+          : undefined;
         entrypoints.push({
           nodeStableKey: relativePath,
           kind: 'message_consumer',
           routePattern: queueName,
           filePath: relativePath,
-          symbolName: sym.name,
-          symbolStableKey: symbolKey(relativePath, sym.name),
+          symbolName: handlerSym?.name ?? sym.name,
+          symbolStableKey: symbolKey(relativePath, handlerSym?.name ?? sym.name),
         });
         foundEntrypoint = true;
       }

@@ -169,9 +169,17 @@ async function selectWorkflows(params: GenerateTutorialsParams): Promise<Workflo
       const projection = projectionByKey.get(row.stable_key);
       const workflowView = projection?.viewScores.critical_for_workflow ?? 0;
       const effectRichness = row.effect_steps / Math.max(row.step_count, 1);
+      // Journey-first selection (ONBOARDING_UX_GOALS.md item 4): composed
+      // product journeys and the dev-environment journey outrank any
+      // route-level workflow of similar score — tutorials teach the flows a
+      // team lead would whiteboard, with routes as the drill-down layer.
+      const journeyBonus =
+        row.trigger_type === 'journey' ? 1
+        : row.trigger_type === 'dev_command' ? 0.5
+        : 0;
       return {
         row: row as WorkflowRow,
-        score: workflowView + (projection?.score ?? 0) + 0.2 * effectRichness,
+        score: workflowView + (projection?.score ?? 0) + 0.2 * effectRichness + journeyBonus,
         family: workflowFamily(row.trigger_type),
       };
     }),

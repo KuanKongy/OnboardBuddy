@@ -28,7 +28,10 @@ describe('sideEffectDetector', () => {
 
   it('each effect has a valid kind', () => {
     const effects = detectSideEffects(fileAnalyses);
-    const validKinds = new Set(['database_write', 'http_call', 'file_write', 'message_publish', 'email_send', 'cache_write']);
+    const validKinds = new Set([
+      'database_write', 'http_call', 'file_write', 'message_publish', 'email_send', 'cache_write',
+      'auth_call', 'external_service', 'process_exec', 'unknown_external',
+    ]);
     for (const eff of effects) {
       expect(validKinds.has(eff.kind)).to.be.true;
     }
