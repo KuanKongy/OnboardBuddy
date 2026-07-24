@@ -18,7 +18,9 @@ import type { SynthesisResult } from './synthesisPass.js';
 import type { DeveloperRole, SemanticView } from './projections.js';
 
 const TOP_SLICE_SYMBOLS_FILES = 40;
-const TARGETS_PER_RERANK_CALL = 10;
+// Sized for measured ~30-120 tok/s decode: 15 targets ≈ 4-5k output/call;
+// more, smaller calls ride the concurrency limit instead of the slow tail.
+const TARGETS_PER_RERANK_CALL = 15;
 const ROLES: DeveloperRole[] = ['backend', 'frontend', 'devops', 'qa', 'general'];
 
 export interface RerankTarget {
@@ -212,25 +214,30 @@ export async function runSemanticReranking(
   for (let i = 0; i < targets.length; i += TARGETS_PER_RERANK_CALL) {
     rerankBatches.push(targets.slice(i, i + TARGETS_PER_RERANK_CALL));
   }
-  await mapLimit(rerankBatches, 6, async (batch) => {
-    const prompt = [
-      'Score each target 0-100 per criticality view: runtime (what breaks the app when wrong), business (domain importance), onboarding (what a newcomer must understand first), change_risk (operational risk / invariants), architecture (boundary and coupling importance), workflow (workflow criticality), and per-role relevance (backend/frontend/devops/qa/general). Give 1-3 short reasons per target. Judge from the summaries and deterministic signals; do not invent facts.',
-      OUTPUT_RULES,
-      batch.map((t) => [
+  await mapLimit(rerankBatches, 10, async (batch) => {
+    const response = await ctx.ai.call<{ targets: LlmTargetScores[] }>({
+      // Structured scoring — cheap tier: measured 49.6s/call on the strong
+      // tier (mostly reasoning tokens) vs ~2s on scout for the same scores;
+      // deterministic signals blend in downstream either way.
+      tier: 'cheap',
+      targetType: 'rerank',
+      promptVersion: PROMPT_VERSIONS.rerank,
+      schemaName: 'rerank_scores',
+      schema: RERANK_SCHEMA,
+      // Static scoring contract in the system prefix (prompt cache).
+      system: [
+        'Score each target 0-100 per criticality view: runtime (what breaks the app when wrong), business (domain importance), onboarding (what a newcomer must understand first), change_risk (operational risk / invariants), architecture (boundary and coupling importance), workflow (workflow criticality), and per-role relevance (backend/frontend/devops/qa/general). Give 1-3 short reasons per target. Judge from the summaries and deterministic signals; do not invent facts.',
+        OUTPUT_RULES,
+      ].join('\n\n'),
+      user: batch.map((t) => [
         `### ${t.stableKey} (${t.targetType})`,
         `summary: ${t.summary.slice(0, 300)}`,
         `phase-A signals: ${JSON.stringify(t.candidateBreakdown)}`,
         t.record?.record.risks_invariants?.length ? `risks: ${t.record.record.risks_invariants.join('; ').slice(0, 200)}` : null,
       ].filter(Boolean).join('\n')).join('\n\n'),
-    ].join('\n\n');
-
-    const response = await ctx.ai.call<{ targets: LlmTargetScores[] }>({
-      tier: 'strong',
-      targetType: 'rerank',
-      promptVersion: PROMPT_VERSIONS.rerank,
-      schemaName: 'rerank_scores',
-      schema: RERANK_SCHEMA,
-      user: prompt,
+      // 4k floor leaves room for deepseek reasoning tokens (they count
+      // against max_tokens; too-tight caps return empty content).
+      maxOutputTokens: 4_000 + 300 * batch.length,
     });
     llmCalls += 1;
     for (const t of response.value?.targets ?? []) llmByKey.set(t.stable_key, t);
@@ -267,58 +274,72 @@ export async function runSemanticReranking(
     normalize(blended, (b) => b.roles[role].blended, (b, v) => { b.roles[role].blended = v; });
   }
 
-  // Persist
-  let rowsWritten = 0;
+  // Persist: prefetch cluster/capability ids in TWO queries, then chunked
+  // multi-VALUES upserts — this loop used to issue ~700 serial statements
+  // against the remote pooler (Track C).
+  const clusterIds = new Map<string, string>(
+    ((await query(
+      `SELECT stable_key, id FROM architecture_clusters WHERE snapshot_id = $1`,
+      [ctx.snapshotId],
+    )).rows as Array<{ stable_key: string; id: string }>).map((r) => [r.stable_key, r.id]),
+  );
+  const capabilityIds = new Map<string, string>(
+    ((await query(
+      `SELECT stable_key, id FROM capabilities WHERE snapshot_id = $1`,
+      [ctx.snapshotId],
+    )).rows as Array<{ stable_key: string; id: string }>).map((r) => [r.stable_key, r.id]),
+  );
+  const idsFor = (target: RerankTarget): { nodeId: string | null; targetId: string | null } => {
+    if (target.targetType === 'symbol' || target.targetType === 'file') {
+      return { nodeId: ctx.nodeIdMap.get(target.stableKey) ?? null, targetId: null };
+    }
+    if (target.targetType === 'workflow') return { nodeId: null, targetId: ctx.workflowIdMap.get(target.stableKey) ?? null };
+    if (target.targetType === 'cluster') return { nodeId: null, targetId: clusterIds.get(target.stableKey) ?? null };
+    return { nodeId: null, targetId: capabilityIds.get(target.stableKey) ?? null };
+  };
+
+  interface ScoreRow {
+    view: SemanticView; targetType: string; nodeId: string | null; targetId: string | null;
+    stableKey: string; role: DeveloperRole | null; score: number;
+    breakdown: Record<string, number>; reasons: string[];
+  }
+  const rows: ScoreRow[] = [];
   for (const b of blended) {
-    const ids = await resolveTargetIds(ctx, b.target);
+    const ids = idsFor(b.target);
     for (const view of Object.keys(LLM_VIEW_FIELD) as Array<keyof typeof LLM_VIEW_FIELD>) {
-      await upsertScore(ctx, b.target, view, null, b.views[view].blended,
-        { deterministic: b.views[view].det, llm: b.views[view].llm }, b.reasons, ids);
-      rowsWritten += 1;
+      rows.push({
+        view, targetType: b.target.targetType, ...ids, stableKey: b.target.stableKey, role: null,
+        score: b.views[view].blended, breakdown: { deterministic: b.views[view].det, llm: b.views[view].llm }, reasons: b.reasons,
+      });
     }
     for (const role of ROLES) {
-      await upsertScore(ctx, b.target, 'critical_for_role', role, b.roles[role].blended,
-        { deterministic: b.roles[role].det, llm: b.roles[role].llm }, b.reasons, ids);
-      rowsWritten += 1;
+      rows.push({
+        view: 'critical_for_role', targetType: b.target.targetType, ...ids, stableKey: b.target.stableKey, role,
+        score: b.roles[role].blended, breakdown: { deterministic: b.roles[role].det, llm: b.roles[role].llm }, reasons: b.reasons,
+      });
     }
   }
-  return { targets: targets.length, rowsWritten, llmCalls };
-}
 
-async function resolveTargetIds(ctx: SemanticContext, target: RerankTarget): Promise<{ nodeId: string | null; targetId: string | null }> {
-  if (target.targetType === 'symbol' || target.targetType === 'file') {
-    return { nodeId: ctx.nodeIdMap.get(target.stableKey) ?? null, targetId: null };
+  const CHUNK = 250;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const part = rows.slice(i, i + CHUNK);
+    const values: unknown[] = [];
+    const tuples = part.map((r, j) => {
+      values.push(ctx.snapshotId, r.view, r.targetType, r.nodeId, r.targetId, r.stableKey, r.role,
+        round5(r.score), JSON.stringify(r.breakdown), r.reasons);
+      const base = j * 10;
+      return `($${base + 1}, 'semantic', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
+    });
+    await query(
+      `INSERT INTO criticality_scores
+         (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
+       VALUES ${tuples.join(', ')}
+       ON CONFLICT (snapshot_id, phase, view, target_type, stable_key, COALESCE(role, ''))
+         DO UPDATE SET score = EXCLUDED.score, score_breakdown = EXCLUDED.score_breakdown, reasons = EXCLUDED.reasons`,
+      values,
+    );
   }
-  if (target.targetType === 'workflow') {
-    return { nodeId: null, targetId: ctx.workflowIdMap.get(target.stableKey) ?? null };
-  }
-  if (target.targetType === 'cluster') {
-    const row = await query(`SELECT id FROM architecture_clusters WHERE snapshot_id = $1 AND stable_key = $2`, [ctx.snapshotId, target.stableKey]);
-    return { nodeId: null, targetId: (row.rows[0] as { id: string } | undefined)?.id ?? null };
-  }
-  const row = await query(`SELECT id FROM capabilities WHERE snapshot_id = $1 AND stable_key = $2`, [ctx.snapshotId, target.stableKey]);
-  return { nodeId: null, targetId: (row.rows[0] as { id: string } | undefined)?.id ?? null };
-}
-
-async function upsertScore(
-  ctx: SemanticContext,
-  target: RerankTarget,
-  view: SemanticView,
-  role: DeveloperRole | null,
-  score: number,
-  breakdown: Record<string, number>,
-  reasons: string[],
-  ids: { nodeId: string | null; targetId: string | null },
-): Promise<void> {
-  await query(
-    `INSERT INTO criticality_scores
-       (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
-     VALUES ($1, 'semantic', $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (snapshot_id, phase, view, target_type, stable_key, COALESCE(role, ''))
-       DO UPDATE SET score = EXCLUDED.score, score_breakdown = EXCLUDED.score_breakdown, reasons = EXCLUDED.reasons`,
-    [ctx.snapshotId, view, target.targetType, ids.nodeId, ids.targetId, target.stableKey, role,
-     round5(score), JSON.stringify(breakdown), reasons],
-  );
+  return { targets: targets.length, rowsWritten: rows.length, llmCalls };
 }
 
 function clamp01(n: number): number {

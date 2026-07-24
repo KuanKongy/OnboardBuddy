@@ -127,11 +127,17 @@ export class OpenRouterProvider implements AiProvider {
   // ── internals ──────────────────────────────────────────────────────────────
 
   private chatBody(req: CompletionRequest): Record<string, unknown> {
+    // OpenRouter routes each model to one of several upstreams; measured
+    // decode on the default route varied 12–124 tok/s for the same model.
+    // 'throughput' asks OpenRouter to prefer the fastest upstream. Set
+    // OPENROUTER_PROVIDER_SORT="" to disable (e.g. non-OpenRouter base URL).
+    const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
     return {
       model: req.model,
       messages: req.messages,
       ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+      ...(sort ? { provider: { sort } } : {}),
     };
   }
 
@@ -160,6 +166,11 @@ export class OpenRouterProvider implements AiProvider {
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : 'unparseable JSON' };
     }
+    // Small models routinely emit null where the schema wants an empty array
+    // (observed live: scout's `"outputs": null` failed 25 symbol batches into
+    // the halving-retry path). null-for-[] is semantically "none" — coerce it
+    // schema-aware instead of burning a full revalidation round trip.
+    value = coerceNullArrays(value, req.schema);
     const violations = validateAgainstSchema(value, req.schema);
     if (violations.length > 0) {
       return { ok: false, error: violations.slice(0, 5).map((v) => `${v.path}: ${v.message}`).join('; ') };
@@ -180,16 +191,22 @@ export class OpenRouterProvider implements AiProvider {
   }
 
   private async post<T>(url: string, body: Record<string, unknown>, opts: ProviderCallOptions): Promise<T> {
+    // Hard per-attempt deadline: observed calls running 550–800s on slow
+    // upstreams with no timeout at all. An aborted attempt surfaces as a
+    // retryable ProviderError, so withRetries / batch-halving take over.
+    const timeoutMs = Number(process.env.LLM_REQUEST_TIMEOUT_MS ?? 240_000);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
     let res: Response;
     try {
       res = await this.fetchImpl(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${opts.apiKey}` },
         body: JSON.stringify(body),
-        signal: opts.signal,
+        signal,
       });
     } catch (err) {
-      // Network-level failure: retryable.
+      // Network-level failure (incl. per-attempt timeout): retryable.
       throw new ProviderError(err instanceof Error ? err.message : String(err), null, true);
     }
     if (!res.ok) {
@@ -205,4 +222,37 @@ function isSchemaRejection(err: unknown): boolean {
   if (!(err instanceof ProviderError) || err.status === null) return false;
   if (err.status < 400 || err.status >= 500) return false;
   return /response_format|json_schema|structured|schema/i.test(err.message);
+}
+
+/**
+ * Walk value and schema together, replacing null with [] wherever the schema
+ * declares an array. Only that one coercion: everything else still has to
+ * pass validation honestly. Exported for tests.
+ */
+export function coerceNullArrays(value: unknown, schema: unknown): unknown {
+  if (schema === null || typeof schema !== 'object') return value;
+  const s = schema as Record<string, unknown>;
+  const types = Array.isArray(s.type) ? s.type : typeof s.type === 'string' ? [s.type] : [];
+
+  if (value === null && types.includes('array') && !types.includes('null')) return [];
+
+  if (Array.isArray(value) && types.includes('array')) {
+    const items = s.items;
+    if (items && typeof items === 'object' && !Array.isArray(items)) {
+      return value.map((v) => coerceNullArrays(v, items));
+    }
+    return value;
+  }
+
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    const props = s.properties;
+    if (props && typeof props === 'object') {
+      const out: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+      for (const [key, propSchema] of Object.entries(props as Record<string, unknown>)) {
+        if (key in out) out[key] = coerceNullArrays(out[key], propSchema);
+      }
+      return out;
+    }
+  }
+  return value;
 }

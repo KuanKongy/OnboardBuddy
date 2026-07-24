@@ -298,6 +298,7 @@ async function callQaModel(
     schemaName: 'qa_answer',
     schema: QA_OUTPUT_SCHEMA,
     user: prompt,
+    maxOutputTokens: 8_000,
   });
   return { output: response.value! };
 }

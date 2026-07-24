@@ -158,7 +158,11 @@ async function callModel(
     promptVersion: SECTION_PROMPT_VERSION,
     schemaName: 'onboarding_section_v2',
     schema: SECTION_OUTPUT_SCHEMA,
+    // Static rules/voice contract shared byte-identically across every
+    // section call — the prefix providers prompt-cache (Track B).
+    system: SECTION_SYSTEM_PROMPT,
     user: prompt,
+    maxOutputTokens: 12_000,
   });
   const raw = response.value!;
   const translate = (id: string) => aliasToId.get(id.trim()) ?? id;
@@ -170,6 +174,12 @@ async function callModel(
   return { output, runId: response.runId };
 }
 
+/** Static rules + voice contract — identical for every section call. */
+const SECTION_SYSTEM_PROMPT = [
+  'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; when citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping — never print them; use the human name or path they refer to.',
+  'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts — never derive or estimate your own.',
+].join('\n\n');
+
 function renderPrompt(
   params: GenerateSectionParams,
   bundle: EvidenceBundleV2,
@@ -178,23 +188,23 @@ function renderPrompt(
 ): string {
   const spec = SECTION_SPECS[params.sectionType];
   const idToAlias = new Map([...aliasToId.entries()].map(([a, id]) => [id, a]));
+  // Evidence budgets sized for the 1M-context tier (Track B): summaries,
+  // snippets, and deterministic facts were truncated for small windows.
   const records = bundle.semanticContext.map(
-    (r) => `- [${r.recordLevel}] ${r.stableKey} (confidence ${r.confidence}): ${r.summary.slice(0, 280)}`,
+    (r) => `- [${r.recordLevel}] ${r.stableKey} (confidence ${r.confidence}): ${r.summary.slice(0, 400)}`,
   );
   const receipts = bundle.receipts.map((r) => {
     const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
-    const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 500).replace(/\n/g, '\n  ')}` : '';
+    const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 1_500).replace(/\n/g, '\n  ')}` : '';
     return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
   });
   return [
     `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${bundle.repo.owner}/${bundle.repo.name} (scope: ${bundle.scope.displayName}).`,
     spec.instructions.replace(/\bROLE\b/g, params.role),
-    'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; when citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping — never print them; use the human name or path they refer to.',
-    'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts — never derive or estimate your own.',
     previousIssues && previousIssues.length > 0
       ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
       : null,
-    `Deterministic facts (authoritative):\n${JSON.stringify(bundle.deterministicContext).slice(0, 8000)}`,
+    `Deterministic facts (authoritative):\n${JSON.stringify(bundle.deterministicContext).slice(0, 24_000)}`,
     `Semantic records:\n${records.join('\n') || '(none)'}`,
     `Receipts (cite by id):\n${receipts.join('\n') || '(none)'}`,
     bundle.unknowns.length > 0 ? `Known gaps: ${JSON.stringify(bundle.unknowns)}` : null,
@@ -253,26 +263,36 @@ async function persistSection(
     }
   }
   const used = new Set(validation.usedReceiptIds);
-  for (const receipt of bundle.receipts) {
-    if (!used.has(receipt.receiptId)) continue;
+  const usedReceipts = bundle.receipts.filter((r) => used.has(r.receiptId));
+  // One multi-VALUES INSERT — with 40-receipt evidence budgets a per-row
+  // loop would cost 40 round trips per section (Track C).
+  if (usedReceipts.length > 0) {
+    const values: unknown[] = [];
+    const tuples = usedReceipts.map((receipt, i) => {
+      values.push(
+        params.projectId, params.snapshotId, receipt.receiptKind, receipt.trustLevel,
+        sectionRow.id, receipt.nodeStableKey ?? null, receipt.filePath ?? null,
+        receipt.symbolName ?? null, receipt.lineStart ?? null, receipt.lineEnd ?? null,
+        receipt.snippet ?? null, receipt.detectionExpression ?? null,
+        receipt.referencedRecordId ?? null, params.commitHash,
+        claimByReceiptId.get(receipt.receiptId) ?? null,
+        JSON.stringify({
+          copiedFromReceiptId: receipt.receiptId,
+          ...(receipt.truncatedFromLineEnd != null
+            ? { truncatedFromLineEnd: receipt.truncatedFromLineEnd }
+            : {}),
+        }),
+      );
+      const base = i * 16;
+      return `(${Array.from({ length: 16 }, (_, j) => `$${base + j + 1}`).join(', ')})`;
+    });
     await query(
       `INSERT INTO source_receipts
          (project_id, snapshot_id, receipt_kind, trust_level, section_id, node_stable_key,
           file_path, symbol_name, line_start, line_end, snippet, detection_expression,
           referenced_record_id, commit_hash, claim, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
-      [params.projectId, params.snapshotId, receipt.receiptKind, receipt.trustLevel,
-       sectionRow.id, receipt.nodeStableKey ?? null, receipt.filePath ?? null,
-       receipt.symbolName ?? null, receipt.lineStart ?? null, receipt.lineEnd ?? null,
-       receipt.snippet ?? null, receipt.detectionExpression ?? null,
-       receipt.referencedRecordId ?? null, params.commitHash,
-       claimByReceiptId.get(receipt.receiptId) ?? null,
-       JSON.stringify({
-         copiedFromReceiptId: receipt.receiptId,
-         ...(receipt.truncatedFromLineEnd != null
-           ? { truncatedFromLineEnd: receipt.truncatedFromLineEnd }
-           : {}),
-       })],
+       VALUES ${tuples.join(', ')}`,
+      values,
     );
   }
   return sectionRow.id;

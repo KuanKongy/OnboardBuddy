@@ -1,14 +1,20 @@
 /**
  * Symbol semantic pass (doc/Pipeline.md "Semantic Pass"): depth-gated,
- * batched per file with hard limits, content-address cached, cheap tier.
- * Trivial and unselected symbols get facts-only records (no LLM call);
- * failed symbols are retried individually, then fall back to facts-only
- * with an llm_failed flag — never silently dropped.
+ * batched across files with hard limits, content-address cached, cheap
+ * tier. Trivial and unselected symbols get facts-only records (no LLM
+ * call); a failing batch splits in half recursively (leaf 4), then failed
+ * symbols are retried individually and fall back to facts-only with an
+ * llm_failed flag — never silently dropped. Persistence is bulk: one
+ * lookup, one insert, one receipts attach, one snapshot map per batch
+ * (latency overhaul Tracks B+C).
  */
 
 import { BudgetExceededError } from '../ai/budgetEnforcer.js';
 import { mapLimit } from '../../lib/parallel.js';
-import { MAX_SYMBOLS_PER_CALL, MAX_SNIPPET_CHARS, MAX_REQUEST_INPUT_TOKENS, CHARS_PER_TOKEN } from '../engine/budgets.js';
+import {
+  MAX_SYMBOLS_PER_CALL, MAX_SNIPPET_CHARS, MAX_REQUEST_INPUT_TOKENS, CHARS_PER_TOKEN,
+  SYMBOL_BATCH_OUTPUT_TOKENS_PER_SYMBOL,
+} from '../engine/budgets.js';
 import { capReceiptSpan } from '../engine/receiptSpan.js';
 import type { EvidenceNode } from '../types/analysis.js';
 import type { SemanticContext } from './context.js';
@@ -17,8 +23,10 @@ import {
   type SemanticRecordBody, type RecordConfidence,
 } from './recordTypes.js';
 import {
-  evidenceHashForSymbol, lookupRecord, insertRecord, mapToSnapshot, attachReceipts,
-  type StoredRecord, type RecordCacheKey, type ReceiptDraft,
+  evidenceHashForSymbol, lookupRecord, lookupRecords, insertRecord, insertRecordsBulk,
+  mapToSnapshot, mapToSnapshotBulk, attachReceipts, attachReceiptsBulk, depthLookupOrder,
+  type StoredRecord, type RecordCacheKey, type ReceiptDraft, type InsertRecordInput,
+  type PriorSymbolRecord,
 } from './recordStore.js';
 
 const SYMBOL_NODE_TYPES = new Set(['function', 'method', 'class', 'interface', 'type', 'enum', 'variable']);
@@ -30,11 +38,34 @@ export interface SymbolPassResult {
   llmRecords: number;
   factsOnlyRecords: number;
   cacheHits: number;
+  /** Prior-mapping exact matches re-mapped without any lookup (Track E). */
+  carriedForward: number;
   retriedSymbols: number;
   failedSymbols: number;
   /** True when a budget 'degrade' downgraded remaining symbols to facts-only. */
   degraded: boolean;
 }
+
+/**
+ * Carry-forward gate (Track E): a prior record substitutes for a fresh
+ * lookup exactly when the SAME computation would have been a cache hit —
+ * evidence hash, prompt version, model family, a depth the current run
+ * accepts, and a non-superseded status. Model-family membership makes a
+ * model swap automatically re-key everything.
+ */
+export function isCarryForwardEligible(
+  prior: PriorSymbolRecord | undefined,
+  expected: { evidenceHash: string; promptVersion: string; modelFamily: string; depth: SemanticDepthLike },
+): prior is PriorSymbolRecord {
+  if (!prior) return false;
+  return prior.evidenceHash === expected.evidenceHash
+    && prior.promptVersion === expected.promptVersion
+    && prior.modelFamily === expected.modelFamily
+    && depthLookupOrder(expected.depth).includes(prior.semanticDepth)
+    && (prior.status === 'usable' || prior.status === 'pending' || prior.status === 'rejected');
+}
+
+type SemanticDepthLike = Parameters<typeof depthLookupOrder>[0];
 
 interface SymbolTarget {
   node: EvidenceNode;
@@ -45,7 +76,7 @@ interface SymbolTarget {
 export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassResult> {
   const result: SymbolPassResult = {
     records: new Map(), llmRecords: 0, factsOnlyRecords: 0,
-    cacheHits: 0, retriedSymbols: 0, failedSymbols: 0, degraded: false,
+    cacheHits: 0, carriedForward: 0, retriedSymbols: 0, failedSymbols: 0, degraded: false,
   };
   const nodesByKey = new Map(ctx.graph.nodes.filter((n) => SYMBOL_NODE_TYPES.has(n.type)).map((n) => [n.stableKey, n]));
 
@@ -61,74 +92,141 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
     else llmKeys.push(key);
   }
 
-  // Facts-only records first: deterministic, no budget interaction.
+  // Facts-only records: deterministic, no budget interaction. Bulk path —
+  // one lookup, one insert, one snapshot map for the whole set instead of
+  // ~4 round trips per record.
+  let factsTargets: Array<{ node: EvidenceNode; cacheKey: RecordCacheKey }> = [];
   for (const key of factsOnlyKeys) {
     const node = nodesByKey.get(key);
     if (!node) continue;
-    const record = await ensureFactsOnlyRecord(ctx, node);
-    result.records.set(key, record);
-    result.factsOnlyRecords += 1;
+    factsTargets.push({
+      node,
+      cacheKey: {
+        projectId: ctx.projectId, stableKey: key, level: 'symbol',
+        evidenceHash: evidenceHashForSymbol(node, ctx.graph, ctx.sideEffects),
+        promptVersion: PROMPT_VERSIONS.factsOnly, depth: ctx.depth, modelFamily: 'deterministic',
+      },
+    });
+  }
+  if (factsTargets.length > 0) {
+    // Carry-forward first (Track E): exact prior matches skip the lookup.
+    const carriedFacts: Array<{ record: StoredRecord; nodeId: string | null }> = [];
+    const factsNeedingLookup: typeof factsTargets = [];
+    for (const t of factsTargets) {
+      const prior = ctx.priorSymbolRecords?.get(t.node.stableKey);
+      if (isCarryForwardEligible(prior, {
+        evidenceHash: t.cacheKey.evidenceHash, promptVersion: PROMPT_VERSIONS.factsOnly,
+        modelFamily: 'deterministic', depth: ctx.depth,
+      })) {
+        carriedFacts.push({ record: prior, nodeId: ctx.nodeIdMap.get(t.node.stableKey) ?? null });
+        result.records.set(t.node.stableKey, prior);
+        result.factsOnlyRecords += 1;
+        result.carriedForward += 1;
+      } else {
+        factsNeedingLookup.push(t);
+      }
+    }
+    if (carriedFacts.length > 0) await mapToSnapshotBulk(ctx.snapshotId, carriedFacts);
+    factsTargets = factsNeedingLookup;
+  }
+  if (factsTargets.length > 0) {
+    const cachedFacts = await lookupRecords(
+      {
+        projectId: ctx.projectId, level: 'symbol',
+        promptVersion: PROMPT_VERSIONS.factsOnly, depth: ctx.depth, modelFamily: 'deterministic',
+      },
+      factsTargets.map((t) => ({ stableKey: t.cacheKey.stableKey, evidenceHash: t.cacheKey.evidenceHash })),
+    );
+    const freshInputs: InsertRecordInput[] = [];
+    for (const t of factsTargets) {
+      if (cachedFacts.has(t.node.stableKey)) continue;
+      const body = buildFactsOnlyBody(ctx, t.node);
+      freshInputs.push({
+        key: t.cacheKey, record: body, summary: renderSummary(t.node.name, body),
+        confidence: 'medium', factsOnly: true, status: 'usable',
+      });
+    }
+    const inserted = freshInputs.length > 0 ? await insertRecordsBulk(freshInputs) : new Map<string, StoredRecord>();
+    const all = factsTargets.map((t) => {
+      const record = cachedFacts.get(t.node.stableKey) ?? inserted.get(t.node.stableKey)!;
+      result.records.set(t.node.stableKey, record);
+      result.factsOnlyRecords += 1;
+      return { record, nodeId: ctx.nodeIdMap.get(t.node.stableKey) ?? null };
+    });
+    await mapToSnapshotBulk(ctx.snapshotId, all);
   }
 
-  // LLM targets: resolve cache hits (parallel — one round trip each against
-  // remote Postgres), then batch the misses per file. Fan-out stays below the
-  // per-process pg pool cap (PG_POOL_MAX, default 10) so cache lookups can't
-  // exhaust the session-mode pooler.
+  // LLM targets: evidence hashes are in-memory; the cache resolves in ONE
+  // bulk lookup instead of a mapLimit-8 fan-out of per-key SELECTs.
   const misses: SymbolTarget[] = [];
-  const lookups = await mapLimit(llmKeys, 8, async (key) => {
+  const llmTargets: SymbolTarget[] = [];
+  for (const key of llmKeys) {
     const node = nodesByKey.get(key);
-    if (!node) return null;
+    if (!node) continue;
     const evidenceHash = evidenceHashForSymbol(node, ctx.graph, ctx.sideEffects);
-    const cacheKey: RecordCacheKey = {
-      projectId: ctx.projectId, stableKey: key, level: 'symbol', evidenceHash,
-      promptVersion: PROMPT_VERSIONS.symbol, depth: ctx.depth, modelFamily: ctx.modelFamily.cheap,
-    };
-    return { key, node, evidenceHash, cacheKey, cached: await lookupRecord(cacheKey) };
-  });
-  for (const hit of lookups) {
-    if (!hit) continue;
-    if (hit.cached) {
-      await mapToSnapshot(ctx.snapshotId, hit.cached, ctx.nodeIdMap.get(hit.key) ?? null);
-      result.records.set(hit.key, hit.cached);
+    llmTargets.push({
+      node, evidenceHash,
+      cacheKey: {
+        projectId: ctx.projectId, stableKey: key, level: 'symbol', evidenceHash,
+        promptVersion: PROMPT_VERSIONS.symbol, depth: ctx.depth, modelFamily: ctx.modelFamily.cheap,
+      },
+    });
+  }
+  // Carry-forward first (Track E): exact prior matches skip lookup + LLM.
+  const carriedLlm: Array<{ record: StoredRecord; nodeId: string | null }> = [];
+  const llmNeedingLookup: SymbolTarget[] = [];
+  for (const target of llmTargets) {
+    const prior = ctx.priorSymbolRecords?.get(target.node.stableKey);
+    if (isCarryForwardEligible(prior, {
+      evidenceHash: target.evidenceHash, promptVersion: PROMPT_VERSIONS.symbol,
+      modelFamily: ctx.modelFamily.cheap, depth: ctx.depth,
+    })) {
+      carriedLlm.push({ record: prior, nodeId: ctx.nodeIdMap.get(target.node.stableKey) ?? null });
+      result.records.set(target.node.stableKey, prior);
       result.cacheHits += 1;
+      result.carriedForward += 1;
     } else {
-      misses.push({ node: hit.node, evidenceHash: hit.evidenceHash, cacheKey: hit.cacheKey });
+      llmNeedingLookup.push(target);
     }
   }
+  if (carriedLlm.length > 0) await mapToSnapshotBulk(ctx.snapshotId, carriedLlm);
+
+  const cachedLlm = await lookupRecords(
+    {
+      projectId: ctx.projectId, level: 'symbol',
+      promptVersion: PROMPT_VERSIONS.symbol, depth: ctx.depth, modelFamily: ctx.modelFamily.cheap,
+    },
+    llmNeedingLookup.map((t) => ({ stableKey: t.cacheKey.stableKey, evidenceHash: t.evidenceHash })),
+  );
+  const cachedEntries: Array<{ record: StoredRecord; nodeId: string | null }> = [];
+  for (const target of llmNeedingLookup) {
+    const cached = cachedLlm.get(target.node.stableKey);
+    if (cached) {
+      cachedEntries.push({ record: cached, nodeId: ctx.nodeIdMap.get(target.node.stableKey) ?? null });
+      result.records.set(target.node.stableKey, cached);
+      result.cacheHits += 1;
+    } else {
+      misses.push(target);
+    }
+  }
+  if (cachedEntries.length > 0) await mapToSnapshotBulk(ctx.snapshotId, cachedEntries);
 
   try {
     // Batches run concurrently — the AiClient semaphore bounds provider
     // pressure; this loop was the single biggest wall-clock cost when serial.
+    const targetByKey = new Map(misses.map((m) => [m.node.stableKey, m]));
     const batches = planBatches(misses.map((m) => m.node));
-    await mapLimit(batches, 6, async (batch) => {
-      const targets = batch.map((n) => misses.find((m) => m.node.stableKey === n.stableKey)!);
-      // A whole-batch failure falls through to per-symbol retries (spec:
-      // "failed symbols are retried individually, not the whole file").
-      const produced = await callBatch(ctx, targets).catch((err) => {
-        if (isControlError(err)) throw err;
-        return new Map<string, StoredRecord>();
-      });
-      const missing = targets.filter((t) => !produced.has(t.node.stableKey));
-      // Per-symbol retry (spec): failed symbols are retried individually.
-      for (const target of missing) {
-        result.retriedSymbols += 1;
-        const single = await callBatch(ctx, [target]).catch((err) => {
-          if (isControlError(err)) throw err;
-          return new Map<string, StoredRecord>();
-        });
-        if (!single.has(target.node.stableKey)) {
-          const fallback = await ensureFactsOnlyRecord(ctx, target.node, [{ kind: 'llm_failed' }]);
-          produced.set(target.node.stableKey, fallback);
-          result.failedSymbols += 1;
-          result.factsOnlyRecords += 1;
-        } else {
-          produced.set(target.node.stableKey, single.get(target.node.stableKey)!);
-        }
-      }
+    let batchesDone = 0;
+    await ctx.onProgress?.({ phase: 'semantic_symbols', done: 0, total: Math.max(1, batches.length), detail: `Semantic: symbol records (0/${batches.length} batches)` });
+    await mapLimit(batches, 28, async (batch) => {
+      const targets = batch.map((n) => targetByKey.get(n.stableKey)!);
+      const produced = await runBatchWithSplitting(ctx, targets, result);
       for (const [key, record] of produced) {
         result.records.set(key, record);
         if (!record.factsOnly) result.llmRecords += 1;
       }
+      batchesDone += 1;
+      await ctx.onProgress?.({ phase: 'semantic_symbols', done: batchesDone, total: batches.length, detail: `Semantic: symbol records (${batchesDone}/${batches.length} batches)` });
     });
   } catch (err) {
     if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
@@ -148,32 +246,81 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
   return result;
 }
 
-/** Groups symbols by file, then chunks by count and estimated input tokens. */
+/**
+ * Packs symbols into batches of up to MAX_SYMBOLS_PER_CALL / the input
+ * token cap. Symbols are sorted by file for prompt locality but batches
+ * pack ACROSS files — per-file batches averaged 2-5 symbols on real repos,
+ * which pinned the call count to ~the file count no matter the cap
+ * (latency overhaul Track B).
+ */
 export function planBatches(nodes: EvidenceNode[]): EvidenceNode[][] {
-  const byFile = new Map<string, EvidenceNode[]>();
-  for (const node of nodes) {
-    const file = node.filePath ?? '';
-    if (!byFile.has(file)) byFile.set(file, []);
-    byFile.get(file)!.push(node);
-  }
+  const sorted = [...nodes].sort((a, b) =>
+    (a.filePath ?? '').localeCompare(b.filePath ?? '') || (a.lineStart ?? 0) - (b.lineStart ?? 0),
+  );
   const batches: EvidenceNode[][] = [];
-  for (const fileNodes of byFile.values()) {
-    let current: EvidenceNode[] = [];
-    let currentTokens = PROMPT_OVERHEAD_TOKENS;
-    for (const node of fileNodes) {
-      const snippetChars = Math.min((node.snippet ?? '').length, MAX_SNIPPET_CHARS);
-      const tokens = Math.ceil(snippetChars / CHARS_PER_TOKEN) + PER_SYMBOL_FACTS_TOKENS;
-      if (current.length >= MAX_SYMBOLS_PER_CALL || (current.length > 0 && currentTokens + tokens > MAX_REQUEST_INPUT_TOKENS)) {
-        batches.push(current);
-        current = [];
-        currentTokens = PROMPT_OVERHEAD_TOKENS;
-      }
-      current.push(node);
-      currentTokens += tokens;
+  let current: EvidenceNode[] = [];
+  let currentTokens = PROMPT_OVERHEAD_TOKENS;
+  for (const node of sorted) {
+    const snippetChars = Math.min((node.snippet ?? '').length, MAX_SNIPPET_CHARS);
+    const tokens = Math.ceil(snippetChars / CHARS_PER_TOKEN) + PER_SYMBOL_FACTS_TOKENS;
+    if (current.length >= MAX_SYMBOLS_PER_CALL || (current.length > 0 && currentTokens + tokens > MAX_REQUEST_INPUT_TOKENS)) {
+      batches.push(current);
+      current = [];
+      currentTokens = PROMPT_OVERHEAD_TOKENS;
     }
-    if (current.length > 0) batches.push(current);
+    current.push(node);
+    currentTokens += tokens;
   }
+  if (current.length > 0) batches.push(current);
   return batches;
+}
+
+/**
+ * Failure blast-radius control for 32-symbol batches: a failing or
+ * partially-missing batch splits in half (halves retried concurrently)
+ * down to a leaf of 4, where the original per-symbol retry -> facts-only
+ * fallback applies. One bad response no longer serializes 32 single-symbol
+ * retry calls.
+ */
+const RETRY_LEAF_SIZE = 4;
+
+async function runBatchWithSplitting(
+  ctx: SemanticContext,
+  targets: SymbolTarget[],
+  result: SymbolPassResult,
+): Promise<Map<string, StoredRecord>> {
+  const produced = await callBatch(ctx, targets).catch((err) => {
+    if (isControlError(err)) throw err;
+    return new Map<string, StoredRecord>();
+  });
+  const missing = targets.filter((t) => !produced.has(t.node.stableKey));
+  if (missing.length === 0) return produced;
+
+  if (missing.length > RETRY_LEAF_SIZE) {
+    const mid = Math.ceil(missing.length / 2);
+    const halves = [missing.slice(0, mid), missing.slice(mid)];
+    const sub = await mapLimit(halves, 2, (half) => runBatchWithSplitting(ctx, half, result));
+    for (const map of sub) for (const [k, v] of map) produced.set(k, v);
+    return produced;
+  }
+
+  // Leaf: per-symbol retry (spec) then honest facts-only fallback.
+  for (const target of missing) {
+    result.retriedSymbols += 1;
+    const single = await callBatch(ctx, [target]).catch((err) => {
+      if (isControlError(err)) throw err;
+      return new Map<string, StoredRecord>();
+    });
+    if (!single.has(target.node.stableKey)) {
+      const fallback = await ensureFactsOnlyRecord(ctx, target.node, [{ kind: 'llm_failed' }]);
+      produced.set(target.node.stableKey, fallback);
+      result.failedSymbols += 1;
+      result.factsOnlyRecords += 1;
+    } else {
+      produced.set(target.node.stableKey, single.get(target.node.stableKey)!);
+    }
+  }
+  return produced;
 }
 
 // ── LLM batch call ───────────────────────────────────────────────────────────
@@ -181,6 +328,16 @@ export function planBatches(nodes: EvidenceNode[]): EvidenceNode[][] {
 interface RawSymbolRecord extends SemanticRecordBody {
   stable_key: string;
 }
+
+/**
+ * Static prompt prefix shared byte-identically by every symbol call in a
+ * run — the system message is the prefix providers cache (Track B).
+ */
+const SYMBOL_SYSTEM_PROMPT = [
+  `You are documenting symbols from a codebase for onboarding. For EACH symbol below, produce one semantic record.`,
+  OUTPUT_RULES,
+  `Set each record's stable_key to the symbol's stable key exactly as given.`,
+].join('\n\n');
 
 async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critiqueNotes?: string): Promise<Map<string, StoredRecord>> {
   const produced = new Map<string, StoredRecord>();
@@ -195,10 +352,7 @@ async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critique
   });
 
   const prompt = [
-    `You are documenting symbols from a codebase for onboarding. For EACH symbol below, produce one semantic record.`,
-    OUTPUT_RULES,
     critiqueNotes ? `A previous attempt was rejected by review. Fix these problems:\n${critiqueNotes}` : null,
-    `Set each record's stable_key to the symbol's stable key exactly as given.`,
     sections.join('\n\n'),
   ].filter(Boolean).join('\n\n');
 
@@ -208,34 +362,54 @@ async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critique
     promptVersion: PROMPT_VERSIONS.symbol,
     schemaName: 'symbol_records',
     schema: batchedSymbolSchema(),
+    system: SYMBOL_SYSTEM_PROMPT,
     user: prompt,
+    // Provider default output caps would truncate a 32-record batch.
+    // 4k floor covers deepseek reasoning tokens (counted against max_tokens).
+    maxOutputTokens: Math.min(60_000, 4_000 + SYMBOL_BATCH_OUTPUT_TOKENS_PER_SYMBOL * targets.length),
   });
 
   const byKey = new Map((response.value?.records ?? []).map((r) => [r.stable_key, r]));
+  const toPersist: Array<{ target: SymbolTarget; input: InsertRecordInput }> = [];
   for (const target of targets) {
     const raw = byKey.get(target.node.stableKey);
     if (!raw) continue;
     const body = normalizeBody(ctx, target.node, raw);
-    const record = await insertRecord({
-      key: target.cacheKey,
-      record: body,
-      summary: renderSummary(target.node.name, body),
-      confidence: body.confidence,
-      factsOnly: false,
-      status: 'pending', // critique promotes to usable
-      model: response.model,
-      tokenUsage: { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+    toPersist.push({
+      target,
+      input: {
+        key: target.cacheKey,
+        record: body,
+        summary: renderSummary(target.node.name, body),
+        confidence: body.confidence,
+        factsOnly: false,
+        status: 'pending', // critique promotes to usable
+        model: response.model,
+        tokenUsage: { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens },
+      },
     });
-    await attachReceipts({
-      projectId: ctx.projectId,
-      snapshotId: ctx.snapshotId,
-      commitHash: ctx.commitHash,
+  }
+  if (toPersist.length === 0) return produced;
+
+  // Bulk persistence: 3 statement groups per batch instead of ~6 round
+  // trips per record (Track C).
+  const inserted = await insertRecordsBulk(toPersist.map((p) => p.input));
+  const items = toPersist.map(({ target }) => {
+    const record = inserted.get(target.node.stableKey)!;
+    return {
       record,
       drafts: [symbolReceiptDraft(ctx, target.node, aliasByKey.get(target.node.stableKey)!)],
-    });
-    await mapToSnapshot(ctx.snapshotId, record, ctx.nodeIdMap.get(target.node.stableKey) ?? null);
-    produced.set(target.node.stableKey, record);
-  }
+      nodeId: ctx.nodeIdMap.get(target.node.stableKey) ?? null,
+    };
+  });
+  await attachReceiptsBulk({
+    projectId: ctx.projectId,
+    snapshotId: ctx.snapshotId,
+    commitHash: ctx.commitHash,
+    items: items.map(({ record, drafts }) => ({ record, drafts })),
+  });
+  await mapToSnapshotBulk(ctx.snapshotId, items.map(({ record, nodeId }) => ({ record, nodeId })));
+  for (const { record } of items) produced.set(record.stableKey, record);
   return produced;
 }
 

@@ -129,8 +129,8 @@ accessible to the connected GitHub user.
 ### 5. OpenRouter (AI)
 
 **What it does:** Routes LLM requests to configurable providers. The default
-model is `openai/gpt-4o-mini`. OpenRouter uses the OpenAI-compatible API shape,
-so the `openai` npm package works directly.
+model is `deepseek/deepseek-v4-flash` (1M context, 65k max output). OpenRouter
+uses the OpenAI-compatible API shape, so the `openai` npm package works directly.
 
 **What data it holds:** Request/response logs on the OpenRouter dashboard only.
 
@@ -145,14 +145,16 @@ so the `openai` npm package works directly.
 The pipeline uses two chat tiers (**cheap** for bulk symbol/file work and
 claim verification, **strong** for synthesis, ranking, tutorials and the
 onboarding sections) plus an **embedding** tier. **Both chat tiers default to
-`openai/gpt-4o-mini`** — a full standard-depth analysis of a small/medium
-repo costs cents. Change them in either of two places:
+`deepseek/deepseek-v4-flash`** ($0.09/M in, $0.18/M out — a full
+standard-depth analysis of a small/medium repo costs cents; the batch sizes
+in `engine/budgets.ts` are tuned to its 1M-context/65k-output caps). Change
+them in either of two places:
 
 1. **Server-wide (env, `backend/.env`)** — any OpenRouter model id:
 
    ```bash
-   OPENROUTER_MODEL_CHEAP=openai/gpt-4o-mini
-   OPENROUTER_MODEL_STRONG=openai/gpt-4o-mini    # e.g. anthropic/claude-sonnet-4.5 for premium quality (~20x price)
+   OPENROUTER_MODEL_CHEAP=deepseek/deepseek-v4-flash
+   OPENROUTER_MODEL_STRONG=deepseek/deepseek-v4-flash   # e.g. anthropic/claude-sonnet-4.5 for premium section prose
    EMBEDDINGS_MODEL=text-embedding-3-small
    ```
 
@@ -161,6 +163,44 @@ repo costs cents. Change them in either of two places:
    `PUT /api/projects/:id/settings` (later list entries are degrade
    fallbacks). Failure behavior per tier lives in
    `project_settings.model_failure_behavior`.
+
+#### Latency model (2026-07 overhaul)
+
+The pipeline is sized for a flash-class 1M-context model and a REMOTE
+Postgres: throughput comes from *moderately sized batches × high
+concurrency × bulk DB statements*, not mega-prompts (output decode is the
+per-call bound, ~65k max output).
+
+- **Batching:** symbol records pack 10/call across files
+  (`engine/budgets.ts`), file synthesis 6 files/call, critique 12
+  records/call, rerank 15 targets/call. Every chat call sets an explicit
+  `maxOutputTokens`. Sizes are tuned to MEASURED OpenRouter decode
+  (~30–120 tok/s depending on upstream): keep per-call output ≤ ~7k tokens
+  so a slow upstream costs ≤ ~2 min, not 9.
+- **Concurrency:** `LLM_MAX_CONCURRENCY` (per AiClient, default 12, env 28)
+  is the provider-pressure knob; per-pass `mapLimit`s feed it. `PG_POOL_MAX`
+  (worker 20) caps concurrent statements — the transaction-mode pooler
+  multiplexes, so it sizes per process, not per user.
+- **Slow-upstream guards:** every provider attempt has a hard deadline
+  (`LLM_REQUEST_TIMEOUT_MS`, default 240s) and chat requests ask OpenRouter
+  to route by `provider.sort` (`OPENROUTER_PROVIDER_SORT`, default
+  `throughput`). A timed-out attempt is a retryable provider error, so
+  normal retries / symbol-batch halving absorb it.
+- **Bulk persistence:** record lookups/inserts/receipts/snapshot-mappings,
+  criticality upserts, entrypoint/side-effect/workflow-step persists, and
+  tutorial steps are all multi-VALUES / `unnest` statements. Per-record
+  round trips to the pooler were the dominant wall-clock cost.
+- **Budget counters are amortized:** limits are enforced from in-memory
+  counters; `analysis_snapshots.budget_usage` is flushed every 10 calls/5s
+  and at phase boundaries — a crash loses at most a few calls of counters
+  while `ai_generation_runs` stays the exact per-call ground truth. The
+  kill-switch check is cached for 2s (pause lands within ~2s + one batch).
+- **Carry-forward:** a forced re-scan captures the previous mapping before
+  deleting it; symbols whose evidence/prompt/model/depth identity is
+  unchanged re-map in bulk with zero lookups and zero LLM calls
+  (`carriedForward` in the `semantic_symbols` phase metrics).
+- **Benchmarking:** `node scripts/latency-report.cjs <snapshot_id>` inside a
+  backend container prints per-phase wall-clock + per-call rollups.
 
 Defaults live in `backend/src/worker/ai/modelTiers.ts`
 (`defaultTierModels()`); the coarse per-tier price table used for the cost
@@ -433,8 +473,9 @@ curl -i -X POST http://localhost:3000/api/webhooks/github \
 1. Go to [openrouter.ai](https://openrouter.ai) → sign in.
 2. **Keys** → **Create Key** → copy the key → paste into `OPENROUTER_API_KEY`.
 3. Set `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`.
-4. Set `OPENROUTER_MODEL=openai/gpt-4o-mini` (recommended for development — fast
-   and cheap).
+4. Set `OPENROUTER_MODEL_CHEAP=deepseek/deepseek-v4-flash` and
+   `OPENROUTER_MODEL_STRONG=deepseek/deepseek-v4-flash` (fast, 1M context,
+   cents per analysis).
 
 ### Upstash Redis
 

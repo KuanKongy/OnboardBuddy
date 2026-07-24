@@ -128,12 +128,16 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
     rawCapabilities = ((cachedAggregate.record as unknown as { capabilities?: RawCapability[] }).capabilities) ?? [];
   } else {
     const response = await ctx.ai.call<{ capabilities: RawCapability[] }>({
-      tier: 'strong',
+      // Structured extraction, one shot per run: the cheap tier (scout) is
+      // JSON-reliable here; the strong tier's long-JSON flakiness paused a
+      // live run when this single call failed validation twice.
+      tier: 'cheap',
       targetType: 'capability_record',
       promptVersion: PROMPT_VERSIONS.capability,
       schemaName: 'capabilities',
       schema: CAPABILITIES_SCHEMA,
       user: prompt,
+      maxOutputTokens: 8_000,
     });
     rawCapabilities = response.value?.capabilities ?? [];
     const body: SemanticRecordBody & { capabilities: RawCapability[] } = {

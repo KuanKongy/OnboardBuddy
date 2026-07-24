@@ -46,6 +46,7 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
   }
   metrics.semantic_symbols = symbolMetrics(symbols);
   await markPhase(ctx.snapshotId, 'semantic_symbols', 'complete', metrics.semantic_symbols);
+  await ctx.ai.budget.flush();
 
   const phases: Array<{ name: (typeof SEMANTIC_PHASES)[number]; run: () => Promise<Record<string, unknown>> }> = [
     {
@@ -110,6 +111,8 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
     try {
       metrics[phase.name] = await phase.run();
       await markPhase(ctx.snapshotId, phase.name, 'complete', metrics[phase.name]);
+      // Amortized budget counters land durably at every phase boundary.
+      await ctx.ai.budget.flush();
     } catch (err) {
       if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
         // Keep what exists; skip this phase's remainder and every later phase.
@@ -127,6 +130,8 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
 }
 
 async function markPhaseForError(ctx: SemanticContext, phase: string, err: unknown): Promise<void> {
+  // Terminal path: whatever the in-memory counters say must survive.
+  await ctx.ai.budget.flush().catch(() => {});
   const message = err instanceof Error ? err.message : String(err);
   if (err instanceof AiPausedError || err instanceof KillSwitchError ||
       (err instanceof BudgetExceededError && err.behavior === 'pause')) {
@@ -139,7 +144,8 @@ async function markPhaseForError(ctx: SemanticContext, phase: string, err: unkno
 function symbolMetrics(symbols: SymbolPassResult): Record<string, unknown> {
   return {
     llmRecords: symbols.llmRecords, factsOnlyRecords: symbols.factsOnlyRecords,
-    cacheHits: symbols.cacheHits, retriedSymbols: symbols.retriedSymbols,
+    cacheHits: symbols.cacheHits, carriedForward: symbols.carriedForward,
+    retriedSymbols: symbols.retriedSymbols,
     failedSymbols: symbols.failedSymbols, budgetDegraded: symbols.degraded,
   };
 }
