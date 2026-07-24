@@ -78,20 +78,40 @@ describe('phase 7 — critical 25% projection', () => {
   });
 });
 
-describe('phase 7 — section specs', () => {
-  it('covers all eleven spec sections with views and instructions', () => {
-    expect(SECTION_TYPES).to.have.length(11);
+describe('phase 7 — section specs (12-section Diátaxis layout)', () => {
+  it('covers all twelve spec sections with chapter, mode, views, instructions, and budgets', () => {
+    expect(SECTION_TYPES).to.have.length(12);
     for (const type of SECTION_TYPES) {
       const spec = SECTION_SPECS[type];
+      expect(spec.chapter, type).to.be.oneOf(['orient', 'understand', 'do', 'consult']);
+      expect(spec.mode, type).to.be.oneOf(['explanation', 'tutorial', 'howto', 'reference']);
       expect(spec.views.length, type).to.be.greaterThan(0);
       expect(spec.instructions.length, type).to.be.greaterThan(40);
       expect(spec.retrievalTask('backend').length, type).to.be.greaterThan(10);
+      expect(spec.outputBudget.large, type).to.be.at.least(spec.outputBudget.small);
     }
   });
 
-  it('diagram-bearing sections are exactly architecture, workflow_guide, data_schema', () => {
+  it('mode assignment follows the chapters: orient/understand explain, do acts, consult references', () => {
+    for (const type of SECTION_TYPES) {
+      const spec = SECTION_SPECS[type];
+      if (spec.chapter === 'orient' || spec.chapter === 'understand') expect(spec.mode, type).to.equal('explanation');
+      if (spec.chapter === 'consult') expect(spec.mode, type).to.equal('reference');
+      if (spec.chapter === 'do') expect(spec.mode, type).to.be.oneOf(['tutorial', 'howto']);
+    }
+  });
+
+  it('anchor diagrams: big_picture, architecture_deep, traced_flows, data_model', () => {
     const withDiagrams = SECTION_TYPES.filter((t) => SECTION_SPECS[t].diagrams !== undefined);
-    expect(withDiagrams.sort()).to.deep.equal(['architecture', 'data_schema', 'workflow_guide']);
+    expect(withDiagrams.sort()).to.deep.equal(['architecture_deep', 'big_picture', 'data_model', 'traced_flows']);
+  });
+
+  it('every consult section carries a deterministic backbone', () => {
+    for (const type of SECTION_TYPES) {
+      const spec = SECTION_SPECS[type];
+      if (spec.chapter === 'consult') expect(spec.backbone, type).to.be.a('function');
+      else expect(spec.backbone, type).to.equal(undefined);
+    }
   });
 });
 
@@ -253,15 +273,15 @@ describe('phase 7 — deterministic section generation (ai_disabled)', () => {
 
     const result = await generateDeterministicSection({
       snapshotId: 'snap-1', packageId: 'pkg-1', role: 'backend',
-      sectionType: 'entry_points', commitHash: 'abc123',
-      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [] },
+      sectionType: 'routes_jobs', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [], sizeClass: 'small' },
     });
 
     expect(result.sectionId).to.equal('sec-det-1');
     expect(result.confidence).to.equal('medium');
     expect(inserted, 'insert params').to.not.equal(null);
     const [, , , title, content, , confidence, , , unknowns, context] = inserted! as string[];
-    expect(title).to.equal('Entry Points and Why They Matter');
+    expect(title).to.equal('Routes, Jobs & Webhooks');
     expect(content).to.include('AI explanations are off');
     expect(content).to.include('/dataset/:id/:kind');
     expect(content).to.include('Server.echo');
@@ -298,8 +318,8 @@ describe('phase 7 — deterministic section generation (ai_disabled)', () => {
 
     const result = await generateDeterministicSection({
       snapshotId: 'snap-1', packageId: 'pkg-1', role: 'backend',
-      sectionType: 'entry_points', commitHash: 'abc123',
-      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [] },
+      sectionType: 'routes_jobs', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'backend', projections: [], sizeClass: 'small' },
     });
 
     expect(result.sectionId).to.equal('sec-det-3');
@@ -328,8 +348,8 @@ describe('phase 7 — deterministic section generation (ai_disabled)', () => {
 
     const result = await generateDeterministicSection({
       snapshotId: 'snap-1', packageId: 'pkg-1', role: 'general',
-      sectionType: 'capability_map', commitHash: 'abc123',
-      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'general', projections: [] },
+      sectionType: 'capabilities', commitHash: 'abc123',
+      deps: { snapshotId: 'snap-1', projectId: 'proj-1', role: 'general', projections: [], sizeClass: 'small' },
     });
 
     expect(result.confidence).to.equal('low');

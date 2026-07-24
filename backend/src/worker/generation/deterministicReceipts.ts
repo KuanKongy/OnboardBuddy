@@ -97,12 +97,44 @@ export async function collectSectionReceipts(
   deps: SectionDeps,
 ): Promise<DeterministicReceiptRow[]> {
   switch (sectionType) {
-    case 'start_here':
-      return entrypointReceipts(deps, 10);
-    case 'entry_points':
+    case 'big_picture': {
+      // Entry points + the config files the topology narration cites.
+      const configs = (await query(
+        `SELECT ${NODE_FIELDS} FROM graph_nodes n
+         WHERE n.snapshot_id = $1 AND n.type = 'config'
+           AND n.metadata->>'configKind' IN ('compose', 'env_example')
+         ORDER BY length(n.stable_key) LIMIT 4`,
+        [deps.snapshotId],
+      )).rows as NodeRow[];
+      return [
+        ...configs.map((n) => fromNode(n, `Runtime configuration: ${n.file_path ?? n.name}`)),
+        ...(await entrypointReceipts(deps, 8)),
+      ];
+    }
+    case 'routes_jobs':
       return entrypointReceipts(deps, 15);
+    case 'common_tasks':
+      return entrypointReceipts(deps, 8);
 
-    case 'architecture': {
+    case 'setup_run': {
+      const rows = (await query(
+        `SELECT ${NODE_FIELDS} FROM graph_nodes n
+         WHERE n.snapshot_id = $1 AND n.type = 'config'
+           AND n.metadata->>'configKind' IN ('compose', 'package_json', 'env_example', 'docker')
+         ORDER BY length(n.stable_key) LIMIT 8`,
+        [deps.snapshotId],
+      )).rows as NodeRow[];
+      return rows.map((n) => fromNode(n, `Run configuration: ${n.file_path ?? n.name}`));
+    }
+
+    case 'first_change':
+      return nodesForProjections(
+        deps,
+        deps.projections.filter((p) => p.targetType === 'file').slice(3, 25),
+        8,
+      );
+
+    case 'architecture_deep': {
       // One representative member per cluster, most-critical clusters first.
       const rows = (await query(
         `SELECT DISTINCT ON (c.id) ${NODE_FIELDS}, c.label AS cluster_label, m.membership_reason
@@ -117,22 +149,24 @@ export async function collectSectionReceipts(
         fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`));
     }
 
-    case 'critical_25': {
-      const byType = critical25(deps.projections);
-      const targets = [...byType.entries()]
-        .filter(([type]) => type === 'symbol' || type === 'file')
-        .flatMap(([, list]) => list);
-      return nodesForProjections(deps, targets, 15);
+    case 'code_map': {
+      // Same source as the spec's fileGroups (criticality_scores files) —
+      // receipts must cover the files the section actually maps.
+      const ranked = (await query(
+        `SELECT DISTINCT ON (stable_key) stable_key, score, reasons
+         FROM criticality_scores
+         WHERE snapshot_id = $1 AND target_type = 'file'
+         ORDER BY stable_key, score DESC`,
+        [deps.snapshotId],
+      )).rows as Array<{ stable_key: string; score: number; reasons: string[] }>;
+      const targets = ranked
+        .sort((a, b) => Number(b.score) - Number(a.score))
+        .slice(0, 24)
+        .map((r) => ({ stableKey: r.stable_key, reasons: r.reasons ?? [] }));
+      return nodesForProjections(deps, targets, 20);
     }
 
-    case 'role_path':
-      return nodesForProjections(
-        deps,
-        deps.projections.filter((p) => p.targetType === 'symbol' || p.targetType === 'file'),
-        10,
-      );
-
-    case 'capability_map': {
+    case 'capabilities': {
       const rows = (await query(
         `SELECT ${NODE_FIELDS}, c.name AS capability_name
          FROM capability_members cm
@@ -160,9 +194,10 @@ export async function collectSectionReceipts(
       }));
     }
 
-    case 'workflow_guide': {
-      // First and last traced step of each workflow — where a flow enters
-      // and what it ends on, the two lines a reader checks first.
+    case 'traced_flows': {
+      // First and last traced step of each journey (falling back to raw
+      // workflows on snapshots without journeys) — where a flow enters and
+      // what it ends on, the two lines a reader checks first.
       const rows = (await query(
         `SELECT ranked.workflow_id, ranked.title, ranked.step_kind, ranked.deterministic_description,
                 ranked.file_path AS step_file, ranked.symbol_name AS step_symbol,
@@ -174,6 +209,9 @@ export async function collectSectionReceipts(
                   ROW_NUMBER() OVER (PARTITION BY ws.workflow_id ORDER BY ws.step_order DESC) AS rn_last
            FROM workflow_steps ws JOIN workflows w ON w.id = ws.workflow_id
            WHERE w.snapshot_id = $1
+             AND (w.trigger_type = 'journey'
+                  OR NOT EXISTS (SELECT 1 FROM workflows j
+                                 WHERE j.snapshot_id = $1 AND j.trigger_type = 'journey'))
          ) ranked
          LEFT JOIN graph_nodes n ON n.id = ranked.node_id
          WHERE ranked.rn_first = 1 OR ranked.rn_last = 1
@@ -200,7 +238,8 @@ export async function collectSectionReceipts(
       }));
     }
 
-    case 'data_schema': {
+    case 'data_model':
+    case 'concepts': {
       const rows = (await query(
         `SELECT ${NODE_FIELDS} FROM graph_nodes n
          WHERE n.snapshot_id = $1 AND n.type = 'schema' LIMIT 15`,
@@ -209,7 +248,7 @@ export async function collectSectionReceipts(
       return rows.map((n) => fromNode(n, `Schema object: ${n.name}`));
     }
 
-    case 'safety_rails': {
+    case 'guardrails_ops': {
       const rows = (await query(
         `SELECT ${NODE_FIELDS}, s.type AS effect_type, s.target, s.evidence
          FROM side_effects s JOIN graph_nodes n ON n.id = s.node_id
@@ -220,26 +259,6 @@ export async function collectSectionReceipts(
         ...fromNode(r, `${r.effect_type.replace(/_/g, ' ')}${r.target ? ` → ${r.target}` : ''}`),
         detectionExpression: r.evidence,
       }));
-    }
-
-    case 'dependency_graph': {
-      const rows = (await query(
-        `SELECT ${NODE_FIELDS}, (n.metadata->>'dependentCount')::int AS dependents
-         FROM graph_nodes n
-         WHERE n.snapshot_id = $1 AND (n.metadata->>'dependentCount')::int > 0
-         ORDER BY (n.metadata->>'dependentCount')::int DESC LIMIT 10`,
-        [deps.snapshotId],
-      )).rows as Array<NodeRow & { dependents: number }>;
-      return rows.map((r) => fromNode(r, `${r.dependents} modules depend on this`));
-    }
-
-    case 'doc_health': {
-      const rows = (await query(
-        `SELECT ${NODE_FIELDS} FROM graph_nodes n
-         WHERE n.snapshot_id = $1 AND n.type = 'doc' LIMIT 8`,
-        [deps.snapshotId],
-      )).rows as NodeRow[];
-      return rows.map((n) => ({ ...fromNode(n, `Documentation file: ${n.file_path ?? n.name}`), receiptKind: 'doc_snippet' as const, trustLevel: 'docs' as const }));
     }
 
     default:

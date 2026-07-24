@@ -288,6 +288,12 @@ function SectionView({
         )}
       </div>
 
+      {/* Anchor diagram first (Diátaxis presentation rule 1): the section's
+          deterministic mermaid opens the body; the prose refers back to it. */}
+      {(section.diagrams ?? []).map((d, i) => (
+        <MermaidDiagram key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
+      ))}
+
       {section.blocks.map((block, bi) => {
         const isLead = bi === 0;
         const canCollapse = hasSecondaryBlocks && !isLead;
@@ -375,11 +381,6 @@ function SectionView({
           </div>
         );
       })}
-
-      {/* Deterministic diagrams (Mermaid) embedded in this section */}
-      {(section.diagrams ?? []).map((d, i) => (
-        <MermaidDiagram key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
-      ))}
 
       {/* Honest unknowns: gaps stated plainly instead of invented content */}
       {(section.unknowns ?? []).length > 0 && (
@@ -509,8 +510,11 @@ export function OnboardingPage() {
   const [freshFilter, setFreshFilter] = useState("all");
 
   // Deep link / resume: ?section= opens the reader at a specific section.
+  // The default is the new layout's opener; a loaded package whose sections
+  // don't include the active id snaps to its first present section below
+  // (covers legacy packages and stale deep links).
   const [activeSectionId, setActiveSectionId] = useState<SectionId>(
-    () => (searchParams.get("section") as SectionId) ?? "start-here",
+    () => (searchParams.get("section") as SectionId) ?? "big-picture",
   );
   const [pkg, setPkg] = useState<OnboardingPackage | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -673,6 +677,14 @@ export function OnboardingPage() {
   // order they appear in the grouped nav (SECTION_GROUPS), so hotkeys, the
   // nav numbering, and the prev/next pager all agree on adjacency.
   const presentSectionIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) => sections.some((s) => s.id === navId));
+  // Active id not in this package (legacy layout, stale deep link) — snap to
+  // the package's first section instead of rendering an empty reader.
+  useEffect(() => {
+    if (presentSectionIds.length > 0 && !presentSectionIds.includes(activeSectionId)) {
+      setActiveSectionId(presentSectionIds[0]!);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [presentSectionIds.join(","), activeSectionId]);
   const moveSection = (delta: number) => {
     const idx = presentSectionIds.indexOf(activeSectionId);
     const next = presentSectionIds[Math.min(Math.max((idx === -1 ? 0 : idx) + delta, 0), presentSectionIds.length - 1)];
@@ -1342,7 +1354,11 @@ export function OnboardingPage() {
           )}
           <nav className="space-y-3">
             {(() => {
-              const filteredNavIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) => isMissing || sections.some((s) => s.id === navId));
+              // Missing packages preview only the current 12-section layout;
+              // the legacy tail group appears solely when an old package
+              // actually contains those sections.
+              const filteredNavIds = SECTION_GROUPS.flatMap((g) => g.ids).filter((navId) =>
+                isMissing ? SECTION_NAV_ORDER.includes(navId) : sections.some((s) => s.id === navId));
               return SECTION_GROUPS.map((group) => {
                 const idsInGroup = group.ids.filter((gid) => filteredNavIds.includes(gid));
                 if (idsInGroup.length === 0) return null;

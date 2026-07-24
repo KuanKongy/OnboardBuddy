@@ -12,6 +12,7 @@ import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
+import { collectSectionReceipts } from './deterministicReceipts.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
 import {
   markUnverifiedClaims,
@@ -93,6 +94,32 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     embedQuery: params.embedQuery,
   });
 
+  // Deterministic receipts join the bundle: the section's own evidence rows
+  // (journey step nodes, mapped files, config files) become citable — the
+  // prose narrates deterministic facts, so the receipts must cover them or
+  // every file mention validates as "cites no receipt from it".
+  const detReceipts = await collectSectionReceipts(params.sectionType, params.deps);
+  const seenKeys = new Set(bundle.receipts.map((r) => r.nodeStableKey ?? r.filePath ?? r.receiptId));
+  let detIdx = 0;
+  for (const det of detReceipts) {
+    const key = det.nodeStableKey ?? det.filePath ?? '';
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    detIdx += 1;
+    bundle.receipts.push({
+      receiptId: `det-${detIdx}`,
+      receiptKind: det.receiptKind,
+      trustLevel: det.trustLevel,
+      nodeStableKey: det.nodeStableKey ?? undefined,
+      filePath: det.filePath ?? undefined,
+      symbolName: det.symbolName ?? undefined,
+      lineStart: det.lineStart ?? undefined,
+      lineEnd: det.lineEnd ?? undefined,
+      snippet: params.privacyMode === 'facts_only_ai' ? undefined : det.snippet ?? undefined,
+    });
+    if (detIdx >= 28) break;
+  }
+
   // Receipts get short aliases (r1, r2, …) in the prompt — small models
   // mangle raw UUIDs, which used to surface as "unknown receipt id" hard
   // failures and dropped citations. Aliases map back to UUIDs before
@@ -101,19 +128,33 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   bundle.receipts.forEach((r, i) => aliasToId.set(`r${i + 1}`, r.receiptId));
 
   // Structured call + inline validation with one stricter retry. Voice lint
-  // shares the retry: marketing filler is a quality failure the same way an
-  // uncited claim is.
+  // and the deterministic completeness check share the retry: marketing
+  // filler and a section that ships its TL;DR then stops are quality
+  // failures the same way an uncited claim is.
+  const completeness = (o: GeneratedOutput) =>
+    spec.completenessCheck?.(o.contentMarkdown ?? '', deterministicContext) ?? [];
   let { output, runId } = await callModel(params, bundle, null, aliasToId);
-  let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
+  let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
   let voice = lintVoice(output.contentMarkdown ?? '');
+  let coverage = completeness(output);
   let retried = false;
-  if (validation.hardFailure || voice.issues.length > 0) {
+  if (validation.hardFailure || voice.issues.length > 0 || coverage.length > 0) {
     retried = true;
-    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues], aliasToId);
+    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...coverage], aliasToId);
     output = stricter.output;
     runId = stricter.runId;
-    validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId });
+    validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
+    coverage = completeness(output);
+  }
+  if (coverage.length > 0) {
+    // Still under-covered after the retry: recorded as an honest unknown,
+    // never silently shipped as if complete.
+    validation = {
+      ...validation,
+      issues: [...validation.issues, ...coverage],
+      unknowns: [...validation.unknowns, { kind: 'incomplete_coverage', detail: coverage[0] ?? null }],
+    };
   }
 
   // Prose aliases become inline [[receipt:<uuid>]] markers for persisted
@@ -135,6 +176,26 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   );
   output = { ...output, contentMarkdown: unverified.content };
 
+  // CONSULT backbones: deterministic tables spliced in where the model wrote
+  // [[backbone]] — the model annotates around the facts but never writes
+  // them, so regenerations stay byte-stable where facts are unchanged. A
+  // missing marker appends the backbone after the intro: facts are never
+  // lost to a model that forgot the marker.
+  if (spec.backbone) {
+    const backboneMarkdown = await spec.backbone(params.deps);
+    const content = output.contentMarkdown ?? '';
+    if (backboneMarkdown) {
+      output = {
+        ...output,
+        contentMarkdown: content.includes('[[backbone]]')
+          ? content.replace(/\[\[backbone\]\]/g, backboneMarkdown)
+          : `${content}\n\n${backboneMarkdown}`,
+      };
+    } else {
+      output = { ...output, contentMarkdown: content.replace(/\[\[backbone\]\]/g, '').trim() };
+    }
+  }
+
   const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
 
   const sectionId = await persistSection(
@@ -149,6 +210,7 @@ async function callModel(
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
 ): Promise<{ output: GeneratedOutput; runId: string | null }> {
+  const spec = SECTION_SPECS[params.sectionType];
   const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
   const response = await params.ai.call<GeneratedOutput>({
     tier: 'strong',
@@ -158,11 +220,12 @@ async function callModel(
     promptVersion: SECTION_PROMPT_VERSION,
     schemaName: 'onboarding_section_v2',
     schema: SECTION_OUTPUT_SCHEMA,
-    // Static rules/voice contract shared byte-identically across every
-    // section call — the prefix providers prompt-cache (Track B).
-    system: SECTION_SYSTEM_PROMPT,
+    // Static rules + the section's Diátaxis mode voice — byte-identical per
+    // mode, so the prefix still prompt-caches across sections (Track B).
+    system: `${SECTION_BASE_PROMPT}\n\n${MODE_VOICES[spec.mode] ?? ''}`,
     user: prompt,
-    maxOutputTokens: 12_000,
+    // Depth contract (plan rule 7): output scales with repo size class.
+    maxOutputTokens: spec.outputBudget[params.deps.sizeClass],
   });
   const raw = response.value!;
   const translate = (id: string) => aliasToId.get(id.trim()) ?? id;
@@ -174,11 +237,38 @@ async function callModel(
   return { output, runId: response.runId };
 }
 
-/** Static rules + voice contract — identical for every section call. */
-const SECTION_SYSTEM_PROMPT = [
-  'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds for every substantive claim; when citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping — never print them; use the human name or path they refer to.',
+/** Static rules + voice contract — byte-identical per mode (prompt caching). */
+const SECTION_BASE_PROMPT = [
+  'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds — but ONLY ids that literally appear in the receipt list; a claim grounded in the deterministic facts (counts, steps, tables, journeys) carries an EMPTY receiptIds array rather than an invented id. When citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping — never print them; use the human name or path they refer to.',
+  'Open contentMarkdown with a TL;DR block: "**TL;DR:** " + 2-3 sentences on what this section covers, ending with one sentence of the form "After reading you can …". Then the body.',
   'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts — never derive or estimate your own.',
 ].join('\n\n');
+
+/**
+ * Diátaxis mode scaffolds (doc/DIATAXIS_NOTES.md per-mode rules) — one
+ * documentation mode per section; blending modes serves none.
+ */
+const MODE_VOICES: Record<string, string> = {
+  explanation: [
+    'MODE: explanation — understanding-oriented, read away from the keyboard.',
+    'Write discursive prose that says WHY: design decisions, constraints, trade-offs, connections between parts. Weighing alternatives is proper here when the evidence shows them; inventing them is not.',
+    'Never give step-by-step instructions and never dump reference tables — link the reader to the Do/Consult sections instead. Each header should survive the prefix "About …".',
+  ].join(' '),
+  tutorial: [
+    'MODE: tutorial — a lesson where the reader learns by doing and MUST succeed.',
+    'Write in first-person plural ("we") with unambiguous imperatives. Numbered steps, ONE action per step, a verify checkpoint after every step ("You should see …") grounded in evidence. A single unbranching path: no options, no alternatives, no "you could also".',
+    'Explanation is capped at one sentence per step — link out for theory. Close by naming what the reader just accomplished.',
+  ].join(' '),
+  howto: [
+    'MODE: how-to — recipes for a competent practitioner already at work.',
+    'Goal-first titles ("How to add an API route"). Assume competence: never explain basics, never teach, never motivate. Conditional imperatives where reality branches ("If the route needs auth, …"). Practical usability over completeness — link to the Consult tables for full option lists.',
+  ].join(' '),
+  reference: [
+    'MODE: reference — austere and uncompromising. Describe; never instruct, never opine, never market.',
+    'Neutral one-liners and tables only. Structure mirrors the product (group by how the code itself is organized). Consistency over elegance: same fields, same order, every entry. Warnings in directive language only where the evidence shows a real hazard.',
+    'Citation rule for this mode: statements that restate the deterministic facts or the spliced tables are already grounded — leave them UNCITED (no claims entry) rather than inventing receipt ids. Cite a receipt ONLY when you used one from the receipt list, with its exact short id.',
+  ].join(' '),
+};
 
 function renderPrompt(
   params: GenerateSectionParams,
