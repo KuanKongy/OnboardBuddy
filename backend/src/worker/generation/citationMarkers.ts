@@ -27,6 +27,16 @@ const REF_ONLY_LINE = new RegExp(
   String.raw`^\s*[-*]?\s*[rR]eceipts?\s*:?\s*\[?(${REF_LIST})\]?\s*$`,
 );
 
+/**
+ * Citations the model wrapped in inline code — `` ` (r2)` `` — would carry
+ * their markers into a code span, where the reader renders them as raw
+ * text instead of chips. Unwrap the backticks before rewriting.
+ */
+const CODE_WRAPPED_REF = new RegExp(
+  '`\\s*(\\(?\\s*(?:[rR]eceipts?\\s*:?\\s*)?\\[?(?:' + REF_LIST + ')\\]?\\s*\\)?)\\s*`',
+  'g',
+);
+
 /** Bookkeeping the model sometimes appends as user-facing markdown. */
 const BOOKKEEPING_HEADING = /^#{1,6}\s*(?:used\s+receipt\s+ids?|claims)\s*:?\s*$/i;
 
@@ -73,7 +83,7 @@ export function rewriteInlineCitations(
   const kept: string[] = [];
   let skippingBookkeeping = false;
   let inCodeFence = false;
-  for (const line of lines) {
+  for (let line of lines) {
     // Never rewrite inside fenced code — a literal "(r1)" in an example is code.
     if (/^\s*(```|~~~)/.test(line)) {
       inCodeFence = !inCodeFence;
@@ -93,6 +103,10 @@ export function rewriteInlineCitations(
       if (/^#{1,6}\s/.test(line)) skippingBookkeeping = false;
       else continue;
     }
+
+    // Inline-code-wrapped citations lose their backticks so the markers
+    // land in prose, not in a code span the reader can't make clickable.
+    line = line.replace(CODE_WRAPPED_REF, ' $1');
 
     const refOnly = line.match(REF_ONLY_LINE);
     if (refOnly) {
@@ -120,6 +134,8 @@ export function rewriteInlineCitations(
       indent +
         replaced
           .slice(indent.length)
+          // Dropped citations inside inline code leave empty `` husks.
+          .replace(/`\s*`/g, '')
           .replace(/[ \t]+([.,;:)])/g, '$1')
           .replace(/[ \t]{2,}/g, ' ')
           .trimEnd(),

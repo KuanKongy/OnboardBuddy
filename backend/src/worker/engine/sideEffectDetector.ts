@@ -16,6 +16,13 @@ export interface DetectedSideEffect {
 
 const DB_WRITE_PATTERNS = [
   /\.query\s*\(\s*['"`]\s*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER)/i,
+  // Bare `query(` helper convention (`import { query } from db`) — the
+  // dot-prefixed pattern missed every such call and their UPDATE/INSERTs
+  // shipped as "Data Read" workflow steps (audit §5.4).
+  /(?<![.\w])query\s*\(\s*['"`\s]*(INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|TRUNCATE)/i,
+  // Raw SQL verbs in the symbol body (template literals built before the
+  // call). Case-sensitive: `UPDATE x SET` is SQL, "update the … set" is prose.
+  /\b(?:INSERT\s+INTO|UPDATE\s+[\w."]+\s+SET|DELETE\s+FROM|TRUNCATE\s+\w)/,
   /\.create\s*\(/,
   /\.update\s*\(/,
   /\.delete\s*\(/,

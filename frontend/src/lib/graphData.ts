@@ -39,6 +39,8 @@ export interface NodeDetail {
   line_start: number | null;
   line_end: number | null;
   composite_score: number | null;
+  /** "file_fallback" = the score is the symbol's file rank (symbol unranked). */
+  ranking_scope?: "direct" | "file_fallback" | null;
   ranking_reasons: string[];
   connected_workflows: Array<{ id: string; title: string; trigger_type: string }>;
   /** Deterministic relationships — present even without an AI record.

@@ -8,9 +8,15 @@ import type { SymbolInfo } from '../types/analysis.js';
 
 const BEHAVIOR_RULES: Array<{ signal: string; pattern: RegExp }> = [
   { signal: 'http_route', pattern: /\b(router|app)\.(get|post|put|patch|delete|all|use)\b/ },
-  { signal: 'database_read', pattern: /\.query\s*\(|\.(select|findMany|findOne|findFirst)\b|supabase\.from/ },
-  { signal: 'database_write', pattern: /\.(insert|update|delete|upsert|create|save|destroy)\b/ },
-  { signal: 'queue_enqueue', pattern: /(queue|Queue)\w*\.add\b/ },
+  // Bare `query(` covers db-helper conventions (`import { query } from db`);
+  // requiring `.query(` missed every route handler in repos built that way
+  // and their writes shipped as "Data Read" steps (audit §5.4).
+  { signal: 'database_read', pattern: /(?<![.\w])query\s*\(|\.query\s*\(|\.(select|findMany|findOne|findFirst)\b|supabase\.from|\bSELECT\s/ },
+  // SQL verbs are matched case-sensitively: lowercase "update the … set"
+  // is prose, `UPDATE projects SET` is a write.
+  { signal: 'database_write', pattern: /\.(insert|update|delete|upsert|create|save|destroy)\b|\b(?:INSERT\s+INTO|UPDATE\s+[\w."]+\s+SET|DELETE\s+FROM|TRUNCATE\s+\w)/ },
+  // `(\(\s*\))?` covers factory conventions — `getAnalysisQueue().add(...)`.
+  { signal: 'queue_enqueue', pattern: /(queue|Queue)\w*\s*(\(\s*\))?\s*\.add\b/ },
   { signal: 'queue_consume', pattern: /new Worker\b|\.process\s*\(/ },
   { signal: 'http_request', pattern: /\bfetch\s*\(|axios\b|octokit\b/ },
   { signal: 'auth_check', pattern: /jwt\.verify|jwtVerify|requireProjectAccess|verifyToken|authenticate/ },

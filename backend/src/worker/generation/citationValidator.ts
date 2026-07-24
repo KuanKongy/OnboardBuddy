@@ -41,6 +41,12 @@ export interface ValidationOutcome {
 const CONFIDENCE_RANK: Record<'high' | 'medium' | 'low', number> = { high: 3, medium: 2, low: 1 };
 const TRUST_RANK: Record<TrustLevel, number> = { code: 5, config: 4, tests: 3, docs: 2, llm_inference: 1 };
 const FILE_TOKEN = /[\w@./-]+\.(?:tsx?|jsx?|mjs|cjs|sql|ya?ml|json)\b/g;
+/**
+ * Runtime/framework names that pattern-match as files: "runs on Node.js"
+ * was downgraded for not citing a receipt from a file called Node.js,
+ * turning whole stack-overview sections low-confidence.
+ */
+const NOT_A_FILE = /^(?:node|express|vue|react|next|nest|angular|ember|deno|bun|d3|three)\.js$/i;
 const MAX_REFERENCE_DEPTH = 3;
 
 export async function validateGeneratedOutput(params: {
@@ -102,7 +108,9 @@ export async function validateGeneratedOutput(params: {
       unknowns.push({ kind: 'uncited_claim', detail: claim.claim.slice(0, 160) });
     } else {
       // 3. claims naming files must cite receipts from those files
-      const namedFiles = [...claim.claim.matchAll(FILE_TOKEN)].map((m) => m[0]);
+      const namedFiles = [...claim.claim.matchAll(FILE_TOKEN)]
+        .map((m) => m[0])
+        .filter((f) => !NOT_A_FILE.test(f));
       if (namedFiles.length > 0) {
         const citedFiles = cited
           .map((id) => bundleReceipts.get(id)!)

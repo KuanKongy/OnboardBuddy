@@ -142,6 +142,23 @@ describe('citationMarkers.stripLegacyCitationAliases', () => {
   });
 });
 
+describe('citationMarkers.rewriteInlineCitations — inline-code-wrapped citations', () => {
+  it('unwraps backtick-wrapped citations so markers render as chips, not code', () => {
+    const r = rewriteInlineCitations(
+      'Manages project-related requests ` (r1)`.',
+      aliasToId,
+      used,
+    );
+    expect(r.content).to.equal('Manages project-related requests [[receipt:uuid-1]].');
+    expect(r.resolved).to.deep.equal(['r1']);
+  });
+
+  it('dropped citations inside backticks leave no empty `` husks', () => {
+    const r = rewriteInlineCitations('Ensures data consistency `(r9)`.', aliasToId, used);
+    expect(r.content).to.equal('Ensures data consistency.');
+  });
+});
+
 describe('citationMarkers.markUnverifiedClaims', () => {
   it('wraps the prose line carrying a downgraded claim', () => {
     const md = [

@@ -111,6 +111,44 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
   return result;
 }
 
+/** Trigger family for diversity capping: trivial-read families are capped. */
+export function workflowFamily(triggerType: string): string {
+  if (triggerType === 'HTTP GET') return 'read_route';
+  if (triggerType === 'UI page') return 'ui';
+  if (triggerType.startsWith('HTTP ')) return 'write_route';
+  return triggerType;
+}
+
+/**
+ * Selection = criticality x side-effect richness x layer diversity (audit
+ * §5.3): pure score-order used to fill every tutorial slot with trivial
+ * GETs and page renders while the flows that write, enqueue, and cross
+ * layers — the ones a contributor must understand — never made the cut.
+ * Read-only families are capped at two slots; leftovers backfill by score.
+ */
+export function pickDiverseWorkflows<T>(
+  scored: Array<{ row: T; score: number; family: string }>,
+  max: number,
+): T[] {
+  const sorted = [...scored].sort((a, b) => b.score - a.score);
+  const CAPPED_FAMILIES = new Set(['read_route', 'ui']);
+  const CAP = 2;
+  const picked: typeof sorted = [];
+  const familyCount = new Map<string, number>();
+  for (const entry of sorted) {
+    if (picked.length >= max) break;
+    const n = familyCount.get(entry.family) ?? 0;
+    if (CAPPED_FAMILIES.has(entry.family) && n >= CAP) continue;
+    familyCount.set(entry.family, n + 1);
+    picked.push(entry);
+  }
+  for (const entry of sorted) {
+    if (picked.length >= max) break;
+    if (!picked.includes(entry)) picked.push(entry);
+  }
+  return picked.map((e) => e.row);
+}
+
 /** Top workflows by critical_for_workflow blended with the role projection. */
 async function selectWorkflows(params: GenerateTutorialsParams): Promise<WorkflowRow[]> {
   const max = params.maxTutorials ?? DEFAULT_MAX_TUTORIALS;
@@ -118,18 +156,26 @@ async function selectWorkflows(params: GenerateTutorialsParams): Promise<Workflo
     params.projections.filter((p) => p.targetType === 'workflow').map((p) => [p.stableKey, p]),
   );
   const rows = (await query(
-    `SELECT id, stable_key, title, trigger_type, purpose FROM workflows WHERE snapshot_id = $1`,
+    `SELECT w.id, w.stable_key, w.title, w.trigger_type, w.purpose,
+            (SELECT count(*)::int FROM workflow_steps ws WHERE ws.workflow_id = w.id) AS step_count,
+            (SELECT count(*)::int FROM workflow_steps ws WHERE ws.workflow_id = w.id
+              AND ws.step_kind IN ('data_write', 'async_work', 'side_effect')) AS effect_steps
+     FROM workflows w WHERE w.snapshot_id = $1`,
     [params.snapshotId],
-  )).rows as WorkflowRow[];
-  return rows
-    .map((row) => {
+  )).rows as Array<WorkflowRow & { step_count: number; effect_steps: number }>;
+  return pickDiverseWorkflows(
+    rows.map((row) => {
       const projection = projectionByKey.get(row.stable_key);
       const workflowView = projection?.viewScores.critical_for_workflow ?? 0;
-      return { row, score: workflowView + (projection?.score ?? 0) };
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, max)
-    .map((entry) => entry.row);
+      const effectRichness = row.effect_steps / Math.max(row.step_count, 1);
+      return {
+        row: row as WorkflowRow,
+        score: workflowView + (projection?.score ?? 0) + 0.2 * effectRichness,
+        family: workflowFamily(row.trigger_type),
+      };
+    }),
+    max,
+  );
 }
 
 async function generateOneTutorial(params: GenerateTutorialsParams, workflow: WorkflowRow, steps: StepRow[]): Promise<void> {

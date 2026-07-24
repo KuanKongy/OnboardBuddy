@@ -96,6 +96,26 @@ describe('workflowExtractor (call-graph traversal)', () => {
     const mixedWorkflows = extractWorkflows({ graph, entrypoints, sideEffects });
     expect(mixedWorkflows).to.deep.equal([]);
   });
+
+  it('traces queue-consumer registrations into pipeline workflows (audit P2 §15)', () => {
+    const wf = workflows.find((w) => w.title === 'Queue consumer: reports');
+    expect(wf, 'queue consumer workflow').to.exist;
+    // The closure's call flow (saveSession -> sessions table) must trace.
+    expect(wf!.steps.map((s) => s.stepKind)).to.include('data_write');
+    expect(wf!.triggerType).to.equal('message_consumer');
+  });
+
+  it("surfaces the seed handler's own writes and enqueues as explicit steps (audit §5.4)", () => {
+    const wf = workflows.find((w) => w.stableKey.endsWith(':enqueueReportHandler'));
+    expect(wf, 'enqueueReport workflow').to.exist;
+    const kinds = wf!.steps.map((s) => s.stepKind);
+    // The INSERT and the queue.add live in the trigger's own body — they
+    // used to vanish behind the 'trigger' step kind.
+    expect(kinds).to.include('data_write');
+    expect(kinds).to.include('async_work');
+    expect(wf!.steps.some((s) => s.metadata?.syntheticSeedEffect)).to.equal(true);
+    expect(kinds[0]).to.equal('trigger');
+  });
 });
 
 describe('workflowExtractor (class-method route handlers — CourseInsights regression)', () => {

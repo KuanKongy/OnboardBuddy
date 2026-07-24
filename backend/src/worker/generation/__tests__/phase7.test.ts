@@ -162,6 +162,20 @@ describe('phase 7 — citation validator', () => {
     expect(result.confidence).to.equal('low'); // min of major claims
   });
 
+  it('framework names like Node.js are not file citations (stack claims stay high)', async () => {
+    stubNodes(['a.ts#fn']);
+    const result = await validateGeneratedOutput({
+      bundle: bundle([{ receiptId: R1, receiptKind: 'code_snippet', trustLevel: 'code', nodeStableKey: 'a.ts#fn', filePath: 'a.ts' }]),
+      output: output(
+        [{ claim: 'The system runs on Node.js with an Express API.', receiptIds: [R1], confidence: 'high' }],
+        [R1],
+      ),
+      snapshotId: 'snap',
+    });
+    expect(result.adjustedClaims[0]!.confidence).to.equal('high');
+    expect(result.issues).to.deep.equal([]);
+  });
+
   it('caps docs-only support at medium and flags conflicts when code evidence existed', async () => {
     stubNodes(['a.ts#fn']);
     const result = await validateGeneratedOutput({
