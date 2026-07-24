@@ -30,9 +30,15 @@ export interface WorkflowStep {
    * graph route renders it as a distinct terminal node instead of an edge
    * looping back to step 1. syntheticSeedEffect marks an effect step
    * surfaced from the trigger's own body (writes/enqueues that the
-   * 'trigger' kind used to swallow).
+   * 'trigger' kind used to swallow). journeyMember/journeyBoundary annotate
+   * composed-journey steps with their source workflow / boundary kind.
    */
-  metadata?: { syntheticReturn?: boolean; syntheticSeedEffect?: boolean };
+  metadata?: {
+    syntheticReturn?: boolean;
+    syntheticSeedEffect?: boolean;
+    journeyMember?: string;
+    journeyBoundary?: string;
+  };
 }
 
 export interface ExtractedWorkflow {
@@ -46,6 +52,28 @@ export interface ExtractedWorkflow {
   /** Raw ordering hint only — real ranking is criticality_scores rows. */
   importanceScore: number;
   externalDependencies: string[];
+  /** Extra persisted metadata (journey membership, unknown-only flags, …). */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Honesty rule (doc/DETECTION_COVERAGE.md): a trace that dies is recorded,
+ * not swallowed — dead-ends roll up into snapshot `unknowns` and the trust
+ * panel as findable work. Only real, resolved entrypoints are recorded;
+ * convention-guessed file seeds and effect-less UI pages are normal.
+ */
+export interface TraceDeadEnd {
+  /** e.g. "message_consumer SUMMARY_QUEUE", "http_route POST /api/auth/login" */
+  entrypoint: string;
+  seedName: string;
+  filePath: string;
+  stepCount: number;
+  reason: 'no_calls_traced' | 'no_effects_reached';
+}
+
+export interface WorkflowExtraction {
+  workflows: ExtractedWorkflow[];
+  deadEnds: TraceDeadEnd[];
 }
 
 const MAX_DEPTH = 8;
@@ -74,14 +102,30 @@ export interface ExtractWorkflowsInput {
 }
 
 export function extractWorkflows(input: ExtractWorkflowsInput): ExtractedWorkflow[] {
+  return extractWorkflowsDetailed(input).workflows;
+}
+
+export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): WorkflowExtraction {
   const ctx = buildTraversalContext(input);
   const workflows: ExtractedWorkflow[] = [];
+  const deadEnds: TraceDeadEnd[] = [];
   const seenKeys = new Set<string>();
+  const seenDeadEnds = new Set<string>();
 
   for (const ep of input.entrypoints) {
     for (const seed of seedsForEntrypoint(ep, ctx)) {
-      const wf = trace(ep, seed, ctx);
-      if (!wf || seenKeys.has(wf.stableKey)) continue;
+      const result = trace(ep, seed, ctx);
+      if (!result) continue;
+      if ('deadEnd' in result) {
+        const key = `${result.deadEnd.entrypoint}:${result.deadEnd.seedName}`;
+        if (recordableDeadEnd(ep) && !seenDeadEnds.has(key)) {
+          seenDeadEnds.add(key);
+          deadEnds.push(result.deadEnd);
+        }
+        continue;
+      }
+      const wf = result.workflow;
+      if (seenKeys.has(wf.stableKey)) continue;
       seenKeys.add(wf.stableKey);
       workflows.push(wf);
     }
@@ -90,9 +134,21 @@ export function extractWorkflows(input: ExtractWorkflowsInput): ExtractedWorkflo
   // Score ties: an AST-detected route (`PUT /dataset/:id/:kind`) beats a
   // convention-guessed seed over the same steps — it carries the real
   // method + route pattern, so it survives duplicate suppression.
-  return suppressNearDuplicates(workflows.sort((a, b) =>
+  const kept = suppressNearDuplicates(workflows.sort((a, b) =>
     b.importanceScore - a.importanceScore
     || Number(Boolean(b.entrypoint.routePattern)) - Number(Boolean(a.entrypoint.routePattern))));
+  return { workflows: kept, deadEnds };
+}
+
+/**
+ * Dead-ends worth surfacing: resolved consumers/handlers and AST-detected
+ * routes. A UI page that renders without effects or a convention-guessed
+ * file seed dying quietly is expected, not an extraction failure.
+ */
+function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
+  if (ep.kind === 'ui_route' || ep.kind === 'export') return false;
+  if (ep.kind === 'http_route') return Boolean(ep.routePattern);
+  return true;
 }
 
 /**
@@ -203,11 +259,18 @@ function qualifiedMemberMatch(symbolStableKey: string, ctx: TraversalContext): E
 
 // ─── Trace ───────────────────────────────────────────────────────────────────
 
-function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext): ExtractedWorkflow | null {
+function trace(
+  ep: DetectedEntrypoint,
+  seed: EvidenceNode,
+  ctx: TraversalContext,
+): { workflow: ExtractedWorkflow } | { deadEnd: TraceDeadEnd } | null {
   const steps: WorkflowStep[] = [];
   const visited = new Set<string>();
   const externals: string[] = [];
   let effectCount = 0;
+  // Effects from recognized patterns only — a workflow kept alive purely by
+  // unknown_external fallbacks is honest but low-trust.
+  let knownEffectCount = 0;
 
   const pushStep = (node: EvidenceNode, kind: WorkflowStepKind, description: string, metadata?: WorkflowStep['metadata']) => {
     steps.push({
@@ -251,7 +314,12 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
 
     if (!noisy) {
       const kind = isSeed ? 'trigger' : classifyStep(node, effects, signals);
-      if (effects.length > 0 || signals.some((s) => EFFECT_SIGNALS.has(s))) effectCount++;
+      if (effects.length > 0 || signals.some((s) => EFFECT_SIGNALS.has(s))) {
+        effectCount++;
+        if (effects.some((e) => e.kind !== 'unknown_external') || signals.some((s) => EFFECT_SIGNALS.has(s))) {
+          knownEffectCount++;
+        }
+      }
       pushStep(node, kind, describeStep(node, kind, ep, effects, signals));
       // The seed is always a 'trigger', which used to swallow its own
       // effects: a handler that INSERTs a job row and enqueues it traced as
@@ -265,16 +333,19 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
           const stepKind =
             effectKind === 'database_write' ? 'data_write'
             : effectKind === 'message_publish' ? 'async_work'
+            // Auth handlers do their work through the identity SDK in the
+            // handler body itself — swallowing it re-hides the User Auth
+            // journey the sink detection just recovered.
+            : effectKind === 'auth_call' ? 'auth_guard'
+            : effectKind === 'external_service' ? 'side_effect'
             : null;
           if (!stepKind) continue; // reads/noise stay implicit
-          pushStep(
-            node,
-            stepKind,
-            stepKind === 'data_write'
-              ? `Writes data${effect.target ? ` (${effect.target})` : ''} from ${node.name}`
-              : `Enqueues async work${effect.target ? ` (${effect.target})` : ''} from ${node.name}`,
-            { syntheticSeedEffect: true },
-          );
+          const description =
+            stepKind === 'data_write' ? `Writes data${effect.target ? ` (${effect.target})` : ''} from ${node.name}`
+            : stepKind === 'async_work' ? `Enqueues async work${effect.target ? ` (${effect.target})` : ''} from ${node.name}`
+            : stepKind === 'auth_guard' ? `Authenticates via ${effect.target ?? 'auth sdk'} in ${node.name}`
+            : `Calls external service${effect.target ? ` (${effect.target})` : ''} from ${node.name}`;
+          pushStep(node, stepKind, description, { syntheticSeedEffect: true });
         }
       }
     }
@@ -290,8 +361,19 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
   visit(seed.stableKey, 0);
 
   // A trigger with a response but nothing else is honest; a trigger alone,
-  // or a trace that never reaches an effect/output, is not a workflow.
-  if (steps.length < 2 || effectCount === 0) return null;
+  // or a trace that never reaches an effect/output, is not a workflow — but
+  // under the honesty rule its death is recorded, never silent.
+  if (steps.length < 2 || effectCount === 0) {
+    return {
+      deadEnd: {
+        entrypoint: `${ep.kind}${ep.method ? ` ${ep.method}` : ''}${ep.routePattern ? ` ${ep.routePattern}` : ''}`,
+        seedName: seed.name,
+        filePath: seed.filePath ?? ep.filePath,
+        stepCount: steps.length,
+        reason: steps.length < 2 ? 'no_calls_traced' : 'no_effects_reached',
+      },
+    };
+  }
 
   // Express handlers respond after their callees run; make that explicit.
   // Tagged syntheticReturn: it re-references the seed node, and rendering it
@@ -308,17 +390,25 @@ function trace(ep: DetectedEntrypoint, seed: EvidenceNode, ctx: TraversalContext
   // components — rank them below server flows of the same size.
   const uiPenalty = ep.kind === 'ui_route' ? 0.5 : 1;
 
+  // Kept alive only by unknown_external fallbacks: honest, but low-trust —
+  // confidence is capped and the flag rides along for the trust panel.
+  const unknownOnly = knownEffectCount === 0;
+
   return {
-    title: workflowTitle(ep, seed),
-    triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}`
-      : ep.kind === 'ui_route' ? 'UI page' : ep.kind,
-    purpose: classifyPurpose(ep, seed, steps, ctx),
-    stableKey: `wf:${ep.nodeStableKey}:${seed.name}`,
-    confidence: steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
-    entrypoint: ep,
-    steps,
-    importanceScore: (steps.length * 0.1 + sideEffectSteps * 0.2) * uiPenalty,
-    externalDependencies: externals,
+    workflow: {
+      title: workflowTitle(ep, seed),
+      triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}`
+        : ep.kind === 'ui_route' ? 'UI page' : ep.kind,
+      purpose: classifyPurpose(ep, seed, steps, ctx),
+      stableKey: `wf:${ep.nodeStableKey}:${seed.name}`,
+      confidence: unknownOnly ? 'low'
+        : steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
+      entrypoint: ep,
+      steps,
+      importanceScore: (steps.length * 0.1 + sideEffectSteps * 0.2) * uiPenalty * (unknownOnly ? 0.5 : 1),
+      externalDependencies: externals,
+      ...(unknownOnly ? { metadata: { unknown_effects_only: true } } : {}),
+    },
   };
 }
 
@@ -356,6 +446,7 @@ function classifyStep(node: EvidenceNode, effects: DetectedSideEffect[], signals
   const effectKinds = new Set(effects.map((e) => e.kind));
   if (effectKinds.has('database_write') || signals.includes('database_write')) return 'data_write';
   if (effectKinds.has('message_publish') || signals.includes('queue_enqueue')) return 'async_work';
+  if (effectKinds.has('auth_call')) return 'auth_guard';
   if (effectKinds.size > 0 || signals.includes('http_request') || signals.includes('filesystem')) return 'side_effect';
   if (signals.includes('auth_check') || AUTH_NAME.test(node.name)) return 'auth_guard';
   if (signals.includes('database_read')) return 'data_read';
@@ -383,8 +474,12 @@ function describeStep(
   switch (kind) {
     case 'trigger':
       return `Entry point: ${ep.kind.replace(/_/g, ' ')}${ep.method ? ` ${ep.method}` : ''}${ep.routePattern ? ` ${ep.routePattern}` : ''} handled by ${where}`;
-    case 'auth_guard':
-      return `Checks authentication/authorization in ${where}`;
+    case 'auth_guard': {
+      const authTarget = effects.find((e) => e.kind === 'auth_call')?.target;
+      return authTarget
+        ? `Authenticates via ${authTarget} in ${where}`
+        : `Checks authentication/authorization in ${where}`;
+    }
     case 'validation':
       return `Validates input in ${where}`;
     case 'data_write':
@@ -462,7 +557,11 @@ export async function persistWorkflows(
        RETURNING id`,
       [snapshotId, wf.title, wf.triggerType, wf.purpose, wf.confidence, wf.stableKey,
        entrypointIdMap?.get(wf.entrypoint) ?? null,
-       JSON.stringify({ importance_score: wf.importanceScore, external_dependencies: wf.externalDependencies })],
+       JSON.stringify({
+         importance_score: wf.importanceScore,
+         external_dependencies: wf.externalDependencies,
+         ...(wf.metadata ?? {}),
+       })],
     );
 
     if (wfResult.rows.length === 0) continue;

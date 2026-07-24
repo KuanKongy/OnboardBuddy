@@ -42,6 +42,14 @@ const WEIGHT_VIEWS = [
   "critical_for_workflow",
 ] as const;
 
+// Mirrors backend SELECTABLE_MODELS (ai/modelTiers.ts) — the vetted model
+// choices; one selection drives both chat tiers.
+const DEFAULT_ANALYSIS_MODEL = "google/gemini-2.5-flash-lite";
+const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
+  { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (default — fast, 1M context)" },
+  { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (1M context)" },
+];
+
 // Mirrors backend DEPTH_BUDGETS (engine/budgets.ts) so the inputs show the
 // real defaults instead of an opaque "depth default" placeholder.
 const DEPTH_BUDGET_DEFAULTS: Record<string, { calls: number; tokens: number }> = {
@@ -77,6 +85,7 @@ export function ProjectSettingsPage() {
   const [defaultRole, setDefaultRole] = useState("general");
   const [privacyMode, setPrivacyMode] = useState("full_ai");
   const [analysisDepth, setAnalysisDepth] = useState("standard");
+  const [analysisModel, setAnalysisModel] = useState(DEFAULT_ANALYSIS_MODEL);
   const [fileLimit, setFileLimit] = useState<string>("");
   const [locLimit, setLocLimit] = useState<string>("");
   const [budgetCalls, setBudgetCalls] = useState<string>("");
@@ -113,6 +122,8 @@ export function ProjectSettingsPage() {
       setDefaultRole(project.settings.default_developer_role);
       setPrivacyMode(project.settings.privacy_mode ?? "full_ai");
       setAnalysisDepth((project.settings as { analysis_depth?: string }).analysis_depth ?? "standard");
+      const tierOverrides = (project.settings as { model_tier_overrides?: Record<string, string[]> }).model_tier_overrides ?? {};
+      setAnalysisModel(tierOverrides.cheap?.[0] ?? DEFAULT_ANALYSIS_MODEL);
       setFileLimit(project.settings.file_limit != null ? String(project.settings.file_limit) : "");
       setLocLimit(project.settings.loc_limit != null ? String(project.settings.loc_limit) : "");
       const budgets = (project.settings as { budget_overrides?: Record<string, number> }).budget_overrides ?? {};
@@ -149,6 +160,8 @@ export function ProjectSettingsPage() {
         default_developer_role: defaultRole,
         privacy_mode: privacyMode,
         analysis_depth: analysisDepth,
+        // One model choice drives both chat tiers; embeddings stay default.
+        model_tier_overrides: { cheap: [analysisModel], strong: [analysisModel] },
         budget_overrides,
         budget_stop_behavior: stopBehavior,
         auto_reanalyze_on_push: autoReanalyze,
@@ -386,6 +399,17 @@ export function ProjectSettingsPage() {
                     <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
                     <SelectItem value="standard">Standard — balanced</SelectItem>
                     <SelectItem value="full">Full — every eligible symbol</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <Label className="text-xs">Analysis model</Label>
+                <Select value={analysisModel} onValueChange={setAnalysisModel} disabled={!canEdit}>
+                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectContent>
+                    {SELECTABLE_MODELS.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

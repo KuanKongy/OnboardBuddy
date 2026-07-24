@@ -7,7 +7,7 @@ import { detectSideEffects } from '../sideEffectDetector';
 import { scanConfigNodes } from '../configScanner';
 import { ingestDocs } from '../docsIngester';
 import { buildEvidenceGraph } from '../evidenceGraphBuilder';
-import { extractWorkflows, type ExtractedWorkflow } from '../workflowExtractor';
+import { extractWorkflows, extractWorkflowsDetailed, type ExtractedWorkflow } from '../workflowExtractor';
 import type { EvidenceGraph } from '../../types/analysis';
 import type { DetectedEntrypoint } from '../entrypointDetector';
 import type { DetectedSideEffect } from '../sideEffectDetector';
@@ -95,6 +95,38 @@ describe('workflowExtractor (call-graph traversal)', () => {
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const mixedWorkflows = extractWorkflows({ graph, entrypoints, sideEffects });
     expect(mixedWorkflows).to.deep.equal([]);
+  });
+
+  it('records dead-ends instead of silently dropping traces (honesty rule)', async () => {
+    const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
+    const { workflows: mixedWorkflows, deadEnds } = extractWorkflowsDetailed({ graph, entrypoints, sideEffects });
+    expect(mixedWorkflows).to.deep.equal([]);
+    expect(deadEnds.length, 'dead ends recorded').to.be.greaterThan(0);
+    for (const de of deadEnds) {
+      expect(de.reason).to.be.oneOf(['no_calls_traced', 'no_effects_reached']);
+      expect(de.entrypoint).to.be.a('string').and.not.equal('');
+    }
+  });
+
+  it('seeds bare-reference queue consumers at the referenced handler (SUMMARY-consumer regression)', () => {
+    const wf = workflows.find((w) => w.title === 'Queue consumer: SUMMARY_QUEUE');
+    expect(wf, 'summary consumer workflow').to.exist;
+    // The trace must run through the referenced handler's real call flow.
+    expect(wf!.steps.map((s) => s.stepKind)).to.include('data_write');
+    expect(wf!.steps[0]!.nodeStableKey).to.contain('#processSummaryJob');
+    expect(wf!.triggerType).to.equal('message_consumer');
+  });
+
+  it('keeps auth workflows whose only effects are identity-SDK calls (User Auth journey)', () => {
+    const login = workflows.find((w) => w.stableKey.endsWith(':supabaseLoginHandler'));
+    expect(login, 'supabase login workflow').to.exist;
+    const kinds = login!.steps.map((s) => s.stepKind);
+    expect(kinds).to.include('auth_guard');
+    const authStep = login!.steps.find((s) => s.stepKind === 'auth_guard')!;
+    expect(authStep.deterministicDescription).to.contain('supabase.auth');
+
+    const logout = workflows.find((w) => w.stableKey.endsWith(':supabaseLogoutHandler'));
+    expect(logout, 'supabase logout workflow').to.exist;
   });
 
   it('traces queue-consumer registrations into pipeline workflows (audit P2 §15)', () => {

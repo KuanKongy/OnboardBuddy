@@ -79,10 +79,11 @@ export const AVG_TOKENS_PER_STRONG_CALL = 14_000;
 export const SECTION_COUNT_ESTIMATE = 11;
 export const TUTORIAL_COUNT_ESTIMATE = 4;
 
-// Coarse per-million-token input prices used ONLY for the preflight cost
+// Coarse per-million-token blended prices used ONLY for the preflight cost
 // tier; real cost accounting happens per call in ai_generation_runs.
-// Both chat tiers ride deepseek/deepseek-v4-flash ($0.09/M in, $0.18/M out).
-export const EST_PRICE_PER_MTOK_CHEAP_USD = 0.11;
+// Both chat tiers default to google/gemini-2.5-flash-lite ($0.10/M in,
+// $0.40/M out — ~0.18 blended at the observed ~3:1 input:output ratio).
+export const EST_PRICE_PER_MTOK_CHEAP_USD = 0.18;
 export const EST_PRICE_PER_MTOK_STRONG_USD = 0.18;
 
 export const COST_TIER_THRESHOLDS_USD = { medium: 2, high: 15 };

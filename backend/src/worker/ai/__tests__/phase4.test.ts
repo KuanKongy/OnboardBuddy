@@ -152,11 +152,12 @@ describe('phase 4 — model tiers', () => {
   });
 
   it('cost estimates scale with tokens and tier', () => {
-    // cheap tracks llama-4-scout ($0.11 in / $0.34 out per Mtok), strong
-    // tracks deepseek-v4-flash ($0.09/$0.18) — keep in sync with
-    // TIER_PRICES_PER_MTOK.
-    expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.11, 1e-9);
-    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.27, 1e-9);
+    // Tier fallback rows track gemini-2.5-flash-lite ($0.10 in / $0.40 out
+    // per Mtok); known models get exact rows via the model param.
+    expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.1, 1e-9);
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.5, 1e-9);
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000, 'deepseek/deepseek-v4-flash')).to.be.closeTo(0.27, 1e-9);
+    expect(estimateCostUsd('cheap', 1_000_000, 0, 'some/unknown-model')).to.be.closeTo(0.1, 1e-9);
   });
 });
 

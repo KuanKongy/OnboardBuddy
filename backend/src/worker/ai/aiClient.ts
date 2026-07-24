@@ -295,7 +295,7 @@ export class AiClient {
         usage = result.usage;
       }
 
-      const costUsd = estimateCostUsd(req.tier, usage.inputTokens, usage.outputTokens);
+      const costUsd = estimateCostUsd(req.tier, usage.inputTokens, usage.outputTokens, model);
       await finishRun(runId, {
         status: 'complete',
         outputHash: computeOutputHash(content),

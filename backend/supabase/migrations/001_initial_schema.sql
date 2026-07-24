@@ -702,6 +702,18 @@ create table if not exists public.package_sections (
   generation_run_id uuid references public.ai_generation_runs(id) on delete set null,
   type varchar not null
     check (type in (
+      -- Diátaxis redesign (doc/ONBOARDING_QUALITY_LATENCY_PLAN.md), 4 chapters:
+      -- ORIENT (explanation)
+      'big_picture', 'concepts',
+      -- UNDERSTAND (explanation + annotated reference)
+      'architecture_deep', 'traced_flows', 'code_map', 'capabilities',
+      -- DO (tutorial / how-to)
+      'setup_run', 'first_change', 'common_tasks',
+      -- CONSULT (reference: deterministic tables + LLM annotations)
+      'routes_jobs', 'data_model', 'guardrails_ops',
+      -- Legacy ids, kept valid during the spec transition so the current
+      -- generators still insert; drop this row block once the redesigned
+      -- specs ship and the old specs are deleted.
       'start_here', 'architecture', 'entry_points', 'critical_25', 'capability_map',
       'role_path', 'workflow_guide', 'data_schema', 'safety_rails',
       'dependency_graph', 'doc_health'

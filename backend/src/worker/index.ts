@@ -16,7 +16,7 @@ import { getCommitSha, downloadZipball, getInstallationToken, getRepo } from '..
 import { runAnalysis } from './engine/analysisRunner.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
-import { extractWorkflows, persistWorkflows } from './engine/workflowExtractor.js';
+import { extractWorkflowsDetailed, persistWorkflows } from './engine/workflowExtractor.js';
 import {
   rankCandidates,
   persistCandidateRankings,
@@ -25,6 +25,9 @@ import {
 import { fetchChurnSignals, persistChurn, type ChurnStats } from './engine/churnService.js';
 import { clusterArchitecture, persistArchitecture } from './engine/architectureClusterer.js';
 import { scanConfigNodes } from './engine/configScanner.js';
+import { extractConfigFlows } from './engine/configFlowExtractor.js';
+import { composeJourneys } from './engine/journeyComposer.js';
+import { validateGoldenJourneys } from './engine/journeyGate.js';
 import { ingestDocs } from './engine/docsIngester.js';
 import {
   buildEvidenceGraph,
@@ -421,6 +424,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     const entrypoints = detectEntrypoints(snapshot.fileAnalyses);
     const sideEffects = detectSideEffects(snapshot.fileAnalyses);
     const configNodes = scanConfigNodes(snapshot.fileRecords, snapshot.inventory);
+    // Config-as-flow (DETECTION_COVERAGE.md §3): compose/CI/env/scripts parsed
+    // into topology + dev journeys; annotates configNodes before graph build
+    // so the topology rides in the compose node's metadata.
+    const configFlows = extractConfigFlows({
+      fileRecords: snapshot.fileRecords,
+      inventory: snapshot.inventory,
+      configNodes,
+    });
     const knownPaths = new Set(snapshot.fileRecords.map((r) => r.relativePath));
     const docs = ingestDocs(snapshot.fileRecords, knownPaths);
 
@@ -518,17 +529,63 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     await persistSideEffects(snapshotId, sideEffects, nodeIdMap);
 
     await updateStep('Extracting workflows', 57);
-    const workflows = extractWorkflows({ graph: evidence, entrypoints, sideEffects });
+    const extraction = extractWorkflowsDetailed({ graph: evidence, entrypoints, sideEffects });
+    // Journey composition: stitch route workflows across queue boundaries,
+    // OAuth chains, and capability groups into the product journeys; config
+    // journeys (compose up, one-command tests, CI) persist beside them and
+    // rank through the same machinery.
+    const journeys = composeJourneys({ workflows: extraction.workflows, sideEffects });
+    const workflows = [...extraction.workflows, ...configFlows.workflows, ...journeys];
     const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
     await query(
       `UPDATE analysis_snapshots SET workflow_count = $2 WHERE id = $1`,
       [snapshotId, workflows.length],
     );
-    await markPhase(snapshotId, 'workflows', 'complete', { workflows: workflows.length });
+    // Golden-journey gate: detectable shapes (queue+consumer pairs, auth
+    // routes, oauth chains, compose) must have composed into journeys.
+    const gate = validateGoldenJourneys({
+      workflows, entrypoints, sideEffects,
+      hasCompose: configFlows.topology !== null,
+    });
+    await markPhase(snapshotId, 'workflows', 'complete', {
+      workflows: workflows.length,
+      journeys: journeys.length,
+      configJourneys: configFlows.workflows.length,
+      deadEnds: extraction.deadEnds.length,
+      journeyGatePasses: gate.passes,
+      journeyGaps: gate.gaps.length,
+    });
     if (workflows.length === 0) {
       await query(
         `UPDATE analysis_snapshots SET unknowns = unknowns || '[{"kind": "no_workflows_found"}]'::jsonb WHERE id = $1`,
         [snapshotId],
+      );
+    }
+    // Honesty rule: traces that died, calls into unmodeled packages, and
+    // golden-journey gaps are findable work, surfaced in snapshot unknowns
+    // (trust panel reads them).
+    const honestyUnknowns: Array<Record<string, unknown>> = [...gate.gaps];
+    if (extraction.deadEnds.length > 0) {
+      honestyUnknowns.push({
+        kind: 'trace_dead_ends',
+        count: extraction.deadEnds.length,
+        examples: extraction.deadEnds.slice(0, 5),
+      });
+    }
+    const unknownExternalPkgs = [...new Set(
+      sideEffects.filter((e) => e.kind === 'unknown_external').map((e) => e.target ?? 'unknown'),
+    )];
+    if (unknownExternalPkgs.length > 0) {
+      honestyUnknowns.push({
+        kind: 'unknown_external_calls',
+        packages: unknownExternalPkgs.slice(0, 15),
+        count: unknownExternalPkgs.length,
+      });
+    }
+    if (honestyUnknowns.length > 0) {
+      await query(
+        `UPDATE analysis_snapshots SET unknowns = unknowns || $2::jsonb WHERE id = $1`,
+        [snapshotId, JSON.stringify(honestyUnknowns)],
       );
     }
 
