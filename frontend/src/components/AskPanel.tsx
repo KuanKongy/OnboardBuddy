@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, ApiError } from "@/lib/api";
+import { MARKDOWN_DISALLOWED_ELEMENTS, safeUrlTransform } from "@/lib/markdownSafety";
 import { receiptForHref, receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
 import type { AskAnswer, SourceReceipt } from "@/types/onboarding";
 import { cn } from "@/lib/utils";
@@ -148,6 +149,8 @@ export function AskPanel({
 
               <div className="prose prose-sm dark:prose-invert max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
                 <ReactMarkdown
+                  disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
+                  urlTransform={safeUrlTransform}
                   components={{
                     a: ({ href, children }) => {
                       const cited = receiptForHref(href, receipts);

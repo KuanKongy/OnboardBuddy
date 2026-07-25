@@ -16,6 +16,7 @@ import {
   SYMBOL_BATCH_OUTPUT_TOKENS_PER_SYMBOL,
 } from '../engine/budgets.js';
 import { capReceiptSpan } from '../engine/receiptSpan.js';
+import { makeUntrustedFence, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
 import type { EvidenceNode } from '../types/analysis.js';
 import type { SemanticContext } from './context.js';
 import {
@@ -24,7 +25,7 @@ import {
 } from './recordTypes.js';
 import {
   evidenceHashForSymbol, lookupRecord, lookupRecords, insertRecord, insertRecordsBulk,
-  mapToSnapshot, mapToSnapshotBulk, attachReceipts, attachReceiptsBulk, depthLookupOrder,
+  mapToSnapshot, mapToSnapshotBulk,  attachReceiptsBulk, depthLookupOrder,
   type StoredRecord, type RecordCacheKey, type ReceiptDraft, type InsertRecordInput,
   type PriorSymbolRecord,
 } from './recordStore.js';
@@ -335,6 +336,10 @@ interface RawSymbolRecord extends SemanticRecordBody {
  */
 const SYMBOL_SYSTEM_PROMPT = [
   `You are documenting symbols from a codebase for onboarding. For EACH symbol below, produce one semantic record.`,
+  // These records are stored, content-addressed, cached across snapshots, and
+  // re-fed into later section/capability prompts — so an injection that lands
+  // here persists and spreads (finding P3). The boundary rule goes first.
+  UNTRUSTED_DATA_RULE,
   OUTPUT_RULES,
   `Set each record's stable_key to the symbol's stable key exactly as given.`,
 ].join('\n\n');
@@ -351,9 +356,13 @@ async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critique
     sections.push(renderSymbolFacts(ctx, t.node, alias));
   });
 
+  // The symbol facts are pure repo content — snippets, names, paths, and the
+  // comments inside them — so the whole block is fenced as untrusted (§5.4).
+  // The critique notes are OUR text and stay outside the fence.
+  const fence = makeUntrustedFence();
   const prompt = [
     critiqueNotes ? `A previous attempt was rejected by review. Fix these problems:\n${critiqueNotes}` : null,
-    sections.join('\n\n'),
+    fence.wrap(sections.join('\n\n')),
   ].filter(Boolean).join('\n\n');
 
   const response = await ctx.ai.call<{ records: RawSymbolRecord[] }>({

@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { AVATAR_URL_HELP, isSafeAvatarUrl, safeAvatarSrc } from "@/lib/avatarUrl";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -76,6 +77,12 @@ export function AccountSettingsPage() {
   }, [user?.id]);
 
   async function handleSaveProfile() {
+    // Reject an off-allowlist avatar before it is stored: saved once, it is
+    // then fetched by the browser on every page load (§5.3 / finding X2).
+    if (avatarUrl.trim() !== "" && !isSafeAvatarUrl(avatarUrl)) {
+      setProfileError(AVATAR_URL_HELP);
+      return;
+    }
     setProfileSaving(true);
     setProfileError("");
     setProfileNotice("");
@@ -298,7 +305,7 @@ export function AccountSettingsPage() {
             <>
               <div className="flex items-start gap-3">
                 <Avatar className="mt-1 size-12">
-                  {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+                  {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
                   <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1 space-y-2">
@@ -321,6 +328,7 @@ export function AccountSettingsPage() {
                       placeholder="https://…/avatar.png"
                       className="mt-1 h-8 text-[0.8125rem]"
                     />
+                    <p className="mt-1 text-[0.625rem] text-muted-foreground">{AVATAR_URL_HELP}</p>
                   </div>
                 </div>
               </div>
@@ -339,7 +347,7 @@ export function AccountSettingsPage() {
             <>
               <div className="flex items-center gap-3">
                 <Avatar className="size-12">
-                  {avatarUrl && <AvatarImage src={avatarUrl} alt="" />}
+                  {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
                   <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">

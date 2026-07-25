@@ -8,6 +8,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { makeUntrustedFence, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
 import type { SemanticContext } from './context.js';
 import { PROMPT_VERSIONS, OUTPUT_RULES, renderSummary, type SemanticRecordBody, type RecordConfidence } from './recordTypes.js';
 import { evidenceHashForChildren, insertRecord, lookupRecord, mapToSnapshot, attachReceipts, type StoredRecord } from './recordStore.js';
@@ -90,8 +91,13 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
     .filter((r) => r.targetType === 'file' || r.targetType === 'symbol')
     .slice(0, 25);
 
-  const prompt = [
-    'Extract the business capabilities of this system: user-meaningful groups of functionality (e.g. "repo analysis", "team management"). Group the workflows and modules below into 2-8 capabilities. This feeds an onboarding hub a new developer uses to decide what to read first, so write for someone who has never seen the codebase.',
+  // Instructions move to the `system` turn so the boundary is a real turn
+  // boundary, not just a paragraph break (§5.4). The evidence below is
+  // second-order untrusted: workflow titles and module summaries are already
+  // model output written FROM repo snippets, so an injection that survived the
+  // symbol pass arrives here as ordinary-looking prose (finding P3).
+  const system = [
+    'Extract the business capabilities of this system: user-meaningful groups of functionality (e.g. "repo analysis", "team management"). Group the workflows and modules given by the user into 2-8 capabilities. This feeds an onboarding hub a new developer uses to decide what to read first, so write for someone who has never seen the codebase.',
     [
       'For each capability produce:',
       '- description: 1-2 sentences in plain product language — what a user of the system gets from it. No file names, no jargon.',
@@ -99,12 +105,17 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
       '- involved_workflows / involved_modules: the exact stable keys given below, each with a one-line reason saying what that member does FOR this capability.',
       '- where_to_start: 1-3 entries chosen ONLY from the "Start-here candidates" list, each with a one-line reason why reading it first pays off.',
     ].join('\n'),
+    UNTRUSTED_DATA_RULE,
     OUTPUT_RULES,
+  ].join('\n\n');
+
+  const fence = makeUntrustedFence();
+  const prompt = fence.wrap([
     `Workflows:\n${ctx.workflows.map((w) => `- ${w.stableKey}: ${w.title} — ${w.purpose}`).join('\n') || '(none traced)'}`,
     `Modules:\n${moduleRecords.map((m) => `- ${m.stableKey}: ${m.summary.slice(0, 200)}`).join('\n') || '(none)'}`,
     `Start-here candidates (files/symbols, most critical first):\n${startCandidates.map((r) => `- ${r.stableKey}`).join('\n') || '(none)'}`,
     `Aggregated business concepts: ${[...concepts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20).map(([c, n]) => `${c} (${n})`).join(', ') || '(none)'}`,
-  ].join('\n\n');
+  ].join('\n\n'));
 
   const children = [...moduleRecords, ...workflowRecords].map((r) => ({ id: r.id, evidenceHash: r.evidenceHash }));
   const cacheKey = {
@@ -136,6 +147,7 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
       promptVersion: PROMPT_VERSIONS.capability,
       schemaName: 'capabilities',
       schema: CAPABILITIES_SCHEMA,
+      system,
       user: prompt,
       maxOutputTokens: 8_000,
     });

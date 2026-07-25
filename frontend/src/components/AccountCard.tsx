@@ -2,6 +2,7 @@ import { Settings } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { safeAvatarSrc } from "@/lib/avatarUrl";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/SidebarShell";
 
@@ -30,8 +31,10 @@ export function AccountCard() {
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
       <Avatar className="size-7">
-        {typeof meta.avatar_url === "string" && meta.avatar_url !== "" && (
-          <AvatarImage src={meta.avatar_url} alt="" />
+        {/* Guarded: values stored before the allowlist existed are still
+            in Supabase, and only this check stops them beaconing (§5.3). */}
+        {safeAvatarSrc(meta.avatar_url as string | undefined) && (
+          <AvatarImage src={safeAvatarSrc(meta.avatar_url as string | undefined)} alt="" />
         )}
         <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
       </Avatar>

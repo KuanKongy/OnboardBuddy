@@ -22,8 +22,14 @@ import {
   type UnverifiedMarkResult,
 } from './citationMarkers.js';
 import { lintVoice } from './voiceLint.js';
+import { makeUntrustedFence, safeIdentifier, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
+import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdownSanitizer.js';
 
-export const SECTION_PROMPT_VERSION = 'section-v5';
+// Bumped for the untrusted-data boundary + output sanitization
+// (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.4/§5.5): the prompt shape changed,
+// so cached sections generated under the old, unfenced prompt must not be
+// reused — the evidence hash includes this version.
+export const SECTION_PROMPT_VERSION = 'section-v6';
 
 const SECTION_OUTPUT_SCHEMA = {
   type: 'object',
@@ -202,7 +208,21 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   // failures the same way an uncited claim is.
   const completeness = (o: GeneratedOutput) =>
     spec.completenessCheck?.(o.contentMarkdown ?? '', deterministicContext) ?? [];
-  let { output, runId } = await callModel(params, bundle, null, aliasToId);
+  // Summed across every attempt, not just the one we keep: a model that tried
+  // three times to emit a beacon image is a louder signal than the single
+  // surviving draft, and this lands in generation_context for the audit.
+  const sanitized: MarkdownSanitizeCounts = { images: 0, links: 0, html: 0, autolinks: 0 };
+  const addSanitized = (counts: MarkdownSanitizeCounts) => {
+    sanitized.images += counts.images;
+    sanitized.links += counts.links;
+    sanitized.html += counts.html;
+    sanitized.autolinks += counts.autolinks;
+  };
+
+  const first = await callModel(params, bundle, null, aliasToId);
+  let output = first.output;
+  let runId = first.runId;
+  addSanitized(first.sanitized);
   let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
   let voice = lintVoice(output.contentMarkdown ?? '');
   let coverage = completeness(output);
@@ -212,6 +232,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...coverage], aliasToId);
     output = stricter.output;
     runId = stricter.runId;
+    addSanitized(stricter.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
     coverage = completeness(output);
@@ -240,6 +261,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     const rewritten = await callModel(params, bundle, issues, aliasToId);
     output = rewritten.output;
     runId = rewritten.runId;
+    addSanitized(rewritten.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
     coverage = completeness(output);
@@ -300,7 +322,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
 
   const sectionId = await persistSection(
     params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits,
-    evidenceHash, critique,
+    evidenceHash, critique, sanitized,
   );
   return { sectionId, validation, retried, runId };
 }
@@ -430,7 +452,7 @@ async function callModel(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
-): Promise<{ output: GeneratedOutput; runId: string | null }> {
+): Promise<{ output: GeneratedOutput; runId: string | null; sanitized: MarkdownSanitizeCounts }> {
   const spec = SECTION_SPECS[params.sectionType];
   const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
   const response = await params.ai.call<GeneratedOutput>({
@@ -441,21 +463,26 @@ async function callModel(
     promptVersion: SECTION_PROMPT_VERSION,
     schemaName: 'onboarding_section_v2',
     schema: SECTION_OUTPUT_SCHEMA,
-    // Static rules + the section's Diátaxis mode voice — byte-identical per
-    // mode, so the prefix still prompt-caches across sections (Track B).
-    system: `${SECTION_BASE_PROMPT}\n\n${MODE_VOICES[spec.mode] ?? ''}`,
+    system: sectionSystemPrompt(spec.mode),
     user: prompt,
     // Depth contract (plan rule 7): output scales with repo size class.
     maxOutputTokens: spec.outputBudget[params.deps.sizeClass],
   });
   const raw = response.value!;
   const translate = (id: string) => aliasToId.get(id.trim()) ?? id;
+  // Sanitize at the single choke point where model prose enters the pipeline:
+  // every later stage (voice lint, coverage, critique, citation rewriting,
+  // persistence, markdown export) then works on text that can no longer carry
+  // a beacon image or an off-allowlist link, whatever the model was talked
+  // into by repo content (§5.5).
+  const clean = sanitizeGeneratedMarkdown(raw.contentMarkdown);
   const output: GeneratedOutput = {
     ...raw,
+    contentMarkdown: clean.markdown,
     usedReceiptIds: (raw.usedReceiptIds ?? []).map(translate),
     claims: (raw.claims ?? []).map((c) => ({ ...c, receiptIds: (c.receiptIds ?? []).map(translate) })),
   };
-  return { output, runId: response.runId };
+  return { output, runId: response.runId, sanitized: clean.removed };
 }
 
 /** Static rules + voice contract — byte-identical per mode (prompt caching). */
@@ -491,7 +518,25 @@ const MODE_VOICES: Record<string, string> = {
   ].join(' '),
 };
 
-function renderPrompt(
+/**
+ * The `system` turn for a section: the untrusted-data boundary rule, the static
+ * output rules, then the mode's voice scaffold.
+ *
+ * Byte-identical per mode, which is what keeps the provider prompt cache warm
+ * across sections (Track B) — the per-request nonce deliberately lives in the
+ * user turn instead. Exported so the security tests and the transparency report
+ * assert against the real prompt rather than a copy of it.
+ */
+export function sectionSystemPrompt(mode: string): string {
+  return `${UNTRUSTED_DATA_RULE}\n\n${SECTION_BASE_PROMPT}\n\n${MODE_VOICES[mode] ?? ''}`;
+}
+
+/**
+ * The `user` turn for a section. Exported for the same reason as
+ * `sectionSystemPrompt`: a test that rebuilt this string itself would prove
+ * nothing about what the generator actually sends.
+ */
+export function renderPrompt(
   params: GenerateSectionParams,
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
@@ -509,16 +554,28 @@ function renderPrompt(
     const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 1_500).replace(/\n/g, '\n  ')}` : '';
     return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
   });
-  return [
-    `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${bundle.repo.owner}/${bundle.repo.name} (scope: ${bundle.scope.displayName}).`,
-    spec.instructions.replace(/\bROLE\b/g, params.role),
-    previousIssues && previousIssues.length > 0
-      ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
-      : null,
+  // Everything below this line is repo-derived and therefore attacker-chosen
+  // on an imported repo: snippets, file and symbol names, record summaries
+  // written from those snippets, and the deterministic facts read out of the
+  // code. It all goes inside one nonce fence (§5.4). Repo owner/name and the
+  // scope path are attacker-chosen too, but they sit in instruction-position
+  // prose, so they are reduced to an identifier charset instead — a repo
+  // cannot smuggle a newline and a fake instruction through its own name.
+  const fence = makeUntrustedFence();
+  const evidence = fence.wrap([
     `Deterministic facts (authoritative):\n${JSON.stringify(bundle.deterministicContext).slice(0, 24_000)}`,
     `Semantic records:\n${records.join('\n') || '(none)'}`,
     `Receipts (cite by id):\n${receipts.join('\n') || '(none)'}`,
     bundle.unknowns.length > 0 ? `Known gaps: ${JSON.stringify(bundle.unknowns)}` : null,
+  ].filter(Boolean).join('\n\n'));
+  const repo = `${safeIdentifier(bundle.repo.owner, 60)}/${safeIdentifier(bundle.repo.name, 60)}`;
+  return [
+    `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${repo} (scope: ${safeIdentifier(bundle.scope.displayName, 120)}).`,
+    spec.instructions.replace(/\bROLE\b/g, params.role),
+    previousIssues && previousIssues.length > 0
+      ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`
+      : null,
+    evidence,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -535,10 +592,15 @@ async function persistSection(
   voiceHits: string[],
   evidenceHash: string,
   critique: CritiqueOutcome | null,
+  sanitized: MarkdownSanitizeCounts,
 ): Promise<string> {
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
     evidence_hash: evidenceHash,
+    // Non-zero counts mean the model emitted markdown we refused to store —
+    // on an imported repo that is the visible tail of a prompt-injection
+    // attempt, so it is recorded rather than dropped (§5.5).
+    output_sanitization: sanitized,
     views: SECTION_SPECS[params.sectionType].views,
     retrieval: bundle.deterministicContext.retrievalStats ?? null,
     validation: { issues: validation.issues, retried, hardFailure: validation.hardFailure },

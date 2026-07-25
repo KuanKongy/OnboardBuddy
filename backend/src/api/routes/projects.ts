@@ -5,7 +5,7 @@ import { requireProjectAccess } from "../middleware/project-access.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
-import { getRepo } from "../../lib/github.js";
+import { getRepo, isValidGitRef } from "../../lib/github.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
 
@@ -123,6 +123,14 @@ projectsRouter.post("/", async (req, res) => {
 
     if (!repo_owner || !repo_name || !github_installation_id) {
       res.status(400).json({ error: "repo_owner, repo_name, and github_installation_id are required" });
+      return;
+    }
+
+    // Stored as the project's default branch and reused by every later run —
+    // so an invalid ref here would be replayed into GitHub API paths forever
+    // (doc/SECURITY_XSS_PROMPT_INJECTION.md finding P4).
+    if (branch !== undefined && branch !== null && branch !== "" && !isValidGitRef(branch)) {
+      res.status(400).json({ error: "branch must be a valid git ref" });
       return;
     }
 
@@ -1039,6 +1047,14 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
       res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
       return;
     }
+    // A branch is interpolated into GitHub API paths downstream; reject
+    // anything that is not a plain ref here so a bad value fails at the edge
+    // with a clear 400 instead of deep in the worker
+    // (doc/SECURITY_XSS_PROMPT_INJECTION.md finding P4).
+    if (branch !== undefined && branch !== null && branch !== "" && !isValidGitRef(branch)) {
+      res.status(400).json({ error: "branch must be a valid git ref" });
+      return;
+    }
     if (depth !== undefined && !VALID_DEPTHS.includes(depth as typeof VALID_DEPTHS[number])) {
       res.status(400).json({ error: "depth must be one of: cheap, standard, full" });
       return;
@@ -1113,6 +1129,14 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     };
     if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
       res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
+      return;
+    }
+    // A branch is interpolated into GitHub API paths downstream; reject
+    // anything that is not a plain ref here so a bad value fails at the edge
+    // with a clear 400 instead of deep in the worker
+    // (doc/SECURITY_XSS_PROMPT_INJECTION.md finding P4).
+    if (branch !== undefined && branch !== null && branch !== "" && !isValidGitRef(branch)) {
+      res.status(400).json({ error: "branch must be a valid git ref" });
       return;
     }
     if (depth !== undefined && !VALID_DEPTHS.includes(depth as typeof VALID_DEPTHS[number])) {

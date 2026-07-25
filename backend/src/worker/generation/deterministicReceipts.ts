@@ -9,7 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
-import { critical25 } from './roleProjection.js';
+import { loadDecisionNotes } from './decisionComments.js';
 import type { SectionDeps, SectionType } from './sectionSpecs.js';
 
 export interface DeterministicReceiptRow {
@@ -145,8 +145,28 @@ export async function collectSectionReceipts(
          ORDER BY c.id, n.line_start NULLS LAST`,
         [deps.snapshotId],
       )).rows as Array<NodeRow & { cluster_label: string; membership_reason: string }>;
-      return rows.slice(0, 10).map((r) =>
-        fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`));
+      // Cluster members give the section its STRUCTURE; the decision comments
+      // give it the WHY, which is the half the golden checklist found missing.
+      // Each one is citable at the exact comment line, so a decision→consequence
+      // sentence can point at the rationale the repo's authors wrote themselves
+      // instead of at the symbol it happens to sit above.
+      const decisions = await loadDecisionNotes(deps.snapshotId, 8);
+      return [
+        ...rows.slice(0, 10).map((r) =>
+          fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`)),
+        ...decisions.map((d) => ({
+          receiptKind: kindForTrust(d.trustLevel),
+          trustLevel: d.trustLevel,
+          nodeId: d.nodeId,
+          nodeStableKey: d.nodeStableKey,
+          filePath: d.filePath,
+          symbolName: d.symbolName,
+          lineStart: d.lineStart,
+          lineEnd: d.lineEnd,
+          snippet: d.note,
+          claim: `Design rationale recorded in the code: ${d.note.slice(0, 180)}`,
+        })),
+      ];
     }
 
     case 'code_map': {

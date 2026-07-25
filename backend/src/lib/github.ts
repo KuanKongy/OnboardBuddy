@@ -371,13 +371,52 @@ export async function listCommits(
   }));
 }
 
+/**
+ * Git ref rules (`git check-ref-format`), tightened for use as URL path
+ * segments (doc/SECURITY_XSS_PROMPT_INJECTION.md finding P4).
+ *
+ * A ref reaches `…/commits/{ref}` and `…/zipball/{ref}` by string
+ * interpolation, and `fetch` normalizes `..` in a path before sending — so an
+ * unchecked ref is a path-traversal primitive that can reach OTHER
+ * api.github.com endpoints carrying our repo-scoped installation token, and
+ * `?`/`#` can bolt query or fragment onto the request. Only refs that are
+ * genuinely just path segments are allowed.
+ */
+const REF_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._+-]*$/;
+
+export function isValidGitRef(ref: string): boolean {
+  if (typeof ref !== 'string' || ref.length === 0 || ref.length > 255) return false;
+  // `..` traverses, `@{` is a reflog selector, `.lock` is reserved by git.
+  if (ref.includes('..') || ref.includes('@{') || ref.endsWith('.lock')) return false;
+  // Control characters, space, and the git-illegal set — `?`/`#` matter most
+  // here because they end the path portion of the URL.
+  if (/[\u0000-\u0020\u007f~^:?*#[\]\\%]/.test(ref)) return false;
+  const segments = ref.split('/');
+  return segments.length <= 20 && segments.every((s) => REF_SEGMENT.test(s));
+}
+
+/**
+ * Encodes a ref for a URL path, per segment: `feature/foo` is a legitimate
+ * branch and its `/` must survive, while everything inside a segment is
+ * escaped. Callers validate first; this is the belt to that suspenders.
+ */
+function encodeRefPath(ref: string): string {
+  return ref.split('/').map(encodeURIComponent).join('/');
+}
+
+function assertRef(ref: string): string {
+  if (!isValidGitRef(ref)) throw new Error(`Invalid git ref: ${JSON.stringify(ref.slice(0, 80))}`);
+  return encodeRefPath(ref);
+}
+
 export async function getCommitSha(
   token: string,
   owner: string,
   repo: string,
   branch: string,
 ): Promise<string> {
-  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/commits/${branch}`, {
+  const res = await fetch(
+    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${assertRef(branch)}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.sha',
@@ -400,7 +439,8 @@ export async function downloadZipball(
   branch: string,
   destPath: string,
 ): Promise<void> {
-  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/zipball/${branch}`, {
+  const res = await fetch(
+    `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/zipball/${assertRef(branch)}`, {
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github+json',

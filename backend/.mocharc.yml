@@ -3,3 +3,9 @@ require:
 spec:
   - "test/**/*.test.ts"
   - "src/**/*.test.ts"
+# Several suites build a real TypeScript program over a fixture repo in their
+# `before` hook (graphBuilder, symbolExtractor, phase3, …). That is seconds of
+# compiler work, not a hang: mocha's 2000ms default aborted the very first root
+# hook inside the Docker test image (host runs are faster and passed), which
+# made the documented one-command run fail while `npm test` was green locally.
+timeout: 30000

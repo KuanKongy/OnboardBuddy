@@ -205,12 +205,24 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
     steps: steps.map((s) => [s.step_order, s.file_path, s.symbol_name, s.step_kind,
       s.line_start, s.line_end, s.deterministic_description, (s.snippet ?? '').slice(0, SNIPPET_CAP)]),
   })).digest('hex');
+  // Quality gate on reuse, same contract as the section cache — the cache must
+  // never immortalize a bad run. This matters here for a specific reason: the
+  // tutorial row is INSERTed with its evidence_hash before its steps are, so a
+  // process death between those two statements leaves a hash-bearing row with
+  // zero steps (the section cache gained its gate after exactly this crash
+  // window cloned an EMPTY section forward on every regeneration). Without the
+  // `EXISTS` check, that step-less tutorial would be cloned forward for as long
+  // as the flow stayed unchanged, and `result.steps` would count steps that do
+  // not exist.
   const cachedTutorial = (await query(
     `SELECT t.id FROM tutorials t
      JOIN analysis_snapshots s ON s.id = t.snapshot_id
      WHERE s.project_id = $1 AND t.stable_key = $2
        AND t.generation_context->>'evidence_hash' = $3
        AND t.status IN ('draft', 'approved')
+       AND t.confidence IN ('high', 'medium')
+       AND length(COALESCE(t.summary, '')) >= 80
+       AND EXISTS (SELECT 1 FROM tutorial_steps ts WHERE ts.tutorial_id = t.id)
      ORDER BY t.created_at DESC LIMIT 1`,
     [params.projectId, `tut:${workflow.stable_key}`, evidenceHash],
   )).rows[0] as { id: string } | undefined;
