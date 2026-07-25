@@ -145,23 +145,43 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     backbone: backboneMarkdown,
   })).digest('hex');
 
+  // Project-scoped, not snapshot-scoped: a new commit whose deterministic
+  // facts are unchanged (docs-only change, unrelated subsystem) reuses the
+  // section across snapshots — receipts clone from the origin snapshot and
+  // the re-anchoring machinery grades their staleness as usual.
+  // Quality gate on reuse: the cache must never immortalize a bad run.
+  // Observed live: a crash-window row with EMPTY content was cloned forward
+  // on every regeneration until this filter. Only substantive, non-low,
+  // coverage-complete, hard-pass rows are reusable — anything else misses
+  // and regenerates fresh.
   const cachedRow = (await query(
-    `SELECT id, content, diagrams, confidence, unknowns
-     FROM package_sections
-     WHERE snapshot_id = $1 AND type = $2 AND role = $3
-       AND generation_context->>'evidence_hash' = $4
-       AND COALESCE(generation_context->'validation'->>'hardFailure', 'false') <> 'true'
-     ORDER BY created_at DESC LIMIT 1`,
-    [params.snapshotId, params.sectionType, params.role, evidenceHash],
+    `SELECT ps.id, ps.content, ps.diagrams, ps.confidence, ps.unknowns
+     FROM package_sections ps
+     JOIN onboarding_packages op ON op.id = ps.package_id
+     WHERE op.project_id = $1 AND ps.type = $2 AND ps.role = $3
+       AND ps.generation_context->>'evidence_hash' = $4
+       AND COALESCE(ps.generation_context->'validation'->>'hardFailure', 'false') <> 'true'
+       AND length(ps.content) >= 400
+       AND ps.confidence IN ('high', 'medium')
+       AND NOT (ps.unknowns @> '[{"kind": "incomplete_coverage"}]'::jsonb)
+       AND NOT (ps.unknowns @> '[{"kind": "critique_contradiction"}]'::jsonb)
+     ORDER BY ps.created_at DESC LIMIT 1`,
+    [params.projectId, params.sectionType, params.role, evidenceHash],
   )).rows[0] as { id: string; content: string; diagrams: unknown; confidence: 'high' | 'medium' | 'low'; unknowns: unknown } | undefined;
-  if (cachedRow) {
-    const sectionId = await persistCachedSection(params, cachedRow, evidenceHash);
+  // Re-judge the cached content against TODAY'S coverage requirements — a
+  // row written before a completeness rule (or during a turbulent run) must
+  // not slip back in on hash luck.
+  const reusable = cachedRow && (!spec.completenessCheck
+    || spec.completenessCheck(cachedRow.content, deterministicContext).length === 0)
+    ? cachedRow : undefined;
+  if (reusable) {
+    const sectionId = await persistCachedSection(params, reusable, evidenceHash);
     return {
       sectionId,
       validation: {
         hardFailure: false, issues: [], adjustedClaims: [], usedReceiptIds: [],
-        confidence: cachedRow.confidence,
-        unknowns: Array.isArray(cachedRow.unknowns) ? cachedRow.unknowns as ValidationOutcome['unknowns'] : [],
+        confidence: reusable.confidence,
+        unknowns: Array.isArray(reusable.unknowns) ? reusable.unknowns as ValidationOutcome['unknowns'] : [],
       },
       retried: false,
       runId: null,
