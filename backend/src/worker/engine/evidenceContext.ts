@@ -1,7 +1,10 @@
 export interface EvidenceSnapRow {
   commit_hash: string;
   branch: string;
+  /** Every file in scope, assets included — NOT a coverage number. */
   file_count: number;
+  /** Files the parser actually read; null on pre-migration-002 snapshots. */
+  parsed_file_count?: number | null;
   symbol_count: number;
   workflow_count: number;
   project_id: string;
@@ -109,7 +112,7 @@ export function buildContext(bundle: EvidenceBundle): string {
     .join('\n');
 
   return `Repository: ${snap.repo_owner}/${snap.repo_name} (branch: ${snap.branch}, commit: ${snap.commit_hash.slice(0, 8)})
-Stats: ${snap.file_count} files, ${snap.symbol_count} symbols, ${snap.workflow_count} detected workflows
+Stats: ${snap.parsed_file_count ?? 'unknown'} files parsed (of ${snap.file_count} in scope), ${snap.symbol_count} symbols, ${snap.workflow_count} detected workflows
 Role context: Generating for "${snap.role}" developer perspective
 Total graph: ${nodes.length} modules, ${edges.length} dependency edges
 

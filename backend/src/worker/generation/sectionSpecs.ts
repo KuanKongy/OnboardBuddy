@@ -225,11 +225,45 @@ async function loadJourneys(snapshotId: string, limit = 8): Promise<Array<Record
   )).rows;
 }
 
-const snapshotCounts = async (snapshotId: string) =>
-  (await query(
-    `SELECT file_count, symbol_count, workflow_count, language_inventory FROM analysis_snapshots WHERE id = $1`,
+/**
+ * Coverage counts for the prompt. The whole object is JSON-stringified into
+ * the evidence fence, so the KEY NAMES are what the model reads — `file_count`
+ * meant "every file in scope, images and lockfiles included", and the model
+ * duly narrated it as the size of the codebase it had been shown. These names
+ * say exactly which denominator each number is, and `filesTheParserRead` is
+ * the one that bounds what any claim can be based on.
+ */
+const snapshotCounts = async (snapshotId: string) => {
+  const row = (await query(
+    `SELECT file_count, parsed_file_count, symbol_count, workflow_count, language_inventory
+     FROM analysis_snapshots WHERE id = $1`,
     [snapshotId],
-  )).rows[0];
+  )).rows[0] as
+    | {
+        file_count: number;
+        parsed_file_count: number | null;
+        symbol_count: number;
+        workflow_count: number;
+        language_inventory: { supportedFileCount?: number; unsupportedFileCount?: number; unsupported?: Record<string, number> } | null;
+      }
+    | undefined;
+  if (!row) return undefined;
+
+  const inv = row.language_inventory ?? {};
+  return {
+    filesTheParserRead: row.parsed_file_count,
+    filesInScopeIncludingNonSource: row.file_count,
+    filesInASupportedLanguage: inv.supportedFileCount ?? null,
+    filesSkippedUnsupportedLanguage: inv.unsupportedFileCount ?? null,
+    skippedLanguages: inv.unsupported ?? {},
+    symbols: row.symbol_count,
+    workflows: row.workflow_count,
+    coverageNote:
+      row.parsed_file_count === null
+        ? 'Parsed-file count unavailable for this snapshot. Do not state a file total.'
+        : `Only ${row.parsed_file_count} files were parsed. Never describe the codebase as ${row.file_count} files — that count includes assets, docs and lockfiles nothing was extracted from.`,
+  };
+};
 
 export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   // ═══ ORIENT ═══════════════════════════════════════════════════════════════
@@ -252,8 +286,13 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         externalServices: envExternalServices(facts.envFiles.flatMap((f) => f.vars.map((v) => v.name))),
         journeys: await loadJourneys(deps.snapshotId, 6),
         topClusters: (await query(
+          // fileCount from the cluster's own metadata — a row count over
+          // architecture_cluster_members counts symbols and config nodes too,
+          // so it reported a cluster as several times larger than its file
+          // membership and the model narrated that inflated size.
           `SELECT c.label, c.kind,
-                  (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
+                  COALESCE((c.metadata->>'fileCount')::int, 0) AS file_count,
+                  c.metadata->>'primaryMemberNoun' AS member_noun
            FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC LIMIT 8`,
           [deps.snapshotId],
         )).rows,
@@ -371,8 +410,11 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         rationale: n.note,
       })),
       clusters: (await query(
+        // See the note on topClusters: file_count is the cluster's own
+        // metadata, not a member row count over symbols and configs.
         `SELECT c.label, c.kind, c.critical_score, c.deterministic_summary,
-                (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
+                COALESCE((c.metadata->>'fileCount')::int, 0) AS file_count,
+                c.metadata->>'primaryMemberNoun' AS member_noun
          FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC`,
         [deps.snapshotId],
       )).rows,

@@ -14,7 +14,8 @@
     "test": "node --import tsx ../node_modules/mocha/bin/mocha.js",
     "test:watch": "node --import tsx ../node_modules/mocha/bin/mocha.js --watch",
     "security:report": "node --import tsx scripts/security-report.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "truth": "node --import tsx scripts/truth-diff.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

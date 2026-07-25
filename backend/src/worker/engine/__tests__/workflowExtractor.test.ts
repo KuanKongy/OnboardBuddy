@@ -91,21 +91,36 @@ describe('workflowExtractor (call-graph traversal)', () => {
     }
   });
 
-  it('never invents workflows when no trace reaches an effect (mixed fixture)', async () => {
+  it('never claims effects it did not trace (mixed fixture)', async () => {
+    // Previously this asserted the list was EMPTY. Dropping these hid real
+    // entry points: a repo with forty routes and no traceable effects reported
+    // no workflows at all, which reads as "this system does nothing". They are
+    // listed now — but as `surface`, explicitly labelled as having no traced
+    // effects. The honesty guarantee is that nothing is *invented*, not that
+    // nothing is shown.
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const mixedWorkflows = extractWorkflows({ graph, entrypoints, sideEffects });
-    expect(mixedWorkflows).to.deep.equal([]);
+
+    for (const wf of mixedWorkflows) {
+      expect(wf.tier, `${wf.title} should be surface`).to.equal('surface');
+      const effectKinds = wf.steps.map((s) => s.stepKind)
+        .filter((k) => ['data_read', 'data_write', 'async_work', 'side_effect'].includes(k));
+      expect(effectKinds, `${wf.title} must not claim effects`).to.deep.equal([]);
+    }
   });
 
-  it('records dead-ends instead of silently dropping traces (honesty rule)', async () => {
+  it('records dead-ends alongside the surface entries they describe (honesty rule)', async () => {
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const { workflows: mixedWorkflows, deadEnds } = extractWorkflowsDetailed({ graph, entrypoints, sideEffects });
-    expect(mixedWorkflows).to.deep.equal([]);
+
     expect(deadEnds.length, 'dead ends recorded').to.be.greaterThan(0);
     for (const de of deadEnds) {
       expect(de.reason).to.be.oneOf(['no_calls_traced', 'no_effects_reached']);
       expect(de.entrypoint).to.be.a('string').and.not.equal('');
     }
+    // Listing the entry point and recording why its trace died are no longer
+    // mutually exclusive — the trust panel keeps its input either way.
+    expect(mixedWorkflows.every((w) => w.tier === 'surface')).to.equal(true);
   });
 
   it('seeds bare-reference queue consumers at the referenced handler (SUMMARY-consumer regression)', () => {

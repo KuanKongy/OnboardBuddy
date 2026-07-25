@@ -29,6 +29,13 @@ export const CANDIDATE_WEIGHTS = {
 
 export type CandidateSignal = keyof typeof CANDIDATE_WEIGHTS;
 
+/**
+ * How much of its fan-in a behaviour-free module keeps. Damped, not zeroed:
+ * a shared module everything depends on is still worth knowing, just not
+ * ahead of the code that does something.
+ */
+const LOW_CONTENT_FAN_DAMPING = 0.35;
+
 export interface CandidateRanking {
   targetType: 'symbol' | 'file' | 'workflow';
   stableKey: string;
@@ -103,10 +110,21 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
   }
 
   const effectCount = new Map<string, number>();
+  // Distinct KINDS, not raw occurrences. Ten writes to the same table is one
+  // thing a symbol does; a write plus an enqueue plus an outbound call is
+  // three, and that breadth is what makes a symbol worth learning first.
+  const effectKinds = new Map<string, Set<string>>();
+  const addKind = (key: string, kind: string) => {
+    const set = effectKinds.get(key);
+    if (set) set.add(kind);
+    else effectKinds.set(key, new Set([kind]));
+  };
   for (const se of input.sideEffects) {
     const key = se.symbolStableKey ?? se.nodeStableKey;
     effectCount.set(key, (effectCount.get(key) ?? 0) + 1);
     effectCount.set(se.nodeStableKey, (effectCount.get(se.nodeStableKey) ?? 0) + 1);
+    addKind(key, se.kind);
+    addKind(se.nodeStableKey, se.kind);
   }
 
   const workflowCount = new Map<string, number>();
@@ -164,11 +182,28 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const churnStats = churnFor(filePath);
     const wfCount = workflowCount.get(key) ?? 0;
 
+    /**
+     * Damps centrality for modules that everything imports but which do
+     * nothing on their own.
+     *
+     * `fanCentrality` alone handed a top-quartile score to `cn()`,
+     * `utils.ts`, a types file — anything imported everywhere. Those then
+     * occupied slots in Critical 25%, which is supposed to answer "what should
+     * I read first", and pushed out the routes and handlers that actually
+     * carry behaviour. Popularity is not importance: a file with no effects,
+     * in no workflow, owning no route or schema, is infrastructure. It is
+     * damped rather than zeroed, because a genuinely central shared module is
+     * still worth knowing about — just not before the login flow.
+     */
+    const carriesBehaviour = effects > 0 || wfCount > 0 || isEntry > 0 || ownsRouteOrSchema > 0;
+    const fanCentrality = (fi + fo * 0.5) * (carriesBehaviour ? 1 : LOW_CONTENT_FAN_DAMPING);
+
     const raw: Record<CandidateSignal, number> = {
       workflowParticipation: wfCount,
-      fanCentrality: fi + fo * 0.5,
+      fanCentrality,
       exportedSurface: exported,
-      sideEffects: effects,
+      // Breadth of behaviour, not repetition of it.
+      sideEffects: effectKinds.get(key)?.size ?? 0,
       entrypointParticipation: isEntry,
       routeSchemaOwnership: ownsRouteOrSchema,
       testProximity: tested,
@@ -196,14 +231,21 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
   }
 
   for (const wf of input.workflows) {
-    const effectSteps = wf.steps.filter((s) =>
-      s.stepKind === 'data_read' || s.stepKind === 'data_write' ||
-      s.stepKind === 'async_work' || s.stepKind === 'side_effect').length;
+    const effectStepKinds = new Set(
+      wf.steps.map((s) => s.stepKind).filter((k) =>
+        k === 'data_read' || k === 'data_write' || k === 'async_work' || k === 'side_effect'),
+    );
     const raw: Record<CandidateSignal, number> = {
-      workflowParticipation: wf.steps.length,
+      // The workflow's own tier-aware score, NOT its length. `wf.steps.length`
+      // here was the same length-is-importance bug the extractor had, in a
+      // second place: it fed criticality_scores, so a 20-step trace through
+      // shared components outranked a 4-step login in Critical 25% as well as
+      // in the workflow list.
+      workflowParticipation: wf.importanceScore,
       fanCentrality: 0,
       exportedSurface: 0,
-      sideEffects: effectSteps,
+      // Breadth of behaviour, matching how symbols are now scored.
+      sideEffects: effectStepKinds.size,
       entrypointParticipation: 1,
       routeSchemaOwnership: wf.steps.some((s) => s.stepKind === 'data_read' || s.stepKind === 'data_write') ? 1 : 0,
       testProximity: 0,
@@ -214,9 +256,11 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       targetType: 'workflow',
       stableKey: wf.stableKey,
       raw,
+      // The extractor already explained its own ranking in plain language;
+      // repeating the step count here contradicted it.
       reasons: [
-        `Traces ${wf.triggerType} through ${wf.steps.length} steps`,
-        ...(effectSteps > 0 ? [`Reaches ${effectSteps} side-effect step${effectSteps > 1 ? 's' : ''}`] : []),
+        `${wf.tier === 'core' ? 'Core user flow' : wf.tier === 'surface' ? 'Entry point, no traced effects' : 'Supporting flow'} — ${wf.triggerType}`,
+        ...wf.rankingReasons.slice(0, 2),
       ],
     });
   }

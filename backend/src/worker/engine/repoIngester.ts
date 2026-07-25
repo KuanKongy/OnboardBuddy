@@ -318,6 +318,21 @@ const FRAMEWORK_HINTS: Record<string, string> = {
   prisma: 'prisma', mongoose: 'mongodb', redis: 'redis', ioredis: 'redis',
 };
 
+/**
+ * Frameworks declared by ONE package, as opposed to `RepoInventory.detectedFrameworks`,
+ * which is the union across every package.json in the repo. The union is right
+ * for "what does this repo use" and badly wrong for "what is this directory" —
+ * in a monorepo it reports React to the backend and Express to the frontend.
+ */
+export function frameworksOfPackage(pkg: RepoPackage): Set<string> {
+  const found = new Set<string>();
+  for (const dep of [...pkg.dependencies, ...pkg.devDependencies]) {
+    const hint = FRAMEWORK_HINTS[dep];
+    if (hint) found.add(hint);
+  }
+  return found;
+}
+
 export async function detectRepoInventory(rootPath: string, records?: RepoFileRecord[]): Promise<RepoInventory> {
   const absRoot = path.resolve(rootPath);
   const fileRecords = records ?? (await scanRepositoryFiles(absRoot));
