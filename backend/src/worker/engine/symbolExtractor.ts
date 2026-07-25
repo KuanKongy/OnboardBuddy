@@ -12,6 +12,8 @@ import type {
   ConstructorInfo,
   EnumMember,
   RouteRegistration,
+  UiRouteDeclaration,
+  SocketHandler,
 } from '../types/analysis.js';
 import {
   ParsedSourceFile,
@@ -56,6 +58,20 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
   // not the ambiguous sub-router path ("GET /").
   const mounts = extractRouterMounts(sourceFile, ctx);
 
+  // UI routes declared in a router config — the only source of a page's real
+  // path, and of pages that live outside a conventional pages/ directory.
+  const uiRoutes = extractUiRouteDeclarations(sourceFile);
+
+  // Socket.IO events. Passed `symbols` for the same reason routes are: inline
+  // handlers need synthesized symbol nodes so workflow tracing has a body to
+  // trace from.
+  const socketHandlers = extractSocketHandlers(sourceFile, relativePath, ctx, symbols);
+
+  // A symbol can be exported by a later statement rather than an inline
+  // modifier; only this pass sees both halves, so it runs before anything
+  // downstream reads `exported`.
+  reconcileExports(symbols, exports);
+
   // Stamp stable keys (repo-local, '/'-separated) on every symbol.
   for (const sym of symbols) {
     sym.stableKey = symbolKey(normalizePath(relativePath), sym.name);
@@ -69,6 +85,8 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     exports,
     ...(routes.length > 0 ? { routeRegistrations: routes } : {}),
     ...(mounts.length > 0 ? { routerMounts: mounts } : {}),
+    ...(uiRoutes.length > 0 ? { uiRouteDeclarations: uiRoutes } : {}),
+    ...(socketHandlers.length > 0 ? { socketHandlers } : {}),
     hasParseErrors: parsed.hasErrors,
     parseErrors: parsed.errors,
   };
@@ -85,12 +103,14 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
 
       case ts.SyntaxKind.ExportAssignment: {
         const exportAssign = node as ts.ExportAssignment;
+        const local = defaultExportLocalName(exportAssign.expression);
         exports.push({
           fromFile: filePath,
           namedExports: [],
           isReExport: false,
           isDefault: true,
           expression: exportAssign.expression.getText(sourceFile),
+          ...(local ? { defaultLocalName: local } : {}),
         });
         break;
       }
@@ -183,9 +203,14 @@ function extractExportDeclaration(node: ts.ExportDeclaration, filePath: string):
     : undefined;
 
   const named: string[] = [];
+  const locals: string[] = [];
   if (node.exportClause && ts.isNamedExports(node.exportClause)) {
     for (const el of node.exportClause.elements) {
       named.push(el.name.text);
+      // `export { load as loadUser }` — propertyName is the local declaration,
+      // name is the public alias. Without the local name, reconciliation looks
+      // up "loadUser" and finds nothing.
+      locals.push((el.propertyName ?? el.name).text);
     }
   }
 
@@ -194,7 +219,352 @@ function extractExportDeclaration(node: ts.ExportDeclaration, filePath: string):
     namedExports: named,
     isReExport,
     sourceSpecifier,
+    ...(locals.length > 0 ? { localBindings: locals } : {}),
   };
+}
+
+/** Matches a bare JS identifier — anything else names no single declaration. */
+const BARE_IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+// ─── Socket.IO event handlers ─────────────────────────────────────────────────
+
+/**
+ * Socket.IO event handlers, which for a realtime app are the entire
+ * interaction surface. Skribbl registers eleven of them
+ * (`create-room`, `draw-ops`, `chat-message`, …) and previously produced one
+ * workflow, from a `/health` route.
+ *
+ * `.on` is far too common to match on its own — `process.on`, `emitter.on` and
+ * every EventEmitter in the repo would qualify. So the anchor is
+ * `X.on('connection', cb)`: 'connection' is reserved by Socket.IO and is
+ * effectively unambiguous. Only `.on` calls **lexically inside that callback**,
+ * on the callback's own socket parameter, are then treated as events. That
+ * keeps the false-positive surface at essentially zero without needing to know
+ * whether the file imports socket.io (Skribbl's handlers.js does not — it takes
+ * `io` as a parameter).
+ */
+function extractSocketHandlers(
+  sourceFile: ts.SourceFile,
+  relativePath: string,
+  ctx: ExtractCtx,
+  symbols: SymbolInfo[],
+): SocketHandler[] {
+  const handlers: SocketHandler[] = [];
+  const usedNames = new Set(symbols.map((s) => s.name));
+  const normalizedPath = normalizePath(relativePath);
+
+  /** `<recv>.on('<event>', <handler>)` — the shape shared by both levels. */
+  const asOnCall = (node: ts.Node): { recv: string; event: string; handler: ts.Expression } | null => {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return null;
+    if (node.expression.name.text !== 'on' || node.arguments.length < 2) return null;
+    const first = node.arguments[0];
+    const handler = node.arguments[node.arguments.length - 1];
+    if (!first || !handler || !ts.isStringLiteralLike(first)) return null;
+    return { recv: node.expression.expression.getText(sourceFile), event: first.text, handler };
+  };
+
+  /** Records the handler, synthesizing a symbol for an inline function body. */
+  const record = (event: string, handler: ts.Expression, callNode: ts.Node, isConnection: boolean): void => {
+    const line = sourceFile.getLineAndCharacterOfPosition(callNode.getStart(sourceFile)).line + 1;
+
+    if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
+      let name = `on ${event}`;
+      for (let i = 2; usedNames.has(name); i++) name = `on ${event} (${i})`;
+      usedNames.add(name);
+      const params = extractParameters(handler.parameters, sourceFile);
+      const calls = extractCallSymbols(handler.body, sourceFile);
+      const resolvedCalls = extractResolvedCalls(handler.body, sourceFile, ctx);
+      const signature = buildSignature(params, 'void');
+      symbols.push({
+        name,
+        kind: 'arrow-function',
+        filePath: sourceFile.fileName,
+        ...getNodeLocation(callNode, sourceFile),
+        exported: false,
+        isDefault: false,
+        signature,
+        parameters: params,
+        returnType: 'void',
+        isAsync: hasModifier(handler, ts.SyntaxKind.AsyncKeyword),
+        ...(calls.length > 0 ? { callsSymbols: calls } : {}),
+        ...(resolvedCalls.length > 0 ? { resolvedCalls } : {}),
+        signatureHash: sha256(`on ${event}${signature}`),
+        bodyHash: hashBody(handler.getText(sourceFile)),
+        snippet: snippetOf(callNode, sourceFile),
+        isTrivial: false,
+      });
+      handlers.push({ event, handlerSymbolName: name, handlerRelativePath: normalizedPath, isConnection, line });
+      return;
+    }
+
+    if (ts.isIdentifier(handler) || ts.isPropertyAccessExpression(handler)) {
+      const target = ctx.checker ? resolveCallTarget(handler, ctx.checker, ctx.rootPath) : null;
+      handlers.push({
+        event,
+        ...(target ? {
+          handlerSymbolName: target.targetName,
+          handlerRelativePath: target.targetRelativePath,
+          ...(target.targetParentName ? { handlerParentName: target.targetParentName } : {}),
+        } : {}),
+        isConnection,
+        line,
+      });
+      return;
+    }
+
+    handlers.push({ event, isConnection, line });
+  };
+
+  function visit(node: ts.Node): void {
+    const call = asOnCall(node);
+    if (call && call.event === 'connection') {
+      record('connection', call.handler, node, true);
+
+      // Bind the callback's socket parameter, then treat only ITS `.on` calls
+      // as events. Anything else inside the callback stays untouched.
+      if (ts.isArrowFunction(call.handler) || ts.isFunctionExpression(call.handler)) {
+        const socketParam = call.handler.parameters[0]?.name;
+        const socketName = socketParam && ts.isIdentifier(socketParam) ? socketParam.text : null;
+        if (socketName) {
+          const walkInner = (inner: ts.Node): void => {
+            const evt = asOnCall(inner);
+            // 'disconnect' is a lifecycle event, not a client action, but it
+            // still runs cleanup with real side effects — keep it.
+            if (evt && evt.recv === socketName && evt.event !== 'connection') {
+              record(evt.event, evt.handler, inner, false);
+            }
+            ts.forEachChild(inner, walkInner);
+          };
+          walkInner(call.handler.body);
+        }
+      }
+      return; // inner `.on`s already handled
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return handlers;
+}
+
+// ─── UI route declarations ────────────────────────────────────────────────────
+
+/** '/app' + 'settings' -> '/app/settings'; tolerates either side's slashes. */
+function joinUiPath(prefix: string, segment: string): string {
+  if (segment.startsWith('/')) return segment.replace(/\/{2,}/g, '/');
+  const joined = `${prefix}/${segment}`.replace(/\/{2,}/g, '/');
+  return joined.length > 1 && joined.endsWith('/') ? joined.slice(0, -1) : joined || '/';
+}
+
+/**
+ * UI routes declared in a router config. Two shapes cover React Router,
+ * TanStack Router and Vue Router:
+ *
+ *   <Route path="/projects/:id" element={<ProjectPage />} />
+ *   createBrowserRouter([{ path: '/projects/:id', element: <ProjectPage /> }])
+ *
+ * Nested routes are parent-joined, so a child declared as `path="settings"`
+ * under `path="/app"` is recorded as `/app/settings` rather than the relative
+ * fragment, which on its own is not a navigable address.
+ *
+ * Only a bare component reference yields `componentName`: inline JSX bodies
+ * (`element={<div>…</div>}`) name no declaration, so they record the path
+ * alone rather than inventing a symbol.
+ */
+function extractUiRouteDeclarations(sourceFile: ts.SourceFile): UiRouteDeclaration[] {
+  const routes: UiRouteDeclaration[] = [];
+  const lineOf = (node: ts.Node): number =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+
+  /** The component a route's `element`/`Component` slot renders, if it names one. */
+  const componentOf = (expr: ts.Expression | undefined): string | undefined => {
+    if (!expr) return undefined;
+    let node: ts.Node = expr;
+    if (ts.isJsxExpression(node)) {
+      if (!node.expression) return undefined;
+      node = node.expression;
+    }
+    if (ts.isJsxElement(node)) node = node.openingElement;
+    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+      const tag = node.tagName.getText(sourceFile);
+      // Lowercase tags are host elements (`<div>`), not page components.
+      return /^[A-Z]/.test(tag) ? tag.split('.').pop() : undefined;
+    }
+    if (ts.isIdentifier(node)) return node.text;
+    return undefined;
+  };
+
+  /** `<Route path="…" element={…}>` — attribute lookup, string or expression. */
+  const jsxAttr = (
+    el: ts.JsxSelfClosingElement | ts.JsxOpeningElement,
+    name: string,
+  ): ts.Expression | undefined => {
+    for (const prop of el.attributes.properties) {
+      if (!ts.isJsxAttribute(prop) || prop.name.getText(sourceFile) !== name) continue;
+      const init = prop.initializer;
+      if (!init) return undefined;
+      if (ts.isStringLiteral(init)) return init;
+      if (ts.isJsxExpression(init)) return init.expression;
+    }
+    return undefined;
+  };
+
+  const isRouteTag = (el: ts.JsxSelfClosingElement | ts.JsxOpeningElement): boolean =>
+    /(^|\.)Route$/.test(el.tagName.getText(sourceFile));
+
+  function visitJsx(node: ts.Node, prefix: string): void {
+    let childPrefix = prefix;
+
+    const opening = ts.isJsxElement(node)
+      ? node.openingElement
+      : ts.isJsxSelfClosingElement(node)
+        ? node
+        : null;
+
+    if (opening && isRouteTag(opening)) {
+      const pathExpr = jsxAttr(opening, 'path');
+      const declared = pathExpr && ts.isStringLiteralLike(pathExpr) ? pathExpr.text : undefined;
+      if (declared !== undefined) {
+        const full = joinUiPath(prefix, declared);
+        const component = componentOf(
+          jsxAttr(opening, 'element') ?? jsxAttr(opening, 'Component') ?? jsxAttr(opening, 'component'),
+        );
+        routes.push({ routePath: full, ...(component ? { componentName: component } : {}), line: lineOf(opening) });
+        childPrefix = full;
+      }
+    }
+
+    ts.forEachChild(node, (child) => visitJsx(child, childPrefix));
+  }
+
+  /** `{ path: '…', element: <X/>, children: [...] }` route objects. */
+  function visitRouteObject(obj: ts.ObjectLiteralExpression, prefix: string): boolean {
+    let declared: string | undefined;
+    let component: ts.Expression | undefined;
+    let children: ts.Expression | undefined;
+
+    for (const prop of obj.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue;
+      const key =
+        ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : undefined;
+      if (key === 'path' && ts.isStringLiteralLike(prop.initializer)) declared = prop.initializer.text;
+      else if (key === 'element' || key === 'Component' || key === 'component') component = prop.initializer;
+      else if (key === 'children') children = prop.initializer;
+    }
+
+    // A `path` alone is not a route — plenty of config objects have one. The
+    // element/children slot is what makes this a router entry.
+    if (declared === undefined || (!component && !children)) return false;
+
+    const full = joinUiPath(prefix, declared);
+    const name = componentOf(component);
+    routes.push({ routePath: full, ...(name ? { componentName: name } : {}), line: lineOf(obj) });
+
+    if (children && ts.isArrayLiteralExpression(children)) {
+      for (const el of children.elements) {
+        if (ts.isObjectLiteralExpression(el)) visitRouteObject(el, full);
+      }
+    }
+    return true;
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isObjectLiteralExpression(node) && visitRouteObject(node, '')) return; // children handled
+    ts.forEachChild(node, visit);
+  }
+
+  visitJsx(sourceFile, '');
+  visit(sourceFile);
+  return routes;
+}
+
+/**
+ * The local declaration a default-export expression points at, if any.
+ *
+ *   export default Index               → "Index"
+ *   export default memo(Index)         → "Index"   (an HOC-wrapped page is still that page)
+ *   export default React.memo(Index)   → "Index"
+ *   export default { a, b }            → null
+ *   export default makeThing(a, b)     → null      (two args name no single declaration)
+ *
+ * Deliberately conservative: guessing here would mark private helpers as
+ * public API and inflate the ranker's `exportedSurface` signal.
+ */
+function defaultExportLocalName(expr: ts.Expression): string | null {
+  let node: ts.Node = expr;
+  for (let depth = 0; depth < 4; depth++) {
+    if (ts.isIdentifier(node)) return node.text;
+    if (ts.isCallExpression(node) && node.arguments.length === 1 && node.arguments[0]) {
+      node = node.arguments[0];
+      continue;
+    }
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node) ||
+      ts.isNonNullExpression(node)
+    ) {
+      node = node.expression;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Marks symbols exported by a *separate statement* rather than an inline
+ * modifier. `isExported()` (astParser.ts) reads only `ts.getModifiers()`, so
+ * these three equally-public declarations disagreed:
+ *
+ *   export default function Index() {}          // exported: true
+ *   const Index = () => {}; export default Index;   // exported: FALSE
+ *   function load() {}      export { load };        // exported: FALSE
+ *
+ * `entrypointDetector` gates `ui_route`, `cli_command` and `event_handler` on
+ * `s.exported`, and `candidateRanker` scores an `exportedSurface` signal — so
+ * the modifier-only reading made an entire `src/pages/` directory invisible in
+ * a project written with the second style while an identically-laid-out
+ * project using the first style reported every page.
+ *
+ * Re-exports (`export { x } from './y'`) are skipped on purpose: that name
+ * belongs to another module, and a local symbol sharing it is a different
+ * declaration.
+ */
+function reconcileExports(symbols: SymbolInfo[], exports: ExportRecord[]): void {
+  if (symbols.length === 0 || exports.length === 0) return;
+
+  const byName = new Map<string, SymbolInfo[]>();
+  for (const sym of symbols) {
+    const bucket = byName.get(sym.name);
+    if (bucket) bucket.push(sym);
+    else byName.set(sym.name, [sym]);
+  }
+
+  const mark = (name: string, asDefault: boolean): void => {
+    for (const sym of byName.get(name) ?? []) {
+      sym.exported = true;
+      if (asDefault) sym.isDefault = true;
+    }
+  };
+
+  for (const rec of exports) {
+    if (rec.isReExport) continue;
+
+    // `localBindings` is absent on records built before this field existed and
+    // on `export *`; falling back to the public names is right for the
+    // unaliased case, which is the overwhelming majority.
+    const locals = rec.localBindings ?? rec.namedExports;
+    locals.forEach((local, i) => {
+      // `export { Index as default }` is a default export spelled the long way.
+      mark(local, rec.namedExports[i] === 'default');
+    });
+
+    const defaultLocal =
+      rec.defaultLocalName ??
+      (rec.expression && BARE_IDENTIFIER.test(rec.expression) ? rec.expression : undefined);
+    if (rec.isDefault && defaultLocal) mark(defaultLocal, true);
+  }
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────

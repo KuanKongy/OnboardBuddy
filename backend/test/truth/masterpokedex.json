@@ -1,0 +1,38 @@
+{
+  "repo": "KuanKongy/MasterPokedex",
+  "clone": "https://github.com/KuanKongy/MasterPokedex.git",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Read src/App.tsx:35-45 (nested router config), listed src/pages/.",
+  "shape": "Vite + React SPA, react-router with a <Layout> wrapper route, no server. Data comes from the public PokeAPI.",
+  "whyThisRepo": "Same `export default <ident>` style as Skribbl but with eight pages and a nested router, so it also checks that a layout wrapper route does not swallow its children.",
+  "expect": {
+    "uiRoutes": {
+      "exact": [
+        "src/pages/Index.tsx",
+        "src/pages/Items.tsx",
+        "src/pages/Map.tsx",
+        "src/pages/NotFound.tsx",
+        "src/pages/PokemonDetail.tsx",
+        "src/pages/PokemonFilter.tsx",
+        "src/pages/PokemonList.tsx",
+        "src/pages/Trainer.tsx"
+      ],
+      "note": "All eight files in src/pages/. PokemonList is included on the directory convention alone — see declaredPaths."
+    },
+    "declaredPaths": {
+      "src/pages/Index.tsx": "/",
+      "src/pages/PokemonDetail.tsx": "/pokemon/:id",
+      "src/pages/Map.tsx": "/map",
+      "src/pages/Trainer.tsx": "/trainer",
+      "src/pages/Items.tsx": "/items",
+      "src/pages/PokemonFilter.tsx": "/pokemon-filter",
+      "src/pages/NotFound.tsx": "/*"
+    },
+    "unrouted": {
+      "exact": ["src/pages/PokemonList.tsx"],
+      "note": "Genuinely absent from App.tsx — it lives in pages/ but is rendered by another page. Having no declared path is the correct answer, not a miss."
+    },
+    "httpRoutes": { "exact": [] }
+  },
+  "knownGaps": []
+}

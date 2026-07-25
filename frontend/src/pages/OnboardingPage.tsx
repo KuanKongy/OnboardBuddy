@@ -74,9 +74,11 @@ import {
 } from "@/components/ui/select";
 import type {
   ConfidenceLevel,
+  LanguageInventory,
   OnboardingPackage,
   OnboardingSection,
   PackageCard,
+  PackageCoverage,
   SectionId,
   SourceReceipt,
 } from "@/types/onboarding";
@@ -127,6 +129,64 @@ const UNKNOWN_LABELS: Record<string, string> = {
   workflow: "A referenced workflow couldn't be fully resolved from the trace evidence",
   data: "Supporting data for part of this section wasn't available in the evidence",
 };
+
+/**
+ * The coverage sentence, stated in terms of what was actually read.
+ *
+ * This line used to say "Analyzed N files" using the count of every file in
+ * scope — assets, markdown and lockfiles included — which overstated coverage
+ * by up to 9x on audited projects and read as a claim that the whole repo had
+ * been understood. It now leads with the parsed count, names the languages
+ * that were skipped instead of burying them in an "unsupported" total, and
+ * says "unknown" for snapshots taken before the parsed count was recorded
+ * rather than substituting the old inflated number.
+ */
+function CoverageFiles({
+  files,
+  languages,
+}: {
+  files: PackageCoverage["files"];
+  languages: LanguageInventory | null;
+}) {
+  const skipped = Object.entries(languages?.unsupported ?? {})
+    .sort((a, b) => b[1] - a[1]);
+  const skippedLabel = skipped.slice(0, 3).map(([lang, n]) => `${lang} ${n}`).join(", ");
+  const skippedRest = skipped.length > 3 ? ` +${skipped.length - 3} more` : "";
+
+  if (files.parsed === null) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+            File coverage unknown for this snapshot
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-80">
+          This analysis predates coverage measurement. {files.inScope} files were in scope, but how
+          many were parsed was not recorded. Re-analyze to measure it.
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+          Parsed <span className="font-medium text-foreground">{files.parsed}</span> of {files.inScope} files
+          {files.unsupported ? ` · ${files.unsupported} skipped` : ""}
+          {skippedLabel ? ` (${skippedLabel}${skippedRest})` : ""}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-80">
+        Everything in this package is derived from the {files.parsed} files the parser read
+        {files.supported !== null ? `, of ${files.supported} counted as source in a supported language` : ""}.
+        The rest of the {files.inScope} files in scope are assets, docs, lockfiles, and languages
+        OnboardBuddy does not parse — nothing here describes them.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /** Human names for the ranker's signals (served with their real weights). */
 const SIGNAL_LABELS: Record<string, string> = {
@@ -1264,10 +1324,7 @@ export function OnboardingPage() {
           denominators the "critical 25%" story needs. All counts, no prose. */}
       {!isMissing && pkg.coverage && (
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-5 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
-          <span>
-            Analyzed <span className="font-medium text-foreground">{pkg.coverage.files.analyzed}</span> files
-            {pkg.coverage.files.unsupported ? ` (${pkg.coverage.files.unsupported} unsupported skipped)` : ""}
-          </span>
+          <CoverageFiles files={pkg.coverage.files} languages={pkg.coverage.languages} />
           <span aria-hidden>·</span>
           <span>
             cites <span className="font-medium text-foreground">{pkg.coverage.symbols.cited}</span> of{" "}

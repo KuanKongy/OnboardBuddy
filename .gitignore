@@ -1,22 +1,56 @@
 node_modules/
 dist/
+build/
 coverage/
 *.tsbuildinfo
 .DS_Store
+Thumbs.db
 
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Every .env is ignored; the committed *.example files are the documented
+# template. Never relax this — a leaked service-role key gives full DB access.
 .env
 .env.*
 !.env.example
 !.env.local.example
+backend/github-app.pem
+*.pem
+*.key
+!**/testdata/**/*.pem
 
+# ── Build / tooling output ───────────────────────────────────────────────────
 backend/tmp/
 backend/.supabase/
 frontend/.vite/
 frontend/playwright-report/
 frontend/test-results/
+.turbo/
+.next/
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
+# ── Generated verification artifacts ─────────────────────────────────────────
+# The audit probe writes a per-surface ledger (census, flags, tab order, one
+# JSONL row per control) on every sweep — ~90 files that are re-derived by
+# `playwright test e2e/audit/probe.spec.ts`. The instrument is source and IS
+# committed; its output is not.
+frontend/e2e/audit/ledger/
+# Repos cloned by `npm run truth` to diff the pipeline against hand-labeled
+# expectations. The fixtures in backend/test/truth/*.json are source; the
+# clones are just checkouts and are re-fetched on demand.
+backend/.truth-repos/
+
+# ── Editors ──────────────────────────────────────────────────────────────────
 .cursor/
+.claude/
+.idea/
+.vscode/
+*.swp
+*~
 
+# ── Local-only docs and scratch harnesses ────────────────────────────────────
 # Throwaway UI preview harness (see frontend-ui-preview-harness memory)
 frontend/preview.html
 frontend/src/preview.tsx
@@ -27,4 +61,3 @@ doc/Feedback.md
 doc/PLAN.md
 doc/Team*.md
 doc/Design.md
-backend/github-app.pem

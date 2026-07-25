@@ -91,9 +91,14 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     const isTest = record?.category === 'test';
     const fileTrust = isTest ? 'tests' : 'code';
 
+    // Deduped: since export reconciliation back-patches `exported` onto
+    // symbols named in an `export { … }` clause, the two halves now overlap
+    // and a plain concat would double-count the module's public surface.
     const exportedSymbols = [
-      ...fa.exports.flatMap((e) => e.namedExports),
-      ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ...new Set([
+        ...fa.exports.flatMap((e) => e.namedExports),
+        ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ]),
     ];
 
     addNode({

@@ -407,13 +407,16 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     if (snapshot.languageInventory.supportedFileCount === 0) {
       unknowns.push({ kind: 'unsupported_only_repo' });
       await query(
+        // parsed_file_count is an explicit 0, not NULL: nothing was parsed and
+        // we know it. NULL is reserved for snapshots predating the column, so
+        // readers can tell "no coverage" from "coverage unknown".
         `INSERT INTO analysis_snapshots
            (project_id, scope_id, commit_hash, branch, status, semantic_depth, privacy_mode,
-            language_inventory, unknowns, warnings)
-         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, '[]')
+            language_inventory, unknowns, warnings, parsed_file_count)
+         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, '[]', 0)
          ON CONFLICT (scope_id, commit_hash) DO UPDATE
            SET status = 'failed', language_inventory = EXCLUDED.language_inventory,
-               unknowns = EXCLUDED.unknowns`,
+               unknowns = EXCLUDED.unknowns, parsed_file_count = 0`,
         [projectId, scope.scopeId, commitHash, branch, analysis_depth, privacy_mode,
          JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns)],
       );
@@ -455,6 +458,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // 8. Persist snapshot + files + graph in one transaction
     await updateStep('Persisting results', 46);
     const fileCount = snapshot.fileRecords.length;
+    // What the parser actually read — the only honest coverage number. Until
+    // now this existed only in the `parse` phase checkpoint, so every reader
+    // fell back to `fileCount` (all files in scope) and overstated coverage.
+    const parsedFileCount = snapshot.fileAnalyses.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
     let snapshotId = '';
@@ -465,11 +472,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
       const snapResult = await client.query<{ id: string }>(
         `INSERT INTO analysis_snapshots
-           (project_id, scope_id, commit_hash, branch, file_count, symbol_count, workflow_count,
+           (project_id, scope_id, commit_hash, branch, file_count, parsed_file_count, symbol_count, workflow_count,
             status, semantic_depth, privacy_mode, language_inventory, unknowns, warnings)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'complete', $8, $9, $10, $11, $12)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'complete', $9, $10, $11, $12, $13)
          ON CONFLICT (scope_id, commit_hash) DO UPDATE
            SET file_count = EXCLUDED.file_count,
+               parsed_file_count = EXCLUDED.parsed_file_count,
                symbol_count = EXCLUDED.symbol_count,
                workflow_count = EXCLUDED.workflow_count,
                status = 'complete',
@@ -479,7 +487,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
                unknowns = EXCLUDED.unknowns,
                warnings = EXCLUDED.warnings
          RETURNING id`,
-        [projectId, scope.scopeId, commitHash, branch, fileCount, symbolCount, 0 /* set after extraction */,
+        [projectId, scope.scopeId, commitHash, branch, fileCount, parsedFileCount, symbolCount, 0 /* set after extraction */,
          analysis_depth, privacy_mode,
          JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns), JSON.stringify(snapshot.errors)],
       );
