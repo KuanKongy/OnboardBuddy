@@ -71,6 +71,10 @@ All seven items **shipped 2026-07-24** (plan step 0); implementation notes per i
 6. **Detection honesty rule** ✅ — `unknown_external` low-confidence fallback (one per file×package, pure-package blocklist; persists as `external_integration` + `metadata.detectorKind`), `TraceDeadEnd` recording in the extractor, rollups into snapshot `unknowns`, surfaced in the coverage strip ("N known unknowns").
 7. **Golden-journey gate** ✅ — `journeyGate.ts` runs after composition: shape-conditional assertions (queue+consumer pairs, ≥2 auth routes, ≥2 oauth routes, compose present); gaps land in snapshot `unknowns` + phase metrics. Receipt-resolution and per-artifact content assertions extend with the step-2 spec rewrite.
 
+## Step-6 final audit result (2026-07-24, automated assertions + rubric reading)
+
+**17/19 golden checks pass** on the live regenerated package (12 sections, ~13k words, 4 journey tutorials). Verified: topology/ER/sequence/cluster anchors; routes tables with both queues' job types; data-model chain; env-name tables; setup_run as a verified single-path tutorial; ≥3 recipes; 20-file grouped code_map; traced_flows walking the analysis pipeline AND user auth. The two remaining items, with smallest-fix verdicts: **concepts** (narration gap — defines 9 real terms but skips snapshot/receipt; fix: weight referenced-BY tables into must-define stems) and **architecture_deep** (narration gap — structure without decision→consequence; fix: route decision-bearing config/doc comments into its receipts). Both are narration-layer, not extraction/composition/selection — the data layers hold.
+
 ## Evaluation protocol (every content eval, after the Diátaxis rubric)
 
 1. Golden-journey check first (present / findable / correct / complete, per journey).

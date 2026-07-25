@@ -7,6 +7,7 @@
  * from the trace (sequence, or dataflow for data-heavy workflows).
  */
 
+import { createHash } from 'node:crypto';
 import { query } from '../../lib/db.js';
 import { mapLimit } from '../../lib/parallel.js';
 import type { AiClient } from '../ai/aiClient.js';
@@ -34,6 +35,8 @@ export interface TutorialResult {
   tutorials: number;
   steps: number;
   failed: number;
+  /** Of `tutorials`, how many were byte-identical cache clones. */
+  cached?: number;
 }
 
 interface WorkflowRow {
@@ -100,9 +103,10 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
     if (steps.length === 0) return;
 
     try {
-      await generateOneTutorial(params, workflow, steps);
+      const one = await generateOneTutorial(params, workflow, steps);
       result.tutorials += 1;
       result.steps += steps.length;
+      if (one.cached) result.cached = (result.cached ?? 0) + 1;
     } catch (err) {
       if (isControlError(err)) throw err;
       result.failed += 1;
@@ -187,7 +191,34 @@ async function selectWorkflows(params: GenerateTutorialsParams): Promise<Workflo
   );
 }
 
-async function generateOneTutorial(params: GenerateTutorialsParams, workflow: WorkflowRow, steps: StepRow[]): Promise<void> {
+async function generateOneTutorial(params: GenerateTutorialsParams, workflow: WorkflowRow, steps: StepRow[]): Promise<{ cached: boolean }> {
+  // Tutorial cache (same contract as the section cache): keyed on the
+  // deterministic inputs — the workflow identity and its traced steps.
+  // Unchanged flow ⇒ the previous tutorial is cloned (row + steps +
+  // receipts) at zero LLM cost.
+  const evidenceHash = createHash('sha256').update(JSON.stringify({
+    v: TUTORIAL_PROMPT_VERSION,
+    workflow: workflow.stable_key,
+    title: workflow.title,
+    trigger: workflow.trigger_type,
+    purpose: workflow.purpose,
+    steps: steps.map((s) => [s.step_order, s.file_path, s.symbol_name, s.step_kind,
+      s.line_start, s.line_end, s.deterministic_description, (s.snippet ?? '').slice(0, SNIPPET_CAP)]),
+  })).digest('hex');
+  const cachedTutorial = (await query(
+    `SELECT t.id FROM tutorials t
+     JOIN analysis_snapshots s ON s.id = t.snapshot_id
+     WHERE s.project_id = $1 AND t.stable_key = $2
+       AND t.generation_context->>'evidence_hash' = $3
+       AND t.status IN ('draft', 'approved')
+     ORDER BY t.created_at DESC LIMIT 1`,
+    [params.projectId, `tut:${workflow.stable_key}`, evidenceHash],
+  )).rows[0] as { id: string } | undefined;
+  if (cachedTutorial) {
+    await cloneTutorial(params, workflow, cachedTutorial.id, evidenceHash);
+    return { cached: true };
+  }
+
   const stepSections = steps.map((s) => [
     `### Step ${s.step_order} (receipt s${s.step_order})`,
     `${s.file_path}${s.symbol_name ? `::${s.symbol_name}` : ''}${s.line_start ? ` (L${s.line_start}-${s.line_end})` : ''} [${s.step_kind ?? 'step'}]`,
@@ -253,10 +284,10 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
     [params.snapshotId, params.packageId, workflow.id, response.runId, stableKey,
      output.title || workflow.title, output.summary ?? '', diagramKind, mermaid,
      confidence, JSON.stringify(unknowns),
-     JSON.stringify({ prompt_version: TUTORIAL_PROMPT_VERSION, workflow: workflow.stable_key, goal: output.goal ?? '' })],
+     JSON.stringify({ prompt_version: TUTORIAL_PROMPT_VERSION, workflow: workflow.stable_key, goal: output.goal ?? '', evidence_hash: evidenceHash })],
   )).rows[0] as { id: string }).id;
 
-  if (steps.length === 0) return;
+  if (steps.length === 0) return { cached: false };
 
   // Bulk step persistence (Track C): 3 statements per tutorial instead of
   // 3 per STEP (~21 steps × 3 = 63 round trips each before).
@@ -308,6 +339,82 @@ async function generateOneTutorial(params: GenerateTutorialsParams, workflow: Wo
      WHERE ts.id = u.step_id`,
     [JSON.stringify(receiptRows.map((r) => ({ step_id: r.tutorial_step_id, receipt_id: r.id })))],
   );
+  return { cached: false };
+}
+
+/** Cache hit: clone the tutorial row, its steps, and their receipts. */
+async function cloneTutorial(
+  params: GenerateTutorialsParams,
+  workflow: WorkflowRow,
+  sourceTutorialId: string,
+  evidenceHash: string,
+): Promise<void> {
+  const stableKey = `tut:${workflow.stable_key}`;
+  // Same-package hit: the source row already IS this package's tutorial —
+  // cloning would trip the (package_id, stable_key) unique index, and
+  // deleting first destroys the source (both observed live). Keep the row,
+  // stamp it as a cache hit.
+  const source = (await query(
+    `SELECT package_id FROM tutorials WHERE id = $1`,
+    [sourceTutorialId],
+  )).rows[0] as { package_id: string | null } | undefined;
+  if (source?.package_id === params.packageId) {
+    await query(
+      `UPDATE tutorials
+       SET generation_context = generation_context || jsonb_build_object('mode', 'cache_hit', 'evidence_hash', $2::text),
+           workflow_id = $3, updated_at = now()
+       WHERE id = $1`,
+      [sourceTutorialId, evidenceHash, workflow.id],
+    );
+    return;
+  }
+  // Cross-package reuse: this package holds no row for the key (or an old
+  // one, removed first — the source lives elsewhere and stays safe).
+  await query(`DELETE FROM tutorials WHERE package_id = $1 AND stable_key = $2`, [params.packageId, stableKey]);
+  const newId = ((await query(
+    `INSERT INTO tutorials
+       (snapshot_id, package_id, workflow_id, generation_run_id, stable_key, title, summary,
+        diagram_kind, diagram_mermaid, status, confidence, unknowns, generation_context)
+     SELECT $2, $3, $4, NULL, stable_key, title, summary,
+            diagram_kind, diagram_mermaid, 'draft', confidence, unknowns,
+            generation_context || jsonb_build_object('mode', 'cache_hit', 'cached_from_tutorial_id', id, 'evidence_hash', $5::text)
+     FROM tutorials WHERE id = $1
+     RETURNING id`,
+    [sourceTutorialId, params.snapshotId, params.packageId, workflow.id, evidenceHash],
+  )).rows[0] as { id: string }).id;
+
+  await query(
+    `INSERT INTO tutorial_steps
+       (tutorial_id, step_order, node_id, file_path, symbol_name, line_start, line_end, snippet, explanation, metadata)
+     SELECT $2, step_order, node_id, file_path, symbol_name, line_start, line_end, snippet, explanation, metadata
+     FROM tutorial_steps WHERE tutorial_id = $1`,
+    [sourceTutorialId, newId],
+  );
+
+  const clonedReceipts = (await query(
+    `INSERT INTO source_receipts
+       (project_id, snapshot_id, receipt_kind, trust_level, tutorial_step_id, node_id,
+        workflow_id, node_stable_key, node_hash, file_path, symbol_name, line_start,
+        line_end, snippet, commit_hash, metadata)
+     SELECT sr.project_id, sr.snapshot_id, sr.receipt_kind, sr.trust_level, ns.id, sr.node_id,
+            $3, sr.node_stable_key, sr.node_hash, sr.file_path, sr.symbol_name, sr.line_start,
+            sr.line_end, sr.snippet, sr.commit_hash, sr.metadata
+     FROM source_receipts sr
+     JOIN tutorial_steps os ON os.id = sr.tutorial_step_id AND os.tutorial_id = $1
+     JOIN tutorial_steps ns ON ns.tutorial_id = $2 AND ns.step_order = os.step_order
+     RETURNING id, tutorial_step_id`,
+    [sourceTutorialId, newId, workflow.id],
+  )).rows as Array<{ id: string; tutorial_step_id: string }>;
+  if (clonedReceipts.length > 0) {
+    await query(
+      `UPDATE tutorial_steps ts
+       SET receipt_ids = ARRAY[u.receipt_id]::uuid[]
+       FROM jsonb_to_recordset($1::jsonb) AS u(step_id uuid, receipt_id uuid)
+       WHERE ts.id = u.step_id`,
+      [JSON.stringify(clonedReceipts.map((r) => ({ step_id: r.tutorial_step_id, receipt_id: r.id })))],
+    );
+  }
+
 }
 
 function isControlError(err: unknown): boolean {

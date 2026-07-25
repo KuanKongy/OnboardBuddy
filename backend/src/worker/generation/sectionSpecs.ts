@@ -293,9 +293,25 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       )).rows,
       envVarNames: (await loadConfigFacts(deps.snapshotId)).envFiles.flatMap((f) => f.vars.map((v) => v.name)).slice(0, 40),
     }),
-    completenessCheck: (content) => {
+    completenessCheck: (content, det) => {
+      const issues: string[] = [];
       const terms = (content.match(/### /g) ?? []).length;
-      return terms >= 8 ? [] : [`INCOMPLETE: only ${terms} "### term" entries — define at least 10 load-bearing terms from the evidence.`];
+      if (terms < 8) issues.push(`INCOMPLETE: only ${terms} "### term" entries — define at least 10 load-bearing terms from the evidence.`);
+      // The most-referenced schema tables ARE the load-bearing nouns —
+      // a concepts section that skips them defines the wrong vocabulary.
+      const tables = (det.schemaTables as Array<{ name?: string; refs?: string[] | null }> ?? []);
+      const degree = new Map<string, number>();
+      for (const t of tables) for (const r of t.refs ?? []) degree.set(r, (degree.get(r) ?? 0) + 1);
+      const coreStems = [...degree.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 6)
+        .map(([name]) => name.replace(/^analysis_|^source_|^onboarding_/, '').replace(/s$/, ''));
+      const lower = content.toLowerCase();
+      const missing = coreStems.filter((stem) => stem.length >= 4 && !lower.includes(stem));
+      if (coreStems.length >= 3 && missing.length * 2 > coreStems.length) {
+        issues.push(`INCOMPLETE: the schema's most-referenced concepts are missing — define: ${missing.join(', ')}`);
+      }
+      return issues;
     },
     outputBudget: { small: 5_000, mid: 8_000, large: 11_000 },
   },
