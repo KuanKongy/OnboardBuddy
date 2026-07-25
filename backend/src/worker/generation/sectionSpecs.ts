@@ -21,6 +21,7 @@ import {
   loadConfigFacts, buildRoutesJobsBackbone, buildDataModelBackbone, buildGuardrailsBackbone,
   type ConfigFacts,
 } from './referenceBackbones.js';
+import { loadDecisionNotes } from './decisionComments.js';
 
 export const SECTION_TYPES = [
   // ORIENT
@@ -128,38 +129,63 @@ function missingItems(content: string, wanted: string[], label: string, minShare
   ];
 }
 
+/**
+ * The schema nouns `concepts` must define, ranked by how connected each table is
+ * (plan golden checklist: "`concepts` names 9 solid terms but skips
+ * 'snapshot'/'receipt' — weight referenced-BY tables into the must-define
+ * stems").
+ *
+ * Referenced-BY degree is weighted double: a table that many others point at is
+ * a shared anchor of the domain — "snapshot" ranks top on this repo precisely
+ * because half the schema hangs off it. But in-degree alone still missed
+ * "receipt", because `source_receipts` mostly points OUTWARD (project, snapshot,
+ * section, node, workflow, step, record) and is pointed at by very little. A
+ * table with seven foreign keys is a join table at the centre of the model, so
+ * out-degree counts too, at half weight.
+ *
+ * The names are reduced to the stem a human would say — `analysis_snapshots` →
+ * `snapshot` — since that is the word the prose will use, and the word the
+ * coverage check has to look for.
+ */
+export function mustDefineStems(tables: Array<{ name?: string; refs?: string[] | null }>, limit = 6): string[] {
+  const inDegree = new Map<string, number>();
+  const outDegree = new Map<string, number>();
+  const known = new Set(tables.map((t) => t.name ?? '').filter(Boolean));
+  for (const table of tables) {
+    const name = table.name ?? '';
+    const refs = (table.refs ?? []).filter((r) => r && r !== name);
+    outDegree.set(name, refs.length);
+    for (const ref of refs) inDegree.set(ref, (inDegree.get(ref) ?? 0) + 1);
+  }
+  const stems = new Map<string, number>();
+  for (const name of known) {
+    const score = (inDegree.get(name) ?? 0) * 2 + (outDegree.get(name) ?? 0);
+    if (score === 0) continue;
+    const stem = name
+      .replace(/^(?:analysis_|source_|onboarding_|package_|snapshot_)/, '')
+      .replace(/e?s$/, '');
+    // Very short stems ("id", "run") match too much prose to be a useful
+    // coverage signal, and are rarely the load-bearing noun anyway.
+    if (stem.length < 4) continue;
+    stems.set(stem, Math.max(stems.get(stem) ?? 0, score));
+  }
+  return [...stems.entries()].sort((a, b) => b[1] - a[1]).slice(0, limit).map(([stem]) => stem);
+}
+
+/**
+ * A projection target as prompt facts.
+ *
+ * Only ever called for path-keyed targets (files, symbols), where `stableKey` IS
+ * the human-readable name. Keep it that way: models copy whatever identifier
+ * they see regardless of instructions, and `wf:`/`cluster:` synthesis keys
+ * leaked into three different sections before the specs stopped feeding them
+ * through here and started querying workflow titles and cluster labels directly.
+ * If a synthesis-keyed projection ever needs to reach a prompt, resolve it to
+ * its title first rather than passing the key.
+ */
 const projectionRow = (t: ProjectedTarget) => ({
   targetType: t.targetType, stableKey: t.stableKey, score: Math.round(t.score * 1000) / 1000, reasons: t.reasons.slice(0, 4),
 });
-
-/**
- * Models copy whatever identifier they see, no matter the instructions —
- * wf:/cluster: stable keys leaked into three different sections before
- * this became mechanical. Projection rows for synthesis targets
- * (workflows, clusters) are served with their human title INSTEAD of the
- * stable key; path-keyed rows keep their stableKey (it IS the human name).
- */
-async function humanizeProjectionRows(
-  snapshotId: string,
-  targets: ProjectedTarget[],
-): Promise<Array<Record<string, unknown>>> {
-  const titles = new Map<string, string>();
-  for (const row of (await query(
-    `SELECT stable_key, title AS name FROM workflows WHERE snapshot_id = $1
-     UNION ALL
-     SELECT stable_key, label AS name FROM architecture_clusters WHERE snapshot_id = $1`,
-    [snapshotId],
-  )).rows as Array<{ stable_key: string; name: string }>) {
-    titles.set(row.stable_key, row.name);
-  }
-  return targets.map((t) => {
-    if (titles.has(t.stableKey)) {
-      const { stableKey: _hidden, ...rest } = projectionRow(t);
-      return { ...rest, title: titles.get(t.stableKey) };
-    }
-    return projectionRow(t);
-  });
-}
 
 /**
  * "Which tests protect you": tested-key -> test-file keys from the graph's
@@ -270,15 +296,22 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     retrievalTask: () => 'The domain vocabulary this codebase thinks in: its core nouns, what each means here, and where each lives.',
     instructions: [
       'Define the load-bearing vocabulary — the nouns a new joiner must know to follow any conversation about this code. Select 10-18 terms FROM THE EVIDENCE: schema table names, capability names, recurring record/workflow nouns, config concepts. Prefer terms this codebase uses with a SPECIFIC meaning over generic industry words.',
+      // The narration fix: `mustDefineTerms` is ranked by how connected each
+      // table is in the schema, so the section stops picking readable-but-
+      // peripheral nouns over the ones every conversation depends on.
+      'START from `mustDefineTerms`. Those are the most connected nouns in this system\'s schema, ranked, and EVERY one of them needs its own "### term" entry — they are the words the rest of the vocabulary is defined in terms of. Add further terms from capabilities, journeys and config to reach 10-18 total.',
       'Format: "### term" then 2-4 sentences: what it means IN THIS SYSTEM (not the dictionary meaning), where it lives (the table and/or module, from the evidence), and how it relates to neighboring terms. Cite a receipt per term.',
       'Order terms so each definition only uses terms already defined. Close with one short paragraph on how the 3-4 most central terms connect end to end.',
     ].join(' '),
-    deterministic: async (deps) => ({
-      schemaTables: (await query(
+    deterministic: async (deps) => {
+      const schemaTables = (await query(
         `SELECT name, file_path, metadata->'references' AS refs FROM graph_nodes
          WHERE snapshot_id = $1 AND type = 'schema' ORDER BY line_start NULLS LAST LIMIT 45`,
         [deps.snapshotId],
-      )).rows,
+      )).rows as Array<{ name?: string; refs?: string[] | null }>;
+      return {
+      schemaTables,
+      mustDefineTerms: mustDefineStems(schemaTables),
       capabilities: (await query(
         `SELECT name, description FROM capabilities WHERE snapshot_id = $1 LIMIT 12`,
         [deps.snapshotId],
@@ -292,24 +325,19 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         [deps.snapshotId],
       )).rows,
       envVarNames: (await loadConfigFacts(deps.snapshotId)).envFiles.flatMap((f) => f.vars.map((v) => v.name)).slice(0, 40),
-    }),
+      };
+    },
     completenessCheck: (content, det) => {
       const issues: string[] = [];
       const terms = (content.match(/### /g) ?? []).length;
       if (terms < 8) issues.push(`INCOMPLETE: only ${terms} "### term" entries — define at least 10 load-bearing terms from the evidence.`);
-      // The most-referenced schema tables ARE the load-bearing nouns —
-      // a concepts section that skips them defines the wrong vocabulary.
-      const tables = (det.schemaTables as Array<{ name?: string; refs?: string[] | null }> ?? []);
-      const degree = new Map<string, number>();
-      for (const t of tables) for (const r of t.refs ?? []) degree.set(r, (degree.get(r) ?? 0) + 1);
-      const coreStems = [...degree.entries()]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 6)
-        .map(([name]) => name.replace(/^analysis_|^source_|^onboarding_/, '').replace(/s$/, ''));
+      // Judged against the SAME ranked list the prompt was given, so the
+      // complaint names exactly the terms the model was told to start from.
+      const stems = (det.mustDefineTerms as string[] ?? []);
       const lower = content.toLowerCase();
-      const missing = coreStems.filter((stem) => stem.length >= 4 && !lower.includes(stem));
-      if (coreStems.length >= 3 && missing.length * 2 > coreStems.length) {
-        issues.push(`INCOMPLETE: the schema's most-referenced concepts are missing — define: ${missing.join(', ')}`);
+      const missing = stems.filter((stem) => !lower.includes(stem));
+      if (stems.length >= 3 && missing.length * 2 > stems.length) {
+        issues.push(`INCOMPLETE: the schema's most connected concepts are missing — add a "### term" entry for each of: ${missing.join(', ')}`);
       }
       return issues;
     },
@@ -325,11 +353,23 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     retrievalTask: () => 'System architecture in depth: each subsystem\'s responsibility, boundaries, crossings, and the design decisions behind them.',
     instructions: [
       'The anchor diagram (cluster map) opens the section — the prose walks it. Open with "## How a request flows": ONE real end-to-end path across cluster boundaries using clusterEdges and their workflow crossings, naming clusters in order.',
-      'Then one "## <cluster label>" subsection PER major cluster (cover every cluster in the evidence with more than 2 files): its responsibility (from deterministic_summary — no "handles business logic" filler), its real file count, what crosses its boundary in and out (from clusterEdges), and the design decisions visible in the evidence for it — state each decision as decision → consequence ("transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock") with a receipt. Admitting trade-offs is correct here; inventing them is not.',
+      'Then one "## <cluster label>" subsection PER major cluster (cover every cluster in the evidence with more than 2 files): its responsibility (from deterministic_summary — no "handles business logic" filler), its real file count, and what crosses its boundary in and out (from clusterEdges).',
+      // The narration fix: the decisions are handed over as data, and the
+      // required sentence shape is stated as a hard format rule rather than an
+      // aspiration. Structure-only prose was the measured failure mode.
+      'DESIGN DECISIONS ARE MANDATORY, NOT OPTIONAL. `decisionNotes` contains rationale the repo\'s authors wrote in their own comments, each with the file and line it came from. Use them: for each cluster that has a matching note, state the decision in the form "<decision> ⇒ <consequence>" — a literal "⇒" between the choice and what it forces on you, e.g. "transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock" — then cite that note\'s receipt. Write at least three such statements in the section. Paraphrase the note into decision→consequence form; do not quote it verbatim and do not invent a decision that no note or other evidence supports. Admitting trade-offs is correct here; inventing them is not.',
       'Close with "## Tensions to know about": 2-3 places where the evidence shows coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes).',
       'The interactive Architecture tab holds the full drill-down graph — say so once at the end, not per cluster.',
     ].join(' '),
     deterministic: async (deps) => ({
+      // Routed in so the prose has WHY to work with and not only structure
+      // (plan golden checklist: "describes structure without
+      // decision→consequence language").
+      decisionNotes: (await loadDecisionNotes(deps.snapshotId, 10)).map((n) => ({
+        where: `${n.filePath ?? n.nodeStableKey}${n.lineStart ? `:${n.lineStart}` : ''}`,
+        symbol: n.symbolName,
+        rationale: n.note,
+      })),
       clusters: (await query(
         `SELECT c.label, c.kind, c.critical_score, c.deterministic_summary,
                 (SELECT count(*)::int FROM architecture_cluster_members m WHERE m.cluster_id = c.id) AS file_count
@@ -371,6 +411,34 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
           edges.map((e) => ({ sourceClusterKey: e.source_key, targetClusterKey: e.target_key, type: e.type, weight: e.weight })),
         ),
       }];
+    },
+    completenessCheck: (content, det) => {
+      const issues: string[] = [];
+      // Cover the clusters that are big enough to be worth a subsection.
+      const majorClusters = (det.clusters as Array<{ label?: string; file_count?: number }> ?? [])
+        .filter((c) => (c.file_count ?? 0) > 2)
+        .map((c) => c.label ?? '');
+      issues.push(...missingItems(content, majorClusters, 'major clusters'));
+
+      // The narration gate. "⇒" is required because the instructions name that
+      // exact shape, which makes the check mechanical: counting "because" would
+      // pass on ordinary descriptive prose and gate nothing. Only demanded when
+      // the section was actually GIVEN rationale to work with — otherwise this
+      // would force the model to invent decisions, the opposite of the goal.
+      const notes = (det.decisionNotes as unknown[] ?? []).length;
+      if (notes >= 2) {
+        const stated = (content.match(/⇒/g) ?? []).length;
+        const wanted = Math.min(3, notes);
+        if (stated < wanted) {
+          issues.push(
+            `INCOMPLETE: ${stated} of ${wanted} required decision→consequence statements — for each major cluster with a matching decisionNotes entry, write "<decision> ⇒ <consequence>" using a literal "⇒" and cite that note's receipt. The section currently describes structure without saying why it is that way.`,
+          );
+        }
+      }
+      if (!/##\s*Tensions/i.test(content)) {
+        issues.push('INCOMPLETE: the closing "## Tensions to know about" section is missing.');
+      }
+      return issues;
     },
     outputBudget: { small: 6_000, mid: 10_000, large: 15_000 },
   },

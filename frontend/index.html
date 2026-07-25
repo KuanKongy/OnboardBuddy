@@ -5,36 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>OnboardBuddy</title>
-    <script>
-      // Theme bootstrap before first paint: explicit "light"/"dark" wins;
-      // anything else (or no stored value) follows the browser/OS theme.
-      (function () {
-        try {
-          var stored = localStorage.getItem("onboardbuddy:theme");
-          var dark =
-            stored === "dark" ||
-            (stored !== "light" &&
-              window.matchMedia &&
-              window.matchMedia("(prefers-color-scheme: dark)").matches);
-          if (dark) {
-            document.documentElement.classList.add("dark");
-          }
-        } catch (e) {
-          document.documentElement.classList.add("dark");
-        }
-      })();
-      // Font-size bootstrap before first paint — mirrors the theme
-      // bootstrap above so choosing "Extra large" never flashes at 100%.
-      (function () {
-        try {
-          var size = localStorage.getItem("onboardbuddy:font-size");
-          var pct = size === "large" ? "112.5%" : size === "xlarge" ? "125%" : "100%";
-          document.documentElement.style.fontSize = pct;
-        } catch (e) {
-          // Best-effort only; default 100% applies.
-        }
-      })();
-    </script>
+    <!--
+      Theme/font-size bootstrap. External and synchronous: it must run before
+      first paint, and keeping it out of the HTML is what lets the CSP be
+      `script-src 'self'` with no 'unsafe-inline' and no hash to maintain
+      (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.1). Do not inline this back.
+    -->
+    <script src="/bootstrap.js"></script>
   </head>
   <body>
     <div id="root"></div>

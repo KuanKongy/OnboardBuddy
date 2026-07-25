@@ -14,6 +14,7 @@ import { ANALYSIS_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken, getRepo } from '../lib/github.js';
+import { assertZipEntriesStayInside } from './zipSafety.js';
 import { runAnalysis } from './engine/analysisRunner.js';
 import { detectEntrypoints, persistEntrypoints } from './engine/entrypointDetector.js';
 import { detectSideEffects, persistSideEffects } from './engine/sideEffectDetector.js';
@@ -119,6 +120,7 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
     ? requestedCommit
     : (await getCommitSha(token, project.repo_owner, project.repo_name, requestedCommit ?? branch)).trim();
   await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
+  await assertZipEntriesStayInside(zipPath, extractDir);
   await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };

@@ -44,6 +44,7 @@ import {
   fetchOnboardingPackage,
   regenerateSection,
 } from "@/lib/onboardingData";
+import { MARKDOWN_DISALLOWED_ELEMENTS, safeUrlTransform } from "@/lib/markdownSafety";
 import { receiptForHref, receiptNumberById, renderReceiptMarkers, UNVERIFIED_HREF } from "@/lib/receiptMarkers";
 import { AskPanel } from "@/components/AskPanel";
 import { MermaidDiagram } from "@/components/MermaidDiagram";
@@ -349,7 +350,11 @@ function SectionView({
                   return (
                     <div className="mb-3 rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
                       <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">TL;DR</span>
-                      <ReactMarkdown components={{ p: ({ children }) => <span>{children}</span> }}>
+                      <ReactMarkdown
+                        disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
+                        urlTransform={safeUrlTransform}
+                        components={{ p: ({ children }) => <span>{children}</span> }}
+                      >
                         {renderReceiptMarkers(split.tldr, block.receipts)}
                       </ReactMarkdown>
                     </div>
@@ -357,6 +362,8 @@ function SectionView({
                 })()}
                 <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
                   <ReactMarkdown
+                    disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
+                    urlTransform={safeUrlTransform}
                     components={{
                       a: ({ href, children }) => {
                         if (href === UNVERIFIED_HREF) {
@@ -716,7 +723,10 @@ export function OnboardingPage() {
     if (presentSectionIds.length > 0 && !presentSectionIds.includes(activeSectionId)) {
       setActiveSectionId(presentSectionIds[0]!);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Deps are deliberately the JOINED id list, not the array: a new array
+    // identity every render would re-run this on every render. (This carried an
+    // eslint-disable for react-hooks/exhaustive-deps, but that plugin is not in
+    // this project's eslint config, so the directive itself was the lint error.)
   }, [presentSectionIds.join(","), activeSectionId]);
   const moveSection = (delta: number) => {
     const idx = presentSectionIds.indexOf(activeSectionId);

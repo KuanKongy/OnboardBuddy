@@ -54,12 +54,17 @@ export interface SemanticRecordBody {
 // OUTPUT_RULES — without the bump a fresh analysis would keep serving the
 // cached "enhances user engagement"-era summaries.
 export const PROMPT_VERSIONS = {
-  symbol: 'symbol-record-v2',
+  // symbol/capability bumped for the untrusted-data boundary
+  // (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.4). These versions are part of the
+  // record cache key, so the bump is what stops records extracted under the
+  // old unfenced prompt from being served — and re-fed into later prompts —
+  // forever (finding P3: records are content-addressed and outlive a snapshot).
+  symbol: 'symbol-record-v3',
   file: 'file-synthesis-v2',
   module: 'module-synthesis-v2',
   service: 'service-synthesis-v2',
   system: 'system-synthesis-v2',
-  capability: 'capability-extraction-v3',
+  capability: 'capability-extraction-v4',
   refinement: 'refinement-v2',
   critique: 'critique-v2',
   workflow: 'workflow-record-v2',
