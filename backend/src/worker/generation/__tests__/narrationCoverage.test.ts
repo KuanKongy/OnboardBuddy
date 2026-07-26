@@ -223,7 +223,6 @@ describe('architecture_deep — the gate that forces decision→consequence pros
   /** The same prose, now citing — which is the section's other half. */
   const cited = (markdown: string): string =>
     markdown
-      .replace('## API Routes\n', '## API Routes\n')
       .replace('enqueues jobs.', 'enqueues jobs (r3).')
       .replace('writes results.', 'writes results (r7).');
 
@@ -251,16 +250,28 @@ describe('architecture_deep — the gate that forces decision→consequence pros
   });
 
   it('fails when the decisions cite but the component subsections do not', () => {
-    const decisionsOnly = structureOnly.replace(
-      'Holds 12 files. Receives HTTP requests and enqueues jobs.',
-      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock (r3).',
-    );
+    // The live OnboardBuddy shape: cited decision bullets above component
+    // subsections that name no file the reader can open.
+    const decisionsOnly = [
+      '## How a request flows',
+      'A request enters API Routes and is handed to Worker Pipeline.',
+      '## Why it is built this way',
+      '- Transaction-mode pooler ⇒ no session state, so every lock is a row lock (r3).',
+      '- Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs (r3).',
+      '- Content-addressed records ⇒ an unchanged file never re-runs the model (r3).',
+      '## API Routes',
+      'Receives HTTP requests, validates the scope and enqueues an analysis job.',
+      '## Worker Pipeline',
+      'Consumes jobs, walks the repository and writes snapshot rows back.',
+      '## Tensions to know about',
+      'The queue module has the highest fan-in.',
+    ].join('\n');
     const issues = spec.completenessCheck!(decisionsOnly, det);
-    // The desert complaint is gone — one citation exists — but the component
-    // the reader cannot open a file of is named.
+    // The desert complaint is gone — citations exist — but the components the
+    // reader cannot open a file of are named.
     expect(issues.join(' ')).to.not.include('cites NOTHING');
+    expect(issues.join(' ')).to.include('2 of 2 component subsections cite nothing');
     expect(issues.join(' ')).to.include('Worker Pipeline');
-    expect(issues.join(' ')).to.include('cite nothing');
   });
 
   it('accepts a bare file:line locator as a citation, and the post-rewrite marker form', () => {
@@ -275,13 +286,14 @@ describe('architecture_deep — the gate that forces decision→consequence pros
     expect(issues.join(' ')).to.not.include('cite nothing');
   });
 
-  it('never complains about citations in a subsection too short to carry a claim', () => {
-    // "<label> — purpose not established from the code" is a ONE-LINE answer
-    // the prompt explicitly asks for; gating it on a receipt would force the
-    // model to invent one for the component it just admitted it cannot explain.
+  it('never demands a receipt for the "purpose not established" escape hatch', () => {
+    // That one-liner is an answer the prompt explicitly asks for when a
+    // component's purpose is only inferable from its kind. Gating it on a
+    // receipt would force the model to invent evidence for the one thing it
+    // just said it has none of.
     const oneLiner = cited(structureOnly).replace(
       'Holds 30 files. Consumes jobs and writes results (r7).',
-      'Worker Pipeline — purpose not established from the code.',
+      'Worker Pipeline — purpose not established from the code; see the Dependencies tab.',
     );
     expect(spec.completenessCheck!(oneLiner, { ...det, decisionNotes: [] }).join(' ')).to.not.include('cite nothing');
   });

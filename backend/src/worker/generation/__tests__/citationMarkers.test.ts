@@ -101,6 +101,9 @@ describe('citationMarkers.rewriteInlineCitations', () => {
         'The worker drains the queue before exit (r_evidence).',
         'Auth is checked at the edge (receipt r_evidence).',
         'The token is signed here [r-2].',
+        // Observed on UBCPSS/architecture_deep: the untrusted-data fence nonce,
+        // welded to an `r`, cited twice as if it were a receipt.
+        'CSS and HTML are not described above (r142772a7287cf939).',
         'A real but unused receipt goes to dropped (r14).',
       ].join('\n'),
       aliasToId,
@@ -111,10 +114,11 @@ describe('citationMarkers.rewriteInlineCitations', () => {
         'The worker drains the queue before exit.',
         'Auth is checked at the edge.',
         'The token is signed here.',
+        'CSS and HTML are not described above.',
         'A real but unused receipt goes to dropped.',
       ].join('\n'),
     );
-    expect(r.unknownAliases).to.deep.equal(['r_evidence', 'r_evidence', 'r-2']);
+    expect(r.unknownAliases).to.deep.equal(['r_evidence', 'r_evidence', 'r-2', 'r142772a7287cf939']);
     // Invented ids are NOT folded into `dropped`: one means the model made a
     // citation up, the other means a real receipt went unused.
     expect(r.dropped).to.deep.equal(['r14']);

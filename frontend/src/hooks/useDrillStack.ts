@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   decodeDrill,
@@ -125,6 +125,55 @@ export function useDrillStack(param = "drill"): DrillStack {
     (index: number) => historyState().obViewports?.[index] ?? null,
     [],
   );
+
+  return {
+    frames,
+    current: frames.length > 0 ? frames[frames.length - 1]! : null,
+    depth: frames.length,
+    push,
+    pop,
+    jumpTo,
+    reset,
+    savedViewport,
+  };
+}
+
+/**
+ * The same ladder, held in component state instead of the URL.
+ *
+ * `useDrillStack` keeps its depth and its saved viewports in `history.state`,
+ * which is ONE object per history entry. Two URL-backed stacks mounted on the
+ * same page — the Dependencies tab hosts both the Files ladder and the Classes
+ * ladder — therefore overwrite each other's `obDepth` and `obViewports`, and
+ * Back on one begins consuming the other's history entries. A second ladder on
+ * a page that already has one uses this: identical interface and identical
+ * drill transitions, at the cost of not being deep-linkable.
+ */
+export function useLocalDrillStack(): DrillStack {
+  const [frames, setFrames] = useState<DrillFrame[]>([]);
+  const viewportsRef = useRef<Record<number, DrillViewport>>({});
+
+  const push = useCallback((frame: DrillFrame, leavingViewport?: DrillViewport) => {
+    setFrames((cur) => {
+      const next = [...cur, frame];
+      if (sameFrames(next, cur)) return cur;
+      // Saved against the level being LEFT, so returning restores the camera
+      // you had rather than refitting to the whole graph.
+      if (leavingViewport) viewportsRef.current[cur.length] = leavingViewport;
+      return next;
+    });
+  }, []);
+
+  const jumpTo = useCallback((index: number) => {
+    setFrames((cur) => {
+      const target = Math.max(-1, Math.min(index, cur.length - 1));
+      return target + 1 === cur.length ? cur : cur.slice(0, target + 1);
+    });
+  }, []);
+
+  const pop = useCallback(() => setFrames((cur) => (cur.length === 0 ? cur : cur.slice(0, -1))), []);
+  const reset = useCallback(() => setFrames((cur) => (cur.length === 0 ? cur : [])), []);
+  const savedViewport = useCallback((index: number) => viewportsRef.current[index] ?? null, []);
 
   return {
     frames,

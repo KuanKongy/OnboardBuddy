@@ -892,13 +892,23 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       } else {
         // Judged only on the components that actually got a subsection, so the
         // complaint can never be about a heading the model was right to omit.
-        const bare = slicesByHeading(content)
-          .filter((s) => majorClusters.some((label) => label && s.heading.includes(label)))
-          .filter((s) => s.body.replace(/\s+/g, ' ').trim().length >= 80 && !CITATION_IN_PROSE.test(s.body))
-          .map((s) => s.heading);
-        const narrated = slicesByHeading(content).filter((s) =>
+        const componentSlices = slicesByHeading(content).filter((s) =>
           majorClusters.some((label) => label && s.heading.includes(label)),
-        ).length;
+        );
+        const narrated = componentSlices.length;
+        const bare = componentSlices
+          .filter((s) => {
+            const body = s.body.replace(/\s+/g, ' ').trim();
+            // The prompt's own escape hatch — "<label> — purpose not established
+            // from the code; see the Dependencies tab." — is the honest answer
+            // for a component nothing explains. Demanding a receipt for it would
+            // force the model to invent evidence for the one thing it just said
+            // it has none of. Same for a body too short to be a claim.
+            if (body.length < 40) return false;
+            if (/purpose not established|not established from the code/i.test(body)) return false;
+            return !CITATION_IN_PROSE.test(body);
+          })
+          .map((s) => s.heading);
         if (narrated >= 2 && bare.length * 2 > narrated) {
           issues.push(
             `INCOMPLETE: ${bare.length} of ${narrated} component subsections cite nothing — ${bare.slice(0, 4).join(', ')}. Each of these has at least one receipt in the list labelled "evidence for: Member of the “<component>” cluster"; cite it as "(r7)" in the sentence it supports. A component the reader cannot open one file of has been described, not explained.`,

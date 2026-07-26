@@ -164,4 +164,18 @@ describe('side-effect sink detection (DETECTION_COVERAGE.md §2)', () => {
     expect(write, 'insertOne through a bound collection is a write').to.not.equal(undefined);
     expect(write!.target).to.equal('jobs');
   });
+
+  // Contract: declaration is not mutation. A module-scope literal used to match
+  // its OWN declaration text, so every constant table in a repo shipped as a
+  // low-confidence write and crowded the real mutators out of the top slice.
+  it('reads a module-scope declaration as a declaration and only a later write as a mutation', () => {
+    const effects = detectSideEffects(fileWith({
+      relativePath: 'src/lib/data.ts',
+      symbols: [
+        { name: 'LINKS', kind: 'variable', initializer: `[{ href: "/a" }]`, snippet: `export const LINKS = [{ href: "/a" }];` },
+        { name: 'reset', kind: 'arrow-function', callsSymbols: [], snippet: `LINKS = [];` },
+      ],
+    } as never));
+    expect(effects.map((e) => e.symbolName)).to.deep.equal(['reset']);
+  });
 });

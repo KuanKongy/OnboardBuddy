@@ -97,23 +97,8 @@ backend/.probe-tmp/
 #        hostile input the secret-scanner test asserts against.
 #   *.example env templates -> the documented setup contract.
 
-# ── Working docs: ours, not the reader's ─────────────────────────────────────
-# doc/ is for the TA and teammates. Audits, scorecards, owner-feedback logs and
-# redesign specs are the working notes behind the rework — they stay on disk and
-# the task list still points at them, they just are not part of what someone
-# reviewing this project should have to wade through.
-doc/AUDIT_LEDGER.md
-doc/CONTENT_AUDIT.md
-doc/OWNER_FEEDBACK_M4.md
-doc/VISUAL_QA_M4.md
-doc/UX_AUDIT_FINDINGS.md
-doc/UX_VISUAL_AUDIT.md
-doc/PROJECT_SCORECARD.md
-doc/ONBOARDING_UX_VALIDATION.md
-doc/ONBOARDING_FIX_IMPLEMENTATION.md
-doc/REWORK_PLAN.md
-doc/ROLE_DIFFERENTIATION_PLAN.md
-doc/READER_REDESIGN.md
-doc/TUTORIAL_REDESIGN.md
-doc/reader-audit/
-doc/visual-qa-m4-shots/
+# ── Working notes: ours, not the reader's ────────────────────────────────────
+# Audits, scorecards, owner-feedback logs, redesign specs and audit screenshots.
+# They live OUTSIDE doc/ so the doc/ folder is exactly what a TA or teammate
+# should read. Kept on disk because the task list and agent briefs cite them.
+.notes/

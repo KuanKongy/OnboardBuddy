@@ -1018,11 +1018,14 @@ export function CapabilitiesPage() {
               (it was 420px) and the graph stays centred in what is visible. */}
           <div className="graph-shell">
             {activeCapability && <CapabilityHeader cap={activeCapability} projectId={id!} />}
-            {/* `min-h-80` is the floor: a capability with a long entry-point
-                list must not squeeze the canvas out of existence — past that
-                the column overflows and the page scrolls, which is right. */}
-            <div className={cn("min-h-80 flex-1", (selectedStep || selectedResource) && "grid gap-3 xl:grid-cols-[1fr_300px]")}>
-              <div className="graph-canvas relative !h-full">
+            {/* Flex, not grid, and `!h-auto` on the canvases: their own
+                `100dvh - chrome` height is what overflowed the window, and a
+                flex child sized by the row needs no percentage to resolve
+                against. `min-h-80` is the floor — a capability with a long
+                entry-point list must not squeeze the canvas out of existence;
+                past that the column overflows and the page scrolls. */}
+            <div className="flex min-h-80 flex-1 flex-col gap-3 xl:flex-row">
+              <div className="graph-canvas relative !h-auto min-h-0 flex-1">
                 {drill.error && (
                   <div className="absolute left-2 top-2 z-10 rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[0.6875rem] text-foreground">
                     {drill.error}
@@ -1062,7 +1065,7 @@ export function CapabilitiesPage() {
               </div>
 
               {selectedResource && (
-                <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
+                <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
                   <p className="section-label mb-2">{selectedResource.kind === "table" ? "Schema table" : "External service"}</p>
                   <p className="font-mono text-[0.8125rem] font-medium text-foreground">{selectedResource.label}</p>
                   <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
@@ -1078,7 +1081,7 @@ export function CapabilitiesPage() {
               )}
 
               {selectedStep && (
-                <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
+                <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
                   <p className="section-label mb-2">Step {selectedStep.stepOrder} of {steps.length}</p>
                   <p className="font-mono text-[0.8125rem] font-medium text-foreground">
                     {selectedStep.symbolName ?? selectedStep.filePath}

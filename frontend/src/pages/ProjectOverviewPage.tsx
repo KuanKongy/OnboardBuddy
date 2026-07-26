@@ -363,6 +363,74 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
   );
 }
 
+// ── Quick actions ─────────────────────────────────────────────────────────────
+
+/**
+ * One overview shortcut — a link when there is somewhere to go, and an inert
+ * card carrying the reason when there is not.
+ *
+ * The three cards used to be three near-identical copies of the same markup
+ * that always rendered as links, which is how a failed project came to offer
+ * "Start reading" into an empty reader directly under a banner saying the run
+ * had failed.
+ */
+function QuickAction({
+  icon: Icon,
+  iconTone,
+  title,
+  cta,
+  to,
+  unavailableReason,
+  pending,
+  onNavigate,
+}: {
+  icon: typeof BookOpen;
+  /** Utility classes for the icon tile ("bg-primary/10 text-primary"). */
+  iconTone: string;
+  title: string;
+  cta: string;
+  /** Null when the destination holds nothing yet. */
+  to: string | null;
+  unavailableReason?: string;
+  pending?: boolean;
+  onNavigate?: () => void;
+}) {
+  const body = (
+    <Card className={`h-full ${to ? "transition-colors group-hover:border-primary/40" : ""}`}>
+      <CardContent className="flex items-center gap-3 p-3">
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${iconTone}`}>
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0">
+          <h3 className="text-[0.8125rem] font-medium text-foreground">{title}</h3>
+          {to ? (
+            <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
+              {cta}
+              {pending
+                ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
+                : <ArrowRight className="h-3 w-3 shrink-0" />}
+            </span>
+          ) : (
+            <span className="block truncate text-xs text-muted-foreground">{unavailableReason}</span>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  if (!to) return <div className="rounded-xl opacity-75">{body}</div>;
+  return (
+    <Link
+      to={to}
+      onClick={onNavigate}
+      aria-disabled={pending}
+      className={`group block rounded-xl ${pending ? "pointer-events-none opacity-70" : ""}`}
+    >
+      {body}
+    </Link>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function ProjectOverviewPage() {
@@ -436,11 +504,32 @@ export function ProjectOverviewPage() {
 
   const snap = analysisStatus?.latestSnapshot;
   const canManage = project.permission_tier === "owner" || project.permission_tier === "admin";
-  // Paused runs always deserve a resume affordance; failed ones only when
-  // it's the most recent thing that happened (older failures live in history).
-  const pausedOrFailed = (analysisStatus?.jobs ?? []).filter(
-    (j, idx) => j.status === "paused" || (j.status === "failed" && idx === 0),
-  );
+
+  /**
+   * Paused / failed runs that are still the newest word on their kind of work.
+   *
+   * "Package generation paused" sat above a run history whose newest
+   * `generate_package` rows read `complete`, on two projects — the old filter
+   * surfaced EVERY paused job regardless of what had happened since, so one
+   * abandoned run kept warning about a pipeline that had been re-run and
+   * finished twice. A banner is a claim about the current state, so it derives
+   * from the newest run of that job type and nothing else. Older pauses and
+   * failures are history, and the run history below is where history lives.
+   */
+  const pausedOrFailed = (() => {
+    const jobs = analysisStatus?.jobs ?? [];
+    // The API sorts active runs to the front, so re-sort by age to find which
+    // job is genuinely the latest of its type.
+    const newestOfType = new Map<string, string>();
+    for (const job of [...jobs].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )) {
+      if (!newestOfType.has(job.job_type)) newestOfType.set(job.job_type, job.id);
+    }
+    return jobs.filter(
+      (j) => (j.status === "paused" || j.status === "failed") && newestOfType.get(j.job_type) === j.id,
+    );
+  })();
 
   async function jobControl(jobId: string, action: "pause" | "stop" | "resume") {
     if (!id) return;
@@ -474,6 +563,25 @@ export function ProjectOverviewPage() {
 
   const neverAnalyzed = !snap && activeJobs.length === 0 && (runs?.length ?? 0) === 0 && (packages?.length ?? 0) === 0;
   const loadError = packagesError || statusError;
+
+  /**
+   * What the quick actions are allowed to promise.
+   *
+   * A failed project still offered "Start reading" into an empty reader and
+   * "Start a tutorial" into an empty list, under a banner telling the reader to
+   * run the analysis again. An action that lands on nothing is worse than no
+   * action: it reads as a broken page rather than as a project without content
+   * yet. Both are now derived from what actually exists.
+   */
+  const hasReadablePackage = (packages ?? []).some((p) => p.status !== "failed" && p.section_count > 0);
+  const hasTutorials = (packages ?? []).some((p) => p.tutorial_count > 0);
+  const contentPending = activeJobs.length > 0;
+  /** Why an action is unavailable, in the reader's terms. */
+  const noContentReason = contentPending
+    ? "Being generated by the run above"
+    : canManage
+      ? "Run an analysis to generate it"
+      : "No package has been generated yet";
 
   // What this page is currently describing. The sidebar chooser wins when a
   // package is pinned (M3 — the header used to say "latest: …" no matter what
@@ -528,82 +636,56 @@ export function ProjectOverviewPage() {
 
       {/* Quick actions: flat rows — icon left, text right. Whole card is a
           Link (not just the inner text) so the hover affordance matches the
-          clickable area; a brief pending state covers the click-to-route gap. */}
+          clickable area; a brief pending state covers the click-to-route gap.
+          A card whose destination is empty says so instead of linking there. */}
       <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <Link
-          to={onboardingResumeLink}
-          onClick={() => setPendingQuickAction("onboarding")}
-          aria-disabled={pendingQuickAction === "onboarding"}
-          className={`group block rounded-xl ${pendingQuickAction === "onboarding" ? "pointer-events-none opacity-70" : ""}`}
-        >
-          <Card className="h-full transition-colors group-hover:border-primary/40">
-            <CardContent className="flex items-center gap-3 p-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
-                <BookOpen className="h-4 w-4 text-primary" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-[0.8125rem] font-medium text-foreground">Continue onboarding</h3>
-                <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
-                  {onboardingProgress
-                    ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
-                    : "Start reading"}
-                  {pendingQuickAction === "onboarding"
-                    ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                    : <ArrowRight className="h-3 w-3 shrink-0" />}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
+        <QuickAction
+          icon={BookOpen}
+          iconTone="bg-primary/10 text-primary"
+          title={onboardingProgress ? "Continue onboarding" : "Onboarding"}
+          cta={
+            onboardingProgress
+              ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
+              : "Start reading"
+          }
+          to={hasReadablePackage ? onboardingResumeLink : null}
+          unavailableReason={noContentReason}
+          pending={pendingQuickAction === "onboarding"}
+          onNavigate={() => setPendingQuickAction("onboarding")}
+        />
 
-        <Link
-          to={tutorialResumeLink}
-          onClick={() => setPendingQuickAction("tutorial")}
-          aria-disabled={pendingQuickAction === "tutorial"}
-          className={`group block rounded-xl ${pendingQuickAction === "tutorial" ? "pointer-events-none opacity-70" : ""}`}
-        >
-          <Card className="h-full transition-colors group-hover:border-primary/40">
-            <CardContent className="flex items-center gap-3 p-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-info/10">
-                <Play className="h-4 w-4 text-info" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-[0.8125rem] font-medium text-foreground">Continue tutorial</h3>
-                <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
-                  {tutorialProgress
-                    ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
-                    : "Start a tutorial"}
-                  {pendingQuickAction === "tutorial"
-                    ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
-                    : <ArrowRight className="h-3 w-3 shrink-0" />}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
+        <QuickAction
+          icon={Play}
+          iconTone="bg-info/10 text-info"
+          // The heading matched the action it offered on exactly one of the two
+          // states: "Continue tutorial" over a link reading "Start a tutorial".
+          title={tutorialProgress ? "Continue tutorial" : "Tutorials"}
+          cta={
+            tutorialProgress
+              ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
+              : "Start a tutorial"
+          }
+          to={hasTutorials ? tutorialResumeLink : null}
+          unavailableReason={
+            contentPending
+              ? "Being generated by the run above"
+              : hasReadablePackage
+                ? "No tutorial was built from this snapshot"
+                : noContentReason
+          }
+          pending={pendingQuickAction === "tutorial"}
+          onNavigate={() => setPendingQuickAction("tutorial")}
+        />
 
-        <Link
+        <QuickAction
+          icon={User}
+          iconTone="bg-warning/10 text-warning"
+          title={`${roleTitle(project.developer_role)} role`}
+          cta="View team"
           to={`/projects/${id}/team`}
-          onClick={() => setPendingQuickAction("role")}
-          aria-disabled={pendingQuickAction === "role"}
-          className={`group block rounded-xl ${pendingQuickAction === "role" ? "pointer-events-none opacity-70" : ""}`}
-        >
-          <Card className="h-full transition-colors group-hover:border-primary/40">
-            <CardContent className="flex items-center gap-3 p-3">
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-warning/10">
-                <User className="h-4 w-4 text-warning" />
-              </div>
-              <div className="min-w-0">
-                <h3 className="text-[0.8125rem] font-medium capitalize text-foreground">{project.developer_role} role</h3>
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-primary">
-                  View team {pendingQuickAction === "role"
-                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                    : <ArrowRight className="h-3 w-3" />}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
+          pending={pendingQuickAction === "role"}
+          onNavigate={() => setPendingQuickAction("role")}
+        />
       </div>
 
       {controlError && <p className="mb-2 text-xs text-destructive">{controlError}</p>}
@@ -720,11 +802,19 @@ export function ProjectOverviewPage() {
       {(packages?.length ?? 0) > 0 && (
         <div className="mb-4" data-tour="overview-packages">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-[0.8125rem] font-medium text-foreground">Packages</h2>
-            <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
-              {filteredPackages.length} / {packages!.length}
-            </span>
-            <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <h2 className="text-[0.8125rem] font-medium text-foreground">
+              {packages!.length === 1 ? "Package" : "Packages"}
+            </h2>
+            {/* "1 / 1 packages" above three dropdowns and a single card is
+                furniture describing itself. The count appears once there is
+                something to count, and the filters once there is something to
+                filter. */}
+            {packages!.length > 1 && (
+              <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                {filteredPackages.length} / {packages!.length}
+              </span>
+            )}
+            <div className={`ml-auto flex-wrap items-center gap-1.5 ${packages!.length > 1 ? "flex" : "hidden"}`}>
               <Select value={roleFilter} onValueChange={setRoleFilter}>
                 <SelectTrigger className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -751,7 +841,9 @@ export function ProjectOverviewPage() {
               </Select>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {/* A lone package gets a readable column rather than a third of a
+              wide row with two empty columns beside it. */}
+          <div className={packages!.length === 1 ? "max-w-md" : "grid gap-3 sm:grid-cols-2 xl:grid-cols-3"}>
             {filteredPackages.map((card) => (
               <div key={card.id} className={selectedPackageId === card.id ? "rounded-xl ring-2 ring-primary/50" : ""}>
                 <PackageCardView

@@ -94,10 +94,3 @@ export function latestSnapshotOrderSql(alias = 's', branchParamExpr?: string): s
   const branch = wantedBranchSql(alias, branchParamExpr);
   return `${branchRankSql(alias, branch)} DESC, ${pushedAtSql(alias)} DESC, ${alias}.created_at DESC`;
 }
-
-/**
- * Same ordering for a query whose `analysis_snapshots` row has no alias
- * (`FROM analysis_snapshots WHERE ...`). Postgres accepts the table name as
- * its own alias, so this is just the default spelled out.
- */
-export const LATEST_SNAPSHOT_ORDER = latestSnapshotOrderSql('analysis_snapshots');

@@ -36,25 +36,29 @@ export function middleTruncate(label: string, max: number): string {
   const text = label.trim();
   if (max <= 1 || text.length <= max) return text;
 
-  const first = text.indexOf("/");
-  if (first > 0 && text.lastIndexOf("/") > first) {
-    const parts = text.split("/");
-    const head = parts[0]!;
-    // Grow the tail one segment at a time while it still fits; always keep at
-    // least one, even when that one segment alone overruns the budget.
-    let kept: string[] = [];
-    for (let i = parts.length - 1; i >= 1; i--) {
+  const parts = text.split("/");
+  if (parts.length > 2) {
+    // Spend the whole budget on trailing segments, from the last one back.
+    let kept = [parts[parts.length - 1]!];
+    for (let i = parts.length - 2; i >= 0; i--) {
       const next = [parts[i]!, ...kept];
-      const candidate = `${head}/…/${next.join("/")}`;
-      if (kept.length > 0 && candidate.length > max) break;
+      if (`…/${next.join("/")}`.length > max) break;
       kept = next;
-      if (candidate.length >= max) break;
     }
-    const out = `${head}/…/${kept.join("/")}`;
-    if (out.length <= max) return out;
+    if (`…/${kept.join("/")}`.length <= max) {
+      // The leading segment carries the HTTP method ("POST /api/…"), so keep
+      // it when there is room. There usually is not, and it is the cheapest
+      // thing to lose: the row and the node both print the trigger underneath.
+      if (kept.length < parts.length) {
+        const withHead = `${parts[0]}/…/${kept.join("/")}`;
+        if (withHead.length <= max) return withHead;
+      }
+      return `…/${kept.join("/")}`;
+    }
   }
 
-  // Character fallback: two thirds of the budget goes to the tail.
+  // Character fallback — a single segment longer than the whole budget, or a
+  // label with no path structure. Two thirds of the budget goes to the tail.
   const tail = Math.max(1, Math.floor((max - 1) * 0.65));
   const head = Math.max(0, max - 1 - tail);
   return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;

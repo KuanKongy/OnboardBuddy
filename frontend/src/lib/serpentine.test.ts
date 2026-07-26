@@ -181,6 +181,17 @@ describe("when to serpentine", () => {
     const { nodes, edges } = chain(80);
     expect(shouldSerpentine(nodes, edges)).to.equal(false);
   });
+
+  /**
+   * Owner C2, the case Auto lost on. OnboardBuddy's flagship
+   * "Analysis → onboarding generation" journey is advertised as eight steps and
+   * arrives as five walkthrough rows, so the old six-node floor sent it to a
+   * vertical column while Snake laid it out correctly when forced by hand.
+   */
+  it("snakes a five-step journey — the shape Auto used to send down a column", () => {
+    const { nodes, edges } = chain(5);
+    expect(shouldSerpentine(nodes, edges, { triggerType: "journey" })).to.equal(true);
+  });
 });
 
 /**

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { fetchClassGraph, fetchNodeDetail, type GraphResponse, type NodeDetail } from "@/lib/graphData";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import { useHotkeys } from "@/hooks/useHotkeys";
-import { useDrillStack } from "@/hooks/useDrillStack";
+import { useLocalDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useOptionalProject } from "@/contexts/ProjectContext";
@@ -66,9 +66,11 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
    * than silently showing the unfocused graph as if nothing was asked. */
   const [focusMissing, setFocusMissing] = useState(false);
 
-  // Its own URL param, so drilling here never rewrites the Files view's drill
-  // path (and a shared link still lands on the same directory).
-  const stack = useDrillStack("classdrill");
+  // Local rather than URL-backed: the Files ladder on this same page already
+  // owns `?drill=` and the history state that carries drill depth and saved
+  // viewports, and a second URL-backed stack would overwrite both (see
+  // useLocalDrillStack).
+  const stack = useLocalDrillStack();
   const currentFrame: DrillFrame | null = stack.current;
   const viewportRef = useRef<(() => Viewport) | null>(null);
   const pendingFocusDrillRef = useRef<string | null>(null);
@@ -149,7 +151,9 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
       id: n.id,
       label: n.label,
       kind: n.kind,
-      filePath: (n as { filePath?: string }).filePath,
+      // A class id is `<path>#<Name>`, so the path is recoverable even from a
+      // response that predates the explicit field.
+      filePath: n.filePath ?? (n.id.includes("#") ? n.id.slice(0, n.id.indexOf("#")) : undefined),
       metadata: {
         exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
         importCount: (n.metadata?.importCount as number) ?? 0,

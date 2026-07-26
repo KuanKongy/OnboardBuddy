@@ -186,7 +186,14 @@ export function ArchitecturePage() {
       (c) =>
         c.label.toLowerCase().includes(q) ||
         (c.narrative?.summary ?? c.summary).toLowerCase().includes(q) ||
-        c.members.some((m) => m.name.toLowerCase().includes(q) || (m.filePath ?? "").toLowerCase().includes(q)),
+        c.members.some(
+          (m) =>
+            m.name.toLowerCase().includes(q) ||
+            (m.filePath ?? "").toLowerCase().includes(q) ||
+            // Searchable now that it is readable: "which component holds the
+            // queue consumer" is answerable from the member briefs.
+            (m.summary ?? "").toLowerCase().includes(q),
+        ),
     );
   }, [data, insideCluster, search]);
 
@@ -196,7 +203,10 @@ export function ArchitecturePage() {
     const q = search.trim().toLowerCase();
     if (!q) return level.nodes;
     return level.nodes.filter(
-      (n) => n.label.toLowerCase().includes(q) || (n.filePath ?? "").toLowerCase().includes(q),
+      (n) =>
+        n.label.toLowerCase().includes(q) ||
+        (n.filePath ?? "").toLowerCase().includes(q) ||
+        (n.summary ?? "").toLowerCase().includes(q),
     );
   }, [insideCluster, level, search]);
 
@@ -243,6 +253,7 @@ export function ArchitecturePage() {
           data: {
             label: m.label,
             filePath: m.filePath,
+            summary: m.summary ?? null,
             criticalScore: m.criticalScore,
             importCount: m.importCount,
             dependentCount: m.dependentCount,
@@ -785,6 +796,21 @@ export function ArchitecturePage() {
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+
+                {/* The same line the member list shows — a member panel that
+                    opened with a score and an export list still never said
+                    what the file was for. */}
+                {selectedMember.summary && (
+                  <div className="mb-3">
+                    <p className="section-label mb-1">What this file does</p>
+                    <p className="text-[0.8125rem] leading-relaxed text-foreground">{selectedMember.summary}</p>
+                    {selectedMember.role && (
+                      <p className="mt-1 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+                        {selectedMember.role}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <ScoreProvenanceDisclosure
                   className="mb-3"
