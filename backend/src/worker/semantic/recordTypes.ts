@@ -59,14 +59,7 @@ export const PROMPT_VERSIONS = {
   // record cache key, so the bump is what stops records extracted under the
   // old unfenced prompt from being served — and re-fed into later prompts —
   // forever (finding P3: records are content-addressed and outlive a snapshot).
-  //
-  // symbol/factsOnly bumped again for secret redaction (secretRedactor.ts):
-  // `evidenceHashForSymbol` hashes bodyHash/signatureHash — both computed from
-  // the RAW source — so redacting snippets does not change the evidence hash
-  // and would not, on its own, invalidate anything. Without this bump a record
-  // extracted from unredacted text (and the receipt holding that snippet)
-  // would be served for as long as the file itself is unchanged.
-  symbol: 'symbol-record-v4',
+  symbol: 'symbol-record-v3',
   file: 'file-synthesis-v2',
   module: 'module-synthesis-v2',
   service: 'service-synthesis-v2',
@@ -76,7 +69,7 @@ export const PROMPT_VERSIONS = {
   critique: 'critique-v2',
   workflow: 'workflow-record-v2',
   rerank: 'rerank-v1',
-  factsOnly: 'facts-only-v2', // deterministic, no LLM
+  factsOnly: 'facts-only-v1', // deterministic, no LLM
 } as const;
 
 /** Shared output rules injected into every semantic prompt. */
