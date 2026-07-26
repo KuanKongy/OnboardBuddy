@@ -23,6 +23,7 @@ import {
 import { sha256, hashBody } from './hashUtils.js';
 import { symbolKey, normalizePath } from './stableKeys.js';
 import { MAX_SNIPPET_CHARS } from './budgets.js';
+import { redactSecrets } from './secretRedactor.js';
 
 /**
  * Extraction context threaded to the per-kind extractors so they can produce
@@ -229,7 +230,9 @@ function extractParameters(
       name: p.name.getText(sf),
       type: p.type?.getText(sf) ?? 'any',
       optional: p.questionToken !== undefined,
-      default: p.initializer?.getText(sf) ?? null,
+      // `function f(apiKey = "sk_live_…")` — another raw-text field that
+      // reaches prompts without passing through snippetOf.
+      default: p.initializer ? redactSecrets(p.initializer.getText(sf)) : null,
     };
 
     if (hasAccessMod) {
@@ -264,9 +267,14 @@ function extractCallSymbols(body: ts.Node | undefined, sf: ts.SourceFile): strin
 
 // ─── Evidence enrichment (hashes, snippets, resolved calls, triviality) ──────
 
-/** Capped source snippet for prompts and receipts. */
+/**
+ * Capped source snippet for prompts and receipts.
+ *
+ * Redaction runs BEFORE the cap: slicing first would leave the leading half of
+ * a credential that straddles `MAX_SNIPPET_CHARS` sitting in the output.
+ */
 function snippetOf(node: ts.Node, sf: ts.SourceFile): string {
-  const text = node.getText(sf);
+  const text = redactSecrets(node.getText(sf));
   return text.length > MAX_SNIPPET_CHARS ? text.slice(0, MAX_SNIPPET_CHARS) : text;
 }
 
@@ -624,6 +632,46 @@ function extractClass(
     });
   }
 
+  // Accessors (`get current() { … }` / `set current(v) { … }`) ARE methods for
+  // evidence purposes — a getter that opens a connection or a setter that
+  // writes is real control flow. Filtering members by `isMethodDeclaration`
+  // alone dropped both silently: no symbol node, no calls edges, so anything
+  // a workflow reached THROUGH an accessor was invisible to tracing.
+  // The accessor keyword is part of the name because a getter and setter of
+  // the same property share one identifier, and equal names collapse into a
+  // single `path#Class.name` graph node (see stableKeys.symbolKey) — the
+  // setter would silently overwrite the getter. Spaces in member names are
+  // already routine here: route symbols look like `POST /:id/analyze`.
+  for (const m of node.members) {
+    const isGet = ts.isGetAccessorDeclaration(m);
+    if (!isGet && !ts.isSetAccessorDeclaration(m)) continue;
+    const keyword = isGet ? 'get' : 'set';
+    const params = extractParameters(m.parameters, sf);
+    const retType = m.type?.getText(sf) ?? (isGet ? 'any' : 'void');
+    const mLoc = getNodeLocation(m, sf);
+    const mCalls = extractCallSymbols(m.body, sf);
+    const mResolved = extractResolvedCalls(m.body, sf, ctx);
+    const signature = buildSignature(params, retType);
+    methods.push({
+      name: `${keyword} ${m.name.getText(sf)}`,
+      signature,
+      parameters: params,
+      returnType: retType,
+      accessibility: getAccessibility(m),
+      static: hasModifier(m, ts.SyntaxKind.StaticKeyword),
+      // Accessors cannot be async in TypeScript.
+      isAsync: false,
+      lineStart: mLoc.start.line,
+      lineEnd: mLoc.end.line,
+      ...(mCalls.length > 0 ? { callsSymbols: mCalls } : {}),
+      ...(mResolved.length > 0 ? { resolvedCalls: mResolved } : {}),
+      signatureHash: sha256(`${keyword} ${signature}`),
+      bodyHash: hashBody(m.getText(sf)),
+      snippet: snippetOf(m, sf),
+      isTrivial: isTrivialBody(m.body, mCalls.length),
+    });
+  }
+
   return {
     name: node.name.text,
     kind: 'class',
@@ -807,7 +855,10 @@ function extractVariableStatement(
     } else {
       if (decl.type) base.typeAnnotation = decl.type.getText(sf);
       if (decl.initializer) {
-        base.initializer = decl.initializer.getText(sf);
+        // The likeliest resting place of an accidentally committed credential
+        // (`const STRIPE_KEY = "sk_live_…"`), and it does NOT pass through
+        // snippetOf — serializer.ts carries this field straight into prompts.
+        base.initializer = redactSecrets(decl.initializer.getText(sf));
         // `const worker = new Worker(QUEUE, async (job) => run(job))`
         // carries real control flow in its closure argument — without
         // these calls the queue-consumer entrypoint seeds a dead node and
@@ -838,7 +889,7 @@ function extractEnum(
 ): SymbolInfo | null {
   const loc = getNodeLocation(node, sf);
   const members: EnumMember[] = node.members.map((m) => {
-    const rawValue = m.initializer?.getText(sf) ?? m.name.getText(sf);
+    const rawValue = redactSecrets(m.initializer?.getText(sf) ?? m.name.getText(sf));
     const value =
       (rawValue.startsWith('"') || rawValue.startsWith("'"))
         ? rawValue.slice(1, -1)
