@@ -22,11 +22,12 @@ import {
   fetchWorkflowsList,
   WORKFLOW_TIERS,
   type WorkflowGraphResponse,
+  type WorkflowOrdering,
   type WorkflowSummary,
 } from "@/lib/graphData";
 import { layoutGraph } from "@/lib/graphLayout";
 import { layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
-import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
+import { ScoreProvenance } from "@/components/ScoreProvenance";
 import { fetchNodeDetail, type NodeDetail } from "@/lib/graphData";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { cn } from "@/lib/utils";
@@ -132,6 +133,7 @@ export function WorkflowsPage() {
   // Deep link from the capabilities hub: ?workflow=<id> preselects a flow.
   const [searchParams] = useSearchParams();
   const [workflows, setWorkflows] = useState<WorkflowSummary[] | null>(null);
+  const [ordering, setOrdering] = useState<WorkflowOrdering | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
     () => searchParams.get("workflow") ?? "",
   );
@@ -151,9 +153,10 @@ export function WorkflowsPage() {
     setLoadingList(true);
     setError("");
     fetchWorkflowsList(id, selectedPackageId)
-      .then((list) => {
-        setWorkflows(list);
-        if (list.length > 0) setSelectedWorkflowId((prev) => prev || list[0]!.id);
+      .then((res) => {
+        setWorkflows(res.workflows);
+        setOrdering(res.ordering ?? null);
+        if (res.workflows.length > 0) setSelectedWorkflowId((prev) => prev || res.workflows[0]!.id);
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoadingList(false));
@@ -393,13 +396,36 @@ export function WorkflowsPage() {
                   ? `${visibleWorkflows.length} of ${workflows.length} flows`
                   : `Traced flows (${workflows.length}) — most critical first`}
               </p>
+              {/* What "most critical first" actually means here is the rail's
+                  sort order, not any one flow's score — tier decides before a
+                  score is compared. The sequence is served by the API beside
+                  the ORDER BY that implements it; each flow's own criticality
+                  is derived under the flow, where that number is shown. */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
                     <Info className="h-3 w-3" />
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-left">{RANKING_EXPLANATION}</TooltipContent>
+                <TooltipContent side="top" className="max-w-sm text-left">
+                  {ordering ? (
+                    <div className="space-y-1 text-[0.6875rem]">
+                      <p className="font-medium">{ordering.summary}</p>
+                      <ol className="list-inside list-decimal space-y-0.5 opacity-80">
+                        {ordering.steps.map((step) => (
+                          <li key={step}>{step}</li>
+                        ))}
+                      </ol>
+                      <p className="opacity-70">
+                        Select a flow to see how its own criticality score was derived.
+                      </p>
+                    </div>
+                  ) : (
+                    <span className="text-[0.6875rem]">
+                      This response did not say how the list was ordered.
+                    </span>
+                  )}
+                </TooltipContent>
               </Tooltip>
             </div>
             {/* Searching the rail, not the canvas: on this tab the thing you
@@ -475,8 +501,11 @@ export function WorkflowsPage() {
 
           {/* flow graph + step detail */}
           <div>
-            {/* Why this flow matters — plain-language ranking reasons */}
-            {selectedSummary && (selectedSummary.purpose || (selectedSummary.reasons?.length ?? 0) > 0) && (
+            {/* Why this flow matters — plain-language ranking reasons, and the
+                derivation of the score that ranked it. Shown for any selected
+                flow now: the criticality block is always meaningful, where the
+                purpose/reasons text is not always present. */}
+            {selectedSummary && (
               <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
                 {selectedSummary.purpose && (
                   <p className="text-foreground">{selectedSummary.purpose}</p>
@@ -487,6 +516,19 @@ export function WorkflowsPage() {
                     {selectedSummary.reasons!.slice(0, 3).join(" · ")}
                   </p>
                 )}
+                {/* The score behind the rail's "most critical" claim, with the
+                    signals that produced it. Reasons are suppressed here
+                    because the line above already prints the same stored
+                    strings. */}
+                <div className="mt-2 border-t border-border pt-2">
+                  <div className="mb-1 flex items-center gap-1.5">
+                    <p className="section-label">Criticality</p>
+                    <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                      {Math.round(Number(selectedSummary.composite_score ?? 0) * 100)} / 100
+                    </span>
+                  </div>
+                  <ScoreProvenance data={selectedSummary.provenance} showReasons={false} />
+                </div>
               </div>
             )}
           <div className={selectedStep ? "grid gap-3 xl:grid-cols-[1fr_300px]" : ""}>

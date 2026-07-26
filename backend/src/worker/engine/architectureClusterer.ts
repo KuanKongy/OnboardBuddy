@@ -1,9 +1,10 @@
+import { builtinModules } from 'node:module';
 import type { PoolClient } from 'pg';
 import type { EvidenceGraph, EvidenceNode, RepoInventory } from '../types/analysis.js';
 import type { CandidateRanking } from './candidateRanker.js';
 import type { ExtractedWorkflow } from './workflowExtractor.js';
 import { frameworksOfPackage } from './repoIngester.js';
-import { pool } from '../../lib/db.js';
+import { pool, query } from '../../lib/db.js';
 
 /**
  * Deterministic architecture clustering (doc/Pipeline.md "Architecture
@@ -200,8 +201,46 @@ export function clusterArchitecture(input: ClusterArchitectureInput): Architectu
     }
   }
 
-  // ── 5. Resolve kinds, score, and summarize from member facts ──────────────
+  // ── 5. Resolve kinds, score, and explain each cluster from member facts ───
   const importsByFile = externalImportsByFile(input.graph);
+  const bucketLabels = new Map([...buckets].map(([key, b]) => [key, b.label]));
+  const workflowTitle = new Map(input.workflows.map((w) => [w.stableKey, w.title]));
+  // Boundary links, resolved to labels and human flow names once for every
+  // cluster rather than per cluster — the same shape `loadClusterNarratives`
+  // reads out of SQL, so the analysis-time and request-time narratives are
+  // produced by the same function from the same facts.
+  const inboundLinks = new Map<string, ClusterBoundaryLink[]>();
+  const outboundLinks = new Map<string, ClusterBoundaryLink[]>();
+  for (const edge of aggregated.values()) {
+    const sourceLabel = bucketLabels.get(edge.sourceClusterKey);
+    const targetLabel = bucketLabels.get(edge.targetClusterKey);
+    if (!sourceLabel || !targetLabel) continue;
+    const carries = edge.workflowCrossings
+      .map((key) => workflowTitle.get(key))
+      .filter((t): t is string => !!t);
+    (outboundLinks.get(edge.sourceClusterKey) ?? outboundLinks.set(edge.sourceClusterKey, []).get(edge.sourceClusterKey)!)
+      .push({ other: targetLabel, type: edge.type, carries });
+    (inboundLinks.get(edge.targetClusterKey) ?? inboundLinks.set(edge.targetClusterKey, []).get(edge.targetClusterKey)!)
+      .push({ other: sourceLabel, type: edge.type, carries });
+  }
+  // A package only one cluster imports is the fact that explains why that
+  // cluster is a separate box; a package half the repo imports explains nothing.
+  const clustersByExternal = new Map<string, Set<string>>();
+  for (const [filePath, specs] of importsByFile) {
+    const clusterKey = clusterKeyByFile.get(filePath);
+    if (!clusterKey) continue;
+    for (const spec of specs) {
+      if (!isThirdParty(spec)) continue;
+      (clustersByExternal.get(spec) ?? clustersByExternal.set(spec, new Set()).get(spec)!).add(clusterKey);
+    }
+  }
+  const exclusiveExternals = new Map<string, string[]>();
+  for (const [spec, owners] of clustersByExternal) {
+    if (owners.size !== 1) continue;
+    const key = [...owners][0]!;
+    (exclusiveExternals.get(key) ?? exclusiveExternals.set(key, []).get(key)!).push(spec);
+  }
+
   const clusters: ArchitectureCluster[] = [];
   for (const [stableKey, bucket] of buckets) {
     const fileMembers = bucket.members.filter((m) => m.node.type === 'module' || m.node.type === 'file');
@@ -227,22 +266,43 @@ export function clusterArchitecture(input: ClusterArchitectureInput): Architectu
     const byType: Record<string, number> = {};
     for (const m of bucket.members) byType[m.node.type] = (byType[m.node.type] ?? 0) + 1;
 
+    const memberKeys = new Set(bucket.members.map((m) => m.node.stableKey));
+    const tables = new Set<string>();
+    for (const e of input.graph.edges) {
+      if (e.type !== 'touches_schema') continue;
+      if (!memberKeys.has(e.sourceKey) && !memberKeys.has(nodeFile(input.graph, e.sourceKey) ?? '')) continue;
+      if (typeof e.metadata.table === 'string') tables.add(e.metadata.table);
+    }
+
+    const narrative = buildClusterNarrative({
+      label: bucket.label,
+      kind,
+      commonPath: commonDirectory(fileMembers.map((m) => m.node.stableKey)),
+      tables: [...tables],
+      exclusiveExternals: exclusiveExternals.get(stableKey) ?? [],
+      inbound: inboundLinks.get(stableKey) ?? [],
+      outbound: outboundLinks.get(stableKey) ?? [],
+    });
+
     clusters.push({
       stableKey,
       label: bucket.label,
       kind,
       criticalScore,
-      deterministicSummary: summarize(bucket, input.graph),
+      deterministicSummary: narrative.summary,
       members: bucket.members.map((m) => ({ nodeStableKey: m.node.stableKey, reason: m.reason })),
       metadata: {
         // The single definition of a cluster's file count. Everything that
         // shows a count to a user or a model reads THIS, not a row count over
         // architecture_cluster_members (which includes symbols and configs).
+        // Counts live HERE and are rendered as a chip; they are deliberately
+        // absent from `deterministicSummary`, which has to explain instead.
         fileCount: fileMembers.length,
         memberCount: bucket.members.length,
         memberCountsByType: byType,
         /** Noun the UI should use — "files" is wrong for schema/config clusters. */
         primaryMemberNoun: primaryMemberNoun(byType, fileMembers.length),
+        narrative,
       },
     });
   }
@@ -253,6 +313,18 @@ export function clusterArchitecture(input: ClusterArchitectureInput): Architectu
   };
 }
 
+/**
+ * A real third-party dependency, as opposed to a relative path or a Node
+ * builtin. `fs`, `path` and `crypto` are importable without the `node:` prefix,
+ * and reporting "the only component that pulls in fs" says nothing about
+ * architecture — every server component reads files.
+ */
+function isThirdParty(specifier: string): boolean {
+  if (!specifier || specifier.startsWith('.') || specifier.startsWith('/')) return false;
+  const bare = specifier.startsWith('node:') ? specifier.slice(5) : specifier;
+  return !builtinModules.includes(bare) && !specifier.startsWith('node:');
+}
+
 /** Bare package name for an import specifier: '@scope/pkg/sub' -> '@scope/pkg'. */
 function packageOfSpecifier(specifier: string): string {
   const parts = specifier.split('/');
@@ -261,14 +333,26 @@ function packageOfSpecifier(specifier: string): string {
 
 /**
  * External packages each file imports, keyed by file path. Built from the
- * `imports` edges that land on `external` boundary nodes, which is the only
- * record of a third-party dependency at file granularity.
+ * edges that land on `external` boundary nodes, which is the only record of a
+ * third-party dependency at file granularity.
+ *
+ * `references_external` is the type the graph builder actually emits for a
+ * third-party import (`evidenceGraphBuilder.ts:201`); `imports` is reserved for
+ * edges that resolved to a file inside the scope. Matching only `imports` here
+ * meant this map was ALWAYS EMPTY on a real repository — verified against the
+ * live FloowForge snapshot, which has 131 external references and returned
+ * nothing. Everything downstream that reads it therefore never fired: the
+ * documented "what these files actually import beats what the manifest
+ * declares" tier of `inferClusterKind` silently fell through to the scope's
+ * package.json on every repo. The unit fixture used `imports`, so the test was
+ * green while the feature was dead. Both types are accepted so the fixture and
+ * the pipeline agree.
  */
 function externalImportsByFile(graph: EvidenceGraph): Map<string, Set<string>> {
   const nodeByKey = new Map(graph.nodes.map((n) => [n.stableKey, n]));
   const byFile = new Map<string, Set<string>>();
   for (const edge of graph.edges) {
-    if (edge.type !== 'imports') continue;
+    if (edge.type !== 'imports' && edge.type !== 'references_external') continue;
     const target = nodeByKey.get(edge.targetKey);
     if (!target || target.type !== 'external') continue;
     const raw = typeof target.metadata.specifier === 'string' ? target.metadata.specifier : target.name;
@@ -321,9 +405,6 @@ function inferClusterKind(
   return 'other';
 }
 
-/** Which member-count noun a cluster should be described with. */
-const NOUN_NODE_TYPE: Record<string, string> = { table: 'schema', 'config file': 'config', file: 'module' };
-
 /**
  * The noun that honestly describes what a cluster contains, chosen by which
  * member type actually dominates.
@@ -344,41 +425,393 @@ function primaryMemberNoun(byType: Record<string, number>, fileCount: number): '
   return candidates.reduce((best, cur) => (cur[1] > best[1] ? cur : best))[0];
 }
 
-function summarize(bucket: { label: string; members: Array<{ node: EvidenceNode }> }, graph: EvidenceGraph): string {
-  const memberKeys = new Set(bucket.members.map((m) => m.node.stableKey));
-  const files = bucket.members.filter((m) => m.node.type === 'module' || m.node.type === 'file');
-  const symbolCount = graph.nodes.filter(
-    (n) => n.filePath != null && memberKeys.has(n.filePath) &&
-      n.type !== 'module' && n.type !== 'file',
-  ).length;
-
-  // A schema cluster holds table nodes and a config cluster holds config
-  // nodes; neither has file members. Leading with "0 files" over 48 tables was
-  // the summary contradicting the graph beside it.
-  const byType: Record<string, number> = {};
-  for (const m of bucket.members) byType[m.node.type] = (byType[m.node.type] ?? 0) + 1;
-  const noun = primaryMemberNoun(byType, files.length);
-  const primaryCount = noun === 'file' ? files.length : (byType[NOUN_NODE_TYPE[noun]!] ?? 0);
-
-  const parts = [`${primaryCount} ${noun}${primaryCount === 1 ? '' : 's'}`];
-  if (noun === 'file' && symbolCount > 0) parts.push(`${symbolCount} symbols`);
-
-  const tables = new Set<string>();
-  for (const e of graph.edges) {
-    if (e.type === 'touches_schema' && (memberKeys.has(e.sourceKey) || memberKeys.has(nodeFile(graph, e.sourceKey) ?? ''))) {
-      const table = typeof e.metadata.table === 'string' ? e.metadata.table : null;
-      if (table) tables.add(table);
-    }
-  }
-  if (tables.size > 0) parts.push(`touches table${tables.size > 1 ? 's' : ''} ${[...tables].slice(0, 5).join(', ')}`);
-
-  return `${bucket.label}: ${parts.join(', ')}.`;
-}
-
 function nodeFile(graph: EvidenceGraph, key: string): string | null {
   // touches_schema sources are symbols; membership is tracked per file.
   const hash = key.indexOf('#');
   return hash > 0 ? key.slice(0, hash) : null;
+}
+
+// ─── Cluster narrative ───────────────────────────────────────────────────────
+
+/**
+ * WHY a component exists, rather than what it contains.
+ *
+ * The summary this replaces was `"<label>: 9 files, 40 symbols"` — printed
+ * under a heading that already said the label, beside a chip that already said
+ * the count. That is an inventory, and a reader who wants to know what "Auth
+ * services" is responsible for learns nothing from it. Measured examples of the
+ * same failure reaching generated prose: `"State — Responsibility: Manages
+ * frontend application state. File Count: 2 files."` (the label reworded, with
+ * the count offered as the explanation) and `"API Routes — Responsibility:
+ * Handles API requests"` (a tautology).
+ *
+ * Three sentences, each answering a question a count cannot:
+ *   responsibility — what this part of the system is FOR, in the repo's own nouns
+ *   boundary       — what crosses in and out, and what those crossings CARRY
+ *   separation     — why it is drawn as its own component at all
+ *
+ * Counts are deliberately absent from every one of them: they live in
+ * `metadata` and are rendered as a chip beside the component, where a count
+ * belongs.
+ */
+export interface ClusterBoundaryLink {
+  /** Label of the component on the other side. */
+  other: string;
+  type: ClusterEdgeType;
+  /** Human flow names travelling across this link — never stable keys. */
+  carries: string[];
+}
+
+export interface ClusterNarrativeFacts {
+  label: string;
+  kind: ClusterKind;
+  /** Directory every member sits under, when they share one. */
+  commonPath: string | null;
+  /** Database tables this component's own code reads or writes. */
+  tables: string[];
+  /** Third-party packages this component imports and no other one does. */
+  exclusiveExternals: string[];
+  inbound: ClusterBoundaryLink[];
+  outbound: ClusterBoundaryLink[];
+}
+
+export interface ClusterNarrative {
+  responsibility: string;
+  boundary: string;
+  separation: string;
+  /** What the evidence could not establish — part of the explanation, not an omission. */
+  unknowns: string[];
+  /** The three sentences joined; what `deterministic_summary` stores. */
+  summary: string;
+}
+
+/**
+ * What a component of this kind is for, stated so that it could not be
+ * produced by rewording the label. "API layer — handles API requests" is the
+ * failure these sentences exist to make impossible.
+ */
+const KIND_RESPONSIBILITY: Record<ClusterKind, string> = {
+  api_layer: 'Requests from outside this process enter the system here and are turned into work the rest of the code does.',
+  auth_layer: 'Decides who a caller is and what they are allowed to do, before anything else runs.',
+  database_layer: 'Owns how this system stores data and reads it back, so no other component writes storage access by hand.',
+  frontend_ui: 'Renders what a person sees and turns what they do into calls on the rest of the system.',
+  frontend_state: 'Holds the state screens read from, so no screen has to keep its own copy in sync.',
+  worker_layer: 'Runs work outside the request path, so a slow job never blocks whoever asked for it.',
+  analysis_engine: 'Turns raw input into the structured facts the rest of the system reasons over.',
+  integration_layer: 'Talks to services this repository does not own, and is where their failures land first.',
+  devops_layer: 'Describes how this system is built, configured and shipped — not what it does while running.',
+  test_layer: 'Holds the checks that fail when behaviour elsewhere changes; nothing at runtime depends on it.',
+  shared_module: 'Has no domain of its own: it exists so the components that do are not each writing the same thing.',
+  other: 'No structural rule placed this code, so what it is for is not established by the evidence here.',
+};
+
+/**
+ * How a connection of each type reads in a sentence, from each side, plus how
+ * much it tells a reader.
+ *
+ * `rank` collapses the several edges two components share down to the one worth
+ * saying. Every `calls` edge is also an `imports` edge, so describing both
+ * printed "It calls into Shared Utilities; imports Shared Utilities" — the same
+ * relationship twice, which is the flat-edge-list failure this narrative exists
+ * to stop repeating. Higher rank wins; `imports` is last because it is the
+ * weakest claim any of them makes.
+ */
+const EDGE_VERB: Record<ClusterEdgeType, { rank: number; out: string; inOne: string; inMany: string }> = {
+  reads_writes_data: { rank: 6, out: 'reads and writes', inOne: 'reads and writes it', inMany: 'read and write it' },
+  enqueues_job: { rank: 5, out: 'enqueues jobs onto', inOne: 'enqueues jobs onto it', inMany: 'enqueue jobs onto it' },
+  sends_request: { rank: 4, out: 'sends requests to', inOne: 'sends requests to it', inMany: 'send requests to it' },
+  tests: { rank: 3, out: 'tests', inOne: 'tests it', inMany: 'test it' },
+  calls: { rank: 2, out: 'calls into', inOne: 'calls into it', inMany: 'call into it' },
+  uses_config: { rank: 1, out: 'reads configuration from', inOne: 'reads configuration from it', inMany: 'read configuration from it' },
+  imports: { rank: 0, out: 'imports', inOne: 'imports it', inMany: 'import it' },
+};
+
+/** "a", "a and b", "a, b and c" — never a bare comma list ending in a dangle. */
+function list(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** Distinct, order-preserving, capped — every fact list in the narrative is one. */
+function take(values: Iterable<string>, limit: number): string[] {
+  const out: string[] = [];
+  for (const v of values) {
+    if (!v || out.includes(v)) continue;
+    out.push(v);
+    if (out.length === limit) break;
+  }
+  return out;
+}
+
+/** How many components one side of a boundary names before it says "and others". */
+const MAX_PARTNERS = 3;
+
+/**
+ * One direction of a boundary in words: "reads and writes Database Schema,
+ * calls into Shared Utilities and Workers".
+ *
+ * Each partner is named once, under the strongest verb the two of them share,
+ * so a component that both imports and calls another appears once rather than
+ * in two clauses that a reader has to notice are the same relationship.
+ */
+function describeLinks(links: ClusterBoundaryLink[], side: 'out' | 'in'): string {
+  const strongest = new Map<string, ClusterEdgeType>();
+  for (const link of links) {
+    const current = strongest.get(link.other);
+    if (!current || EDGE_VERB[link.type].rank > EDGE_VERB[current].rank) strongest.set(link.other, link.type);
+  }
+
+  const byVerb = new Map<ClusterEdgeType, string[]>();
+  for (const [other, type] of strongest) {
+    (byVerb.get(type) ?? byVerb.set(type, []).get(type)!).push(other);
+  }
+
+  return [...byVerb.entries()]
+    .sort((a, b) => EDGE_VERB[b[0]].rank - EDGE_VERB[a[0]].rank)
+    .map(([type, all]) => {
+      const shown = take(all, MAX_PARTNERS);
+      // `list()` would render "A, B and C and others" — the truncation marker
+      // takes the conjunction slot instead.
+      const named = all.length > shown.length ? `${shown.join(', ')} and others` : list(shown);
+      const verb = EDGE_VERB[type];
+      return side === 'out'
+        ? `${verb.out} ${named}`
+        : `${named} ${all.length === 1 ? verb.inOne : verb.inMany}`;
+    })
+    .join(', ');
+}
+
+export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarrative {
+  const unknowns: string[] = [];
+
+  // ── Responsibility: the kind's role, made specific by this repo's own nouns.
+  const evidence: string[] = [];
+  const tables = take(facts.tables, 5);
+  if (tables.length > 0) {
+    evidence.push(`it reads or writes the ${list(tables)} table${tables.length === 1 ? '' : 's'}`);
+  }
+  const externals = take(facts.exclusiveExternals, 3);
+  if (externals.length > 0) {
+    evidence.push(`it is the only component here that pulls in ${list(externals)}`);
+  }
+  const responsibility = evidence.length > 0
+    ? `${KIND_RESPONSIBILITY[facts.kind]} In this repository ${list(evidence)}.`
+    : KIND_RESPONSIBILITY[facts.kind];
+
+  // ── Boundary: what crosses, and what those crossings carry.
+  const links = [...facts.inbound, ...facts.outbound];
+  const carried = take(links.flatMap((l) => l.carries), 3);
+  let boundary: string;
+  if (links.length === 0) {
+    boundary = 'Nothing in the traced evidence connects it to another component.';
+    unknowns.push(
+      'No traced connection reaches this component, which is a limit of the tracing as much as a fact about the code.',
+    );
+  } else {
+    const out = describeLinks(facts.outbound, 'out');
+    const inb = describeLinks(facts.inbound, 'in');
+    const sentences: string[] = [];
+    if (out) sentences.push(`It ${out}.`);
+    if (inb) sentences.push(`${inb[0]!.toUpperCase()}${inb.slice(1)}.`);
+    if (carried.length > 0) {
+      sentences.push(`Traced flows crossing that boundary include ${list(carried)}.`);
+    } else {
+      sentences.push('No traced flow crosses that boundary — the links here are imports and calls only.');
+      unknowns.push('No traced flow crosses this boundary, so what actually travels between these components at runtime is not established.');
+    }
+    boundary = sentences.join(' ');
+  }
+
+  // ── Separation: why it is its own component. Derived, never asserted.
+  let separation: string;
+  if (facts.inbound.length === 0 && facts.outbound.length === 0) {
+    separation = 'It stands alone in this map; treat that as a gap in what could be traced, not as proof that nothing uses it.';
+  } else if (facts.inbound.length === 0) {
+    separation = 'Nothing else in the map depends on it, so a change made here stops at its own boundary.';
+  } else if (facts.outbound.length === 0) {
+    separation = 'It depends on nothing else in the map, which is what makes it safe for everything else to depend on it.';
+  } else if (externals.length > 0) {
+    separation = `Keeping it separate is what stops ${list(externals)} from spreading into the rest of the codebase.`;
+  } else {
+    separation = facts.commonPath
+      ? `It is drawn as one component because its files share \`${facts.commonPath}\` — the grouping is by path and convention, not by a declared module boundary.`
+      : 'It is drawn as one component by path and convention, not by a declared module boundary.';
+  }
+
+  if (evidence.length === 0 && carried.length === 0) {
+    unknowns.push('Nothing in the evidence names what this component works on, so its responsibility above is inferred from its kind alone.');
+  }
+
+  return {
+    responsibility,
+    boundary,
+    separation,
+    unknowns,
+    summary: [responsibility, boundary, separation].filter(Boolean).join(' '),
+  };
+}
+
+/** Longest shared directory of a set of file paths, or null when they diverge. */
+function commonDirectory(paths: string[]): string | null {
+  const dirs = paths.filter(Boolean).map((p) => p.split('/').slice(0, -1));
+  if (dirs.length === 0) return null;
+  const first = dirs[0]!;
+  let depth = first.length;
+  for (const d of dirs) {
+    let i = 0;
+    while (i < depth && i < d.length && d[i] === first[i]) i++;
+    depth = i;
+    if (depth === 0) return null;
+  }
+  return first.slice(0, depth).join('/') || null;
+}
+
+/**
+ * Narrative facts for every cluster of a persisted snapshot.
+ *
+ * The API and the `architecture_deep` prompt both call this, so the tab and the
+ * generated section are two renderings of ONE dataset. They used to disagree —
+ * the tab printed a count-only summary while the section wrote its own prose
+ * from edge weights — which is a large part of why the architecture view "does
+ * not make sense": the two surfaces described the same component differently.
+ *
+ * Computed at request time from stored rows rather than read out of
+ * `metadata`, so snapshots analysed before this existed get the narrative too
+ * without being re-analysed.
+ */
+/** The stored rows `buildNarrativesFromRows` turns into narrative facts. */
+export interface ClusterNarrativeRows {
+  clusters: Array<{ id: string; stable_key: string; label: string; kind: ClusterKind }>;
+  edges: Array<{ source_cluster_id: string; target_cluster_id: string; type: ClusterEdgeType; crossings: unknown }>;
+  members: Array<{ cluster_key: string; file_path: string }>;
+  workflows: Array<{ stable_key: string; title: string }>;
+  tables: Array<{ file_path: string | null; table_name: string }>;
+  externals: Array<{ file_path: string; specifier: string }>;
+}
+
+/**
+ * Row assembly, split from the queries so the narrative can be exercised
+ * against a real snapshot's rows without a database connection.
+ */
+export function buildNarrativesFromRows(rows: ClusterNarrativeRows): Map<string, ClusterNarrative> {
+  const labelById = new Map(rows.clusters.map((c) => [c.id, c.label]));
+  const keyById = new Map(rows.clusters.map((c) => [c.id, c.stable_key]));
+
+  const clusterOfFile = new Map<string, string>();
+  const pathsByCluster = new Map<string, string[]>();
+  for (const m of rows.members) {
+    clusterOfFile.set(m.file_path, m.cluster_key);
+    (pathsByCluster.get(m.cluster_key) ?? pathsByCluster.set(m.cluster_key, []).get(m.cluster_key)!).push(m.file_path);
+  }
+
+  const titleByKey = new Map(rows.workflows.map((w) => [w.stable_key, w.title]));
+
+  const tablesByCluster = new Map<string, Set<string>>();
+  for (const t of rows.tables) {
+    const key = t.file_path ? clusterOfFile.get(t.file_path) : undefined;
+    if (!key) continue;
+    (tablesByCluster.get(key) ?? tablesByCluster.set(key, new Set()).get(key)!).add(t.table_name);
+  }
+
+  // "Exclusive" is the whole point: a package half the repo imports says
+  // nothing about one component, while a package only this component imports
+  // is precisely why it is drawn as its own box.
+  const clustersByExternal = new Map<string, Set<string>>();
+  for (const x of rows.externals) {
+    const key = clusterOfFile.get(x.file_path);
+    if (!key) continue;
+    const pkg = packageOfSpecifier(x.specifier);
+    if (!isThirdParty(pkg)) continue;
+    (clustersByExternal.get(pkg) ?? clustersByExternal.set(pkg, new Set()).get(pkg)!).add(key);
+  }
+  const exclusiveByCluster = new Map<string, string[]>();
+  for (const [pkg, owners] of clustersByExternal) {
+    if (owners.size !== 1) continue;
+    const key = [...owners][0]!;
+    (exclusiveByCluster.get(key) ?? exclusiveByCluster.set(key, []).get(key)!).push(pkg);
+  }
+
+  const inbound = new Map<string, ClusterBoundaryLink[]>();
+  const outbound = new Map<string, ClusterBoundaryLink[]>();
+  for (const e of rows.edges) {
+    const sourceKey = keyById.get(e.source_cluster_id);
+    const targetKey = keyById.get(e.target_cluster_id);
+    const sourceLabel = labelById.get(e.source_cluster_id);
+    const targetLabel = labelById.get(e.target_cluster_id);
+    if (!sourceKey || !targetKey || !sourceLabel || !targetLabel) continue;
+    const carries = (Array.isArray(e.crossings) ? e.crossings : [])
+      .filter((c): c is string => typeof c === 'string')
+      .map((c) => titleByKey.get(c))
+      .filter((t): t is string => !!t);
+    (outbound.get(sourceKey) ?? outbound.set(sourceKey, []).get(sourceKey)!)
+      .push({ other: targetLabel, type: e.type, carries });
+    (inbound.get(targetKey) ?? inbound.set(targetKey, []).get(targetKey)!)
+      .push({ other: sourceLabel, type: e.type, carries });
+  }
+
+  const out = new Map<string, ClusterNarrative>();
+  for (const c of rows.clusters) {
+    out.set(c.stable_key, buildClusterNarrative({
+      label: c.label,
+      kind: c.kind,
+      commonPath: commonDirectory(pathsByCluster.get(c.stable_key) ?? []),
+      tables: [...(tablesByCluster.get(c.stable_key) ?? [])],
+      exclusiveExternals: exclusiveByCluster.get(c.stable_key) ?? [],
+      inbound: inbound.get(c.stable_key) ?? [],
+      outbound: outbound.get(c.stable_key) ?? [],
+    }));
+  }
+  return out;
+}
+
+export async function loadClusterNarratives(snapshotId: string): Promise<Map<string, ClusterNarrative>> {
+  const [clusterRows, edgeRows, memberRows, workflowRows, tableRows, externalRows] = await Promise.all([
+    query(
+      `SELECT id, stable_key, label, kind FROM architecture_clusters WHERE snapshot_id = $1`,
+      [snapshotId],
+    ),
+    query(
+      `SELECT e.source_cluster_id, e.target_cluster_id, e.type,
+              COALESCE(e.metadata->'workflowCrossings', '[]'::jsonb) AS crossings
+       FROM architecture_edges e WHERE e.snapshot_id = $1
+       ORDER BY e.weight DESC`,
+      [snapshotId],
+    ),
+    query(
+      `SELECT c.stable_key AS cluster_key, gn.file_path
+       FROM architecture_cluster_members m
+       JOIN architecture_clusters c ON c.id = m.cluster_id
+       JOIN graph_nodes gn ON gn.id = m.node_id
+       WHERE c.snapshot_id = $1 AND gn.file_path IS NOT NULL`,
+      [snapshotId],
+    ),
+    // Crossings are stored as workflow stable keys (`wf:web/app/page.tsx:Home`),
+    // which are pipeline bookkeeping and must never reach a reader.
+    query(`SELECT stable_key, title FROM workflows WHERE snapshot_id = $1`, [snapshotId]),
+    query(
+      `SELECT src.file_path, e.metadata->>'table' AS table_name
+       FROM graph_edges e JOIN graph_nodes src ON src.id = e.source_node_id
+       WHERE e.snapshot_id = $1 AND e.type = 'touches_schema' AND e.metadata->>'table' IS NOT NULL`,
+      [snapshotId],
+    ),
+    query(
+      `SELECT src.file_path, COALESCE(tgt.metadata->>'specifier', tgt.name) AS specifier
+       FROM graph_edges e
+       JOIN graph_nodes src ON src.id = e.source_node_id
+       JOIN graph_nodes tgt ON tgt.id = e.target_node_id
+       WHERE e.snapshot_id = $1 AND e.type = 'references_external' AND src.file_path IS NOT NULL`,
+      [snapshotId],
+    ),
+  ]);
+
+  return buildNarrativesFromRows({
+    clusters: clusterRows.rows as ClusterNarrativeRows['clusters'],
+    edges: edgeRows.rows as ClusterNarrativeRows['edges'],
+    members: memberRows.rows as ClusterNarrativeRows['members'],
+    workflows: workflowRows.rows as ClusterNarrativeRows['workflows'],
+    tables: tableRows.rows as ClusterNarrativeRows['tables'],
+    externals: externalRows.rows as ClusterNarrativeRows['externals'],
+  });
 }
 
 function slugOf(label: string): string {

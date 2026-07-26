@@ -199,8 +199,18 @@ describe("GET /api/projects/:id/onboarding", () => {
     });
     expect(res.body.package.coverage.symbols).to.deep.equal({ total: 1305, cited: 47 });
     expect(res.body.package.coverage.workflows).to.deep.equal({ total: 66, covered: 16 });
-    expect(res.body.package.coverage.rankingSignals).to.be.an("array").that.is.not.empty;
-    expect(res.body.package.coverage.rankingSignals[0]).to.have.keys(["signal", "weight"]);
+    // The ranking claim ships its own derivation: the formula, every signal
+    // with its real weight, and what the scale means. The strip used to send
+    // bare signal/weight pairs and let the frontend narrate them.
+    const ranking = res.body.package.coverage.rankingProvenance;
+    expect(ranking.available).to.equal(true);
+    expect(ranking.formula).to.contain("snapshot maximum");
+    expect(ranking.inputs).to.be.an("array").with.length(9);
+    expect(ranking.inputs[0]).to.include({ key: "workflowParticipation", weight: 0.2 });
+    expect(ranking.inputs[0].label).to.be.a("string").that.is.not.empty;
+    // Weights are served, never restated in the UI, so they cannot drift.
+    const total = ranking.inputs.reduce((sum: number, i: { weight: number }) => sum + i.weight, 0);
+    expect(total).to.be.closeTo(1, 1e-9);
   });
 });
 

@@ -22,6 +22,8 @@ import {
   type UnverifiedMarkResult,
 } from './citationMarkers.js';
 import { lintVoice } from './voiceLint.js';
+import { lintExplanation, type ExplanationEvidence } from './explanationLint.js';
+
 import { makeUntrustedFence, safeIdentifier, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
 import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdownSanitizer.js';
 
@@ -30,6 +32,81 @@ import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdo
 // so cached sections generated under the old, unfenced prompt must not be
 // reused — the evidence hash includes this version.
 export const SECTION_PROMPT_VERSION = 'section-v6';
+
+/**
+ * Repairs the two contract breaches that do not need a model to fix.
+ *
+ * Both were still present after the retry on real output: `capabilities`
+ * leaked `wf:`/`cluster:` keys the prompt explicitly forbids, and FloowForge's
+ * `big_picture` never mentioned that 49 of its 167 files are Python nobody
+ * read. Asking a second time is the wrong tool for either — one is a string
+ * the reader must never see, the other is a fact we hold with certainty. A
+ * prompt is a request; this is the guarantee.
+ *
+ * Deliberately narrow: it rewrites identifiers into their readable form and
+ * appends a disclosure the evidence entitles us to state. It never edits a
+ * claim, because that would be inventing prose the model did not write.
+ */
+export function repairExplanation(
+  markdown: string,
+  evidence: { mustDisclose?: string[] },
+): { markdown: string; repairs: string[] } {
+  const repairs: string[] = [];
+  let out = markdown ?? '';
+
+  // `wf:web/app/p/[token]/page.tsx:PublicFormPage` → `PublicFormPage`;
+  // `cluster:web/modules` → `web/modules`. The prefix is an internal join key
+  // and means nothing to a reader.
+  const before = out;
+  out = out
+    // Greedy to the LAST colon, because a real key's path contains brackets
+    // and dots (`wf:web/app/p/[token]/page.tsx:PublicFormPage`) — a lazy match
+    // that excluded `]` stopped inside `[token]` and left the prefix behind.
+    .replace(/\bwf:\S*:([A-Za-z_$][\w$]*)/g, '$1')
+    .replace(/\bcluster:([^\s`)\]]+)/g, '$1');
+  if (out !== before) repairs.push('internal_key_leak');
+
+  // Disclosure is appended only when the prose genuinely omits it — if the
+  // model complied, nothing is added.
+  const undisclosed = (evidence.mustDisclose ?? []).filter(
+    (lang) => !new RegExp(`\\b${lang.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(out),
+  );
+  if (undisclosed.length > 0) {
+    const list = undisclosed.join(', ');
+    out += `\n\n> **Not covered here.** Part of this repository is written in ${list}, which OnboardBuddy does not parse. No section in this package describes that code — it exists, and nothing here tells you what it does.\n`;
+    repairs.push('undisclosed_gap');
+  }
+
+  return { markdown: out, repairs };
+}
+
+/**
+ * What the explanation validator judges this section against.
+ *
+ * `mustDisclose` is the load-bearing part. FloowForge is 100 Python files out
+ * of 167 — about forty FastAPI route handlers — and its generated package
+ * never once said "Python", so a reader finished it believing the repo is a
+ * frontend. The facts were in the deterministic context the whole time; only
+ * the prompt asked for them, and a prompt is a request, not a guarantee. This
+ * makes it a check.
+ */
+function buildExplanationEvidence(
+  params: GenerateSectionParams,
+  spec: { mode: string },
+  bundle: { deterministicContext?: unknown },
+): ExplanationEvidence {
+  const det = (bundle.deterministicContext ?? {}) as {
+    snapshot?: { unreadStacks?: { mustDisclose?: boolean; languages?: Array<{ language: string }> } | null };
+  };
+  const unread = det.snapshot?.unreadStacks;
+  return {
+    mode: spec.mode as ExplanationEvidence['mode'],
+    // Only demand disclosure when the omission would actually mislead —
+    // `mustDisclose` already applies that threshold (≥10% of the repo, or ≥20
+    // files, in a source language nothing parsed).
+    mustDisclose: unread?.mustDisclose ? (unread.languages ?? []).map((l) => l.language) : [],
+  } satisfies ExplanationEvidence;
+}
 
 const SECTION_OUTPUT_SCHEMA = {
   type: 'object',
@@ -145,6 +222,12 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     type: params.sectionType,
     role: params.role,
     mode: spec.mode,
+    // Privacy mode shapes the prompt (facts_only_ai withholds every snippet),
+    // so it belongs in the key. Omitting it made the cache serve full_ai prose
+    // — written with the code in front of the model — to a project that had
+    // just switched to facts_only_ai, which is exactly the "changing the
+    // setting changed nothing about my package" report.
+    privacy: params.privacyMode,
     budget: spec.outputBudget[params.deps.sizeClass],
     instructions: spec.instructions,
     deterministic: deterministicContext,
@@ -225,18 +308,33 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   addSanitized(first.sanitized);
   let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
   let voice = lintVoice(output.contentMarkdown ?? '');
+  // The four explanation-contract rules: right altitude, claims grounded in
+  // receipts, gaps named, and no narrating the screen back at the reader.
+  // `lintVoice` only ever caught marketing tone, which is why prose could pass
+  // it while explaining nothing.
+  const explanationEvidence = buildExplanationEvidence(params, spec, bundle);
+  let explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
   let coverage = completeness(output);
   let retried = false;
-  if (validation.hardFailure || voice.issues.length > 0 || coverage.length > 0) {
+  if (validation.hardFailure || voice.issues.length > 0 || explain.issues.length > 0 || coverage.length > 0) {
     retried = true;
-    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...coverage], aliasToId);
+    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...explain.issues, ...coverage], aliasToId);
     output = stricter.output;
     runId = stricter.runId;
     addSanitized(stricter.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
+    explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
     coverage = completeness(output);
   }
+  // Last: repair what does not need a model. Anything still flagged after
+  // this is a genuine explanation defect rather than a mechanical one.
+  const repaired = repairExplanation(output.contentMarkdown ?? '', explanationEvidence);
+  if (repaired.repairs.length > 0) {
+    output = { ...output, contentMarkdown: repaired.markdown };
+    explain = lintExplanation(repaired.markdown, explanationEvidence);
+  }
+
   if (coverage.length > 0) {
     // Still under-covered after the retry: recorded as an honest unknown,
     // never silently shipped as if complete.
@@ -264,6 +362,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     addSanitized(rewritten.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
+    explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
     coverage = completeness(output);
     critique = await runSectionCritique(params, output, bundle, aliasToId);
     if (critique && critique.contradicted > 0) {
@@ -321,7 +420,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
 
   const sectionId = await persistSection(
-    params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits,
+    params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits, explain.hits,
     evidenceHash, critique, sanitized,
   );
   return { sectionId, validation, retried, runId };
@@ -401,10 +500,20 @@ async function runSectionCritique(
     };
   } catch (err) {
     // Critique is a quality layer, not a gate — its own failure never blocks
-    // the section.
+    // the section. Control errors are NOT quality failures though: swallowing
+    // AiDisabledError here would let a privacy guard fire and vanish (the
+    // section ships as if nothing happened), and swallowing a pause/kill/
+    // budget trip would keep spending after the run was told to stop.
+    if (isControlError(err)) throw err;
     console.warn(`[sectionGenerator] critique failed for ${params.sectionType}:`, err instanceof Error ? err.message : err);
     return null;
   }
+}
+
+/** Run-control signals (same list as tutorialGenerator): never swallowed. */
+function isControlError(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : '';
+  return name === 'AiPausedError' || name === 'KillSwitchError' || name === 'BudgetExceededError' || name === 'AiDisabledError';
 }
 
 /** Byte-identical reuse: clone the cached row and its receipt copies. */
@@ -427,6 +536,7 @@ async function persistCachedSection(
      JSON.stringify({
        prompt_version: SECTION_PROMPT_VERSION,
        evidence_hash: evidenceHash,
+       privacy_mode: params.privacyMode,
        cached_from_section_id: cached.id,
        mode: 'cache_hit',
      })],
@@ -590,6 +700,7 @@ async function persistSection(
   inline: RewriteResult,
   unverified: UnverifiedMarkResult,
   voiceHits: string[],
+  explanationHits: string[],
   evidenceHash: string,
   critique: CritiqueOutcome | null,
   sanitized: MarkdownSanitizeCounts,
@@ -597,6 +708,11 @@ async function persistSection(
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
     evidence_hash: evidenceHash,
+    // The mode this section was ACTUALLY built under. analysis_snapshots
+    // .privacy_mode records what the analysis ran under and never changes
+    // afterwards, so it cannot answer "how was this package made" once the
+    // setting is changed and only the package is regenerated.
+    privacy_mode: params.privacyMode,
     // Non-zero counts mean the model emitted markdown we refused to store —
     // on an imported repo that is the visible tail of a prompt-injection
     // attempt, so it is recorded rather than dropped (§5.5).
@@ -621,6 +737,9 @@ async function persistSection(
       unverified_unmatched: unverified.unmatched,
     },
     voice_lint: { remaining_hits: voiceHits },
+    // Explanation-contract findings that survived the retry: kept so a section
+    // that still narrates the screen is findable, not silently shipped.
+    explanation_lint: { remaining_hits: explanationHits },
   };
 
   // Replace the previous version of this section; generation runs stay for audit.

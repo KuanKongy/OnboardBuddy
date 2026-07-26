@@ -53,11 +53,11 @@ const architecture = {
   projectId: P,
   snapshotId: "snap-1",
   clusters: [
-    { id: "cluster:api", label: "API routes", kind: "api_layer", criticalScore: 0.92, summarySource: "semantic", confidence: "high", summary: "Express routes that receive login and session requests, validate input, and delegate to the auth service.", members: files.slice(0, 2).map((f) => ({ key: f, name: f, filePath: f })), metadata: {} },
-    { id: "cluster:auth", label: "Auth services", kind: "auth_layer", criticalScore: 0.88, summarySource: "semantic", confidence: "high", summary: "Credential validation, JWT signing and verification, and session persistence.", members: files.slice(2, 5).map((f) => ({ key: f, name: f, filePath: f })), metadata: {} },
-    { id: "cluster:data", label: "Database layer", kind: "database_layer", criticalScore: 0.61, summarySource: "deterministic", confidence: null, summary: "Session table migrations and data access.", members: [{ key: files[6]!, name: files[6]!, filePath: files[6]! }], metadata: {} },
-    { id: "cluster:config", label: "Configuration", kind: "devops_layer", criticalScore: 0.35, summarySource: "deterministic", confidence: null, summary: "Environment configuration read at boot.", members: [{ key: files[7]!, name: files[7]!, filePath: files[7]! }], metadata: {} },
-    { id: "cluster:shared", label: "Shared utilities", kind: "shared_module", criticalScore: 0.22, summarySource: "deterministic", confidence: null, summary: "Pure text formatting helpers.", members: [{ key: files[5]!, name: files[5]!, filePath: files[5]! }], metadata: {} },
+    { id: "cluster:api", label: "API routes", kind: "api_layer", criticalScore: 0.92, summarySource: "semantic", confidence: "high", summary: "Express routes that receive login and session requests, validate input, and delegate to the auth service.", members: files.slice(0, 2).map((f) => ({ key: f, name: f, filePath: f })), metadata: {}, provenance: {"available":true,"method":"member_mean","label":"Criticality","score":0.92,"formula":"component score = mean of its 2 scored files","inputs":[{"key":"routes/authRoutes.ts","label":"routes/authRoutes.ts","weight":null,"value":0.98,"contribution":0.49,"measured":"routes/authRoutes.ts"},{"key":"routes/userRoutes.ts","label":"routes/userRoutes.ts","weight":null,"value":0.86,"contribution":0.43,"measured":"routes/userRoutes.ts"}],"reasons":["Averages 2 member files","Top member routes/authRoutes.ts scores 98","Lowest scored member routes/userRoutes.ts scores 86"],"lever":"It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.","scaleNote":"Each member's own score comes from the 9-signal candidate ranking. Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.","caveat":null} },
+    { id: "cluster:auth", label: "Auth services", kind: "auth_layer", criticalScore: 0.88, summarySource: "semantic", confidence: "high", summary: "Credential validation, JWT signing and verification, and session persistence.", members: files.slice(2, 5).map((f) => ({ key: f, name: f, filePath: f })), metadata: {}, provenance: {"available":true,"method":"member_mean","label":"Criticality","score":0.88,"formula":"component score = mean of its 3 scored files","inputs":[{"key":"services/authService.ts","label":"services/authService.ts","weight":null,"value":0.96,"contribution":0.32,"measured":"services/authService.ts"},{"key":"services/sessionStore.ts","label":"services/sessionStore.ts","weight":null,"value":0.88,"contribution":0.29333333333333333,"measured":"services/sessionStore.ts"},{"key":"utils/jwtUtil.ts","label":"utils/jwtUtil.ts","weight":null,"value":0.8,"contribution":0.26666666666666666,"measured":"utils/jwtUtil.ts"}],"reasons":["Averages 3 member files","Top member services/authService.ts scores 96","Lowest scored member utils/jwtUtil.ts scores 80"],"lever":"It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.","scaleNote":"Each member's own score comes from the 9-signal candidate ranking. Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.","caveat":null} },
+    { id: "cluster:data", label: "Database layer", kind: "database_layer", criticalScore: 0.61, summarySource: "deterministic", confidence: null, summary: "Session table migrations and data access.", members: [{ key: files[6]!, name: files[6]!, filePath: files[6]! }], metadata: {}, provenance: {"available":true,"method":"member_mean","label":"Criticality","score":0.61,"formula":"component score = mean of its 1 scored file","inputs":[{"key":"db/sessionTable.ts","label":"db/sessionTable.ts","weight":null,"value":0.61,"contribution":0.61,"measured":"db/sessionTable.ts"}],"reasons":["Averages 1 member file","Top member db/sessionTable.ts scores 61"],"lever":"It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.","scaleNote":"Each member's own score comes from the 9-signal candidate ranking. Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.","caveat":null} },
+    { id: "cluster:config", label: "Configuration", kind: "devops_layer", criticalScore: 0.35, summarySource: "deterministic", confidence: null, summary: "Environment configuration read at boot.", members: [{ key: files[7]!, name: files[7]!, filePath: files[7]! }], metadata: {}, provenance: {"available":true,"method":"member_mean","label":"Criticality","score":0.35,"formula":"component score = mean of its 1 scored file","inputs":[{"key":"config/env.ts","label":"config/env.ts","weight":null,"value":0.35,"contribution":0.35,"measured":"config/env.ts"}],"reasons":["Averages 1 member file","Top member config/env.ts scores 35"],"lever":"It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.","scaleNote":"Each member's own score comes from the 9-signal candidate ranking. Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.","caveat":null} },
+    { id: "cluster:shared", label: "Shared utilities", kind: "shared_module", criticalScore: 0.22, summarySource: "deterministic", confidence: null, summary: "Pure text formatting helpers.", members: [{ key: files[5]!, name: files[5]!, filePath: files[5]! }], metadata: {}, provenance: {"available":true,"method":"member_mean","label":"Criticality","score":0.22,"formula":"component score = mean of its 1 scored file","inputs":[{"key":"utils/format.ts","label":"utils/format.ts","weight":null,"value":0.22,"contribution":0.22,"measured":"utils/format.ts"}],"reasons":["Averages 1 member file","Top member utils/format.ts scores 22"],"lever":"It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.","scaleNote":"Each member's own score comes from the 9-signal candidate ranking. Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.","caveat":null} },
   ],
   edges: [
     { id: "ae1", source: "cluster:api", target: "cluster:auth", kind: "calls", weight: 9 },
@@ -89,38 +89,69 @@ const workflowGraph = {
 const capabilities = {
   capabilities: [
     {
-      id: "cap-1", stableKey: "capability:user-authentication", name: "User authentication",
+      id: "cap-1", stableKey: "capability:session", name: "User authentication",
       description: "Users sign in with email and password and receive a session token.",
       confidence: "high", summary: "Login and session handling across routes, service, and store.",
       userValue: "Any bug or change around login, tokens, or session expiry lands here.",
+      tier: "core", score: 0.82, realizesUserAction: true, namedBy: "model",
+      derivation: [
+        "Grouped on the `sessions` table these flows write.",
+        "2 traced flows from 2 entry points.",
+        "Touches 1 schema table: sessions.",
+      ],
+      binding: {
+        key: "session", keySource: "schema",
+        entrypoints: [{ kind: "http_route", route: "/api/auth/login", filePath: "routes/authRoutes.ts", symbol: "login" }],
+        schemas: ["sessions"], services: ["bcrypt"],
+      },
       whereToStart: [
         { stable_key: "routes/authRoutes.ts", reason: "Every auth request enters through this router — read it first." },
       ],
-      whereTheCodeLives: [],
       workflows: [{
-        id: "wf-1", title: "User login", triggerType: "http_route", purpose: "auth",
-        score: 0.9, reason: "The end-to-end login path from route to session write.",
+        id: "wf-1", stableKey: "wf:login", title: "User login", triggerType: "http_route", purpose: "auth",
+        tier: "core", stepCount: 4, score: 0.9, reason: "Core flow, 4 traced steps from /api/auth/login",
         tutorials: [{ id: "tut-1", title: "User login, end to end" }],
       }],
+      nodes: [{ stableKey: "services/authService.ts#createSession", name: "createSession", filePath: "services/authService.ts", reason: "entry point or effect site this capability binds to" }],
       modules: [
         { id: "m1", label: "Auth services", stableKey: "cluster:auth", kind: "auth_layer", reason: "Credential checks and token signing." },
         { id: "m2", label: "API routes", stableKey: "cluster:api", kind: "api_layer", reason: "HTTP entry points." },
       ],
     },
     {
-      id: "cap-2", stableKey: "capability:session-management", name: "Session management",
+      id: "cap-2", stableKey: "capability:token", name: "Session verification",
       description: "Sessions are persisted and can be verified or revoked.",
       confidence: "medium", summary: null,
       userValue: "Touch this when sessions outlive logout or verification misbehaves.",
+      tier: "supporting", score: 0.4, realizesUserAction: false, namedBy: "deterministic",
+      derivation: ["Grouped on the `sessions` table this flow writes.", "1 traced flow from 1 entry point."],
+      binding: {
+        key: "token", keySource: "schema",
+        entrypoints: [{ kind: "http_route", route: "/api/auth/verify", filePath: "routes/authRoutes.ts", symbol: "verify" }],
+        schemas: ["sessions"], services: [],
+      },
       whereToStart: [],
-      whereTheCodeLives: [],
       workflows: [{
-        id: "wf-2", title: "Verify session", triggerType: "http_route", purpose: "auth",
-        score: 0.7, reason: "Token verification on each request.", tutorials: [],
+        id: "wf-2", stableKey: "wf:verify", title: "Verify session", triggerType: "http_route", purpose: "auth",
+        tier: "supporting", stepCount: 2, score: 0.7, reason: "Supporting flow, 2 traced steps from /api/auth/verify",
+        tutorials: [],
       }],
+      nodes: [],
       modules: [{ id: "m3", label: "Database layer", stableKey: "cluster:data", kind: "database_layer", reason: "Session rows live here." }],
     },
   ],
+  ordering: {
+    summary: "Tier first, then whether a person triggers it, then the flow score behind it.",
+    steps: ["Tier", "User-triggered first", "Flow importance score", "Ties break on flow count, then alphabetically"],
+  },
+  bindingRule: {
+    summary: "A capability is derived from evidence and then named, never named and then justified.",
+    legs: ["At least one entry point.", "At least one traced flow past its trigger.", "At least one schema table or named external service."],
+  },
+  derivation: {
+    tracedFlows: 2, consideredFlows: 2, boundFlows: 2, entrypoints: 2, schemaTables: 1,
+    unbound: [], reportStored: true,
+  },
   snapshotId: "snap-1",
 };
 
@@ -239,7 +270,7 @@ export async function mockApi(page: Page, opts: { tier?: "owner" | "admin" | "de
     [/\/api\/projects\/[^/]+\/graph\/workflows\/[^/]+/, workflowGraph],
     [/\/api\/projects\/[^/]+\/graph\/nodes\/.+/, nodeDetail],
     [/\/api\/projects\/[^/]+\/workflows\/[^/]+\/walkthrough/, { workflow: workflowGraph.workflow, steps: workflowSteps.map((s, i) => ({ id: `ws-${i}`, step_order: s.stepOrder, file_path: s.filePath, symbol_name: s.symbolName, line_start: s.lineStart, line_end: s.lineEnd, explanation: null, step_kind: s.stepKind, deterministic_description: s.description, role_relevance: {} })) }],
-    [/\/api\/projects\/[^/]+\/workflows/, { workflows: [{ id: "wf-1", title: "User login", trigger_type: "http_route", purpose: "auth", importance_score: 0.9, confidence: "high", composite_score: 0.9, step_count: 6 }, { id: "wf-2", title: "Verify session", trigger_type: "http_route", purpose: "auth", importance_score: 0.7, confidence: "medium", composite_score: 0.7, step_count: 3 }], snapshotId: "snap-1" }],
+    [/\/api\/projects\/[^/]+\/workflows/, { workflows: [{ id: "wf-1", title: "User login", trigger_type: "http_route", purpose: "auth", importance_score: 0.9, confidence: "high", composite_score: 0.45, step_count: 6, tier: "core", realizes_capability: true, reasons: ["Core user flow — http_route", "Writes to the sessions table"], provenance: {"available":true,"method":"weighted_signals","label":"Criticality","score":0.45,"formula":"score = Σ (signal ÷ snapshot maximum) × weight, over 9 signals","inputs":[{"key":"workflowParticipation","label":"Flow importance (tier + trigger)","weight":0.2,"value":1,"contribution":0.2,"measured":"importance 0.9"},{"key":"sideEffects","label":"Side-effect breadth","weight":0.15,"value":1,"contribution":0.15,"measured":"2 kinds of side effect"},{"key":"entrypointParticipation","label":"Starts at an entry point","weight":0.1,"value":1,"contribution":0.1,"measured":"entry point"},{"key":"routeSchemaOwnership","label":"Reads or writes data","weight":0.1,"value":1,"contribution":0.1,"measured":"reads or writes data"},{"key":"fanCentrality","label":"Fan-in / fan-out centrality","weight":0.15,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"exportedSurface","label":"Exported surface","weight":0.15,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"testProximity","label":"Test coverage","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"configRelevance","label":"Config & environment","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"churn","label":"Churn (last 90 days)","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"}],"reasons":["Core user flow — http_route","Writes to the sessions table","Signs a session token"],"lever":"Every signal a flow can earn is already at this snapshot's maximum — 55 points is as high as a flow goes.","scaleNote":"Every signal is divided by the highest value any flow reaches in THIS snapshot, so 55 points would mean leading every signal a flow can earn. The scale is relative to this repository — it is not comparable across projects.","caveat":"5 of the 9 signals only apply to files and symbols, so a flow tops out at 55 points. Compare flows with other flows — a flow's 45 and a file's 45 are not the same claim."} }, { id: "wf-2", title: "Verify session", trigger_type: "http_route", purpose: "auth", importance_score: 0.7, confidence: "medium", composite_score: 0.3306, step_count: 3, tier: "core", reasons: ["Core user flow — http_route", "Reads the sessions table"], provenance: {"available":true,"method":"weighted_signals","label":"Criticality","score":0.3306,"formula":"score = Σ (signal ÷ snapshot maximum) × weight, over 9 signals","inputs":[{"key":"workflowParticipation","label":"Flow importance (tier + trigger)","weight":0.2,"value":0.778,"contribution":0.15560000000000002,"measured":"importance 0.7"},{"key":"entrypointParticipation","label":"Starts at an entry point","weight":0.1,"value":1,"contribution":0.1,"measured":"entry point"},{"key":"routeSchemaOwnership","label":"Reads or writes data","weight":0.1,"value":1,"contribution":0.1,"measured":"reads or writes data"},{"key":"sideEffects","label":"Side-effect breadth","weight":0.15,"value":0.5,"contribution":0.075,"measured":"1 kind of side effect"},{"key":"fanCentrality","label":"Fan-in / fan-out centrality","weight":0.15,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"exportedSurface","label":"Exported surface","weight":0.15,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"testProximity","label":"Test coverage","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"configRelevance","label":"Config & environment","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"},{"key":"churn","label":"Churn (last 90 days)","weight":0.05,"value":0,"contribution":0,"measured":"not measured for flows"}],"reasons":["Core user flow — http_route","Reads the sessions table"],"lever":"Biggest lever: side-effect breadth is at 50% of the snapshot's highest flow; closing that gap is worth up to 7.5 points.","scaleNote":"Every signal is divided by the highest value any flow reaches in THIS snapshot, so 55 points would mean leading every signal a flow can earn. The scale is relative to this repository — it is not comparable across projects.","caveat":"5 of the 9 signals only apply to files and symbols, so a flow tops out at 55 points. Compare flows with other flows — a flow's 45 and a file's 45 are not the same claim."} }], ordering: { summary: "Tier first, then business capability, then the flow's own importance score.", steps: ["Tier: core user flows, then supporting (jobs, admin, dev), then untraced endpoints & pages", "Within a tier: flows that realize a named business capability come first", "Then the flow's importance score (trigger type and traced effects, not step count)", "Ties break alphabetically by title"] }, snapshotId: "snap-1" }],
     [/\/api\/projects\/[^/]+\/capabilities/, capabilities],
     [/\/api\/projects\/[^/]+\/tutorials\/[^/]+/, tutorialDetail],
     [/\/api\/projects\/[^/]+\/tutorials/, tutorials],

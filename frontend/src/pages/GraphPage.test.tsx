@@ -49,8 +49,9 @@ vi.mock("@/lib/graphData", () => {
   };
   return {
     fetchDependencyGraph: vi.fn().mockResolvedValue(mockResponse),
+    fetchFileSymbolGraph: vi.fn().mockResolvedValue(mockResponse),
     fetchClassGraph: vi.fn().mockResolvedValue(classResponse),
-    fetchWorkflowsList: vi.fn().mockResolvedValue([]),
+    fetchWorkflowsList: vi.fn().mockResolvedValue({ workflows: [] }),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
   };

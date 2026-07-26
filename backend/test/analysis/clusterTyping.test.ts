@@ -56,7 +56,15 @@ function buildInput(opts: { extraEdges?: EvidenceGraph['edges'] } = {}) {
     {
       sourceKey: 'backend/src/domain/pricing.ts',
       targetKey: 'external:express',
-      type: 'imports',
+      // `references_external` is what the graph builder actually emits for a
+      // third-party import (evidenceGraphBuilder.ts:201); `imports` is only
+      // ever file→file. This fixture originally used `imports`, so it was
+      // wrong in exactly the same way the code was — the import-evidence tier
+      // of `inferClusterKind` filtered for `imports` and therefore matched
+      // nothing on any real repo (FloowForge: 131 references_external, zero
+      // seen), while this test stayed green. A fixture that cannot fail the
+      // way production fails is not a test.
+      type: 'references_external',
       confidence: 'high',
       metadata: {},
     },
@@ -131,8 +139,12 @@ describe('architecture cluster counts', () => {
 
     expect(schema.metadata.fileCount).to.equal(0); // genuinely no file members
     expect(schema.metadata.primaryMemberNoun).to.equal('table');
-    expect(schema.deterministicSummary).to.contain('3 tables');
-    expect(schema.deterministicSummary).to.not.contain('0 files');
+    expect(schema.metadata.memberCountsByType).to.deep.equal({ schema: 3 });
+    // The count itself moved to the chip beside the component; the summary has
+    // to explain instead. Asserting the count is ABSENT is the same guarantee
+    // from the other side — "0 files" can no longer be printed over 3 tables
+    // because no count is printed at all.
+    expect(schema.deterministicSummary).to.not.match(/\d/);
   });
 
   it('describes a mostly-config cluster by its config files, not by its one module', () => {
@@ -149,7 +161,27 @@ describe('architecture cluster counts', () => {
     input.graph.edges = [];
     const cluster = clusterArchitecture(input).clusters.find((c) => c.label === 'Configuration & Deployment')!;
     expect(cluster.metadata.primaryMemberNoun).to.equal('config file');
-    expect(cluster.deterministicSummary).to.contain('3 config files');
+    expect(cluster.metadata.memberCountsByType).to.deep.equal({ module: 1, config: 3 });
+  });
+
+  /**
+   * The complaint this whole rework answers: a summary reading "Auth services:
+   * 9 files, 40 symbols" is an inventory printed under a heading that already
+   * says the label, beside a chip that already says the count.
+   */
+  it('explains what a component is for and what crosses it, with no counts in the prose', () => {
+    const input = buildInput();
+    const cluster = clusterArchitecture(input).clusters.find((c) => c.label === 'Backend · Modules')!;
+    const narrative = cluster.metadata.narrative as { responsibility: string; boundary: string; separation: string };
+
+    expect(cluster.deterministicSummary).to.not.match(/\d/);
+    // Not the label reworded: the responsibility has to say something the
+    // label does not already say.
+    expect(narrative.responsibility.toLowerCase()).to.not.contain('modules');
+    expect(narrative.responsibility.length).to.be.greaterThan(40);
+    expect(narrative.boundary).to.be.a('string').and.not.empty;
+    expect(narrative.separation).to.be.a('string').and.not.empty;
+    expect(cluster.deterministicSummary).to.contain(narrative.responsibility);
   });
 
   it('reports fileCount over file members only, and a type breakdown beside it', () => {

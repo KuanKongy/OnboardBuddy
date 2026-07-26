@@ -107,7 +107,14 @@ async function resolveSnapshot(input: AskInput): Promise<ResolvedSnapshot> {
     where = `sc.path_prefix = '' AND s.status = 'complete'`;
   }
   const row = (await query(
-    `SELECT s.id AS snapshot_id, s.scope_id, s.commit_hash, s.semantic_depth, s.privacy_mode,
+    // Privacy follows the LIVE setting, exactly as generation does
+    // (summaryWorker.loadSnapshot). Reading s.privacy_mode alone froze the
+    // mode at analysis time: a project analyzed under full_ai kept answering
+    // questions with full LLM calls — and shipping snippets — after the owner
+    // switched Settings → AI & privacy to ai_disabled/facts_only_ai, because
+    // no re-analysis had happened to refresh the snapshot's copy.
+    `SELECT s.id AS snapshot_id, s.scope_id, s.commit_hash, s.semantic_depth,
+            COALESCE(ps.privacy_mode, s.privacy_mode) AS privacy_mode,
             COALESCE(ps.default_developer_role, 'general') AS default_role,
             COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
             COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,

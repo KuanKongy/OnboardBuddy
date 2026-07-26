@@ -13,6 +13,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { assertAiAllowed } from '../worker/ai/privacy.js';
 import { embedText } from '../worker/engine/embeddingService.js';
 import { capReceiptSpan } from '../worker/engine/receiptSpan.js';
 import type { ViewType } from '../worker/semantic/embeddingViews.js';
@@ -128,6 +129,14 @@ interface Candidate {
 }
 
 export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> {
+  // The query embedding below goes STRAIGHT to the embeddings provider
+  // (engine/embeddingService), bypassing AiClient and therefore its
+  // privacy/budget/kill-switch gate. That makes this the one place in the
+  // pipeline where an ai_disabled project could still have text leave the
+  // process, so the assertion is repeated here rather than trusted to the
+  // caller — the type says ai_disabled cannot reach this function, and a
+  // caller that casts (or a new one) must not be able to make the type lie.
+  assertAiAllowed(input.privacyMode);
   const views = input.views ?? ['purpose', 'domain'];
   const kPerView = input.kPerView ?? DEFAULTS.kPerView;
   const maxRecords = input.maxRecords ?? DEFAULTS.maxRecords;

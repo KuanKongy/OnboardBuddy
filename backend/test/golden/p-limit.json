@@ -1,0 +1,25 @@
+{
+  "repo": "sindresorhus/p-limit",
+  "clone": "https://github.com/sindresorhus/p-limit.git",
+  "shape": "A five-file published npm library: index.js, index.d.ts, a test, a benchmark. No UI, no server, no database.",
+  "whyThisShape": "The few-or-no-entrypoints case. There are no pages, no routes, no jobs and not enough files to cluster, so a prompt that assumes an application shape has nothing to fill its sections with. The interesting failure here is not a wrong claim but an INVENTED structure — a 'Traced Flows' or 'Architecture in Depth' section that manufactures subsystems out of one exported function. That is the same over-fitting the reviewer saw, in its most extreme form.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Cloned and probed: 5 files in scope, 1 entrypoint (an export), zero routes/pages/jobs.",
+  "expectShape": {
+    "entrypointKinds": { "mustExclude": ["ui_route", "http_route", "worker_job"] },
+    "maxEntrypoints": 3
+  },
+  "domainNouns": ["limit", "concurrency", "queue", "promise", "task"],
+  "mustDisclose": [],
+  "budgets": {
+    "minDomainNounsInPackage": 3,
+    "minCitedShare": 0.35,
+    "maxNarrationErrors": 40,
+    "maxLevelErrors": 12,
+    "minSectionsDisclosingGaps": 1
+  },
+  "proseUnavailable": "sindresorhus/p-limit is a third-party repository: the product analyses repos through a GitHub App installation, and there is none for that account, so no snapshot can exist. The shape probe above is real; the prose row is honestly unscored. To score it, point a local worker at a clone (analysisRunner accepts a path) and re-run.",
+  "knownGaps": [
+    "Because this repo cannot be analysed through the normal path, the most valuable generalization case in the set is the one with no prose evidence. Fixing that needs a local-path analysis entrypoint, which does not exist today."
+  ]
+}

@@ -5,7 +5,8 @@ import { evidenceHashForSymbol, evidenceHashForChildren, depthLookupOrder, inser
 import { planBatches, buildFactsOnlyBody } from '../symbolPass.js';
 import { MAX_SYMBOLS_PER_CALL } from '../../engine/budgets.js';
 import { groupClustersIntoServices } from '../synthesisPass.js';
-import { slugify } from '../capabilityPass.js';
+import { deriveCapabilities, slugify } from '../capabilityPass.js';
+import type { ExtractedWorkflow, WorkflowStep } from '../../engine/workflowExtractor.js';
 import { DEFAULT_ROLE_WEIGHTS, SEMANTIC_VIEWS, projectRoleScore, resolveRoleWeights } from '../projections.js';
 import { deterministicViewScores, deterministicRoleScores, selectRerankTargets, type RerankTarget } from '../semanticReranker.js';
 import { schemaForLevel, batchedSymbolSchema, batchedLevelSchema, renderSummary, PROMPT_VERSIONS } from '../recordTypes.js';
@@ -213,6 +214,97 @@ describe('phase 5 — services grouping and slugs', () => {
   it('slugify produces stable keys', () => {
     expect(slugify('Team Management & Invitations!')).to.equal('team-management-invitations');
     expect(slugify('---')).to.equal('unnamed');
+  });
+});
+
+/**
+ * The regression this file exists to catch is silent: a capability that binds
+ * to nothing still renders as a confident card, and nobody notices until a
+ * reviewer opens the tab and asks what "Core Application Structure and
+ * Utilities" is. The count is the assertion.
+ */
+describe('phase 5 — capability derivation binds or emits nothing', () => {
+  const step = (order: number, key: string, kind: WorkflowStep['stepKind']): WorkflowStep => ({
+    stepOrder: order, nodeStableKey: key, filePath: key.split('#')[0]!,
+    symbolName: key.split('#')[1], stepKind: kind, deterministicDescription: `step ${order}`,
+  });
+
+  const flow = (over: Partial<ExtractedWorkflow> & { key: string; route?: string }): ExtractedWorkflow => ({
+    title: over.title ?? over.key,
+    triggerType: 'HTTP GET',
+    purpose: 'p',
+    stableKey: `wf:${over.key}`,
+    confidence: 'high',
+    entrypoint: {
+      nodeStableKey: `src/${over.key}.ts`, kind: 'http_route',
+      filePath: `src/${over.key}.ts`, symbolName: 'handler',
+      symbolStableKey: `src/${over.key}.ts#handler`,
+      ...(over.route ? { routePattern: over.route } : {}),
+    },
+    steps: over.steps ?? [step(1, `src/${over.key}.ts#handler`, 'trigger'), step(2, `src/${over.key}.ts#helper`, 'transform')],
+    tier: over.tier ?? 'core',
+    importanceScore: over.importanceScore ?? 0.5,
+    rankingReasons: [], externalDependencies: [],
+  });
+
+  it('emits nothing when traced flows reach no schema table and no named service', () => {
+    const derived = deriveCapabilities({
+      // Two real routes, each traced past its trigger — but every effect they
+      // reach is an unrecognized npm package, which is the honesty fallback,
+      // not a service. v4 would have named 2-8 capabilities out of this.
+      workflows: [flow({ key: 'pokedex', route: '/pokemon' }), flow({ key: 'filter', route: '/pokemon-filter' })],
+      sideEffects: [
+        { nodeStableKey: 'src/pokedex.ts', symbolStableKey: 'src/pokedex.ts#helper', kind: 'unknown_external', target: 'class-variance-authority', filePath: 'src/pokedex.ts' },
+      ],
+      graph: { nodes: [], edges: [] },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities).to.have.length(0);
+    expect(derived.unbound.map((u) => u.missing)).to.deep.equal([
+      'no schema table or external service reached',
+      'no schema table or external service reached',
+    ]);
+    expect(derived.totals.consideredFlows).to.equal(2);
+  });
+
+  it('emits one capability per bound group, keyed on the table it writes', () => {
+    const derived = deriveCapabilities({
+      workflows: [
+        flow({
+          key: 'createProject', route: '/api/projects',
+          steps: [
+            step(1, 'src/createProject.ts#handler', 'trigger'),
+            step(2, 'src/store.ts#insert', 'data_write'),
+            step(3, 'schema:projects', 'data_write'),
+          ],
+        }),
+        // Same table, different route: one capability, two flows.
+        flow({
+          key: 'deleteProject', route: '/api/projects/:id',
+          steps: [
+            step(1, 'src/deleteProject.ts#handler', 'trigger'),
+            step(2, 'schema:projects', 'data_write'),
+          ],
+        }),
+        // A page that reaches nothing stays out, and says why.
+        flow({ key: 'about', route: '/about', tier: 'surface', steps: [step(1, 'src/about.ts#handler', 'trigger')] }),
+      ],
+      sideEffects: [],
+      graph: {
+        nodes: [{ stableKey: 'schema:projects', type: 'schema', name: 'projects', filePath: 'db/schema.sql', trustLevel: 'code', metadata: {} }],
+        edges: [],
+      },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities).to.have.length(1);
+    const cap = derived.capabilities[0]!;
+    expect(cap.key).to.equal('project');
+    expect(cap.schemas).to.deep.equal(['projects']);
+    expect(cap.flows.map((f) => f.stableKey)).to.deep.equal(['wf:createProject', 'wf:deleteProject']);
+    // The seam is the effect site, not the file the capability was named for.
+    expect(cap.whereToStart[0]!.stable_key).to.equal('src/createProject.ts#handler');
+    expect(cap.whereToStart[1]!.stable_key).to.equal('src/store.ts#insert');
+    expect(derived.unbound.map((u) => u.title)).to.deep.equal(['about']);
   });
 });
 

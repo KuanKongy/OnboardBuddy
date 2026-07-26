@@ -77,11 +77,16 @@ const projectNavItems = [
     description: "Traced request flows from entry point to side effects.",
   },
   {
-    to: "walkthrough",
+    // The route used to be `/walkthrough` while the label said "Tutorials",
+    // so every link a reader copied said one thing and every tab said another.
+    // The path now matches the label; `alias` keeps the old path routed and
+    // keeps this item highlighted when someone follows an old link.
+    to: "tutorials",
+    alias: "walkthrough",
     label: "Tutorials",
     icon: Route,
     end: false,
-    description: "Step-by-step code walkthroughs of real flows, with snippets and explanations.",
+    description: "Runnable procedures built from this repo: each step is a command or an edit, with what you should see and how to check it.",
   },
   {
     to: "team",
@@ -147,9 +152,9 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
     body: "Real request flows traced from entry points to side effects — the fastest way to see how a feature actually executes.",
   },
   {
-    target: "nav-walkthrough",
+    target: "nav-tutorials",
     title: "Tutorials",
-    body: "Step-by-step walkthroughs of real flows: the actual code at each step with an explanation. No slides, no invented examples.",
+    body: "Procedures you run against this repo, not essays about it: every step is a command or an edit, with the result you should see and a way to check it. Built only where the evidence supports one.",
   },
   {
     target: "nav-team",
@@ -230,7 +235,10 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
           // and pass a plain string instead.
           const isActive = item.end
             ? pathname.replace(/\/$/, "") === to.replace(/\/$/, "")
-            : pathname.startsWith(to);
+            : pathname.startsWith(to) ||
+              ("alias" in item && typeof item.alias === "string"
+                ? pathname.startsWith(`/projects/${id}/${item.alias}`)
+                : false);
           return (
             <Tooltip key={item.to}>
               <TooltipTrigger asChild>

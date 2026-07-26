@@ -1,0 +1,28 @@
+{
+  "repo": "KuanKongy/FloowForge",
+  "clone": "https://github.com/KuanKongy/FloowForge.git",
+  "shape": "Monorepo: Next.js App Router frontend under web/, FastAPI backend under api/ (Python), Supabase migrations under supabase/.",
+  "whyThisShape": "The honest-coverage case, and the sharpest test in the set. Roughly forty route handlers live in Python that no parser reads. Every claim the package makes about 'the backend' is therefore about code it never saw, and silence about that reads as 'this repo has no backend'. This is the fixture that makes the parsed-vs-in-scope distinction load-bearing.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Enumerated web/app/**/page.tsx, confirmed api/ is FastAPI (Python); domain nouns from web/app/app/* route names and supabase/migrations.",
+  "expectShape": {
+    "entrypointKinds": { "mustInclude": ["ui_route"], "mustExclude": ["http_route"] },
+    "uiRoutesAtLeast": 14,
+    "unparsedLanguages": ["python"]
+  },
+  "domainNouns": ["flow", "run", "trigger", "node", "integration", "workflow", "token", "step"],
+  "mustDisclose": ["Python"],
+  "budgetsMeasuredOn": "2026-07-25, snapshot 9df21491 (12 sections, 9 clusters, 5 capabilities, 67/167 files parsed). measured: domainNouns=8/8 · cited=45.1% · narrationErrors=53 · levelErrors=3 · sectionsWithGaps=4/12",
+  "budgets": {
+    "minDomainNounsInPackage": 8,
+    "minCitedShare": 0.4,
+    "maxNarrationErrors": 60,
+    "maxLevelErrors": 6,
+    "minSectionsDisclosingGaps": 3
+  },
+  "knownGaps": [
+    "P3 'the unread Python subsystem is named' is DELIBERATELY LEFT RED. It is not debt to ratchet: the package currently describes FloowForge to a new joiner without ever saying that 100 of its 167 files — the whole FastAPI backend — were never read. Every other budget here is today's measured number; this one is a requirement.",
+    "31 of the 53 narration errors are leaked stable keys (wf:web/app/p/[token]/page.tsx:PublicFormPage, cluster:web/modules) in the capabilities section — the same section, and the same failure, the reviewer singled out.",
+    "api/ is Python: the route handlers, the execution engine and the integration adapters are entirely outside the analysis. Any 'Traced Flows' section here traces only the half of each flow that lives in TypeScript."
+  ]
+}

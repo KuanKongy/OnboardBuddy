@@ -36,12 +36,32 @@ export type CandidateSignal = keyof typeof CANDIDATE_WEIGHTS;
  */
 const LOW_CONTENT_FAN_DAMPING = 0.35;
 
+/**
+ * Signals that cannot be measured for a target type, and are therefore removed
+ * from its denominator rather than scored as zero.
+ *
+ * Only genuinely undefined signals belong here. `testProximity`,
+ * `configRelevance` and `churn` were also zeroed for workflows before, but
+ * those ARE measurable on a flow (see the workflow branch) — they were missing
+ * data, not inapplicable signals, and the fix was to compute them.
+ */
+export const INAPPLICABLE_SIGNALS: Partial<Record<CandidateRanking['targetType'], CandidateSignal[]>> = {
+  // A workflow is a path through the graph: it has no importers and no exports.
+  workflow: ['fanCentrality', 'exportedSurface'],
+};
+
 export interface CandidateRanking {
   targetType: 'symbol' | 'file' | 'workflow';
   stableKey: string;
   score: number;
   /** Normalized [0,1] per-signal contributions (before weights). */
   breakdown: Record<CandidateSignal, number>;
+  /**
+   * Signals that cannot be measured for this target type. Their `breakdown`
+   * entry is 0 as a placeholder and their weight is excluded from the score's
+   * denominator — so a 0 here means "not applicable", not "scored nothing".
+   */
+  inapplicableSignals: CandidateSignal[];
   /** Raw signal values, kept for auditability. */
   raw: Record<CandidateSignal, number>;
   reasons: string[];
@@ -108,6 +128,10 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     uiOnlyEntrypointKeys.delete(ep.symbolStableKey ?? ep.nodeStableKey);
     uiOnlyEntrypointKeys.delete(ep.nodeStableKey);
   }
+
+  // Step nodes carry the behaviour/purpose signals a workflow's own signals are
+  // derived from; the map at the bottom of this file belongs to another function.
+  const nodeByStableKey = new Map(input.graph.nodes.map((n) => [n.stableKey, n]));
 
   const effectCount = new Map<string, number>();
   // Distinct KINDS, not raw occurrences. Ten writes to the same table is one
@@ -248,9 +272,20 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       sideEffects: effectStepKinds.size,
       entrypointParticipation: 1,
       routeSchemaOwnership: wf.steps.some((s) => s.stepKind === 'data_read' || s.stepKind === 'data_write') ? 1 : 0,
-      testProximity: 0,
-      configRelevance: 0,
-      churn: 0,
+      // These three were hard-coded to 0, which cost every workflow 15% of the
+      // weight for signals that are perfectly measurable on a flow — they were
+      // simply never computed. A flow is tested if its code is, reads config if
+      // any step does, and churns as much as the files it runs through.
+      testProximity: wf.steps.some((s) => testedFiles.has(s.filePath) || testedFiles.has(s.nodeStableKey)) ? 1 : 0,
+      configRelevance: wf.steps.some((s) => {
+        const node = nodeByStableKey.get(s.nodeStableKey);
+        const sig = Array.isArray(node?.metadata.behaviorSignals) ? (node!.metadata.behaviorSignals as string[]) : [];
+        const pur = Array.isArray(node?.metadata.purposeSignals) ? (node!.metadata.purposeSignals as string[]) : [];
+        return sig.includes('env_read') || pur.includes('configuration');
+      }) ? 1 : 0,
+      // Busiest file the flow touches: a flow through churning code is itself
+      // churning, even when no single step dominates.
+      churn: Math.max(0, ...wf.steps.map((s) => churnFor(s.filePath)?.commitCount90d ?? 0)),
     };
     targets.push({
       targetType: 'workflow',
@@ -267,27 +302,46 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
 
   // ── Normalize per target type, weight, score ──────────────────────────────
   const rankings: CandidateRanking[] = [];
-  const byType = new Map<string, RawTarget[]>();
+  const byType = new Map<CandidateRanking['targetType'], RawTarget[]>();
   for (const t of targets) byType.set(t.targetType, [...(byType.get(t.targetType) ?? []), t]);
 
-  for (const group of byType.values()) {
+  for (const [targetType, group] of byType) {
     const maxima = {} as Record<CandidateSignal, number>;
     for (const signal of Object.keys(CANDIDATE_WEIGHTS) as CandidateSignal[]) {
       maxima[signal] = Math.max(...group.map((t) => t.raw[signal]), 0);
     }
+    // Weight that can actually be earned by this target type. A workflow has no
+    // fan-in and exports nothing, so those two signals are not "zero" for a
+    // flow — they are undefined, and scoring them as zero silently capped every
+    // workflow at 0.55 while a file could reach 1.0. Dividing by the applicable
+    // weight instead means each type spans the full 0–1 range and a top-ranked
+    // flow reads as ~100, not as a mysterious 55.
+    const inapplicable = new Set(INAPPLICABLE_SIGNALS[targetType] ?? []);
+    const applicableWeight = (Object.entries(CANDIDATE_WEIGHTS) as Array<[CandidateSignal, number]>)
+      .reduce((sum, [signal, weight]) => (inapplicable.has(signal) ? sum : sum + weight), 0);
+
     for (const t of group) {
       const breakdown = {} as Record<CandidateSignal, number>;
       let score = 0;
       for (const [signal, weight] of Object.entries(CANDIDATE_WEIGHTS) as Array<[CandidateSignal, number]>) {
+        if (inapplicable.has(signal)) {
+          // Present but zero, so nothing summing all nine keys produces NaN.
+          // `inapplicableSignals` below is what tells a reader this 0 means
+          // "not measurable here" rather than "measured, found nothing".
+          breakdown[signal] = 0;
+          continue;
+        }
         const normalized = maxima[signal] > 0 ? t.raw[signal] / maxima[signal] : 0;
         breakdown[signal] = Math.round(normalized * 1000) / 1000;
         score += normalized * weight;
       }
+      score = applicableWeight > 0 ? score / applicableWeight : 0;
       rankings.push({
         targetType: t.targetType,
         stableKey: t.stableKey,
         score: Math.round(score * 100000) / 100000,
         breakdown,
+        inapplicableSignals: [...inapplicable],
         raw: t.raw,
         reasons: t.reasons,
       });

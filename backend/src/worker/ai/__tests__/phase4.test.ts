@@ -1,119 +1,17 @@
 import { expect } from 'chai';
 import { __setQueryForTests } from '../../../lib/db.js';
-import {
-  ProviderError,
-  StructuredOutputError,
-  type AiProvider,
-  type CompletionRequest,
-  type CompletionResult,
-  type ProviderCallOptions,
-  type StructuredRequest,
-  type StructuredResult,
-} from '../provider.js';
+import { ProviderError, StructuredOutputError } from '../provider.js';
 import { OpenRouterProvider, coerceNullArrays } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
 import { BudgetEnforcer, BudgetExceededError, KillSwitchError, normalizeBudgetOverrides } from '../budgetEnforcer.js';
-import { AiClient, AiPausedError, AiFailedError } from '../aiClient.js';
+import { AiPausedError, AiFailedError } from '../aiClient.js';
 import { stripSnippetsDeep, applyPrivacyMode, AiDisabledError } from '../privacy.js';
-
-// ── Shared fakes ─────────────────────────────────────────────────────────────
-
-interface QueryLogEntry { text: string; params?: unknown[] }
-
-/** Routes the db-layer queries the ai modules issue; records everything. */
-function installFakeDb(overrides: {
-  llmKeyRows?: unknown[];
-  jobStatus?: string;
-  hasCachedRun?: boolean;
-  budgetUsageRow?: Record<string, unknown> | null;
-} = {}): QueryLogEntry[] {
-  const log: QueryLogEntry[] = [];
-  let runCounter = 0;
-  __setQueryForTests(async (text, params) => {
-    log.push({ text, params });
-    if (text.includes('FROM project_llm_keys')) return { rows: overrides.llmKeyRows ?? [] } as never;
-    if (text.includes('FROM analysis_jobs')) return { rows: [{ status: overrides.jobStatus ?? 'running' }] } as never;
-    if (text.includes('FROM ai_generation_runs')) {
-      return { rows: overrides.hasCachedRun ? [{ '?column?': 1 }] : [] } as never;
-    }
-    if (text.includes('INSERT INTO ai_generation_runs')) {
-      runCounter += 1;
-      return { rows: [{ id: `run-${runCounter}` }] } as never;
-    }
-    if (text.includes('SELECT budget_usage')) {
-      return { rows: overrides.budgetUsageRow === null ? [] : [{ budget_usage: overrides.budgetUsageRow ?? {} }] } as never;
-    }
-    return { rows: [] } as never;
-  });
-  return log;
-}
-
-class FakeProvider implements AiProvider {
-  readonly id = 'openrouter';
-  completeCalls: Array<{ model: string }> = [];
-  /** Errors to throw before succeeding, consumed in order. */
-  errors: unknown[] = [];
-  /** Models that always fail, regardless of the error queue. */
-  brokenModels = new Set<string>();
-  structuredValue: unknown = { ok: true };
-
-  async complete(req: CompletionRequest, _opts: ProviderCallOptions): Promise<CompletionResult> {
-    this.completeCalls.push({ model: req.model });
-    this.maybeThrow(req.model);
-    return { content: `reply from ${req.model}`, usage: { inputTokens: 100, outputTokens: 20 } };
-  }
-
-  async completeStructured<T>(req: StructuredRequest, _opts: ProviderCallOptions): Promise<StructuredResult<T>> {
-    this.completeCalls.push({ model: req.model });
-    this.maybeThrow(req.model);
-    return { value: this.structuredValue as T, usage: { inputTokens: 150, outputTokens: 30 }, usedSchemaFallback: false };
-  }
-
-  async embed(inputs: string[], _model: string, _opts: ProviderCallOptions): Promise<{ vectors: number[][]; usage: { inputTokens: number; outputTokens: number } }> {
-    return { vectors: inputs.map(() => [0.1, 0.2]), usage: { inputTokens: 10, outputTokens: 0 } };
-  }
-
-  private maybeThrow(model: string): void {
-    if (this.brokenModels.has(model)) throw new ProviderError('model permanently down', 500, true);
-    const err = this.errors.shift();
-    if (err) throw err;
-  }
-}
-
-function makeBudget(opts: { depth?: 'cheap' | 'standard' | 'full'; stopBehavior?: 'fail' | 'pause' | 'degrade'; overrides?: unknown; now?: () => number } = {}): BudgetEnforcer {
-  return new BudgetEnforcer({
-    snapshotId: 'snap-1',
-    depth: opts.depth ?? 'standard',
-    stopBehavior: opts.stopBehavior,
-    budgetOverrides: opts.overrides,
-    now: opts.now,
-  });
-}
-
-function makeClient(provider: FakeProvider, opts: {
-  privacyMode?: 'full_ai' | 'facts_only_ai' | 'ai_disabled';
-  budget?: BudgetEnforcer;
-  models?: Partial<Record<'cheap' | 'strong', string[]>>;
-  behaviors?: Partial<Record<'cheap' | 'strong', Array<'retry' | 'degrade' | 'pause' | 'fail'>>>;
-} = {}): AiClient {
-  const tierConfig = resolveTierConfig();
-  if (opts.models?.cheap) tierConfig.models.cheap = opts.models.cheap;
-  if (opts.models?.strong) tierConfig.models.strong = opts.models.strong;
-  if (opts.behaviors?.cheap) tierConfig.failureBehavior.cheap = opts.behaviors.cheap;
-  if (opts.behaviors?.strong) tierConfig.failureBehavior.strong = opts.behaviors.strong;
-  return new AiClient({
-    projectId: 'proj-1',
-    snapshotId: 'snap-1',
-    privacyMode: opts.privacyMode ?? 'full_ai',
-    budget: opts.budget ?? makeBudget(),
-    provider,
-    tierConfig,
-    maxRetries: 2,
-    sleep: async () => {},
-  });
-}
+// Shared fakes (test/helpers/aiHarness.ts) — the privacy-mode suites assert
+// against the same provider stub, so a call site cannot drift out from under
+// one suite while still satisfying the other.
+import { FakeProvider, installFakeDb, makeBudget, makeClient } from '../../../../test/helpers/aiHarness.js';
 
 const baseRequest = {
   tier: 'cheap' as const,

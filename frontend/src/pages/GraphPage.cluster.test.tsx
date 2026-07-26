@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
-import { fetchDependencyGraph } from "@/lib/graphData";
+import { fetchDependencyGraph, fetchFileSymbolGraph } from "@/lib/graphData";
 
 /**
  * Drill-down navigation.
@@ -24,17 +24,25 @@ vi.mock("@/lib/graphData", () => {
     kind: "cluster",
     metadata: { exportedSymbols: [], importCount: files, dependentCount: 0, fileCount: files, directory: dir },
   });
-  const fileNode = (path: string, label: string) => ({
+  const fileNode = (path: string, label: string, symbolCount = 0) => ({
     id: path,
     label,
     kind: "module",
-    metadata: { exportedSymbols: [label], importCount: 1, dependentCount: 0 },
+    metadata: { exportedSymbols: [label], importCount: 1, dependentCount: 0, symbolCount },
+  });
+  const symbolNode = (path: string, label: string, kind: string) => ({
+    id: path,
+    label,
+    kind,
+    metadata: { exportedSymbols: [], importCount: 1, dependentCount: 1, exported: true },
   });
 
   const root = {
-    projectId: "proj-1", snapshotId: "snap-1", clustered: true, totalNodes: 80, totalEdges: 120,
+    projectId: "proj-1", snapshotId: "snap-1", clustered: true, totalNodes: 187, totalEdges: 120,
+    level: { kind: "root", id: null, unit: "groups" },
+    truncation: null,
     graph: {
-      nodes: [clusterNode("src/lib", 40), clusterNode("src/api", 40)],
+      nodes: [clusterNode("src/lib", 40), clusterNode("src/api", 40), clusterNode("src/big", 107)],
       edges: [{ id: "e0", source: "cluster:src/lib", target: "cluster:src/api", kind: "dependency" }],
       entryPoints: [],
     },
@@ -42,11 +50,35 @@ vi.mock("@/lib/graphData", () => {
   };
 
   // `src/lib` still has a group inside it, so a two-level drill is reachable —
-  // that is what makes an intermediate breadcrumb meaningful.
+  // that is what makes an intermediate breadcrumb meaningful. `api.ts` is the
+  // file that has symbols under it.
   const lib = {
     projectId: "proj-1", snapshotId: "snap-1", clustered: true, totalNodes: 40, totalEdges: 10,
+    level: { kind: "cluster", id: "src/lib", unit: "groups and files" },
+    truncation: null,
     graph: {
-      nodes: [clusterNode("src/lib/deep", 8), fileNode("src/lib/index.ts", "index")],
+      nodes: [
+        clusterNode("src/lib/deep", 8),
+        fileNode("src/lib/index.ts", "index"),
+        fileNode("src/lib/api.ts", "api", 3),
+      ],
+      edges: [],
+      entryPoints: [],
+    },
+    fileAnalyses: [],
+  };
+
+  // A level the node cap actually bites into: 107 files, 60 drawn.
+  const big = {
+    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 107, totalEdges: 4,
+    level: { kind: "cluster", id: "src/big", unit: "files" },
+    truncation: {
+      shown: 60, total: 107, hidden: 47, limit: 60, unit: "files",
+      keptBy: "the files that import the most other project files",
+      seeRest: null,
+    },
+    graph: {
+      nodes: Array.from({ length: 60 }, (_, i) => fileNode(`src/big/f${i}.ts`, `f${i}`)),
       edges: [],
       entryPoints: [],
     },
@@ -55,6 +87,8 @@ vi.mock("@/lib/graphData", () => {
 
   const leaf = (cluster: string) => ({
     projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 2, totalEdges: 1,
+    level: { kind: "cluster", id: cluster, unit: "files" },
+    truncation: null,
     graph: {
       nodes: [fileNode(`${cluster}/a.ts`, "a"), fileNode(`${cluster}/b.ts`, "b")],
       edges: [{ id: "e1", source: `${cluster}/a.ts`, target: `${cluster}/b.ts`, kind: "imports", weight: 1 }],
@@ -63,12 +97,34 @@ vi.mock("@/lib/graphData", () => {
     fileAnalyses: [],
   });
 
+  const symbols = {
+    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 3, totalEdges: 1,
+    level: { kind: "file", id: "src/lib/api.ts", unit: "symbols" },
+    truncation: null,
+    graph: {
+      nodes: [
+        symbolNode("src/lib/api.ts#createClient", "createClient", "function"),
+        symbolNode("src/lib/api.ts#request", "request", "function"),
+        symbolNode("src/lib/api.ts#ApiError", "ApiError", "class"),
+      ],
+      edges: [{
+        id: "s1", source: "src/lib/api.ts#createClient", target: "src/lib/api.ts#request",
+        kind: "calls", weight: 1,
+      }],
+      entryPoints: [],
+    },
+    fileAnalyses: [],
+  };
+
   return {
     fetchDependencyGraph: vi.fn().mockImplementation((_p: string, cluster?: string) =>
-      Promise.resolve(!cluster ? root : cluster === "src/lib" ? lib : leaf(cluster)),
+      Promise.resolve(
+        !cluster ? root : cluster === "src/lib" ? lib : cluster === "src/big" ? big : leaf(cluster),
+      ),
     ),
+    fetchFileSymbolGraph: vi.fn().mockResolvedValue(symbols),
     fetchClassGraph: vi.fn().mockResolvedValue(null),
-    fetchWorkflowsList: vi.fn().mockResolvedValue([]),
+    fetchWorkflowsList: vi.fn().mockResolvedValue({ workflows: [] }),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
   };
@@ -165,6 +221,43 @@ describe("GraphPage drill-down", () => {
     expect(vi.mocked(fetchDependencyGraph).mock.calls.length).toBe(callsBefore);
     expect(screen.getByText("lib")).toBeInTheDocument();
     expect(screen.queryByText("index.ts")).not.toBeInTheDocument();
+  });
+
+  it("drills a file into the symbols it declares, and a symbol is the leaf", async () => {
+    // The rung the ladder was missing: cluster → nested cluster → file →
+    // symbols. `index` (no symbols) stays a leaf; `api` (3) opens a level.
+    renderGraphPage();
+    await drillInto("src/lib/ (40 files)");
+    await drillInto("api");
+
+    await waitFor(() =>
+      expect(fetchFileSymbolGraph).toHaveBeenCalledWith("proj-1", "src/lib/api.ts", null),
+    );
+    // The file becomes a level of its own, so the group it came from turns
+    // into an intermediate crumb.
+    await waitFor(() => expect(screen.getByRole("button", { name: "lib" })).toBeInTheDocument());
+    expect(screen.getByText("createClient")).toBeInTheDocument();
+    expect(screen.getByText("ApiError")).toBeInTheDocument();
+    expect(screen.getByText(/Symbols declared in/)).toBeInTheDocument();
+
+    const symbolCalls = vi.mocked(fetchFileSymbolGraph).mock.calls.length;
+    fireEvent.click(screen.getByText("createClient"));
+
+    // A symbol has nothing below it: selection, not navigation.
+    expect(vi.mocked(fetchFileSymbolGraph).mock.calls.length).toBe(symbolCalls);
+    expect(screen.getByText("request")).toBeInTheDocument();
+  });
+
+  it("says how much of a capped level it is not drawing", async () => {
+    // The cap was silent below the root: 60 of 107 files with the toolbar
+    // reporting "60 / 60 files".
+    renderGraphPage();
+    await drillInto("src/big/ (107 files)");
+
+    await waitFor(() => expect(screen.getByText(/Showing 60 of 107 files in big/)).toBeInTheDocument());
+    expect(screen.getByText(/47 not drawn/)).toBeInTheDocument();
+    expect(screen.getByText(/capped at 60 nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/47 more not drawn/)).toBeInTheDocument();
   });
 
   it("restores the drill level from the URL on a cold load", async () => {

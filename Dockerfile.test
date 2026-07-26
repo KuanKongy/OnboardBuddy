@@ -16,6 +16,8 @@ RUN npm ci
 
 COPY backend ./backend
 COPY frontend ./frontend
+COPY scripts ./scripts
 
-# Default: run both suites back to back (backend first).
-CMD ["sh", "-c", "npm test -w backend && npm test -w frontend"]
+# Default: run every suite and print a per-area pass/fail summary at the end.
+# The runner exits non-zero if any area fails. See scripts/test-summary.mjs.
+CMD ["node", "scripts/test-summary.mjs"]
