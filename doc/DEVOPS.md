@@ -26,6 +26,35 @@ no local Redis.
 
 ---
 
+## Database change policy for M5 (read before writing a migration)
+
+**The M4 submission must stay testable for the whole of M5.** A TA can clone the `Milestone4`
+branch, bring it up with the `.env` files from Canvas, and point it at the same Supabase project we
+are still developing against — so the schema is shared between a graded, frozen release and an
+actively changing one.
+
+**The rule: do not change the database during M5.** Prefer solving the problem in application code,
+in a jsonb column that already exists (`metadata`, `generation_context`, `checkpoint`,
+`budget_usage`, `score_breakdown`), or by deriving the value at read time.
+
+**If a change is genuinely unavoidable, it must be backwards compatible with M4's code**, which
+means all of:
+
+- **Additive only.** New nullable columns, new tables, new indexes. Never drop or rename a column or
+  table, never narrow a type, never add a `NOT NULL` without a default, never tighten a `CHECK` that
+  existing rows or M4's code paths could violate.
+- **M4's queries keep working unchanged.** M4 selects named columns and writes rows without the new
+  field; both must still succeed. A new column has to have a sensible default or be nullable.
+- **No destructive backfill.** Backfill into new space, never overwrite existing values.
+- **Reversible.** Ship a `DOWN` alongside the `UP`, and confirm M4 still runs after the `UP` is
+  applied — not just after the `DOWN`.
+- **Written down.** Add it to the migration folder with a comment naming why it could not be avoided,
+  and note it in the M5 section of the README so the TA is not surprised by a schema they did not
+  submit.
+
+The practical test before writing any migration: *if the TA checks out `Milestone4` tomorrow and
+runs it against this database, does it still work?* If the honest answer is "probably", that is a no.
+
 ## External Services
 
 ### 1. Supabase (Auth + PostgreSQL)
