@@ -26,6 +26,7 @@
 
 import { expect } from 'chai';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { INJECTION_PAYLOADS, COMPROMISED_MODEL_OUTPUT, readFixtureFile, readFixtureRepo } from '../../../../test/security/injectionCatalogue.js';
 import { makeUntrustedFence, safeIdentifier, UNTRUSTED_DATA_RULE, INJECTION_UNKNOWN_KIND } from '../../ai/untrustedData.js';
 import { sanitizeGeneratedMarkdown } from '../markdownSanitizer.js';
@@ -263,7 +264,7 @@ describe('layer 2 — a FULLY COMPROMISED model response cannot reach storage ar
 // ── Layer 3: the defenses are actually wired in ─────────────────────────────
 
 describe('layer 3 — every prompt site and the output choke point are wired up', () => {
-  const read = (rel: string) => readFileSync(new URL(rel, import.meta.url).pathname, 'utf8');
+  const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
   const sites = [
     { path: '../sectionGenerator.ts', label: 'section generation (P1)' },
     { path: '../../semantic/symbolPass.ts', label: 'symbol records (P3)' },

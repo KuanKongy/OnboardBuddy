@@ -15,6 +15,7 @@ import { llmKeysRouter } from "./llmKeys.js";
 import { askRouter } from "./ask.js";
 import { internalChatRouter } from "./internalChat.js";
 import { requireAuth } from "../middleware/auth.js";
+import { askRateLimit } from "../middleware/askRateLimit.js";
 
 export const apiRouter = Router();
 
@@ -31,5 +32,5 @@ apiRouter.use("/projects/:id/capabilities", requireAuth, capabilitiesRouter);
 apiRouter.use("/projects/:id/tutorials", requireAuth, tutorialsRouter);
 apiRouter.use("/projects/:id/progress", requireAuth, progressRouter);
 apiRouter.use("/projects/:id/llm-key", requireAuth, llmKeysRouter);
-apiRouter.use("/projects/:id/ask", requireAuth, askRouter);
+apiRouter.use("/projects/:id/ask", requireAuth, askRateLimit, askRouter);
 apiRouter.use("/internal/chat", internalChatRouter);

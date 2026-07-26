@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 // vitest's root is the frontend workspace, so cwd is the stable anchor here —
 // `import.meta.url` is rewritten by the transform and does not resolve to a
@@ -42,7 +42,7 @@ function stripBlockComments(text: string): string {
 
 const FILES = sourceFiles(SRC).map((f) => {
   const text = readFileSync(f, "utf8");
-  return { path: relative(SRC, f), text, code: stripBlockComments(text) };
+  return { path: relative(SRC, f).split(sep).join("/"), text, code: stripBlockComments(text) };
 });
 
 /**
