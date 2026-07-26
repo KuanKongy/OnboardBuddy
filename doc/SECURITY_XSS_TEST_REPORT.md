@@ -213,46 +213,52 @@ P-01…P-10, catalogued in `backend/test/security/injectionCatalogue.ts`) — no
   `beacon.invalid` and `evil.example` (both RFC 2606/6761 reserved, non-resolvable). A first draft
   of the disclaimer accidentally added two real hyperlinks to `rfc-editor.org` while *citing* the
   RFC — caught before commit, replaced with plain unlinked text.
-- `git init -b main`, committed locally (`a75b9c3`). **Not pushed.**
+- `git init -b main`, committed locally (`a75b9c3`), **pushed**: `git push
+  "https://ng-eugene:$TOKEN@github.com/ng-eugene/onboardbuddy-injection-demo.git" main:main` →
+  `main -> main` accepted. Verified server-side via the GitHub API afterward: `GET
+  .../branches` returns `main` at `a75b9c3d…` (matches local exactly), `GET .../contents/README.md`
+  resolves. No token persisted in `.git/config` — pushed via URL argument only, never
+  `git remote add`'d with credentials embedded.
 
-**Live import: blocked on credential, twice, by design contingency, not a stall.** The stored
-github.com credential for `ng-eugene` was already confirmed dead this session (`git ls-remote`
-fails non-interactively — `terminal prompts disabled`, no usable stored credential; `GET
-api.github.com/user` also `401`).
+**Credential history, for the record — two PATs, two distinct failure modes, both non-bypassable
+without a real fix:**
 
-- **First PAT** (`ghp_…P5On`, classic, correct 40-char shape): `401 Bad credentials` from a direct
-  API check — dead/revoked token, not a scope issue.
-- **Second PAT** (`github_pat_11BA4T…`, fine-grained): **authenticates fine**
-  (`GET /user` → `200`, confirmed as `ng-eugene`; `GET /repos/ng-eugene/onboardbuddy-injection-demo`
-  → `200`, confirms the repo already exists, private, empty). `git push` still failed —
-  `403 Write access to repository not granted` — and `GET .../repos/...` responded with
-  `x-accepted-github-permissions: metadata=read`, confirming the **token itself** was never granted
-  `Contents: Read and write` for this repository (the repo JSON's `permissions.push: true` reflects
-  the *user's* role, not what this specific fine-grained token is scoped to — a common confusion
-  point with fine-grained PATs). This needs a token edit on github.com, not a retry: Settings →
-  Developer settings → Fine-grained tokens → this token → **Repository access** must explicitly
-  include `onboardbuddy-injection-demo`, and **Permissions → Contents** must be **Read and write**.
-  No regeneration needed — permission edits apply to the existing token.
+- **First PAT** (`ghp_…P5On`, classic): `401 Bad credentials` — dead/revoked token.
+- **Second PAT** (`github_pat_11BA4T…`, fine-grained), first attempt: authenticated fine but
+  `git push` → `403 Write access to repository not granted` (token created without `Contents:
+  Read and write` for this repo — the repo JSON's `permissions.push: true` reflects the *user's*
+  role, not the token's granted scope, a common fine-grained-PAT confusion point). **After the
+  user edited the token's permissions on github.com** (no regeneration needed), the identical push
+  command succeeded on the next attempt.
 
-Per the plan's own contingency, this stayed **local-build-only** both times rather than stalling
-the rest of the round. The repo is built, committed, and now durably placed; the exact commands to
-finish once a correctly-scoped token exists are:
+**Live import: blocked on a step that cannot be automated at all — the GitHub App installation
+consent screen.** `GET /api/github/installations` for this account returns `{"github_connected":
+false, "installations": []}` — the OnboardBuddy GitHub App has never been connected for
+`ng.eugene2004@gmail.com` in this app's database, distinct from `ng-eugene` being a real,
+authenticated GitHub user via PAT. Read `backend/src/api/routes/github.ts:120-136` to confirm: the
+connection flow is `GET /oauth/start` → a real `github.com/login/oauth/authorize` redirect → user
+clicks "Authorize" while logged into github.com → `POST /oauth/complete` with the returned `code`.
+There is no PAT-based or API-only substitute for this — a personal access token authenticates API
+*calls*, it cannot click through an OAuth consent screen or a GitHub App installation-authorization
+screen on the user's behalf, and `GET /user/installations` with the PAT itself confirms this:
+`403 Resource not accessible by personal access token`. Opening the flow in a driven, unauthenticated
+browser session (checked this round) lands on GitHub's own login page — there is no session to
+reuse and no credential that substitutes for the account owner clicking through.
 
-```bash
-cd "doc/plans/injection-demo-repo"     # relative to repo root; git-excluded, not a submodule
-git remote add origin https://github.com/ng-eugene/onboardbuddy-injection-demo.git
-git push -u origin main
-# then remove the token from the URL/config immediately if it was embedded for auth:
-#   git push "https://ng-eugene:$GH_DEMO_TOKEN@github.com/ng-eugene/onboardbuddy-injection-demo.git" main:main
-```
+**What finishes this, and it must be interactive:**
+1. Sign into github.com as `ng-eugene` in a real browser.
+2. Open the OnboardBuddy frontend (`http://localhost:5173`), sign in as
+   `ng.eugene2004@gmail.com`, and use its "Connect GitHub" flow (this drives step `oauth/start`
+   above automatically).
+3. When GitHub prompts for the App installation, grant it access to
+   **`onboardbuddy-injection-demo`** specifically (or "All repositories" — either satisfies
+   `userCanAccessInstallation`).
 
-After that, the remaining steps (confirm the GitHub App has repo access via
-`GET /api/github/installations` → `GET /api/github/repos?installation_id=<id>`, import with
-`privacy_mode: "full_ai"`, then read the generated onboarding package and check per-payload
-whether the beacon image / phishing link / "Verified safe" opener / suppressed-finding /
-echoed-system-prompt landed in stored section text) were **not run** — they require the push to
-land first. This is the one piece of the plan's ask genuinely not completed, and it is blocked on
-an external credential's permission scope, not on effort.
+Once that's done, `GET /api/github/installations` will return a non-empty list and the rest of
+this section — `POST /api/projects` with the real `github_installation_id`, `privacy_mode:
+"full_ai"` import, then reading the generated section text for each of P-01…P-10 — resumes exactly
+where the plan described it, no further blockers expected (the repo content, host safety, and file
+count were all verified in the "Content" bullets above and don't change).
 
 ## 4. Results — does the central question hold?
 
@@ -294,10 +300,10 @@ or not reproduced):**
 - Malformed `:id` path params (non-UUID) return a generic `500` instead of a clean `400` — no
   information disclosure (verified), just an imprecise status code. One-line UUID-shape check,
   left as a follow-up rather than folded in, since the probes found no actual leak risk.
-- The demo-repo prompt-injection **live import** (github.com push → GitHub App import → per-payload
-  audit of the generated onboarding text) is blocked on a correctly-scoped GitHub token — two PATs
-  tried this round, one dead, one authenticating but missing `Contents: Read and write` for this
-  repo — see §3.7 for the exact diagnosis and resumption commands.
+- The demo-repo prompt-injection **live import** (github.com push, done → GitHub App connect and
+  install → import → per-payload audit of the generated onboarding text) is blocked on the GitHub
+  App's OAuth consent screen, which only the account owner can click through — not something a PAT
+  or a scripted browser session can satisfy. See §3.7 for the exact three steps that finish it.
 
 **Also fixed — pre-existing, unrelated to the XSS/SQLi/CSRF/IDOR threat model, but directly
 blocking this round's own required verification (`npm run test`, `npx vitest run`) on this
@@ -363,9 +369,11 @@ Concrete acceptance, reproduced this session (not asserted, run):
   window given prior real `/ask` calls already made this session — consistent, not just internally
   self-tested.
 - Repo import: local build complete (now at `doc/plans/injection-demo-repo/`, git-excluded,
-  durable), `supportedFileCount = 7`, zero `beacon.invalid`/`evil.example` leakage risk (both are
-  the *intended* payload hosts, reserved/non-resolvable) confirmed by host grep; live import
-  blocked on token permission scope (§3.7), resumption commands there.
+  durable) and **pushed to github.com** (`main` @ `a75b9c3`, verified server-side),
+  `supportedFileCount = 7`, zero `beacon.invalid`/`evil.example` leakage risk (both are the
+  *intended* payload hosts, reserved/non-resolvable) confirmed by host grep; live import blocked on
+  the GitHub App connection/installation step, which requires the account owner to click through a
+  consent screen (§3.7) — not retriable with a token.
 
 ## 7. Test-artifact hygiene
 
