@@ -232,7 +232,9 @@ describe('phase 3 — architecture clustering', () => {
     const map = clusterArchitecture({ graph, inventory, workflows, rankings });
     const api = map.clusters.find((c) => c.kind === 'api_layer')!;
     expect(api.criticalScore).to.be.greaterThan(0);
-    expect(api.deterministicSummary).to.match(/\d+ files?/);
+    // Counts live in `metadata` and render as a chip; the summary explains.
+    expect(api.metadata.fileCount).to.be.a('number');
+    expect(api.deterministicSummary).to.not.match(/\d/);
     for (const c of map.clusters) {
       for (const m of c.members) expect(m.reason).to.be.a('string').and.not.empty;
     }

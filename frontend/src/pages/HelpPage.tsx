@@ -23,7 +23,7 @@ interface TourRow {
   title: string;
   description: string;
   hint?: string;
-  /** Dashboard tour needs no project; the other three do. */
+  /** The dashboard and import tours need no project; the other three do. */
   projectScoped: boolean;
   path: (projectId: string) => string;
 }
@@ -42,6 +42,14 @@ const TOUR_ROWS: TourRow[] = [
     description: "What each project tab does — overview, onboarding, architecture, dependencies, workflows.",
     projectScoped: true,
     path: (id) => `/projects/${id}`,
+  },
+  {
+    name: "import",
+    title: "Import tour",
+    description: "Configuring the first analysis — branch, commit, scope, and the cost preview.",
+    hint: "Starts on step 2, once a repository has been imported.",
+    projectScoped: false,
+    path: () => "/import",
   },
   {
     name: "onboardingLifecycle",

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Circle,
   Download,
+  FileCode2,
   FileText,
   FlaskConical,
   GitCommitHorizontal,
@@ -21,8 +22,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
@@ -36,18 +36,18 @@ import { apiFetch } from "@/lib/api";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
 import { useProgress } from "@/lib/useProgress";
 import {
-  ROLES,
-  ROLE_READING_ORDER,
   SECTION_GROUPS,
   SECTION_NAV_ORDER,
-  SECTION_WHY,
   fetchOnboardingPackage,
+  readingOrderFor,
   regenerateSection,
+  sectionWhy,
 } from "@/lib/onboardingData";
-import { MARKDOWN_DISALLOWED_ELEMENTS, safeUrlTransform } from "@/lib/markdownSafety";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel, roleTitle } from "@/lib/roles";
 import { receiptForHref, receiptNumberById, renderReceiptMarkers, UNVERIFIED_HREF } from "@/lib/receiptMarkers";
 import { AskPanel } from "@/components/AskPanel";
-import { MermaidDiagram } from "@/components/MermaidDiagram";
+import { DiagramFrame } from "@/components/reader/DiagramFrame";
+import { SectionMarkdown, type MarkdownComponents } from "@/components/reader/SectionMarkdown";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
 import { ReceiptChip, InlineReceiptRef } from "@/components/ReceiptChips";
 import { Badge } from "@/components/ui/badge";
@@ -74,13 +74,17 @@ import {
 } from "@/components/ui/select";
 import type {
   ConfidenceLevel,
+  LanguageInventory,
   OnboardingPackage,
   OnboardingSection,
   PackageCard,
+  PackageCoverage,
+  SectionGapGroup,
   SectionId,
   SourceReceipt,
 } from "@/types/onboarding";
 import { ReceiptViewer } from "@/components/ReceiptViewer";
+import { ScoreProvenance } from "@/components/ScoreProvenance";
 import { cn } from "@/lib/utils";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -94,6 +98,12 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 function StatusBadge({ status }: { status: string }) {
+  // E6/§17.8 "constants pretending to be data": 8/8 packages and 93/93
+  // sections in the system are `draft` and no reachable action clears it, so
+  // the badge told every reader their documentation is unfinished. States
+  // that never vary render nothing; real states (stale/generating/failed/
+  // approved) keep their badge.
+  if (status === "draft") return null;
   return (
     <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", STATUS_STYLE[status] ?? "")}>
       {status}
@@ -126,20 +136,89 @@ const UNKNOWN_LABELS: Record<string, string> = {
     "The semantic index had nothing relevant for this section — it is based on structural facts only",
   workflow: "A referenced workflow couldn't be fully resolved from the trace evidence",
   data: "Supporting data for part of this section wasn't available in the evidence",
+  // Kinds that used to render as raw pipeline telemetry (READER_REDESIGN.md
+  // N8): the reader speaks to a newcomer, not to the validator.
+  unsupported_language: "Part of this repository is in a language the analyzer doesn't parse",
+  prompt_injection_attempt: "Repo content tried to steer the AI (prompt injection) — it was fenced and ignored",
+  incomplete_coverage: "This section doesn't yet cover every file it maps — regenerate to fill it in",
+  critique_contradiction: "An internal consistency check flagged one of this section's statements",
+  env_var_documentation_missing: "Some environment variables have no documented purpose in .env.example",
+  missing_test_for_area: "No existing test could be found covering this change area",
 };
 
-/** Human names for the ranker's signals (served with their real weights). */
-const SIGNAL_LABELS: Record<string, string> = {
-  workflowParticipation: "workflow participation",
-  fanCentrality: "fan-in/out centrality",
-  exportedSurface: "exported surface",
-  sideEffects: "side effects",
-  entrypointParticipation: "entry points",
-  routeSchemaOwnership: "route/schema ownership",
-  testProximity: "test proximity",
-  configRelevance: "config relevance",
-  churn: "churn (90d)",
-};
+/**
+ * Gap kinds whose `detail` is written in the pipeline's own instruction voice
+ * ("INCOMPLETE: you covered 0 of 36 required mapped files…") — the translated
+ * label above carries the reader-facing meaning; the raw text stays in the
+ * provenance trail, not the document (N8).
+ */
+const DETAIL_SUPPRESSED_KINDS = new Set(["incomplete_coverage"]);
+
+/**
+ * CONSULT sections are deterministic reference tables. Zero receipts is their
+ * CORRECT state — "the table is the evidence" (audit §8.1/A13) — so they get
+ * a provenance sentence instead of the self-indicting "no receipts — content
+ * is not independently verifiable" framing.
+ */
+const REFERENCE_SECTION_IDS = new Set<string>(["routes-jobs", "data-model", "guardrails-ops", "data-schema"]);
+
+/**
+ * The coverage sentence, stated in terms of what was actually read.
+ *
+ * This line used to say "Analyzed N files" using the count of every file in
+ * scope — assets, markdown and lockfiles included — which overstated coverage
+ * by up to 9x on audited projects and read as a claim that the whole repo had
+ * been understood. It now leads with the parsed count, names the languages
+ * that were skipped instead of burying them in an "unsupported" total, and
+ * says "unknown" for snapshots taken before the parsed count was recorded
+ * rather than substituting the old inflated number.
+ */
+function CoverageFiles({
+  files,
+  languages,
+}: {
+  files: PackageCoverage["files"];
+  languages: LanguageInventory | null;
+}) {
+  const skipped = Object.entries(languages?.unsupported ?? {})
+    .sort((a, b) => b[1] - a[1]);
+  const skippedLabel = skipped.slice(0, 3).map(([lang, n]) => `${lang} ${n}`).join(", ");
+  const skippedRest = skipped.length > 3 ? ` +${skipped.length - 3} more` : "";
+
+  if (files.parsed === null) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+            File coverage unknown for this snapshot
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-80">
+          This analysis predates coverage measurement. {files.inScope} files were in scope, but how
+          many were parsed was not recorded. Re-analyze to measure it.
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+          Parsed <span className="font-medium text-foreground">{files.parsed}</span> of {files.inScope} files
+          {files.unsupported ? ` · ${files.unsupported} skipped` : ""}
+          {skippedLabel ? ` (${skippedLabel}${skippedRest})` : ""}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-80">
+        Everything in this package is derived from the {files.parsed} files the parser read
+        {files.supported !== null ? `, of ${files.supported} counted as source in a supported language` : ""}.
+        The rest of the {files.inScope} files in scope are assets, docs, lockfiles, and languages
+        OnboardBuddy does not parse — nothing here describes them.
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 /**
  * "How packages work" tour: the transparency contract for package lifecycle —
@@ -218,17 +297,86 @@ function initialBlockExpansion(section: OnboardingSection): boolean[] {
 function splitTldr(body: string): { tldr: string; rest: string } | null {
   const trimmed = body.trimStart();
   if (!trimmed.startsWith("**TL;DR:**")) return null;
-  const paraEnd = trimmed.indexOf("\n\n");
-  const tldrPara = paraEnd === -1 ? trimmed : trimmed.slice(0, paraEnd);
-  const rest = paraEnd === -1 ? "" : trimmed.slice(paraEnd + 2);
+  // The TL;DR paragraph ends at a blank line OR at the next line that starts
+  // a heading — generators sometimes emit "### Heading" straight after the
+  // TL;DR with only a single newline, and slicing on blank lines alone
+  // rendered a literal "### Table groups" inside the callout
+  // (READER_REDESIGN.md N5, seen live on MasterPokedex data_model).
+  const m = /\n[\t ]*\n|\n(?=#{1,6}\s)/.exec(trimmed);
+  let tldrPara = m ? trimmed.slice(0, m.index) : trimmed;
+  let rest = m ? trimmed.slice(m.index).replace(/^\s+/, "") : "";
+  // The same failure squeezed onto ONE line: "…relationships. ### Table groups".
+  const inlineHeading = tldrPara.search(/\s#{1,6}\s/);
+  if (inlineHeading > -1) {
+    rest = [tldrPara.slice(inlineHeading).trim(), rest].filter(Boolean).join("\n\n");
+    tldrPara = tldrPara.slice(0, inlineHeading);
+  }
   return { tldr: tldrPara.replace(/^\*\*TL;DR:\*\*\s*/, ""), rest };
+}
+
+/**
+ * Owner feedback K1: known gaps and the per-block citation lists "should be
+ * there, but should only show up on demand". Nothing is deleted — each list
+ * moves behind a button that names its size, so the reader can see that N
+ * gaps / N citations exist without the detail taking over the page (the audit
+ * measured one gaps block at 63% of its section — §19.4 — and a 43-chip
+ * citation footer rendered all at once — §19.3).
+ */
+function DisclosureButton({
+  open,
+  onToggle,
+  label,
+  icon,
+  controls,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  label: string;
+  icon?: ReactNode;
+  controls: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={controls}
+      className="-mx-1 inline-flex items-center gap-1.5 rounded px-1 py-1 text-[0.71875rem] font-medium text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+    >
+      <ChevronDown className={cn("h-3 w-3 shrink-0 transition-transform duration-150", !open && "-rotate-90")} />
+      {icon}
+      {label}
+    </button>
+  );
 }
 
 /**
  * Sections that retell what an interactive tab already shows link to it
  * (audit §8): the prose is the narrative, the tab is the reference.
  */
+/**
+ * The handoff from "read about it" to "go look at it".
+ *
+ * This only ever listed the LEGACY section ids (`architecture`,
+ * `dependency-graph`, `capability-map`, `workflows`, `data-schema`). None of
+ * them is one of the twelve ids a current package actually contains, so every
+ * package generated against the Diátaxis schema silently lost the link out to
+ * the interactive tab — the sections are deliberately the narrative and the
+ * tabs are deliberately the complete data, and the bridge between them was
+ * pointing at a schema that no longer ships.
+ *
+ * Current ids first; the legacy entries stay because legacy packages are still
+ * rendered.
+ */
 const TAB_FOR_SECTION: Partial<Record<SectionId, { path: string; label: string }>> = {
+  // ── current (Diátaxis) ──────────────────────────────────────────────────
+  "architecture-deep": { path: "architecture", label: "Explore the interactive cluster map in the Architecture tab" },
+  "traced-flows": { path: "workflows", label: "See every traced flow, ranked, in the Workflows tab" },
+  "code-map": { path: "dependencies", label: "Browse the full symbol graph in the Dependencies tab" },
+  capabilities: { path: "capabilities", label: "Open the Capabilities tab for flows and starting points" },
+  "routes-jobs": { path: "workflows", label: "See these entry points as traced flows in the Workflows tab" },
+  "data-model": { path: "dependencies", label: "Trace table accessors in the Dependencies tab" },
+  // ── legacy (11-section packages still render) ───────────────────────────
   architecture: { path: "architecture", label: "Explore the interactive cluster map in the Architecture tab" },
   "dependency-graph": { path: "dependencies", label: "Browse the full symbol graph in the Dependencies tab" },
   "capability-map": { path: "capabilities", label: "Open the Capabilities tab for flows and starting points" },
@@ -236,7 +384,8 @@ const TAB_FOR_SECTION: Partial<Record<SectionId, { path: string; label: string }
   "data-schema": { path: "dependencies", label: "Trace table accessors in the Dependencies tab" },
 };
 
-function SectionView({
+/** Exported for the reader disclosure test (K1). */
+export function SectionView({
   section,
   projectId,
   onReceiptClick,
@@ -246,9 +395,27 @@ function SectionView({
   onReceiptClick: (r: SourceReceipt) => void;
 }) {
   const [expanded, setExpanded] = useState<boolean[]>(() => initialBlockExpansion(section));
+  // K1: citations per block and the gaps list start collapsed on every
+  // section, so switching sections never re-opens them.
+  const [citationsOpen, setCitationsOpen] = useState<boolean[]>(() => section.blocks.map(() => false));
+  const [gapsOpen, setGapsOpen] = useState(false);
+  // A10: the API dedupes gaps onto their templates. Payloads generated before
+  // it shipped carry only the flat list — degrade to one row per entry rather
+  // than hiding gaps we cannot group.
+  const gapGroups: SectionGapGroup[] = section.unknownGroups?.length
+    ? section.unknownGroups
+    : (section.unknowns ?? []).map((u) => ({
+        kind: u.kind,
+        count: 1,
+        variants: [
+          { signature: u.kind, count: 1, detail: u.detail ?? null, members: u.detail ? [u.detail] : [] },
+        ],
+      }));
 
   useLayoutEffect(() => {
     setExpanded(initialBlockExpansion(section));
+    setCitationsOpen(section.blocks.map(() => false));
+    setGapsOpen(false);
   }, [section.id, section.sectionId]);
 
   if (section.status === "missing") {
@@ -267,18 +434,85 @@ function SectionView({
   const secondaryExpanded = expanded.slice(1);
   const allSecondaryExpanded = secondaryExpanded.length > 0 && secondaryExpanded.every(Boolean);
 
+  const leadBlock = section.blocks[0];
+  const leadBody = leadBlock ? stripLeadingDuplicateHeading(leadBlock.body, section.label) : "";
+  const leadSplit = leadBlock ? splitTldr(leadBody) : null;
+
+  // A13: deterministic reference sections aren't "unverifiable AI prose" —
+  // zero receipts is their CORRECT state (the table is the evidence), and the
+  // old pill said the opposite on the three most mechanically verifiable
+  // sections in the package.
+  const totalReceipts = section.blocks.reduce((n, b) => n + b.receipts.length, 0);
+  const referenceProvenance = REFERENCE_SECTION_IDS.has(section.id) && totalReceipts === 0;
+  const displayReason = referenceProvenance
+    ? "built from code facts — the tables are the source"
+    : section.confidenceReason;
+
+  // One `a` override shared by the TL;DR callout and every block body:
+  // citation markers become inline receipt refs, unverified spans get their
+  // explanation, everything else is a hardened external link.
+  const anchorComponents = (receipts: SourceReceipt[]): MarkdownComponents => ({
+    a: ({ href, children }) => {
+      if (href === UNVERIFIED_HREF) {
+        // A claim the validator downgraded for citing nothing — flagged at
+        // the point of doubt.
+        return (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                className="cursor-help underline decoration-warning decoration-dotted underline-offset-4"
+              >
+                {children}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-72">
+              Unverified — this statement cites no receipt. It was downgraded
+              during validation and is listed under Known gaps.
+            </TooltipContent>
+          </Tooltip>
+        );
+      }
+      const cited = receiptForHref(href, receipts);
+      if (cited) {
+        const n = receiptNumberById(receipts).get(cited.bundleReceiptId ?? "") ?? 0;
+        return <InlineReceiptRef receipt={cited} index={n} onClick={onReceiptClick} />;
+      }
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer">
+          {children}
+        </a>
+      );
+    },
+  });
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", confidenceStyle(section.confidence))}>
-          {section.confidence} confidence
+        <Badge
+          variant="outline"
+          className={cn(
+            "text-[0.6875rem] capitalize",
+            referenceProvenance
+              ? "border-border bg-secondary text-secondary-foreground"
+              : confidenceStyle(section.confidence),
+          )}
+        >
+          {referenceProvenance ? "Reference" : `${section.confidence} confidence`}
         </Badge>
-        {section.confidenceReason && (
+        {displayReason && (
           // The grade's mechanical basis, inline (audit §3.6) — a label
           // without its reason reads as theater.
-          <span className="text-[0.6875rem] text-muted-foreground" title="How this grade was computed">
-            {section.confidenceReason}
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {referenceProvenance
+                ? "Deterministic reference facts — generated from the analyzed code, not narrated by the model"
+                : "How this grade was computed"}
+            </TooltipContent>
+          </Tooltip>
         )}
         {section.status === "stale" && (
           <Badge variant="outline" className={cn("text-[0.6875rem]", STATUS_STYLE.stale)}>
@@ -305,16 +539,45 @@ function SectionView({
         )}
       </div>
 
-      {/* Anchor diagram first (Diátaxis presentation rule 1): the section's
-          deterministic mermaid opens the body; the prose refers back to it. */}
+      {/* Sentence before picture (READER_REDESIGN.md §2): the lead block's
+          TL;DR opens the section — J1's "headline first" — and the anchor
+          diagram follows it, height-clamped with an Enlarge lightbox
+          (E2/N12) instead of being the unexplained first thing a newcomer
+          sees. */}
+      {leadBlock && leadSplit && (
+        <div className="max-w-[75ch] rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.875rem] leading-relaxed text-foreground">
+          <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">TL;DR</span>
+          <SectionMarkdown
+            components={{ ...anchorComponents(leadBlock.receipts), p: ({ children }) => <span>{children}</span> }}
+          >
+            {renderReceiptMarkers(leadSplit.tldr, leadBlock.receipts)}
+          </SectionMarkdown>
+        </div>
+      )}
       {(section.diagrams ?? []).map((d, i) => (
-        <MermaidDiagram key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
+        <DiagramFrame key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
       ))}
 
       {section.blocks.map((block, bi) => {
         const isLead = bi === 0;
         const canCollapse = hasSecondaryBlocks && !isLead;
         const isOpen = isLead || expanded[bi];
+        // A11/N7: chips render only receipts that actually open somewhere.
+        // Internal record references (no file path) are counted honestly in
+        // the label instead of rendering as blank number-chips.
+        const openable = block.receipts.filter((r) => !!r.filePath);
+        const internalRefs = block.receipts.length - openable.length;
+        const numberOf = receiptNumberById(block.receipts);
+        // A11 / §19.3: state both numbers the way the audit asked for them —
+        // "43 citations · 21 you can open". 69% of receipts on the audited
+        // package were internal record references with no file at all, and
+        // counting them as evidence inflated the trust signal.
+        const citationLabel =
+          openable.length > 0
+            ? `${block.receipts.length} citation${block.receipts.length === 1 ? "" : "s"}${
+                internalRefs > 0 ? ` · ${openable.length} you can open` : ""
+              }`
+            : `${internalRefs} internal reference${internalRefs === 1 ? "" : "s"} · none you can open`;
         return (
           <div key={bi}>
             {canCollapse ? (
@@ -327,7 +590,7 @@ function SectionView({
                 <ChevronDown
                   className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150", !isOpen && "-rotate-90")}
                 />
-                <h3 className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
+                <h3 className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">{block.title}</h3>
                 {block.receipts.length > 0 && (
                   <span className="shrink-0 text-[0.6875rem] text-muted-foreground/60">
                     {block.receipts.length} source ref{block.receipts.length === 1 ? "" : "s"}
@@ -338,82 +601,48 @@ function SectionView({
               // The lead block's title always equals the section label shown
               // in the sticky top bar — rendering it again is the duplicated
               // title stack the audit flagged.
-              !isLead && <h3 className="mb-1.5 text-[0.8125rem] font-semibold text-foreground">{block.title}</h3>
+              !isLead && <h3 className="mb-1.5 text-[0.875rem] font-semibold text-foreground">{block.title}</h3>
             )}
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
               <div className="overflow-hidden" inert={!isOpen}>
-                {(() => {
-                  if (!isLead) return null;
-                  const split = splitTldr(stripLeadingDuplicateHeading(block.body, section.label));
-                  if (!split) return null;
-                  return (
-                    <div className="mb-3 rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
-                      <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">TL;DR</span>
-                      <ReactMarkdown
-                        disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
-                        urlTransform={safeUrlTransform}
-                        components={{ p: ({ children }) => <span>{children}</span> }}
-                      >
-                        {renderReceiptMarkers(split.tldr, block.receipts)}
-                      </ReactMarkdown>
-                    </div>
-                  );
-                })()}
-                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.84375rem] leading-relaxed text-muted-foreground prose-headings:text-foreground prose-headings:text-[0.84375rem] prose-headings:font-semibold prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.75rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-li:my-0.5 prose-p:my-1.5 prose-ul:my-1 prose-pre:max-h-72 prose-pre:overflow-auto">
-                  <ReactMarkdown
-                    disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
-                    urlTransform={safeUrlTransform}
-                    components={{
-                      a: ({ href, children }) => {
-                        if (href === UNVERIFIED_HREF) {
-                          // A claim the validator downgraded for citing
-                          // nothing — flagged at the point of doubt.
-                          return (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span
-                                  tabIndex={0}
-                                  className="cursor-help underline decoration-warning decoration-dotted underline-offset-4"
-                                >
-                                  {children}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-72">
-                                Unverified — this statement cites no receipt. It was downgraded
-                                during validation and is listed under Known gaps.
-                              </TooltipContent>
-                            </Tooltip>
-                          );
-                        }
-                        const cited = receiptForHref(href, block.receipts);
-                        if (cited) {
-                          const n = receiptNumberById(block.receipts).get(cited.bundleReceiptId ?? "") ?? 0;
-                          return <InlineReceiptRef receipt={cited} index={n} onClick={onReceiptClick} />;
-                        }
-                        return (
-                          <a href={href} target="_blank" rel="noopener noreferrer">
-                            {children}
-                          </a>
-                        );
-                      },
-                    }}
-                  >
-                    {renderReceiptMarkers(
-                      (() => {
-                        if (!isLead) return block.body;
-                        const lead = stripLeadingDuplicateHeading(block.body, section.label);
-                        return splitTldr(lead)?.rest ?? lead;
-                      })(),
-                      block.receipts,
-                    )}
-                  </ReactMarkdown>
+                {/* Reading measure (READER_REDESIGN.md §1.6): 15px/1.75 body
+                    capped at ~70ch — the old 13.5px across the full column ran
+                    ~110 characters per line. Tables and code stay full-width
+                    ("artifact stage") and scroll inside their own containers. */}
+                <div className="prose prose-sm dark:prose-invert mb-3 max-w-none text-[0.9375rem] leading-[1.75] text-muted-foreground prose-headings:max-w-[70ch] prose-headings:text-[1.0625rem] prose-headings:font-semibold prose-headings:text-foreground prose-p:max-w-[70ch] prose-p:my-2 prose-ul:max-w-[70ch] prose-ul:my-1.5 prose-ol:max-w-[70ch] prose-li:my-1 prose-strong:text-foreground prose-code:rounded prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:text-[0.8125rem] prose-code:text-foreground prose-code:before:content-none prose-code:after:content-none prose-pre:max-h-72 prose-pre:overflow-auto">
+                  <SectionMarkdown components={anchorComponents(block.receipts)}>
+                    {renderReceiptMarkers(isLead ? (leadSplit?.rest ?? leadBody) : block.body, block.receipts)}
+                  </SectionMarkdown>
                 </div>
+                {/* K1: the full source list, on demand — the inline [N]
+                    markers inside the prose stay where they are. */}
                 {block.receipts.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {block.receipts.map((r, ri) => (
-                      <ReceiptChip key={ri} receipt={r} onClick={onReceiptClick} index={ri + 1} />
-                    ))}
+                  <div>
+                    <DisclosureButton
+                      open={!!citationsOpen[bi]}
+                      onToggle={() => setCitationsOpen((prev) => prev.map((v, i) => (i === bi ? !v : v)))}
+                      controls={`citations-${section.id}-${bi}`}
+                      label={citationLabel}
+                      icon={<FileCode2 className="h-3 w-3 shrink-0" aria-hidden />}
+                    />
+                    {citationsOpen[bi] &&
+                      (openable.length > 0 ? (
+                        <div id={`citations-${section.id}-${bi}`} className="mt-1.5 flex flex-wrap gap-1.5">
+                          {openable.map((r, ri) => (
+                            <ReceiptChip
+                              key={ri}
+                              receipt={r}
+                              onClick={onReceiptClick}
+                              index={numberOf.get(r.bundleReceiptId ?? "") ?? ri + 1}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <p id={`citations-${section.id}-${bi}`} className="mt-1.5 text-[0.71875rem] text-muted-foreground">
+                          These references point at internal analysis records with no file location — nothing to open here.
+                        </p>
+                      ))}
                   </div>
                 )}
               </div>
@@ -422,20 +651,81 @@ function SectionView({
         );
       })}
 
-      {/* Honest unknowns: gaps stated plainly instead of invented content */}
+      {/* Honest unknowns: gaps stated plainly instead of invented content.
+          K1 — kept in full, but behind a disclosure whose label states the
+          count, so their existence is visible and their bulk is not (the
+          audit measured a 33-row gaps wall re-quoting its own section —
+          §19.4 / READER_REDESIGN.md §1.4). */}
       {(section.unknowns ?? []).length > 0 && (
-        <div className="rounded-lg border border-border bg-muted/30 px-3.5 py-3">
-          <p className="section-label mb-1.5 flex items-center gap-1.5">
-            <HelpCircle className="h-3 w-3" /> Known gaps
-          </p>
-          <ul className="space-y-1">
-            {section.unknowns!.map((u, i) => (
-              <li key={i} className="text-[0.75rem] leading-relaxed text-muted-foreground">
-                {UNKNOWN_LABELS[u.kind] ?? u.kind.replace(/_/g, " ")}
-                {u.detail ? <span className="text-muted-foreground/70"> — {u.detail}</span> : null}
-              </li>
-            ))}
-          </ul>
+        <div className="rounded-lg border border-border bg-muted/30 px-3.5 py-2">
+          <DisclosureButton
+            open={gapsOpen}
+            onToggle={() => setGapsOpen((v) => !v)}
+            controls={`gaps-${section.id}`}
+            // VISUAL QA M4 #6: this said "6 known gaps" while the trust
+            // strip at the top of the same screen said "66 known gaps".
+            // Both were right — this counts THIS section, the strip counts
+            // the whole package — but neither said which, so one word
+            // described two populations. Each number now names its scope.
+            label={`${section.unknowns!.length} known gap${section.unknowns!.length === 1 ? "" : "s"} in this section${
+              gapGroups.length < section.unknowns!.length ? ` · ${gapGroups.length} kinds` : ""
+            }`}
+            icon={<HelpCircle className="h-3 w-3 shrink-0" aria-hidden />}
+          />
+          {gapsOpen && (
+            // A10 / §19.4: one row per gap KIND with its count, not one row
+            // per entry. The audited section shipped 34 lines that differed
+            // only by an env-var name; the API groups them on their template
+            // (`api/lib/gapSummary.ts`, deterministic) so that becomes one
+            // `× 34` row whose names sit inside it. Nothing is dropped — the
+            // counts still sum to the disclosure label.
+            <ul id={`gaps-${section.id}`} className="mt-1.5 space-y-1.5">
+              {gapGroups.map((group, gi) => (
+                <li key={gi} className="max-w-[75ch] text-[0.75rem] leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground/80">
+                    {UNKNOWN_LABELS[group.kind] ?? group.kind.replace(/_/g, " ")}
+                  </span>
+                  {group.count > 1 && (
+                    <span className="ml-1.5 rounded bg-muted px-1 text-[0.6875rem] tabular-nums text-muted-foreground">
+                      × {group.count}
+                    </span>
+                  )}
+                  {!DETAIL_SUPPRESSED_KINDS.has(group.kind) && (
+                    <ul className="mt-0.5 space-y-0.5 pl-3">
+                      {group.variants.map((variant, vi) => {
+                        const detail = (variant.detail ?? "").trim();
+                        if (detail === "") return null;
+                        // Details are stored truncated at a fixed length and
+                        // used to render cut mid-word ("…processing throug") —
+                        // an ellipsis marks the cut honestly until the backend
+                        // stores full text (READER_REDESIGN.md N3).
+                        const clipped = !/[.!?)\]"'`]$/.test(detail);
+                        // Same sentence, different identifier: name them
+                        // inline rather than repeating the sentence per name.
+                        const others = variant.members.slice(1);
+                        return (
+                          <li key={vi} className="text-muted-foreground/70">
+                            {detail}
+                            {clipped ? "…" : ""}
+                            {variant.count > 1 && (
+                              <span className="text-muted-foreground/60">
+                                {" "}
+                                (× {variant.count}
+                                {others.length > 0
+                                  ? `: ${others.slice(0, 8).join(", ")}${others.length > 8 ? `, +${others.length - 8} more` : ""}`
+                                  : ""}
+                                )
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -478,7 +768,7 @@ export function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageC
             <span className="truncate">{card.scope_name}</span>
           </p>
           <p className="mt-0.5 text-[0.71875rem] text-muted-foreground">
-            {ROLES.find((r) => r.key === card.role)?.label ?? card.role}
+            {roleTitle(card.role)}
           </p>
         </div>
         <StatusBadge status={card.status} />
@@ -536,10 +826,17 @@ export function OnboardingPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { project, refetch } = useProject();
-  const { packages: cards, packagesError, refreshPackages, selectPackage, registerSessionJob } = usePackages();
+  const {
+    packages: cards,
+    packagesError,
+    refreshPackages,
+    selectPackage,
+    selectedPackageId,
+    registerSessionJob,
+  } = usePackages();
 
   const view = searchParams.get("view") ?? "cards";
-  const selectedRole = searchParams.get("role") ?? project?.developer_role ?? "general";
+  const selectedRole = searchParams.get("role") ?? project?.developer_role ?? FALLBACK_ROLE;
   // ?package=<id> pins the reader to one exact package (set when opening a
   // card); legacy ?role= links keep the old "latest for role" behavior.
   const selectedPackageParam = searchParams.get("package");
@@ -634,6 +931,30 @@ export function OnboardingPage() {
     loadPkg();
     return () => { fetchAbortRef.current?.abort(); };
   }, [loadPkg]);
+
+  // ── M3: the reader follows the sidebar package chooser ────────────────────
+  // The reader read only its own `?package=` param, so picking a different
+  // package (or "Latest analysis") in the chooser that promises "every tab
+  // follows this selection" changed nothing here — no refetch, no re-render,
+  // verified live on 2026-07-26. On entering the reader the URL wins once (a
+  // resume/deep link is an explicit request for THAT package, and it is
+  // adopted as the project-wide selection so the other tabs agree); after
+  // that the chooser drives the URL, which drives `loadPkg`.
+  const readerSelectionSynced = useRef(false);
+  useEffect(() => {
+    if (view !== "reader") { readerSelectionSynced.current = false; return; }
+    if (cards === null) return;
+    if (!readerSelectionSynced.current) {
+      readerSelectionSynced.current = true;
+      if (selectedPackageParam && selectedPackageParam !== selectedPackageId) {
+        selectPackage(selectedPackageParam);
+      }
+      return;
+    }
+    if ((selectedPackageId ?? null) !== (selectedPackageParam ?? null)) {
+      setParams({ package: selectedPackageId });
+    }
+  }, [view, cards, selectedPackageId, selectedPackageParam, selectPackage]);
 
   useEffect(() => {
     setGenerating(project?.status === "analyzing");
@@ -733,6 +1054,15 @@ export function OnboardingPage() {
     const next = presentSectionIds[Math.min(Math.max((idx === -1 ? 0 : idx) + delta, 0), presentSectionIds.length - 1)];
     if (next && next !== activeSectionId) setActiveSectionId(next);
   };
+  // Opening a section always starts at its top. The content pane is one
+  // scroll container shared by every section, and switching sections used to
+  // inherit the previous offset — click a section in the rail from the bottom
+  // of another and you landed on its citations footer, title never seen
+  // (READER_REDESIGN.md N2, reproduced 5/5 on the live audit).
+  const readerScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    readerScrollRef.current?.scrollTo({ top: 0 });
+  }, [activeSectionId]);
   function sectionLabelFor(navId: SectionId): string {
     return sections.find((s) => s.id === navId)?.label
       ?? navId.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -804,8 +1134,13 @@ export function OnboardingPage() {
           setGenerating(false);
           if (landed) {
             setPkg(polled);
-            // Pin the reader to the package that just landed.
-            if (polled!.id) setParams({ package: polled!.id });
+            // Pin the reader to the package that just landed — and make it the
+            // sidebar selection too, or the M3 sync effect below would treat
+            // the URL as drifting from the chooser and put it straight back.
+            if (polled!.id) {
+              selectPackage(polled!.id);
+              setParams({ package: polled!.id });
+            }
           } else if (timedOut) {
             setActionError("Generation is taking longer than expected — check the Overview page for job status, or try again.");
           }
@@ -914,16 +1249,22 @@ export function OnboardingPage() {
             subtitle="Generated onboarding packages — one per scope, role, and analyzed commit."
             actions={
               <>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="gap-1.5 text-muted-foreground"
-                  onClick={() => setLifecycleTourOpen(true)}
-                  title="When packages update, when new ones appear, and when stale badges show up"
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                  How packages work
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1.5 text-muted-foreground"
+                      onClick={() => setLifecycleTourOpen(true)}
+                    >
+                      <HelpCircle className="h-3.5 w-3.5" />
+                      How packages work
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs text-left">
+                    When packages update, when new ones appear, and when stale badges show up
+                  </TooltipContent>
+                </Tooltip>
                 {canManage && (
                   <Button
                     size="sm"
@@ -946,7 +1287,7 @@ export function OnboardingPage() {
               <SelectTrigger aria-label="Filter by role" className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All roles</SelectItem>
-                {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -1015,7 +1356,15 @@ export function OnboardingPage() {
                 Run an analysis to generate role-based onboarding: entry points, critical files,
                 workflows, tutorials, and safety notes — every claim backed by code receipts.
               </p>
-              {canManage && (
+              {/* E10: the empty state offered only the admin-only re-analysis,
+                  so a developer saw a dead end — yet POST /onboarding/generate
+                  is `requireProjectAccess()` (any member,
+                  api/routes/onboarding.ts:110). Members now get the action the
+                  backend actually grants: generate their role's package from
+                  the analysis that already exists. Re-analysing the repo stays
+                  owner/admin because POST /projects/:id/analyze is
+                  (projects.ts:1133). */}
+              {canManage ? (
                 <Button
                   size="sm"
                   className="mt-4 gap-1.5"
@@ -1024,6 +1373,18 @@ export function OnboardingPage() {
                 >
                   {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                   {generating || project?.status === "analyzing" ? "Analyzing…" : "Analyze & generate…"}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="mt-4 gap-1.5"
+                  onClick={handleGenerateRole}
+                  disabled={generating || project?.status === "analyzing"}
+                >
+                  {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                  {generating || project?.status === "analyzing"
+                    ? "Generating…"
+                    : `Generate for ${roleTitle(selectedRole)}`}
                 </Button>
               )}
             </div>
@@ -1055,7 +1416,7 @@ export function OnboardingPage() {
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-sm">
-                Regenerate {ROLES.find((r) => r.key === regenCard?.role)?.label ?? regenCard?.role} package
+                Regenerate {roleTitle(regenCard?.role)} package
               </DialogTitle>
             </DialogHeader>
 
@@ -1149,13 +1510,13 @@ export function OnboardingPage() {
           {selectedPackageParam ? (
             // Pinned to one exact package — role is part of its identity.
             <Badge variant="outline" className="h-7 px-2 text-xs">
-              {ROLES.find((r) => r.key === (pkg?.role ?? selectedRole))?.label ?? (pkg?.role ?? selectedRole)}
+              {roleTitle(pkg?.role ?? selectedRole)}
             </Badge>
           ) : (
             <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
               <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
               </SelectContent>
             </Select>
           )}
@@ -1165,28 +1526,30 @@ export function OnboardingPage() {
                   endpoint enforces the same tiers). The stale banner keeps
                   its own contextual copy of this action. */}
               {canManage && activeSection?.sectionId && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="gap-1.5"
-                  onClick={handleRegenerateSection}
-                  disabled={regenerating}
-                  title="Rebuild this section against the newest analysis"
-                >
-                  {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                  {regenerating ? "Regenerating…" : "Regenerate section"}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={handleRegenerateSection}
+                      disabled={regenerating}
+                    >
+                      {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      {regenerating ? "Regenerating…" : "Regenerate section"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
+                </Tooltip>
               )}
               {canManage && activeSection?.sectionId && (
                 <Button
                   size="xs"
-                  variant={markedReviewed ? "secondary" : "default"}
+                  variant={markedReviewed ? "secondary" : "outline"}
                   data-tour="reader-review"
                   className={cn(
                     "gap-1.5",
-                    markedReviewed
-                      ? "border-success/40 bg-success-soft text-success"
-                      : "ring-2 ring-primary/30",
+                    markedReviewed && "border-success/40 bg-success-soft text-success",
                   )}
                   onClick={handleToggleReview}
                 >
@@ -1199,14 +1562,12 @@ export function OnboardingPage() {
               {!canManage && activeSection && (
                 <Button
                   size="xs"
-                  variant={isSectionRead ? "secondary" : "default"}
+                  variant={isSectionRead ? "secondary" : "outline"}
                   data-tour="reader-review"
                   disabled={readSections === null}
                   className={cn(
                     "gap-1.5",
-                    isSectionRead
-                      ? "border-success/40 bg-success-soft text-success"
-                      : "ring-2 ring-primary/30",
+                    isSectionRead && "border-success/40 bg-success-soft text-success",
                   )}
                   onClick={handleToggleRead}
                 >
@@ -1214,26 +1575,38 @@ export function OnboardingPage() {
                   {isSectionRead ? "Read" : "Mark as read"}
                 </Button>
               )}
-              <Button
-                size="xs"
-                variant="outline"
-                className="gap-1.5"
-                onClick={() => setAskOpen(true)}
-                title="Ask a question about this codebase — answered from the analyzed evidence with receipts"
-              >
-                <MessageSquare className="h-3 w-3" />
-                Ask
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                className="gap-1"
-                onClick={() => setProvenanceOpen(true)}
-                title="How this package was made — models, calls, cost, validation"
-                aria-label="How this package was made"
-              >
-                <FlaskConical className="h-3 w-3" />
-              </Button>
+              {/* E8: the emphasis used to be inverted — "Mark as read" (a
+                  progress checkbox) wore the only primary ring in the top bar
+                  while Ask, the reader's highest-value action, was a ghost.
+                  Ask is the emphasized control now; the read/review marks are
+                  quiet outlines. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="xs" variant="default" className="gap-1.5" onClick={() => setAskOpen(true)}>
+                    <MessageSquare className="h-3 w-3" />
+                    Ask
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-left">
+                  Ask a question about this codebase — answered from the analyzed evidence with receipts
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="gap-1"
+                    onClick={() => setProvenanceOpen(true)}
+                    aria-label="How this package was made"
+                  >
+                    <FlaskConical className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-left">
+                  How this package was made — models, calls, cost, validation
+                </TooltipContent>
+              </Tooltip>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1259,15 +1632,41 @@ export function OnboardingPage() {
         </div>
       </div>
 
+      {/* How this package was built. Sits above the coverage strip because it
+          changes how everything below should be read: a structural-only
+          package has no explanation in it by design, and without this banner
+          switching privacy to "AI disabled" produced a package that looked
+          broken rather than deliberately different — the reported "changing to
+          no-AI does not do anything" was partly that the change was invisible. */}
+      {!isMissing && pkg.generation?.label && pkg.generation.kind !== "ai" && (
+        <div
+          className="flex items-start gap-2 border-b bg-muted/30 px-5 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground"
+          role="status"
+        >
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 opacity-60" aria-hidden />
+          <p className="flex-1">
+            <span className="font-medium text-foreground">
+              {pkg.generation.kind === "deterministic" ? "Built without AI" : "Partly built without AI"}
+            </span>{" "}
+            {pkg.generation.label}
+            {pkg.generation.kind === "mixed" && (
+              <>
+                {" "}
+                <span className="tabular-nums">
+                  ({pkg.generation.deterministicSections} of {pkg.generation.totalSections} sections)
+                </span>
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Coverage strip (audit §4.2): what was analyzed, what this package
           actually cites, and the signals behind the ranking — the honest
           denominators the "critical 25%" story needs. All counts, no prose. */}
       {!isMissing && pkg.coverage && (
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-5 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
-          <span>
-            Analyzed <span className="font-medium text-foreground">{pkg.coverage.files.analyzed}</span> files
-            {pkg.coverage.files.unsupported ? ` (${pkg.coverage.files.unsupported} unsupported skipped)` : ""}
-          </span>
+          <CoverageFiles files={pkg.coverage.files} languages={pkg.coverage.languages} />
           <span aria-hidden>·</span>
           <span>
             cites <span className="font-medium text-foreground">{pkg.coverage.symbols.cited}</span> of{" "}
@@ -1278,38 +1677,65 @@ export function OnboardingPage() {
             <span className="font-medium text-foreground">{pkg.coverage.workflows.covered}</span> of{" "}
             {pkg.coverage.workflows.total} traced workflows in sections & tutorials
           </span>
-          {pkg.coverage.rankingSignals.length > 0 && (
+          {/* The weight table with its formula, served by the API. This line
+              used to restate the ranker's signal names in the frontend and
+              print the weights with no formula around them — two places to
+              keep in sync, and no way to tell what the percentages summed to. */}
+          {pkg.coverage.rankingProvenance && (
             <>
               <span aria-hidden>·</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
-                    ranked by {pkg.coverage.rankingSignals.length} signals
+                    ranked by{" "}
+                    {pkg.coverage.rankingProvenance.available
+                      ? pkg.coverage.rankingProvenance.inputs.length
+                      : "?"}{" "}
+                    signals
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-80">
-                  {pkg.coverage.rankingSignals
-                    .map((s) => `${SIGNAL_LABELS[s.signal] ?? s.signal} ${Math.round(s.weight * 100)}%`)
-                    .join(" · ")}
+                <TooltipContent side="bottom" className="max-w-sm text-left">
+                  <ScoreProvenance data={pkg.coverage.rankingProvenance} variant="tooltip" />
                 </TooltipContent>
               </Tooltip>
             </>
           )}
           {/* Honesty rule (DETECTION_COVERAGE.md): what the analysis KNOWS it
               doesn't know — dead-end traces, unmodeled packages, journey
-              gaps. Findable work, never silent holes. */}
-          {(pkg.coverage.detectionUnknowns?.length ?? 0) > 0 && (
+              gaps. Findable work, never silent holes.
+
+              A10: this used to print `detectionUnknowns.length` alone and call
+              it "6 known unknowns" while the sections below it listed 89 gap
+              entries under the same word — the strip contradicted its own
+              page. One population now: "known gaps" means anything the
+              analysis recorded as undetermined, the number is the sum of both
+              provenances (API `coverage.gaps`), and the tooltip says which is
+              which. Pre-`gaps` payloads fall back to the detection count. */}
+          {((pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns?.length) ?? 0) > 0 && (
             <>
               <span aria-hidden>·</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="cursor-help text-warning underline decoration-dotted underline-offset-2">
-                    {pkg.coverage.detectionUnknowns!.length} known unknown
-                    {pkg.coverage.detectionUnknowns!.length === 1 ? "" : "s"}
+                    {pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length} known gap
+                    {(pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length) === 1 ? "" : "s"}{" "}
+                    in this package
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-80">
-                  {pkg.coverage.detectionUnknowns!
+                  {pkg.coverage.gaps && (
+                    <p className="mb-1 font-medium">
+                      {pkg.coverage.gaps.total} things this analysis knows it could not determine,
+                      across the whole package:{" "}
+                      {pkg.coverage.gaps.sections} raised while writing the sections (each section
+                      lists its own share under &ldquo;known gaps in this section&rdquo;; grouped
+                      into {pkg.coverage.gaps.groups} kinds in total)
+                      {pkg.coverage.gaps.detection > 0
+                        ? ` and ${pkg.coverage.gaps.detection} found by detection:`
+                        : "."}
+                    </p>
+                  )}
+                  {(pkg.coverage.detectionUnknowns ?? [])
                     .map((u) => {
                       if (u.kind === "trace_dead_ends") return `${u.count ?? "?"} traces reached no effect`;
                       if (u.kind === "unknown_external_calls")
@@ -1401,7 +1827,7 @@ export function OnboardingPage() {
               journeys interleave modes, so the shelf order below is NOT the
               reading order. Next 3 unread, resume-aware. */}
           {!isMissing && readSections !== null && (() => {
-            const order = ROLE_READING_ORDER[pkg?.role ?? "general"] ?? ROLE_READING_ORDER.general!;
+            const order = readingOrderFor(pkg?.role);
             const nextUp = order
               .filter((id) => presentSectionIds.includes(id) && !readSections.includes(id))
               .slice(0, 3);
@@ -1409,7 +1835,7 @@ export function OnboardingPage() {
             return (
               <div className="mb-3 rounded-md border border-primary/20 bg-primary/5 px-2 py-2">
                 <p className="mb-1 text-[0.625rem] font-semibold uppercase tracking-wide text-primary/80">
-                  Suggested for you{pkg?.role && pkg.role !== "general" ? ` (${pkg.role})` : ""}
+                  Suggested for you{pkg?.role && pkg.role !== FALLBACK_ROLE ? ` (${roleLabel(pkg.role)})` : ""}
                 </p>
                 <div className="space-y-1">
                   {nextUp.map((id) => (
@@ -1419,8 +1845,11 @@ export function OnboardingPage() {
                       className="block w-full rounded px-1.5 py-1 text-left hover:bg-primary/10"
                     >
                       <span className="block text-[0.75rem] font-medium text-foreground">{sectionLabelFor(id)}</span>
-                      {SECTION_WHY[id] && (
-                        <span className="block text-[0.6875rem] leading-snug text-muted-foreground">{SECTION_WHY[id]}</span>
+                      {/* Why THIS reader is being sent here: the role's
+                          overlay line where it has one, the shared line
+                          otherwise. */}
+                      {sectionWhy(id, pkg?.role) && (
+                        <span className="block text-[0.6875rem] leading-snug text-muted-foreground">{sectionWhy(id, pkg?.role)}</span>
                       )}
                     </button>
                   ))}
@@ -1458,18 +1887,34 @@ export function OnboardingPage() {
                             onClick={() => setActiveSectionId(navId)}
                             disabled={isMissing}
                             className={cn(
-                              "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-medium transition-colors disabled:opacity-40",
+                              "flex w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-medium transition-colors disabled:opacity-40",
                               isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                             )}
                           >
-                            <span className="w-4 shrink-0 text-right text-[0.6875rem] tabular-nums text-muted-foreground/50">{idx + 1}</span>
-                            <span className="min-w-0 flex-1 truncate" title={label}>{label}</span>
-                            {section?.status === "stale" && <AlertTriangle className="h-3 w-3 shrink-0 text-warning" />}
+                            <span className="w-4 shrink-0 text-right text-[0.6875rem] tabular-nums leading-5 text-muted-foreground/50">{idx + 1}</span>
+                            {/* H1: no tooltip that repeats the label. It only
+                                existed because 4 of 12 titles truncated in the
+                                narrow rail (§8.3/§17.7) — wrapping shows the
+                                whole title, which removes the truncation AND
+                                the restating tooltip. */}
+                            <span className="min-w-0 flex-1 leading-5">{label}</span>
+                            {section?.status === "stale" && <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-warning" />}
+                            {/* Kept under H1: the dot shows no label, so the
+                                tooltip is the only legend for what red means
+                                (§8.3 — "red dots with no legend"). */}
                             {section?.confidence === "low" && section.status !== "stale" && (
-                              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" title="Low confidence" />
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span
+                                    aria-label="Low confidence"
+                                    className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
+                                  />
+                                </TooltipTrigger>
+                                <TooltipContent side="right">Low confidence</TooltipContent>
+                              </Tooltip>
                             )}
                             {readSections?.includes(navId) && (
-                              <CheckCircle2 className="h-3 w-3 shrink-0 text-success/70" aria-label="Read" />
+                              <CheckCircle2 className="mt-1 h-3 w-3 shrink-0 text-success/70" aria-label="Read" />
                             )}
                           </button>
                         );
@@ -1483,7 +1928,7 @@ export function OnboardingPage() {
         </aside>
 
         {/* content */}
-        <div className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
+        <div ref={readerScrollRef} className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
           <div className="mx-auto max-w-3xl">
             {isMissing ? (
               pkgFetchError ? (
@@ -1506,7 +1951,7 @@ export function OnboardingPage() {
                     <FileText className="h-6 w-6 text-muted-foreground" />
                   </div>
                   <h2 className="text-sm font-semibold text-foreground">
-                    No package for {ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}
+                    No package for {roleTitle(selectedRole)}
                   </h2>
                   <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
                     Generate this role's package from the latest analysis — role-specific entry
@@ -1514,28 +1959,39 @@ export function OnboardingPage() {
                   </p>
                   <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerateRole} disabled={generating}>
                     {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {generating ? "Generating…" : `Generate for ${ROLES.find((r) => r.key === selectedRole)?.label ?? selectedRole}`}
+                    {generating ? "Generating…" : `Generate for ${roleTitle(selectedRole)}`}
                   </Button>
                 </div>
               )
             ) : activeSection ? (
               <>
-                {activeSection.status === "stale" && canManage && (
+                {/* E10: this banner used to be `canManage`-gated, so the tier
+                    that actually reads the docs was never told they were
+                    stale — the warning went only to the people who don't need
+                    it. Everyone sees the state; only the action stays gated,
+                    because POST /sections/:id/regenerate really is owner/admin
+                    (api/routes/onboarding.ts:28). */}
+                {activeSection.status === "stale" && (
                   <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2">
                     <p className="text-xs text-warning">
                       <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                      Stale — source files changed since this was written. Regenerating rebuilds it against the newest analysis.
+                      Stale — source files changed since this was written.{" "}
+                      {canManage
+                        ? "Regenerating rebuilds it against the newest analysis."
+                        : "An owner or admin can regenerate it against the newest analysis."}
                     </p>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      className="shrink-0 border-warning/50 text-warning hover:bg-warning-soft"
-                      onClick={handleRegenerateSection}
-                      disabled={regenerating}
-                    >
-                      {regenerating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1.5 h-3 w-3" />}
-                      {regenerating ? "Regenerating…" : "Regenerate"}
-                    </Button>
+                    {canManage && (
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="shrink-0 border-warning/50 text-warning hover:bg-warning-soft"
+                        onClick={handleRegenerateSection}
+                        disabled={regenerating}
+                      >
+                        {regenerating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-1.5 h-3 w-3" />}
+                        {regenerating ? "Regenerating…" : "Regenerate"}
+                      </Button>
+                    )}
                   </div>
                 )}
                 <SectionView section={activeSection} projectId={id} onReceiptClick={setReceiptModal} />

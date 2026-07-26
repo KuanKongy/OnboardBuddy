@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { apiFetch } from "@/lib/api";
+import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 interface Member {
   user_id: string;
@@ -44,21 +45,20 @@ interface PendingInvitation {
   created_at: string;
 }
 
-const roleOptions = [
-  { value: "backend", label: "Backend" },
-  { value: "frontend", label: "Frontend" },
-  { value: "devops", label: "DevOps" },
-  { value: "qa", label: "QA" },
-  { value: "general", label: "General" },
-];
-
-const avatarColors = [
-  "bg-blue-500",
-  "bg-amber-500",
-  "bg-emerald-500",
-  "bg-purple-500",
-  "bg-rose-500",
-  "bg-cyan-500",
+/**
+ * Low-saturation tints drawn from the app's own semantic tokens.
+ *
+ * The six fully saturated Tailwind swatches this replaces (blue-500,
+ * amber-500, emerald-500, rose-500…) were the loudest colour on any screen in
+ * the product, and four of them sat side by side in a viewport that was
+ * otherwise empty. Identity still varies per member; the volume does not.
+ */
+const avatarTints = [
+  "bg-primary/15 text-primary",
+  "bg-info/15 text-info",
+  "bg-success/15 text-success",
+  "bg-warning/15 text-warning",
+  "bg-muted text-muted-foreground",
 ];
 
 function getInitials(email: string): string {
@@ -71,7 +71,14 @@ function getAvatarColor(email: string): string {
   for (let i = 0; i < email.length; i++) {
     hash = email.charCodeAt(i) + ((hash << 5) - hash);
   }
-  return avatarColors[Math.abs(hash) % avatarColors.length] ?? "bg-blue-500";
+  return avatarTints[Math.abs(hash) % avatarTints.length] ?? avatarTints[0]!;
+}
+
+/** "2026-03-04T…" → "4 Mar 2026". Empty for an unparseable value. */
+function fmtDate(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 const tierBadgeVariant: Record<string, "default" | "secondary" | "outline"> = {
@@ -90,12 +97,12 @@ export function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteTier, setInviteTier] = useState("developer");
-  const [inviteRole, setInviteRole] = useState("general");
+  const [inviteRole, setInviteRole] = useState<string>(FALLBACK_ROLE);
   const [inviting, setInviting] = useState(false);
 
   const [manageMember, setManageMember] = useState<Member | null>(null);
   const [editTier, setEditTier] = useState("developer");
-  const [editRole, setEditRole] = useState("general");
+  const [editRole, setEditRole] = useState<string>(FALLBACK_ROLE);
   const [savingMember, setSavingMember] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<Member | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -278,7 +285,7 @@ export function TeamPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {roleOptions.map((r) => (
+                      {ROLE_OPTIONS.map((r) => (
                         <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                       ))}
                     </SelectContent>
@@ -318,51 +325,80 @@ export function TeamPage() {
         </div>
       )}
 
+      {/* A four-column grid of avatar tiles spent a 1493px viewport on two
+          members and still had nowhere to put what a reader wants to know
+          about them. A bounded table holds the same people, their role, tier,
+          when they joined and how much of the package they have reviewed —
+          and the empty two thirds of the screen stop being empty. */}
+      <div className="mx-auto max-w-2xl">
       {loading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-          {members.map((member) => (
-            // Every member opens the detail modal — management controls
-            // inside are permission-gated, viewing details is not.
-            <button
-              key={member.user_id}
-              type="button"
-              onClick={() => openManage(member)}
-              className="text-left"
-              aria-label={`View ${member.email}`}
-            >
-              <Card className="h-full transition-colors hover:border-primary/40">
-                <CardContent className="flex flex-col items-center p-3 text-center">
-                  <Avatar className="mb-1.5 h-8 w-8">
-                    <AvatarFallback className={`${getAvatarColor(member.email)} text-xs font-medium text-white`}>
-                      {getInitials(member.email)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <p
-                    className="w-full truncate text-xs font-medium text-foreground"
-                    title={member.email.split("@")[0]}
-                  >
-                    {member.email.split("@")[0]}
-                  </p>
-                  <p
-                    className="w-full truncate text-xs capitalize text-muted-foreground"
-                    title={member.developer_role}
-                  >
-                    {member.developer_role}
-                  </p>
-                  <Badge
-                    variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
-                    className="mt-1.5 text-[0.6875rem] capitalize"
-                  >
-                    {member.permission_tier}
-                  </Badge>
-                </CardContent>
-              </Card>
-            </button>
-          ))}
+        <div className="overflow-hidden rounded-lg border border-border">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-border bg-muted/40 text-muted-foreground">
+                <th scope="col" className="px-3 py-2 font-medium">Member</th>
+                <th scope="col" className="px-3 py-2 font-medium">Role</th>
+                <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">Joined</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Reviewed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((member) => (
+                <tr
+                  key={member.user_id}
+                  // Every member opens the detail modal — management controls
+                  // inside are permission-gated, viewing details is not.
+                  tabIndex={0}
+                  role="button"
+                  aria-label={`View ${member.email}`}
+                  onClick={() => openManage(member)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openManage(member); }
+                  }}
+                  className="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+                >
+                  <td className="px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Avatar className="h-6 w-6 shrink-0">
+                        <AvatarFallback className={`${getAvatarColor(member.email)} text-[0.625rem] font-medium`}>
+                          {getInitials(member.email)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-foreground" title={member.email}>
+                          {member.email.split("@")[0]}
+                        </p>
+                        <Badge
+                          variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
+                          className="mt-0.5 text-[0.625rem] capitalize"
+                        >
+                          {member.permission_tier}
+                        </Badge>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 capitalize text-muted-foreground">{member.developer_role}</td>
+                  <td className="hidden px-3 py-2 tabular-nums text-muted-foreground sm:table-cell">
+                    {fmtDate(member.joined_at)}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                    {member.sections_reviewed}
+                  </td>
+                </tr>
+              ))}
+              {members.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                    No members yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -410,6 +446,7 @@ export function TeamPage() {
           </div>
         </div>
       )}
+      </div>
 
       {/* Member detail dialog: profile info for everyone, management
           controls only when the caller may manage this member. */}
@@ -423,7 +460,7 @@ export function TeamPage() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <Avatar className="h-7 w-7">
-                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[0.6875rem] font-medium text-white`}>
+                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[0.6875rem] font-medium`}>
                   {getInitials(manageMember?.email ?? "")}
                 </AvatarFallback>
               </Avatar>
@@ -499,7 +536,7 @@ export function TeamPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {roleOptions.map((r) => (
+                          {ROLE_OPTIONS.map((r) => (
                             <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                           ))}
                         </SelectContent>

@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 // vitest's root is the frontend workspace, so cwd is the stable anchor here —
 // `import.meta.url` is rewritten by the transform and does not resolve to a
@@ -42,7 +42,7 @@ function stripBlockComments(text: string): string {
 
 const FILES = sourceFiles(SRC).map((f) => {
   const text = readFileSync(f, "utf8");
-  return { path: relative(SRC, f), text, code: stripBlockComments(text) };
+  return { path: relative(SRC, f).split(sep).join("/"), text, code: stripBlockComments(text) };
 });
 
 /**
@@ -69,7 +69,10 @@ describe("markdown renderer hardening is applied everywhere", () => {
     // deliberately, having checked the new one is hardened.
     expect(withRenderer.length).toBeGreaterThanOrEqual(2);
     const paths = withRenderer.map((f) => f.path).sort();
-    expect(paths).toEqual(["components/AskPanel.tsx", "pages/OnboardingPage.tsx"]);
+    // The reader's renderers were consolidated into SectionMarkdown so the
+    // hardening props and the GFM table treatment cannot drift between call
+    // sites; OnboardingPage renders markdown only through it.
+    expect(paths).toEqual(["components/AskPanel.tsx", "components/reader/SectionMarkdown.tsx"]);
   });
 
   it("every <ReactMarkdown> passes urlTransform and disallowedElements", () => {
@@ -91,12 +94,29 @@ describe("markdown renderer hardening is applied everywhere", () => {
     // Matched on imports and the plugin props, not on any mention of the name:
     // this very policy module discusses `rehype-raw` in prose, and a test that
     // banned the string would be a test that punishes documentation.
+    //
+    // Deliberate exception (READER_REDESIGN.md N1): `remark-gfm` in the shared
+    // SectionMarkdown renderer, and only there. GFM is a SYNTAX extension —
+    // tables/strikethrough/task lists — with no raw-HTML path; without it the
+    // generated reference tables render as literal pipe characters. The pin
+    // below keeps the plugin list at exactly [remarkGfm]: adding any other
+    // plugin, anywhere, fails this test and needs its own review.
+    const GFM_HOME = "components/reader/SectionMarkdown.tsx";
     for (const file of FILES) {
       expect(file.code, `${file.path} imports a raw-HTML plugin`)
         .to.not.match(/from\s+["'](?:rehype-raw|remark-html)["']/);
-      expect(file.code, `${file.path} passes rehype/remark plugins to a renderer`)
-        .to.not.match(/\b(?:rehypePlugins|remarkPlugins)\s*=/);
+      expect(file.code, `${file.path} passes rehype plugins to a renderer`)
+        .to.not.match(/\brehypePlugins\s*=/);
+      if (file.path !== GFM_HOME) {
+        expect(file.code, `${file.path} passes remark plugins to a renderer`)
+          .to.not.match(/\bremarkPlugins\s*=/);
+      }
     }
+    const gfmHome = FILES.find((f) => f.path === GFM_HOME);
+    expect(gfmHome, `${GFM_HOME} exists`).toBeTruthy();
+    expect(gfmHome!.code).to.match(/import\s+remarkGfm\s+from\s+["']remark-gfm["']/);
+    expect(gfmHome!.code).to.match(/const\s+REMARK_PLUGINS\s*=\s*\[remarkGfm\]/);
+    expect(gfmHome!.code).to.match(/remarkPlugins=\{REMARK_PLUGINS\}/);
   });
 
   it("dangerouslySetInnerHTML is absent from the whole app", () => {

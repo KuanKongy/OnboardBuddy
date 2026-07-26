@@ -32,12 +32,35 @@ describe('ranking algorithm (Phase A candidate ranker)', () => {
     rankings = rankCandidates({ graph, entrypoints, sideEffects, workflows });
   });
 
-  it('composite score is the weighted sum of the spec signals', () => {
+  it('composite score is the weighted sum over the signals that APPLY', () => {
+    // Signals that cannot be measured for a target type are excluded from the
+    // denominator rather than scored as zero. Scoring them as zero silently
+    // capped every workflow at 0.55 (fan-in .15 + exports .15 + tests .05 +
+    // config .05 + churn .05 unreachable) while a file could reach 1.0, so a
+    // top-ranked flow displayed as 55 with nothing explaining the ceiling.
     expect(rankings.length).to.be.greaterThan(0);
     for (const r of rankings) {
-      const recomputed = (Object.keys(CANDIDATE_WEIGHTS) as Array<keyof typeof CANDIDATE_WEIGHTS>)
-        .reduce((sum, signal) => sum + r.breakdown[signal] * CANDIDATE_WEIGHTS[signal], 0);
-      expect(Math.abs(recomputed - r.score)).to.be.lessThan(0.01);
+      const inapplicable = new Set(r.inapplicableSignals);
+      const signals = (Object.keys(CANDIDATE_WEIGHTS) as Array<keyof typeof CANDIDATE_WEIGHTS>)
+        .filter((s) => !inapplicable.has(s));
+      const applicableWeight = signals.reduce((sum, s) => sum + CANDIDATE_WEIGHTS[s], 0);
+      const recomputed =
+        signals.reduce((sum, s) => sum + r.breakdown[s] * CANDIDATE_WEIGHTS[s], 0) / applicableWeight;
+      expect(Math.abs(recomputed - r.score), r.stableKey).to.be.lessThan(0.01);
+    }
+  });
+
+  it('every target type can reach the full 0–1 range', () => {
+    // The regression guard for the ceiling: whatever ranks top of its type
+    // should read as ~100, not as an unexplained fraction of it.
+    const byType = new Map<string, number>();
+    for (const r of rankings) {
+      byType.set(r.targetType, Math.max(byType.get(r.targetType) ?? 0, r.score));
+    }
+    expect(byType.size).to.be.greaterThan(0);
+    for (const [type, best] of byType) {
+      expect(best, `${type} tops out at ${best}`).to.be.greaterThan(0.6);
+      expect(best).to.be.at.most(1);
     }
   });
 

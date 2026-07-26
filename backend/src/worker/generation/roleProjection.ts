@@ -17,6 +17,13 @@ export interface ProjectedTarget {
   score: number;
   reasons: string[];
   viewScores: Partial<Record<SemanticView, number>>;
+  /**
+   * Whether the target has behavioural content (Phase A
+   * `CandidateRanking.behavioral`). Only `false` demotes: a target with no
+   * stored candidate row, and every snapshot analysed before the flag existed,
+   * reads as behavioural rather than being demoted on missing data.
+   */
+  behavioral?: boolean;
 }
 
 /** Projects every semantically-ranked target for `role`, best first. */
@@ -32,12 +39,28 @@ export async function loadRoleProjections(
     [snapshotId, role],
   )).rows as Array<{ target_type: string; stable_key: string; view: SemanticView; score: string; reasons: string[] }>;
 
+  // Phase A recorded, per target, whether it has behavioural content. Only
+  // the non-behavioural ones are fetched — the set is small (declarations),
+  // and absence then correctly means "behavioural, or never ranked".
+  const declarationOnly = new Set(
+    ((await query(
+      `SELECT target_type, stable_key FROM criticality_scores
+       WHERE snapshot_id = $1 AND phase = 'candidate' AND view = 'candidate'
+         AND score_breakdown->>'behavioral' = 'false'`,
+      [snapshotId],
+    )).rows as Array<{ target_type: string; stable_key: string }>)
+      .map((r) => `${r.target_type}:${r.stable_key}`),
+  );
+
   const byTarget = new Map<string, ProjectedTarget>();
   for (const row of rows) {
     const key = `${row.target_type}:${row.stable_key}`;
     let target = byTarget.get(key);
     if (!target) {
-      target = { targetType: row.target_type, stableKey: row.stable_key, score: 0, reasons: [], viewScores: {} };
+      target = {
+        targetType: row.target_type, stableKey: row.stable_key, score: 0,
+        reasons: [], viewScores: {}, behavioral: !declarationOnly.has(key),
+      };
       byTarget.set(key, target);
     }
     target.viewScores[row.view] = Number(row.score);
@@ -93,7 +116,32 @@ function selectWithAreaCap(targets: ProjectedTarget[], take: number): ProjectedT
     if (picked.length >= take) break;
     picked.push(target);
   }
-  return picked.sort((a, b) => b.score - a.score);
+  // Behaviour before score: re-sorting on score alone would undo the quality
+  // floor in the emitted order, putting a high-scoring type declaration above
+  // the code that runs.
+  return picked.sort((a, b) =>
+    Number(b.behavioral !== false) - Number(a.behavioral !== false) || b.score - a.score);
+}
+
+/**
+ * Structural quality floor: everything that runs is offered before anything
+ * that only declares.
+ *
+ * Critical 25% answers "what should I read first", and a bare `interface`, a
+ * type alias or a const literal is not an answer to it — on a thin repo where
+ * `exportedSurface` was the only signal anything scored on, half the slice came
+ * back as one types file's declarations while the components that render the
+ * product sat below them.
+ *
+ * RELATIVE, never an exclusion. Declarations are not dropped, they are
+ * deferred: if the behavioural targets run out, they fill the rest of the
+ * quota, so the size contract holds and a types-only package — where the
+ * interfaces ARE the content — is selected exactly as before.
+ */
+function behaviourFirst(targets: ProjectedTarget[]): ProjectedTarget[] {
+  const behavioural = targets.filter((t) => t.behavioral !== false);
+  if (behavioural.length === targets.length) return targets;
+  return [...behavioural, ...targets.filter((t) => t.behavioral === false)];
 }
 
 /** Top 25% (at least `minPerType`) per target_type — the "Critical 25%". */
@@ -109,11 +157,15 @@ export function critical25(
   const result = new Map<string, ProjectedTarget[]>();
   for (const [type, targets] of byType) {
     const take = Math.max(minPerType, Math.ceil(targets.length * 0.25));
+    // The quota is a share of ALL targets of this type, computed before the
+    // floor reorders them: the floor decides who fills the slice, never how
+    // big it is.
+    const ordered = behaviourFirst(targets);
     // Diversity applies where areas exist (files/symbols); workflow and
     // cluster keys aren't path-shaped.
     result.set(
       type,
-      type === 'file' || type === 'symbol' ? selectWithAreaCap(targets, take) : targets.slice(0, take),
+      type === 'file' || type === 'symbol' ? selectWithAreaCap(ordered, take) : ordered.slice(0, take),
     );
   }
   return result;

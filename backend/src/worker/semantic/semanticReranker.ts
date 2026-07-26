@@ -9,6 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
 import { mapLimit } from '../../lib/parallel.js';
 import type { SemanticContext } from './context.js';
 import type { CandidateRanking, CandidateSignal } from '../engine/candidateRanker.js';
@@ -330,14 +331,18 @@ export async function runSemanticReranking(
       const base = j * 10;
       return `($${base + 1}, 'semantic', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10})`;
     });
-    await query(
+    // Safe to repeat: autocommit + ON CONFLICT DO UPDATE, so a repeated chunk
+    // writes the same values. This is the phase immediately before embeddings —
+    // the same contention window that cancelled three runs on 2026-07-26 — and
+    // it writes ~1.3k rows for a mid-size repo.
+    await withStatementTimeoutRetry('semanticReranking/upsert', () => query(
       `INSERT INTO criticality_scores
          (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
        VALUES ${tuples.join(', ')}
        ON CONFLICT (snapshot_id, phase, view, target_type, stable_key, COALESCE(role, ''))
          DO UPDATE SET score = EXCLUDED.score, score_breakdown = EXCLUDED.score_breakdown, reasons = EXCLUDED.reasons`,
       values,
-    );
+    ));
   }
   return { targets: targets.length, rowsWritten: rows.length, llmCalls };
 }

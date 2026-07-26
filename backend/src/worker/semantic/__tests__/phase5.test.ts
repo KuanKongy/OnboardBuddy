@@ -5,7 +5,8 @@ import { evidenceHashForSymbol, evidenceHashForChildren, depthLookupOrder, inser
 import { planBatches, buildFactsOnlyBody } from '../symbolPass.js';
 import { MAX_SYMBOLS_PER_CALL } from '../../engine/budgets.js';
 import { groupClustersIntoServices } from '../synthesisPass.js';
-import { slugify } from '../capabilityPass.js';
+import { deriveCapabilities, slugify } from '../capabilityPass.js';
+import type { ExtractedWorkflow, WorkflowStep } from '../../engine/workflowExtractor.js';
 import { DEFAULT_ROLE_WEIGHTS, SEMANTIC_VIEWS, projectRoleScore, resolveRoleWeights } from '../projections.js';
 import { deterministicViewScores, deterministicRoleScores, selectRerankTargets, type RerankTarget } from '../semanticReranker.js';
 import { schemaForLevel, batchedSymbolSchema, batchedLevelSchema, renderSummary, PROMPT_VERSIONS } from '../recordTypes.js';
@@ -134,14 +135,17 @@ describe('phase 5 — symbol batching (cross-file, 1M-context sizing)', () => {
 
 describe('phase 5 — facts-only records', () => {
   it('renders purpose, callee narrative, and deterministic side effects', () => {
-    const node = makeNode({ metadata: { purposeSignals: ['auth'] } });
+    // CONTRACT CHANGE: facts-only purpose is built from `behaviorSignals` (a
+    // mechanism the code demonstrably performs) instead of the deleted
+    // `purposeSignals` domain phrase table — see `behaviorSignals.ts`.
+    const node = makeNode({ metadata: { behaviorSignals: ['auth_check'] } });
     const graph = makeGraph([node], [
       { sourceKey: 'a.ts#fn', targetKey: 'b.ts#save', type: 'calls', confidence: 'high', metadata: {} },
     ]);
     const body = buildFactsOnlyBody({ graph, sideEffects: [
       { nodeStableKey: 'a.ts', symbolStableKey: 'a.ts#fn', kind: 'database_write', target: 'sessions', filePath: 'a.ts' },
     ] }, node);
-    expect(body.purpose).to.include('auth');
+    expect(body.purpose).to.include('auth check');
     expect(body.dependencies_narrative).to.include('b.ts#save');
     expect(body.side_effects[0]).to.deep.include({ kind: 'database_write', mergedWithDeterministic: true });
     expect(body.claims).to.deep.equal([]);
@@ -216,6 +220,203 @@ describe('phase 5 — services grouping and slugs', () => {
   });
 });
 
+/**
+ * The regression this file exists to catch is silent: a capability that binds
+ * to nothing still renders as a confident card, and nobody notices until a
+ * reviewer opens the tab and asks what "Core Application Structure and
+ * Utilities" is. The count is the assertion.
+ */
+describe('phase 5 — capability derivation binds or emits nothing', () => {
+  const step = (order: number, key: string, kind: WorkflowStep['stepKind']): WorkflowStep => ({
+    stepOrder: order, nodeStableKey: key, filePath: key.split('#')[0]!,
+    symbolName: key.split('#')[1], stepKind: kind, deterministicDescription: `step ${order}`,
+  });
+
+  const flow = (over: Partial<ExtractedWorkflow> & { key: string; route?: string }): ExtractedWorkflow => ({
+    title: over.title ?? over.key,
+    triggerType: 'HTTP GET',
+    purpose: 'p',
+    stableKey: `wf:${over.key}`,
+    confidence: 'high',
+    entrypoint: {
+      nodeStableKey: `src/${over.key}.ts`, kind: 'http_route',
+      filePath: `src/${over.key}.ts`, symbolName: 'handler',
+      symbolStableKey: `src/${over.key}.ts#handler`,
+      ...(over.route ? { routePattern: over.route } : {}),
+    },
+    steps: over.steps ?? [step(1, `src/${over.key}.ts#handler`, 'trigger'), step(2, `src/${over.key}.ts#helper`, 'transform')],
+    tier: over.tier ?? 'core',
+    importanceScore: over.importanceScore ?? 0.5,
+    rankingReasons: [], externalDependencies: [],
+  });
+
+  // CONTRACT CHANGE: the third leg is now "reaches a persistence or external
+  // surface", not "reaches a schema table or a named service" — a flow that
+  // persists to disk, a queue or the network binds too. `unknown_external` is
+  // still not a surface, which is the property this case pins.
+  it('emits nothing when traced flows reach no persistence or external surface', () => {
+    const derived = deriveCapabilities({
+      // Two real routes, each traced past its trigger — but every effect they
+      // reach is an unrecognized npm package, which is the honesty fallback,
+      // not a service. v4 would have named 2-8 capabilities out of this.
+      workflows: [flow({ key: 'pokedex', route: '/pokemon' }), flow({ key: 'filter', route: '/pokemon-filter' })],
+      sideEffects: [
+        { nodeStableKey: 'src/pokedex.ts', symbolStableKey: 'src/pokedex.ts#helper', kind: 'unknown_external', target: 'class-variance-authority', filePath: 'src/pokedex.ts' },
+      ],
+      graph: { nodes: [], edges: [] },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities).to.have.length(0);
+    expect(derived.unbound.map((u) => u.missing)).to.deep.equal([
+      'no persistence or external surface reached',
+      'no persistence or external surface reached',
+    ]);
+    expect(derived.totals.consideredFlows).to.equal(2);
+  });
+
+  /**
+   * A project whose persistence is a disk write behind a client the effect
+   * detector has no pattern for reached "nothing" and shipped zero
+   * capabilities, while a chart component that happened to match `.save(`
+   * shipped one. The surface a step node's own behaviour signal names is the
+   * evidence that closes that gap.
+   */
+  it('binds a flow whose only surface is the filesystem its steps reach', () => {
+    const derived = deriveCapabilities({
+      workflows: [flow({
+        key: 'datasets', route: '/datasets',
+        steps: [
+          step(1, 'src/datasets.ts#handler', 'trigger'),
+          step(2, 'src/persist.ts#write', 'side_effect'),
+        ],
+      })],
+      sideEffects: [],
+      graph: {
+        nodes: [{
+          stableKey: 'src/persist.ts#write', type: 'method', name: 'write',
+          filePath: 'src/persist.ts', trustLevel: 'code',
+          metadata: { behaviorSignals: ['filesystem'] },
+        }],
+        edges: [],
+      },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities.map((c) => [c.key, c.surfaces])).to.deep.equal([['dataset', ['filesystem']]]);
+  });
+
+  it('emits one capability per bound group, keyed on the table it writes', () => {
+    const derived = deriveCapabilities({
+      workflows: [
+        flow({
+          key: 'createProject', route: '/api/projects',
+          steps: [
+            step(1, 'src/createProject.ts#handler', 'trigger'),
+            step(2, 'src/store.ts#insert', 'data_write'),
+            step(3, 'schema:projects', 'data_write'),
+          ],
+        }),
+        // Same table, different route: one capability, two flows.
+        flow({
+          key: 'deleteProject', route: '/api/projects/:id',
+          steps: [
+            step(1, 'src/deleteProject.ts#handler', 'trigger'),
+            step(2, 'schema:projects', 'data_write'),
+          ],
+        }),
+        // A page that reaches nothing stays out, and says why.
+        flow({ key: 'about', route: '/about', tier: 'surface', steps: [step(1, 'src/about.ts#handler', 'trigger')] }),
+      ],
+      sideEffects: [],
+      graph: {
+        nodes: [{ stableKey: 'schema:projects', type: 'schema', name: 'projects', filePath: 'db/schema.sql', trustLevel: 'code', metadata: {} }],
+        edges: [],
+      },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities).to.have.length(1);
+    const cap = derived.capabilities[0]!;
+    expect(cap.key).to.equal('project');
+    expect(cap.schemas).to.deep.equal(['projects']);
+    expect(cap.flows.map((f) => f.stableKey)).to.deep.equal(['wf:createProject', 'wf:deleteProject']);
+    // The seam is the effect site, not the file the capability was named for.
+    expect(cap.whereToStart[0]!.stable_key).to.equal('src/createProject.ts#handler');
+    expect(cap.whereToStart[1]!.stable_key).to.equal('src/store.ts#insert');
+    expect(derived.unbound.map((u) => u.title)).to.deep.equal(['about']);
+  });
+
+  /**
+   * A capability is something the product does for someone. When DOM listener
+   * detection began feeding `dom:*` entrypoints into this pass, a static WebGL
+   * portfolio site's capability list became `Keyboard Input`, `Mouse Button
+   * Press`, `Mouse Button Release`, `Mouse Movement`, `Mouse Wheel Scroll` and
+   * `WebGL Context Loss` — seven rows, zero capabilities. The mechanism was
+   * `routeResource('dom:mousedown')` returning `dom-mousedown` as if a browser
+   * event name were a domain noun.
+   */
+  describe('raw input events are not capabilities', () => {
+    const eventFlow = (event: string, key: string, over: Partial<ExtractedWorkflow> = {}): ExtractedWorkflow => ({
+      ...flow({ key }),
+      ...over,
+      entrypoint: {
+        nodeStableKey: `src/${key}.ts`, kind: 'event_handler',
+        filePath: `src/${key}.ts`, symbolName: 'handler',
+        symbolStableKey: `src/${key}.ts#handler`, routePattern: event,
+      },
+      steps: [step(1, `src/${key}.ts#handler`, 'trigger'), step(2, 'src/state.ts#persist', 'data_write')],
+    });
+    const persistEffect = (key: string) => ({
+      nodeStableKey: 'src/state.ts', symbolStableKey: 'src/state.ts#persist',
+      kind: 'database_write' as const, target: key, filePath: 'src/state.ts',
+    });
+
+    it('drops a group reachable only by dom:* listeners, and says why', () => {
+      const derived = deriveCapabilities({
+        workflows: [eventFlow('dom:mousedown', 'camera'), eventFlow('dom:wheel', 'zoom')],
+        sideEffects: [persistEffect('camera'), persistEffect('zoom')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities).to.deep.equal([]);
+      expect(derived.unbound.map((u) => u.missing)).to.have.length(2);
+      for (const u of derived.unbound) expect(u.missing).to.contain('only raw input events reach it');
+    });
+
+    it('keeps a named protocol event — socket handlers are the product surface', () => {
+      // Skribbl's twelve `socket.on(…)` handlers ARE its interaction surface;
+      // a caller sends those messages on purpose. This is the line the fix
+      // must not cross.
+      const derived = deriveCapabilities({
+        workflows: [eventFlow('socket:create-room', 'createRoom')],
+        sideEffects: [persistEffect('rooms')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities.map((c) => c.key)).to.deep.equal(['room']);
+    });
+
+    it('lets an input-event flow ride along in a group an addressable flow formed', () => {
+      // The rule is about what may CONSTITUTE a group, not who may belong: a
+      // scroll listener that writes the same resource as a real page stays
+      // attached to it rather than being deleted from the evidence.
+      const page = {
+        ...flow({ key: 'settings', route: '/settings' }),
+        entrypoint: {
+          nodeStableKey: 'src/settings.ts', kind: 'ui_route', filePath: 'src/settings.ts',
+          symbolName: 'Settings', symbolStableKey: 'src/settings.ts#Settings', routePattern: '/settings',
+        },
+        steps: [step(1, 'src/settings.ts#Settings', 'trigger'), step(2, 'src/state.ts#persist', 'data_write')],
+      } as ExtractedWorkflow;
+      const derived = deriveCapabilities({
+        workflows: [page, eventFlow('dom:scroll', 'scroller')],
+        sideEffects: [persistEffect('preferences')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities.map((c) => [c.key, c.flows.length])).to.deep.equal([['preference', 2]]);
+    });
+  });
+});
+
 describe('phase 5 — role projections', () => {
   afterEach(() => __setQueryForTests(null));
 
@@ -229,7 +430,12 @@ describe('phase 5 — role projections', () => {
   it('projects view scores through the weight table', () => {
     const scores = Object.fromEntries(SEMANTIC_VIEWS.map((v) => [v, 1])) as Record<(typeof SEMANTIC_VIEWS)[number], number>;
     expect(projectRoleScore(scores, DEFAULT_ROLE_WEIGHTS.backend)).to.be.closeTo(1.0, 1e-9);
-    expect(projectRoleScore({ critical_for_runtime: 1 }, DEFAULT_ROLE_WEIGHTS.backend)).to.be.closeTo(0.2, 1e-9);
+    // A single view projects to exactly its own weight. Read the weight from
+    // the table rather than restating it: this asserts the projection MATH,
+    // and hardcoding 0.20 here turned a deliberate weight tune into a test
+    // failure that said nothing about whether the math still holds.
+    expect(projectRoleScore({ critical_for_runtime: 1 }, DEFAULT_ROLE_WEIGHTS.backend))
+      .to.be.closeTo(DEFAULT_ROLE_WEIGHTS.backend.critical_for_runtime, 1e-9);
   });
 
   it('custom ranking_weight_configs override defaults per view', async () => {

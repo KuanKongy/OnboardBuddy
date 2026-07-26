@@ -22,6 +22,7 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   INJECTION_PAYLOADS,
   COMPROMISED_MODEL_OUTPUT,
@@ -251,7 +252,7 @@ const report = out.join('\n');
 process.stdout.write(report);
 
 if (process.argv.includes('--write')) {
-  const target = new URL('../../doc/SECURITY_TEST_EVIDENCE.md', import.meta.url).pathname;
+  const target = fileURLToPath(new URL('../../doc/SECURITY_TEST_EVIDENCE.md', import.meta.url));
   writeFileSync(target, report, 'utf8');
   process.stderr.write(`\n[security-report] wrote ${target}\n`);
 }

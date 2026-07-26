@@ -11,7 +11,7 @@
 
 import { query } from '../../lib/db.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
-import { collectSectionReceipts, insertSectionReceipts } from './deterministicReceipts.js';
+import { collectSectionReceiptsOrGap, insertSectionReceipts } from './deterministicReceipts.js';
 
 export interface DeterministicSectionResult {
   sectionId: string;
@@ -56,6 +56,13 @@ export async function generateDeterministicSection(params: {
   // but without narration/citations we grade presence, not interpretation.
   const confidence: 'high' | 'medium' | 'low' = hasFacts ? 'medium' : 'low';
 
+  // Collected BEFORE the row is written, so a receipt query that could not run
+  // is recorded on the section as a named gap rather than discovered after the
+  // fact (or, as it shipped, thrown and turned into a dead error stub — see
+  // `collectSectionReceiptsOrGap`). With AI off these receipts are the only
+  // drill-down the reader has, so their absence is worth saying out loud.
+  const { rows: receipts, gap: receiptGap } = await collectSectionReceiptsOrGap(params.sectionType, params.deps);
+
   await query(`DELETE FROM package_sections WHERE package_id = $1 AND type = $2`, [params.packageId, params.sectionType]);
   const row = (await query(
     `INSERT INTO package_sections
@@ -66,14 +73,23 @@ export async function generateDeterministicSection(params: {
     [params.packageId, params.snapshotId, params.sectionType,
      SECTION_TITLES[params.sectionType] ?? params.sectionType, content,
      JSON.stringify(diagrams), confidence, params.commitHash, params.role,
-     JSON.stringify([{ kind: 'ai_disabled', detail: 'Generated without LLM assistance' }]),
-     JSON.stringify({ mode: 'deterministic', prompt_version: null })],
+     JSON.stringify([
+       { kind: 'ai_disabled', detail: 'Generated without LLM assistance' },
+       ...(receiptGap ? [receiptGap] : []),
+     ]),
+     // privacy_mode is the stored proof of HOW this section was built, read
+     // back by GET /onboarding and /provenance. The snapshot's copy cannot be
+     // used for that: it records the analysis, which usually ran earlier and
+     // under a different setting than the package the reader is looking at.
+     JSON.stringify({
+       mode: 'deterministic', prompt_version: null, privacy_mode: 'ai_disabled',
+       deterministic_receipts: { collected: receipts.length, failed: receiptGap !== null, reason: receiptGap?.detail ?? null },
+     })],
   )).rows[0] as { id: string };
 
   // The same evidence drill-down the AI path gets: section-owned receipt
   // copies built from graph-node snippets (the old DELETE above cascaded the
   // previous version's receipts).
-  const receipts = await collectSectionReceipts(params.sectionType, params.deps);
   if (receipts.length > 0) {
     await insertSectionReceipts({
       projectId: params.deps.projectId,

@@ -64,7 +64,11 @@ export const PROMPT_VERSIONS = {
   module: 'module-synthesis-v2',
   service: 'service-synthesis-v2',
   system: 'system-synthesis-v2',
-  capability: 'capability-extraction-v4',
+  // v5 replaced "extract 2-8 capabilities" (a quota, so always filled) with
+  // deterministic derivation + a naming-only call. The bump is what stops the
+  // v4 records — whose bodies hold invented capabilities — from being served
+  // from the content-addressed cache forever.
+  capability: 'capability-naming-v5',
   refinement: 'refinement-v2',
   critique: 'critique-v2',
   workflow: 'workflow-record-v2',

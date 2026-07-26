@@ -28,7 +28,7 @@ import { fetchChurnSignals, persistChurn, type ChurnStats } from './engine/churn
 import { clusterArchitecture, persistArchitecture } from './engine/architectureClusterer.js';
 import { scanConfigNodes } from './engine/configScanner.js';
 import { extractConfigFlows } from './engine/configFlowExtractor.js';
-import { composeJourneys } from './engine/journeyComposer.js';
+import { composeJourneysDetailed } from './engine/journeyComposer.js';
 import { validateGoldenJourneys } from './engine/journeyGate.js';
 import { selectModel, isAutoSelection, overridesForSelection } from './ai/modelSelector.js';
 import { checkDocHealth } from './engine/docHealthCheck.js';
@@ -49,9 +49,19 @@ import { findPreviousSnapshot, runIncrementalDiff } from './incrementalAnalyzer.
 import type { SemanticContext } from './semantic/context.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import { query, pool } from '../lib/db.js';
+import { withStatementTimeoutRetry } from '../lib/pgRetry.js';
+import { envInt } from '../lib/env.js';
 import { recomputeProjectStatus } from '../lib/projectStatus.js';
+import { markSnapshotFailed } from './runStatus.js';
 
 const execFileAsync = promisify(execFile);
+// The worker image (Dockerfile.worker, alpine) ships BusyBox `unzip` on PATH —
+// the default here. On a native (non-Docker) dev machine, PATH resolution for
+// a bare command name does not reliably reach a spawned child process through
+// every npm/tsx-watch process hop, so this is override-able with an absolute
+// path via `UNZIP_BIN` in `.env` rather than patched to a Windows-specific
+// binary name, which would silently break the Linux/alpine deploy target.
+const UNZIP_BIN = process.env.UNZIP_BIN ?? 'unzip';
 
 // ─── Shared job helpers ──────────────────────────────────────────────────────
 
@@ -121,7 +131,7 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
     : (await getCommitSha(token, project.repo_owner, project.repo_name, requestedCommit ?? branch)).trim();
   await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
   await assertZipEntriesStayInside(zipPath, extractDir);
-  await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
+  await execFileAsync(UNZIP_BIN, ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
 }
@@ -302,6 +312,18 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       .catch(() => {});
   }, 15_000);
 
+  // Bug #75: the snapshot row is written 'complete' at the persistence step
+  // (~46%), because the graph it holds really is complete at that point — but
+  // six phases still follow it. When one of them died (both live cases were a
+  // statement timeout at 98%) only `analysis_jobs` was marked failed, and the
+  // snapshot kept saying 'complete'. `lib/projectStatus.ts` reads "anything
+  // ever completed ⇒ complete", so the project card claimed it was analysed
+  // while every tab was empty. Hoisted out of the try so the failure path can
+  // correct the row this run wrote — and ONLY that row: the snapshot-reuse
+  // path returns before this is ever assigned, so a previously-good snapshot
+  // borrowed by a failing run is never stomped.
+  let persistedSnapshotId: string | null = null;
+
   try {
     // 2. Download + extract zipball at the requested commit (default: branch head)
     await updateStep('Downloading repository', 10);
@@ -407,13 +429,16 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     if (snapshot.languageInventory.supportedFileCount === 0) {
       unknowns.push({ kind: 'unsupported_only_repo' });
       await query(
+        // parsed_file_count is an explicit 0, not NULL: nothing was parsed and
+        // we know it. NULL is reserved for snapshots predating the column, so
+        // readers can tell "no coverage" from "coverage unknown".
         `INSERT INTO analysis_snapshots
            (project_id, scope_id, commit_hash, branch, status, semantic_depth, privacy_mode,
-            language_inventory, unknowns, warnings)
-         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, '[]')
+            language_inventory, unknowns, warnings, parsed_file_count)
+         VALUES ($1, $2, $3, $4, 'failed', $5, $6, $7, $8, '[]', 0)
          ON CONFLICT (scope_id, commit_hash) DO UPDATE
            SET status = 'failed', language_inventory = EXCLUDED.language_inventory,
-               unknowns = EXCLUDED.unknowns`,
+               unknowns = EXCLUDED.unknowns, parsed_file_count = 0`,
         [projectId, scope.scopeId, commitHash, branch, analysis_depth, privacy_mode,
          JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns)],
       );
@@ -455,57 +480,78 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // 8. Persist snapshot + files + graph in one transaction
     await updateStep('Persisting results', 46);
     const fileCount = snapshot.fileRecords.length;
+    // What the parser actually read — the only honest coverage number. Until
+    // now this existed only in the `parse` phase checkpoint, so every reader
+    // fell back to `fileCount` (all files in scope) and overstated coverage.
+    const parsedFileCount = snapshot.fileAnalyses.length;
     const symbolCount = snapshot.fileAnalyses.reduce((n, fa) => n + fa.symbols.length, 0);
 
-    let snapshotId = '';
-    let nodeIdMap = new Map<string, string>();
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
+    // Retried at the TRANSACTION level, never per statement. persistRepositoryFiles
+    // and persistEvidenceGraph run inside this BEGIN…COMMIT, and once a 57014
+    // cancels one of their statements the transaction is aborted — every further
+    // command in it fails with 25P02, so retrying the individual statement is
+    // impossible. Re-running the whole body is safe because ROLLBACK has already
+    // undone the failed attempt and the body is idempotent by construction: the
+    // snapshot row is an upsert keyed on (scope_id, commit_hash), and everything
+    // else is DELETE-by-snapshot_id followed by INSERT. A second pass therefore
+    // re-derives the same snapshotId and the same rows.
+    const persisted = await withStatementTimeoutRetry('persistResults/transaction', async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
 
-      const snapResult = await client.query<{ id: string }>(
-        `INSERT INTO analysis_snapshots
-           (project_id, scope_id, commit_hash, branch, file_count, symbol_count, workflow_count,
-            status, semantic_depth, privacy_mode, language_inventory, unknowns, warnings)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'complete', $8, $9, $10, $11, $12)
-         ON CONFLICT (scope_id, commit_hash) DO UPDATE
-           SET file_count = EXCLUDED.file_count,
-               symbol_count = EXCLUDED.symbol_count,
-               workflow_count = EXCLUDED.workflow_count,
-               status = 'complete',
-               semantic_depth = EXCLUDED.semantic_depth,
-               privacy_mode = EXCLUDED.privacy_mode,
-               language_inventory = EXCLUDED.language_inventory,
-               unknowns = EXCLUDED.unknowns,
-               warnings = EXCLUDED.warnings
-         RETURNING id`,
-        [projectId, scope.scopeId, commitHash, branch, fileCount, symbolCount, 0 /* set after extraction */,
-         analysis_depth, privacy_mode,
-         JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns), JSON.stringify(snapshot.errors)],
-      );
-      snapshotId = snapResult.rows[0]!.id;
+        const snapResult = await client.query<{ id: string }>(
+          `INSERT INTO analysis_snapshots
+             (project_id, scope_id, commit_hash, branch, file_count, parsed_file_count, symbol_count, workflow_count,
+              status, semantic_depth, privacy_mode, language_inventory, unknowns, warnings)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'complete', $9, $10, $11, $12, $13)
+           ON CONFLICT (scope_id, commit_hash) DO UPDATE
+             SET file_count = EXCLUDED.file_count,
+                 parsed_file_count = EXCLUDED.parsed_file_count,
+                 symbol_count = EXCLUDED.symbol_count,
+                 workflow_count = EXCLUDED.workflow_count,
+                 status = 'complete',
+                 semantic_depth = EXCLUDED.semantic_depth,
+                 privacy_mode = EXCLUDED.privacy_mode,
+                 language_inventory = EXCLUDED.language_inventory,
+                 unknowns = EXCLUDED.unknowns,
+                 warnings = EXCLUDED.warnings
+           RETURNING id`,
+          [projectId, scope.scopeId, commitHash, branch, fileCount, parsedFileCount, symbolCount, 0 /* set after extraction */,
+           analysis_depth, privacy_mode,
+           JSON.stringify(snapshot.languageInventory), JSON.stringify(unknowns), JSON.stringify(snapshot.errors)],
+        );
+        const id = snapResult.rows[0]!.id;
 
-      // Clear stale data from a previous scan of the same commit
-      await client.query(`DELETE FROM workflows WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM entrypoints WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM side_effects WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM criticality_scores WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM architecture_edges WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM architecture_clusters WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [snapshotId]);
-      await client.query(`DELETE FROM repository_files WHERE snapshot_id = $1`, [snapshotId]);
+        // Clear stale data from a previous scan of the same commit
+        await client.query(`DELETE FROM workflows WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM entrypoints WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM side_effects WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM criticality_scores WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM architecture_edges WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM architecture_clusters WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM graph_edges WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM graph_nodes WHERE snapshot_id = $1`, [id]);
+        await client.query(`DELETE FROM repository_files WHERE snapshot_id = $1`, [id]);
 
-      await persistRepositoryFiles(client, snapshotId, snapshot.fileRecords);
-      nodeIdMap = await persistEvidenceGraph(client, snapshotId, evidence);
+        await persistRepositoryFiles(client, id, snapshot.fileRecords);
+        const nodes = await persistEvidenceGraph(client, id, evidence);
 
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      client.release();
-    }
+        await client.query('COMMIT');
+        return { snapshotId: id, nodeIdMap: nodes };
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    });
+    const snapshotId = persisted.snapshotId;
+    const nodeIdMap = persisted.nodeIdMap;
+
+    // From here on this run OWNS the snapshot row's status (bug #75): if any
+    // later phase throws, the catch below must undo the optimistic 'complete'.
+    persistedSnapshotId = snapshotId;
 
     // Link the job to its snapshot as soon as it exists — the overview's
     // unified run panel reads phase rows by the job's snapshot_id live.
@@ -535,21 +581,26 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
     await updateStep('Extracting workflows', 57);
     const extraction = extractWorkflowsDetailed({ graph: evidence, entrypoints, sideEffects });
-    // Journey composition: stitch route workflows across queue boundaries,
-    // OAuth chains, and capability groups into the product journeys; config
-    // journeys (compose up, one-command tests, CI) persist beside them and
-    // rank through the same machinery.
-    const journeys = composeJourneys({ workflows: extraction.workflows, sideEffects });
+    // Journey composition: chain traced workflows across detected continuation
+    // boundaries (async_token / external_roundtrip / capability_unlock /
+    // resource_lifecycle) into the product journeys; config journeys (compose
+    // up, one-command tests, CI) persist beside them and rank through the same
+    // machinery. The graph nodes carry the verified bytes the literal-scanning
+    // detectors need for their receipts.
+    const composed = composeJourneysDetailed({
+      workflows: extraction.workflows, sideEffects, nodes: evidence.nodes,
+    });
+    const journeys = composed.journeys;
     const workflows = [...extraction.workflows, ...configFlows.workflows, ...journeys];
     const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
     await query(
       `UPDATE analysis_snapshots SET workflow_count = $2 WHERE id = $1`,
       [snapshotId, workflows.length],
     );
-    // Golden-journey gate: detectable shapes (queue+consumer pairs, auth
-    // routes, oauth chains, compose) must have composed into journeys.
+    // Golden-journey gate: detectable shapes (publish/consume token pairs, any
+    // other detected boundary kind, compose) must have composed into journeys.
     const gate = validateGoldenJourneys({
-      workflows, entrypoints, sideEffects,
+      workflows, entrypoints, sideEffects, nodes: evidence.nodes,
       hasCompose: configFlows.topology !== null,
     });
     await markPhase(snapshotId, 'workflows', 'complete', {
@@ -569,7 +620,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // Honesty rule: traces that died, calls into unmodeled packages, and
     // golden-journey gaps are findable work, surfaced in snapshot unknowns
     // (trust panel reads them).
-    const honestyUnknowns: Array<Record<string, unknown>> = [...gate.gaps];
+    const honestyUnknowns: Array<Record<string, unknown>> = [...gate.gaps, ...composed.unknowns];
     if (extraction.deadEnds.length > 0) {
       honestyUnknowns.push({
         kind: 'trace_dead_ends',
@@ -786,9 +837,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
           // Resumable: checkpointed phases + content-addressed records make
           // a re-run skip everything already paid for.
           await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]);
+          // Budget trips now spell out the numbers ("used N of M calls this
+          // run (lifetime across runs: L)") — keep enough of the message for
+          // them to survive, and mirror it into error_message so the
+          // paused-run banner (which renders that field) shows them too.
+          const pauseMessage = err.message.slice(0, 240);
           await query(
-            `UPDATE analysis_jobs SET status = 'paused', current_step = $2, finished_at = NOW() WHERE id = $1`,
-            [jobId, `Paused: ${err.message.slice(0, 120)}`],
+            `UPDATE analysis_jobs SET status = 'paused', current_step = $2, error_message = $3, finished_at = NOW() WHERE id = $1`,
+            [jobId, `Paused: ${pauseMessage}`, pauseMessage],
           );
           console.warn(`[worker] semantic pipeline paused (project=${projectId}):`, err.message);
           return;
@@ -842,6 +898,14 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
        WHERE id = $2`,
       [message, jobId, JSON.stringify([{ step: `Failed: ${message.slice(0, 100)}`, pct: 0, ts: new Date().toISOString() }])],
     );
+    // Bug #75: make the snapshot status truthful. A run that did not reach
+    // phase 13 leaves 'failed' behind, never the 'complete' the persistence
+    // step wrote at 46%. Scoped to the snapshot THIS run persisted — the
+    // reuse path returns long before `persistedSnapshotId` is set, so a
+    // previously-good snapshot borrowed by a failing run is never stomped.
+    if (persistedSnapshotId) {
+      await markSnapshotFailed(persistedSnapshotId, message).catch(() => {});
+    }
     // A failing run must not stomp the scalar while a sibling is still live.
     await recomputeProjectStatus(projectId);
     throw err;
@@ -863,8 +927,13 @@ function createAnalysisWorker(): Worker<AnalysisJobData> {
     },
     {
       connection,
-      concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
-      drainDelay: Number(process.env.WORKER_POLL_INTERVAL_MS ?? 30000),
+      // Parallel analysis runs in THIS process. Independent of the package
+      // generator's SUMMARY_CONCURRENCY (summaryWorker.ts) even though both
+      // workers are hosted here — they used to share this one env var, so
+      // raising analysis throughput silently doubled generation throughput and
+      // the shared pg pool paid for both. Pool sizing: src/lib/db.ts.
+      concurrency: envInt('WORKER_CONCURRENCY', 4),
+      drainDelay: envInt('WORKER_POLL_INTERVAL_MS', 30000),
       stalledInterval: 120_000,
       lockDuration: 600_000,
       removeOnComplete: { count: 5 },
@@ -917,6 +986,9 @@ startQueueWatchdog({
   },
 });
 
+/** Job types that own their snapshot's status (generation jobs never do). */
+const ANALYSIS_JOB_TYPES = new Set(['analyze_scope', 'incremental_update']);
+
 /**
  * Orphan reconciliation: a DB job stuck 'running' whose worker died (restart,
  * crash, lost Redis connection) would show a progress bar over nothing,
@@ -931,12 +1003,20 @@ async function reconcileOrphanedJobs(): Promise<void> {
            error_message = 'Worker lost this run (restart or crash). Completed phases are checkpointed — run Analyze… again to resume from cache.'
        WHERE status = 'running'
          AND COALESCE(last_heartbeat_at, started_at, created_at) < NOW() - INTERVAL '3 minutes'
-       RETURNING id, project_id, snapshot_id`,
-    )).rows as Array<{ id: string; project_id: string; snapshot_id: string | null }>;
+       RETURNING id, project_id, snapshot_id, job_type`,
+    )).rows as Array<{ id: string; project_id: string; snapshot_id: string | null; job_type: string }>;
     for (const row of orphans) {
-      if (row.snapshot_id) {
+      // Bug #75, crash variant: an ANALYSIS that died mid-pipeline leaves the
+      // snapshot on the optimistic 'complete' the persistence step wrote at
+      // 46%, so the reconciler has to correct that too — 'running'/'pending'
+      // alone never matched the real case. Restricted to analysis job types on
+      // purpose: an orphaned generate_package job points at a snapshot whose
+      // analysis genuinely finished, and failing it would be the same lie in
+      // the other direction. 'paused' is left alone (resumable, not dead).
+      if (row.snapshot_id && ANALYSIS_JOB_TYPES.has(row.job_type)) {
         await query(
-          `UPDATE analysis_snapshots SET status = 'failed' WHERE id = $1 AND status IN ('running', 'pending')`,
+          `UPDATE analysis_snapshots SET status = 'failed'
+           WHERE id = $1 AND status IN ('running', 'pending', 'complete')`,
           [row.snapshot_id],
         ).catch(() => {});
       }
@@ -950,4 +1030,7 @@ async function reconcileOrphanedJobs(): Promise<void> {
 void reconcileOrphanedJobs();
 setInterval(() => void reconcileOrphanedJobs(), 120_000);
 
-console.log(`[worker] listening on queue "${ANALYSIS_QUEUE}"`);
+console.log(
+  `[worker] listening on queue "${ANALYSIS_QUEUE}" ` +
+  `(concurrency=${envInt('WORKER_CONCURRENCY', 4)}, pgPoolMax=${envInt('PG_POOL_MAX', 30)})`,
+);

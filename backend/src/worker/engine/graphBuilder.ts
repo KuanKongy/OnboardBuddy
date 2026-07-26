@@ -65,9 +65,13 @@ export function buildDependencyGraph(
   // Build one node per file
   for (const fa of fileAnalyses) {
     const nodeId = fa.relativePath;
+    // Deduped — export reconciliation marks symbols named in an `export { … }`
+    // clause, so the two halves overlap (see evidenceGraphBuilder).
     const exportedSymbols = [
-      ...fa.exports.flatMap((e) => e.namedExports),
-      ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ...new Set([
+        ...fa.exports.flatMap((e) => e.namedExports),
+        ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ]),
     ];
 
     nodeMap.set(nodeId, {

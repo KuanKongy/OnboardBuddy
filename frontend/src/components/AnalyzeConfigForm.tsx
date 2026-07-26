@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { ROLE_OPTIONS } from "@/lib/roles";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -67,14 +68,6 @@ const DEPTHS = [
   { value: "cheap", label: "Cheap — fewest AI calls" },
   { value: "standard", label: "Standard — balanced" },
   { value: "full", label: "Full — most thorough" },
-];
-
-const ROLES = [
-  { value: "backend", label: "Backend" },
-  { value: "frontend", label: "Frontend" },
-  { value: "devops", label: "DevOps" },
-  { value: "qa", label: "QA" },
-  { value: "general", label: "General" },
 ];
 
 interface AnalyzeConfigFormProps {
@@ -236,7 +229,7 @@ export function AnalyzeConfigForm({
           <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">Project default role</SelectItem>
-            {ROLES.map((r) => (
+            {ROLE_OPTIONS.map((r) => (
               <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
             ))}
           </SelectContent>

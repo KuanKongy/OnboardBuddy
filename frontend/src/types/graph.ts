@@ -51,12 +51,38 @@ export interface GraphNodeMetadata {
   externalImportCount?: number;
   /** Distinct internal files importing this file (deduped edges). */
   dependentCount: number;
+  /** Symbols this file declares. Context on the card, not a drill affordance. */
+  symbolCount?: number;
+  /** Symbol-level only: whether the symbol is part of the file's public surface. */
+  exported?: boolean;
+  /**
+   * What this file does, one line, from the stored FILE semantic record.
+   * Null when the analyzer produced no record for it — the card then says so
+   * rather than inventing a description from the path.
+   */
+  summary?: string | null;
+  /** The record's own classification: "route file", "service", "config glue". */
+  role?: string | null;
+  summaryConfidence?: string | null;
+  /** Group nodes only: files folded into this group. */
+  fileCount?: number;
+  /** Group nodes only: what `fileCount` counts, when it is not files. */
+  groupNoun?: string;
+  /** Group nodes only: links whose two ends are both inside the group. */
+  internalImportCount?: number;
 }
 
 export interface GraphNode {
   id: string;
   label: string;
   kind: string;
+  /**
+   * The file this node lives in, when the id is not already that path. Set for
+   * class/interface nodes, whose id is `<path>#<Name>` and whose label is the
+   * bare name — without it the card can neither say where the class is nor
+   * colour itself by the file's role.
+   */
+  filePath?: string;
   metadata: GraphNodeMetadata;
 }
 
@@ -75,42 +101,12 @@ export interface DependencyGraph {
   entryPoints: string[];
 }
 
-export type ArchitectureComponentType =
-  | "entry"
-  | "gateway"
-  | "service"
-  | "database"
-  | "worker"
-  | "frontend"
-  | "utility"
-  | "config"
-  | "tests"
-  | "module";
-
-export interface ArchitectureComponent {
-  id: string;
-  label: string;
-  directory: string;
-  type: ArchitectureComponentType;
-  files: string[];
-  exportedSymbols: string[];
-  importCount: number;
-  dependentCount: number;
-}
-
-export interface ArchitectureEdge {
-  id: string;
-  source: string;
-  target: string;
-  kind: string;
-  weight: number;
-}
-
-export interface ArchitectureGraph {
-  components: ArchitectureComponent[];
-  edges: ArchitectureEdge[];
-  entryComponentIds: string[];
-}
+// The architecture map is modelled in `lib/architectureData.ts`
+// (`ArchitectureCluster` / `ArchitectureEdge` / `ArchitectureResponse`), which
+// is what the API actually returns and what every renderer imports. A second,
+// never-imported `ArchitectureComponent` / `ArchitectureGraph` pair used to sit
+// here describing a shape the server has never sent, with its own conflicting
+// `ArchitectureEdge`.
 
 export interface AnalysisSnapshot {
   projectId: string;

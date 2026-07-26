@@ -1,0 +1,29 @@
+{
+  "repo": "KuanKongy/FloowForge",
+  "clone": "https://github.com/KuanKongy/FloowForge.git",
+  "shape": "Monorepo: Next.js App Router frontend under web/, FastAPI backend under api/ (Python), Supabase migrations under supabase/.",
+  "whyThisShape": "The honest-coverage case, and the sharpest test in the set. Roughly forty route handlers live in Python that no parser reads. Every claim the package makes about 'the backend' is therefore about code it never saw, and silence about that reads as 'this repo has no backend'. This is the fixture that makes the parsed-vs-in-scope distinction load-bearing.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Enumerated web/app/**/page.tsx, confirmed api/ is FastAPI (Python); domain nouns from web/app/app/* route names and supabase/migrations.",
+  "expectShape": {
+    "entrypointKinds": { "mustInclude": ["ui_route"], "mustExclude": ["http_route"] },
+    "uiRoutesAtLeast": 14,
+    "unparsedLanguages": ["python"]
+  },
+  "domainNouns": ["flow", "run", "trigger", "node", "integration", "workflow", "token", "step"],
+  "mustDisclose": ["Python"],
+  "budgetsMeasuredOn": "2026-07-25, re-measured after the package was regenerated. Snapshot 9df21491 (12 sections, 9 clusters, 9 capabilities, 67/167 files parsed). measured: domainNouns=8/8 · cited=40.6% (26/64) · narrationErrors=9 · levelErrors=5 · sectionsWithGaps=6/12. The budgets below are unchanged from the first measurement — the regeneration moved every number in the right direction except levelErrors (3→5), which still sits inside its budget of 6.",
+  "budgets": {
+    "minDomainNounsInPackage": 8,
+    "minCitedShare": 0.4,
+    "maxNarrationErrors": 60,
+    "maxLevelErrors": 6,
+    "minSectionsDisclosingGaps": 3
+  },
+  "knownGaps": [
+    "P3 'the unread Python subsystem is named' was DELIBERATELY LEFT RED and is now GREEN: architecture_deep and big_picture both name the 49 unread Python files. It stays a requirement rather than a ratchet — if it goes red again the package is once more describing FloowForge as if it had no backend.",
+    "Leaked stable keys (wf:web/app/p/[token]/page.tsx:PublicFormPage, cluster:web/modules) were 31 of the old 53 narration errors, all in the capabilities section the reviewer singled out. repairExplanation now strips them and the whole package measures 9 narration errors.",
+    "P2 is passing at 40.6% with almost no headroom, and the debt is concentrated: architecture_deep ships 11 claim paragraphs with ZERO receipts — no [[receipt:…]] marker, no rN alias, no file:line locator anywhere in its 2,977 characters — and traced_flows cites three steps to '(r_evidence)', an alias the pipeline never issued. Those two sections are the whole gap between 40.6% and Skribbl's 66.1%.",
+    "api/ is Python: the route handlers, the execution engine and the integration adapters are entirely outside the analysis. Any 'Traced Flows' section here traces only the half of each flow that lives in TypeScript."
+  ]
+}

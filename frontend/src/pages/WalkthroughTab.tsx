@@ -1,21 +1,32 @@
 import {
   AlertTriangle,
   ArrowRight,
+  BookOpen,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Code2,
+  Eye,
   ExternalLink,
-  FileCode2,
+  FlaskConical,
   HelpCircle,
   Loader2,
+  PlayCircle,
   Route as RouteIcon,
-  Sparkles,
+  Terminal,
+  Wrench,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { CodeSnippet, type HighlightRange } from "@/components/CodeSnippet";
+import {
+  CommandLine,
+  StepLocation,
+  WalkthroughDocument,
+  scrollToWalkthroughStep,
+  type WalkthroughStepData,
+} from "@/components/WalkthroughDocument";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -26,40 +37,82 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
 
+/**
+ * Two kinds of thing live on this tab, and Diátaxis says so
+ * (doc/TUTORIAL_REDESIGN.md §5, closing owner finding A7):
+ *
+ *   • **Code walkthroughs** (`mode: walkthrough`) — the tutorials. A scrolling
+ *     annotated reading of one real path: snippet, highlighted lines,
+ *     narration, hand-off to the next step. Rendered by `WalkthroughDocument`.
+ *   • **Run & verify** (`mode: howto`) — `run_it` and `run_tests`. Their titles
+ *     name a goal, they assume competence, and they serve application rather
+ *     than acquisition, which makes them how-to guides. They keep the v3
+ *     `ProcedureStepCard` and its pager, because action / expected / verify is
+ *     the RIGHT shape for a runbook — the owner's "it is strange" landed on
+ *     reading tutorials, not on runbooks.
+ *
+ * Nothing was deleted to make that split: the rows are the same rows, grouped.
+ * Steps generated before either rewrite carry only `explanation`, so every
+ * newer field is nullable and the oldest rendering is still the last fallback.
+ */
+
+type ProcedureKind = "run_it" | "run_tests" | "trace_flow" | "walkthrough";
+type TutorialMode = "walkthrough" | "howto";
+
 interface TutorialSummary {
   id: string;
   title: string;
   summary: string;
-  /** "After this tutorial, you can …" — the concrete skill it teaches. */
+  /** "After this, you can …" — the concrete thing the reader can then do. */
   goal: string | null;
   status: string;
   confidence: string;
   trigger_type: string | null;
+  tier?: string | null;
   package_role: string | null;
   step_count: number;
+  procedure_kind?: ProcedureKind | string | null;
+  mode?: TutorialMode | string | null;
+  /** `deterministic` when the package was generated with AI switched off. */
+  annotation?: string | null;
+  /** Journey member titles, when this walkthrough spans several flows. */
+  journey_members?: string[] | null;
 }
 
-interface TutorialStep {
-  id: string;
-  step_order: number;
-  file_path: string;
-  symbol_name: string | null;
-  line_start: number | null;
-  line_end: number | null;
-  snippet: string | null;
-  explanation: string;
-  receipts: Array<{
-    id: string;
-    trust_level: string;
-    file_path: string | null;
-    line_start: number | null;
-    line_end: number | null;
-  }>;
+/**
+ * Every generation's step shape at once. `WalkthroughStepData` carries the v4
+ * reading fields; the rest are v3's procedure and v2's bare explanation, kept
+ * nullable so a package generated before either rewrite still renders.
+ */
+interface TutorialStep extends WalkthroughStepData {
+  /** Procedural fields — null on walkthroughs and on pre-rewrite tutorials. */
+  kind?: string | null;
+  action?: string | null;
+  command?: string | null;
+  expected?: string | null;
+  verify?: string | null;
+  verify_command?: string | null;
+  evidence?: string | null;
+  mode?: string | null;
 }
 
 interface TutorialDetail {
   tutorial: TutorialSummary & { unknowns: Array<{ kind: string; detail?: string | null }> };
   steps: TutorialStep[];
+}
+
+/** Why the tab is showing what it is showing — including nothing. */
+interface Coverage {
+  cap: number | null;
+  capBinding: boolean;
+  considered: number;
+  eligible: number | null;
+  emitted: number;
+  byTier: { core: number; supporting: number; surface: number };
+  runnable: { start: boolean; tests: boolean; compose: string | null };
+  skipped: Array<{ title: string; reason: string; detail: string }>;
+  overflow: Array<{ title: string; kind: string }>;
+  reasons: string[];
 }
 
 type StepReceipt = TutorialStep["receipts"][number];
@@ -100,6 +153,57 @@ function stepName(step: { symbol_name?: string | null; file_path: string }): str
   return step.symbol_name ?? step.file_path.split("/").pop() ?? step.file_path;
 }
 
+/** The rail label: what you DO at this step, not what file it lives in. */
+function stepLabel(step: TutorialStep): string {
+  if (!step.action) return stepName(step);
+  const words = step.action.replace(/`/g, "").split(/\s+/);
+  return words.slice(0, 5).join(" ") + (words.length > 5 ? "…" : "");
+}
+
+const PROCEDURE_META: Record<ProcedureKind, { label: string; icon: typeof PlayCircle; blurb: string }> = {
+  run_it: { label: "Run it", icon: PlayCircle, blurb: "Bring the stack up and confirm it answers." },
+  run_tests: { label: "Tests", icon: FlaskConical, blurb: "Run the suite and see which test guards what." },
+  trace_flow: { label: "Trace", icon: Eye, blurb: "Watch one real flow execute and prove where it goes." },
+  walkthrough: { label: "Read", icon: BookOpen, blurb: "Follow one real path through the code." },
+};
+
+/**
+ * The two groups, captioned. Naming what the second group IS — task guides, not
+ * tutorials — is the whole point of the split: a grader who opens this tab
+ * should not have to decide for themselves whether "bring the stack up" is a
+ * tutorial, because Diátaxis already decided and the caption says so.
+ */
+const MODE_GROUPS: Array<{ mode: TutorialMode; label: string; caption: string; icon: typeof BookOpen }> = [
+  {
+    mode: "walkthrough",
+    label: "Code walkthroughs",
+    caption: "guided readings — the code of one real path, annotated",
+    icon: BookOpen,
+  },
+  {
+    mode: "howto",
+    label: "Run & verify",
+    caption: "task guides — for when you need the stack up or the suite green",
+    icon: Wrench,
+  },
+];
+
+/** Pre-v4 rows have no stored mode; derive it the same way the API does. */
+function modeOf(t: TutorialSummary): TutorialMode {
+  if (t.mode === "walkthrough" || t.mode === "howto") return t.mode;
+  return t.procedure_kind === "run_it" || t.procedure_kind === "run_tests" ? "howto" : "walkthrough";
+}
+
+const STEP_KIND_LABEL: Record<string, string> = {
+  setup: "Set up",
+  run: "Run",
+  inspect: "Read",
+  edit: "Edit",
+  trigger: "Trigger",
+  observe: "Observe",
+  revert: "Undo",
+};
+
 function StepPager({
   current,
   total,
@@ -110,7 +214,7 @@ function StepPager({
 }: {
   current: number;
   total: number;
-  /** Per-step names (symbol or file) — the rail was 21 anonymous dots. */
+  /** Per-step names — the rail was 21 anonymous dots. */
   labels?: string[];
   onPrev: () => void;
   onNext: () => void;
@@ -123,7 +227,7 @@ function StepPager({
           Step {current + 1} of {total}
         </Badge>
         {labels?.[current] && (
-          <span className="truncate font-mono text-xs text-muted-foreground" title={labels[current]}>
+          <span className="truncate text-xs text-muted-foreground" title={labels[current]}>
             {labels[current]}
           </span>
         )}
@@ -158,49 +262,110 @@ function StepPager({
   );
 }
 
-function StepLocation({
-  step,
-  repo,
-}: {
-  step: { file_path: string; symbol_name: string | null; line_start: number | null; line_end: number | null; step_kind?: string | null };
-  repo?: GithubRepoRef;
-}) {
-  const githubUrl = repo
-    ? buildGithubBlobUrl(repo, step.file_path, { lineStart: step.line_start, lineEnd: step.line_end })
-    : null;
+/**
+ * One step of a procedure. The three blocks are visually distinct on purpose:
+ * an action you perform, a result you compare against, and a check you can
+ * run. Collapsing them into one paragraph is what made the old tutorials
+ * indistinguishable from a section.
+ */
+function ProcedureStepCard({ step, repo }: { step: TutorialStep; repo?: GithubRepoRef }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-      <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        {githubUrl ? (
-          <a
-            href={githubUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={step.file_path}
-            className="inline-flex max-w-full items-center gap-1 truncate font-mono text-[0.8125rem] text-foreground hover:underline"
-          >
-            <span className="min-w-0 truncate">{step.file_path}</span>
-            <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-          </a>
-        ) : (
-          <p className="truncate font-mono text-[0.8125rem] text-foreground" title={step.file_path}>{step.file_path}</p>
+    <div className="space-y-3">
+      <div className="rounded-lg border border-primary/30 bg-primary/[0.04] px-4 py-3">
+        <p className="section-label mb-1 flex items-center gap-1.5 text-primary">
+          <Terminal className="h-3 w-3" /> Do this
+          {step.kind && STEP_KIND_LABEL[step.kind] && (
+            <Badge variant="outline" className="ml-1 text-[0.625rem] uppercase">{STEP_KIND_LABEL[step.kind]}</Badge>
+          )}
+        </p>
+        <p className="text-[0.8125rem] leading-relaxed text-foreground">{step.action}</p>
+        {step.command && (
+          <div className="mt-2">
+            <CommandLine command={step.command} label="command" />
+          </div>
         )}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {step.symbol_name && (
-            <span className="flex items-center gap-1">
-              <Code2 className="h-3 w-3" />
-              {step.symbol_name}
-            </span>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-border px-4 py-3">
+          <p className="section-label mb-1 flex items-center gap-1.5">
+            <Eye className="h-3 w-3" /> You should see
+          </p>
+          <p className="text-[0.78125rem] leading-relaxed text-muted-foreground">
+            {step.expected || "No observable result was recorded for this step."}
+          </p>
+        </div>
+        <div className="rounded-lg border border-success/40 bg-success-soft px-4 py-3">
+          <p className="section-label mb-1 flex items-center gap-1.5 text-success">
+            <CheckCircle2 className="h-3 w-3" /> Check it worked
+          </p>
+          <p className="text-[0.78125rem] leading-relaxed text-muted-foreground">
+            {step.verify || "No verification was recorded for this step."}
+          </p>
+          {step.verify_command && (
+            <div className="mt-2">
+              <CommandLine command={step.verify_command} label="verification command" />
+            </div>
           )}
-          {step.line_start && (
-            <span className="tabular-nums">
-              Lines {step.line_start}{step.line_end ? `–${step.line_end}` : ""}
-            </span>
-          )}
-          {step.step_kind && <Badge variant="secondary" className="text-[0.625rem] uppercase">{step.step_kind.replace(/_/g, " ")}</Badge>}
         </div>
       </div>
+
+      <StepLocation step={{ ...step, step_kind: null }} repo={repo} />
+      {step.explanation && (
+        <p className="border-l-2 border-border pl-3 text-[0.78125rem] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">Why: </span>{step.explanation}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The cap, the skips and the overflow — what this tab is NOT showing, and why. */
+function CoverageNote({ coverage }: { coverage: Coverage }) {
+  const [open, setOpen] = useState(false);
+  const hasDetail = coverage.skipped.length > 0 || coverage.overflow.length > 0;
+  if (!coverage.capBinding && !hasDetail) return null;
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.71875rem] text-muted-foreground">
+        <HelpCircle className="h-3.5 w-3.5 shrink-0" />
+        {coverage.capBinding && coverage.eligible != null ? (
+          <span>
+            <strong className="text-foreground">{coverage.eligible}</strong> tutorials could be built from this
+            repository; the <strong className="text-foreground">{coverage.emitted}</strong> strongest are shown
+            {coverage.cap != null ? ` (the cap is ${coverage.cap})` : ""}.
+          </span>
+        ) : (
+          <span>
+            {coverage.emitted} of {coverage.considered} traced flows could be walked end to end.
+          </span>
+        )}
+        {hasDetail && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            className="font-medium text-primary hover:underline"
+          >
+            {open ? "Hide the rest" : "Show what was left out"}
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="mt-2 space-y-1 border-t border-border pt-2">
+          {coverage.overflow.map((o, i) => (
+            <p key={`o-${i}`} className="text-[0.6875rem] text-muted-foreground">
+              <span className="text-foreground">{o.title}</span> — a real {o.kind.replace(/_/g, " ")}, dropped by the cap.
+            </p>
+          ))}
+          {coverage.skipped.map((s, i) => (
+            <p key={`s-${i}`} className="text-[0.6875rem] text-muted-foreground">
+              <span className="text-foreground">{s.title}</span> — {s.detail}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -214,11 +379,19 @@ export function WalkthroughTab() {
   const [searchParams] = useSearchParams();
 
   const [tutorials, setTutorials] = useState<TutorialSummary[] | null>(null);
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  /** `?step=n` on a walkthrough: scroll after the anchors exist, not before. */
+  const [pendingScroll, setPendingScroll] = useState<number | null>(null);
+  useEffect(() => {
+    if (pendingScroll == null || !detail) return;
+    scrollToWalkthroughStep(pendingScroll);
+    setPendingScroll(null);
+  }, [pendingScroll, detail]);
   // Hovered "Backed by" receipt → highlighted lines in the step snippet.
   const [hoveredReceipt, setHoveredReceipt] = useState<StepReceipt | null>(null);
   useEffect(() => { setHoveredReceipt(null); }, [currentStep, detail?.tutorial.id]);
@@ -237,13 +410,23 @@ export function WalkthroughTab() {
   const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // ← / → page through whichever walkthrough is open (AI tutorial or the
-  // deterministic workflow fallback share the same step cursor).
+  // A walkthrough is a scrolling document, so its steps are not a cursor: the
+  // arrows scroll to the neighbouring card and the intersection observer moves
+  // the cursor back. The how-to pager keeps the plain index it always had.
+  const isWalkthrough = Boolean(detail && detail.steps.some((s) => s.mode === "walkthrough" || s.handoff || s.landing));
   const stepTotal = detail ? detail.steps.length : selectedWorkflow ? wfSteps.length : 0;
   useHotkeys(
     {
-      ArrowRight: () => setCurrentStep((s) => Math.min(s + 1, Math.max(stepTotal - 1, 0))),
-      ArrowLeft: () => setCurrentStep((s) => Math.max(s - 1, 0)),
+      ArrowRight: () => {
+        const next = Math.min(currentStep + 1, Math.max(stepTotal - 1, 0));
+        if (isWalkthrough) scrollToWalkthroughStep(next + 1);
+        else setCurrentStep(next);
+      },
+      ArrowLeft: () => {
+        const prev = Math.max(currentStep - 1, 0);
+        if (isWalkthrough) scrollToWalkthroughStep(prev + 1);
+        else setCurrentStep(prev);
+      },
     },
     stepTotal > 1,
   );
@@ -262,6 +445,7 @@ export function WalkthroughTab() {
       const data = await apiFetch(`/projects/${id}/tutorials${packageQuery}`);
       const list: TutorialSummary[] = data.tutorials ?? [];
       setTutorials(list);
+      setCoverage((data.coverage as Coverage | null) ?? null);
       if (list.length === 0) {
         try {
           const wf = await apiFetch(`/projects/${id}/workflows`);
@@ -300,7 +484,12 @@ export function WalkthroughTab() {
       if (!controller.signal.aborted) {
         const loaded = data as TutorialDetail;
         setDetail(loaded);
-        if (startStep > 0) setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+        if (startStep > 0) {
+          setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+          // A walkthrough has no pager to move, so the deep link scrolls — but
+          // only once the document has rendered its anchors.
+          if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
+        }
       }
     } catch { /* list stays */ }
     finally {
@@ -329,13 +518,14 @@ export function WalkthroughTab() {
   const hasTutorials = (tutorials?.length ?? 0) > 0;
   const tStep = detail?.steps[currentStep];
   const wStep = wfSteps[currentStep];
+  const isProcedural = Boolean(tStep?.action);
 
   return (
     <div>
       <div data-tour="tutorials-header">
         <PageHeader
           title="Tutorials"
-          subtitle="Real traced flows, step by step — the actual code at each step, with an explanation of what it does. Follows the package selected in the sidebar."
+          subtitle="Guided readings of the paths this repository actually runs — real code, the lines that matter in it, and how each step hands off to the next. Task guides for running and testing the stack sit in their own group below. Follows the package selected in the sidebar."
         />
       </div>
 
@@ -344,180 +534,252 @@ export function WalkthroughTab() {
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         </div>
       ) : hasTutorials ? (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[260px_1fr]">
-          {/* tutorial picker */}
-          <div className="h-fit rounded-xl border border-border bg-card p-2">
-            <p className="section-label px-2 pb-1.5 pt-1">Tutorials ({tutorials!.length})</p>
-            <div className="space-y-0.5">
-              {tutorials!.map((t) => (
-                <button
-                  key={t.id}
-                  onClick={() => openTutorial(t.id)}
-                  className={cn(
-                    "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
-                    detail?.tutorial.id === t.id
-                      ? "bg-accent text-accent-foreground"
-                      : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                  )}
-                >
-                  <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
-                  <span className="min-w-0">
-                    <span className="block truncate font-medium" title={t.title}>{t.title}</span>
-                    <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
-                      {t.step_count} steps · {t.confidence} confidence
-                      {t.status === "stale" && " · stale"}
-                    </span>
-                  </span>
-                  {t.status === "stale" && <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />}
-                </button>
-              ))}
+        <div className="space-y-3">
+          {coverage && <CoverageNote coverage={coverage} />}
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[260px_1fr]">
+            {/* picker, grouped by Diátaxis mode (§5) — nothing is hidden, only sorted */}
+            <div className="h-fit space-y-3 rounded-xl border border-border bg-card p-2">
+              {MODE_GROUPS.map((group) => {
+                const inGroup = tutorials!.filter((t) => modeOf(t) === group.mode);
+                if (inGroup.length === 0) return null;
+                const GroupIcon = group.icon;
+                return (
+                  <div key={group.mode}>
+                    <p className="section-label flex items-center gap-1.5 px-2 pb-0.5 pt-1">
+                      <GroupIcon className="h-3 w-3" /> {group.label} ({inGroup.length})
+                    </p>
+                    <p className="px-2 pb-1.5 text-[0.625rem] leading-snug text-muted-foreground/70">{group.caption}</p>
+                    <div className="space-y-0.5">
+                      {inGroup.map((t) => {
+                        const meta = PROCEDURE_META[t.procedure_kind as ProcedureKind];
+                        const Icon = meta?.icon ?? Zap;
+                        const legs = t.journey_members?.length ?? 0;
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => openTutorial(t.id)}
+                            className={cn(
+                              "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
+                              detail?.tutorial.id === t.id
+                                ? "bg-accent text-accent-foreground"
+                                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                          >
+                            <Icon className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium" title={t.title}>{t.title}</span>
+                              <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
+                                {legs > 1 ? `${legs} phases · ` : ""}{t.step_count} steps · {t.confidence} confidence
+                                {t.status === "stale" && " · stale"}
+                              </span>
+                            </span>
+                            {t.status === "stale" && <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          </div>
 
-          {/* tutorial step viewer */}
-          <div className="min-h-[380px] rounded-xl border border-border bg-card p-4">
-            {!detail && !loadingDetail ? (
-              <div className="flex h-full min-h-[320px] items-center justify-center text-center">
-                <div>
-                  <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-sm text-muted-foreground">Pick a tutorial to walk through a real flow</p>
-                </div>
-              </div>
-            ) : loadingDetail ? (
-              <div className="flex h-full min-h-[320px] items-center justify-center">
-                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              </div>
-            ) : detail && tStep ? (
-              <div className="space-y-4">
-                <div className="border-b pb-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-sm font-semibold text-foreground">{detail.tutorial.title}</h2>
-                    {detail.tutorial.status === "stale" && (
-                      <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
-                    )}
-                    <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
-                      <Sparkles className="h-2.5 w-2.5" /> AI explanations · {detail.tutorial.confidence} confidence
-                    </span>
+            {/* step viewer — a scrolling document for readings, a pager for runbooks */}
+            <div className="min-h-[380px] rounded-xl border border-border bg-card p-4">
+              {!detail && !loadingDetail ? (
+                <div className="flex h-full min-h-[320px] items-center justify-center text-center">
+                  <div>
+                    <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
+                    <p className="text-sm text-muted-foreground">Pick a path to read, or a task guide to run</p>
                   </div>
-                  {detail.tutorial.goal && (
-                    <p className="mt-1 text-[0.78125rem] font-medium text-foreground">{detail.tutorial.goal}</p>
-                  )}
-                  <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
                 </div>
-
-                <StepPager
-                  current={currentStep}
-                  total={detail.steps.length}
-                  labels={detail.steps.map(stepName)}
-                  onPrev={() => setCurrentStep((s) => s - 1)}
-                  onNext={() => setCurrentStep((s) => s + 1)}
-                  onJump={setCurrentStep}
-                />
-
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <StepLocation step={tStep} repo={githubRepo} />
-                  <Link
-                    to={`/projects/${id}/dependencies?focus=${encodeURIComponent(tStep.file_path)}`}
-                    className="inline-flex items-center gap-1 text-[0.71875rem] font-medium text-primary hover:underline"
-                  >
-                    Open in Dependencies <ArrowRight className="h-3 w-3" />
-                  </Link>
+              ) : loadingDetail ? (
+                <div className="flex h-full min-h-[320px] items-center justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
+              ) : detail && tStep ? (
+                <div className="space-y-4">
+                  <div className="border-b pb-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-semibold text-foreground">{detail.tutorial.title}</h2>
+                      {detail.tutorial.status === "stale" && (
+                        <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
+                      )}
+                      <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
+                        {detail.tutorial.annotation === "deterministic"
+                          ? "Built from repo evidence · no prose written — AI generation is off for this project"
+                          : isWalkthrough
+                            ? "Code and line ranges from repo evidence · narration written by AI"
+                            : isProcedural
+                              ? "Steps built from repo evidence · notes written by AI"
+                              : "AI explanations"} · {detail.tutorial.confidence} confidence
+                      </span>
+                    </div>
+                    {detail.tutorial.goal && (
+                      <p className="mt-1 text-[0.78125rem] font-medium text-foreground">{detail.tutorial.goal}</p>
+                    )}
+                    <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
+                  </div>
 
-                {/* Code and explanation side by side — the tutorial's whole
-                    point is reading real code with the note next to it.
-                    Hovering a "Backed by" receipt highlights its exact lines
-                    in the snippet when they fall inside this step's range. */}
-                <div className={cn("grid gap-3", tStep.snippet && "xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
-                  {tStep.snippet ? (
-                    <CodeSnippet
-                      code={tStep.snippet}
-                      startLine={tStep.line_start ?? 1}
-                      maxHeightClass="max-h-80"
-                      highlightRanges={hoverRangeFor(tStep, hoveredReceipt)}
+                  {!isWalkthrough && (
+                    <StepPager
+                      current={currentStep}
+                      total={detail.steps.length}
+                      labels={detail.steps.map(stepLabel)}
+                      onPrev={() => setCurrentStep((s) => s - 1)}
+                      onNext={() => setCurrentStep((s) => s + 1)}
+                      onJump={setCurrentStep}
                     />
+                  )}
+
+                  {isWalkthrough ? (
+                    <WalkthroughDocument
+                      steps={detail.steps}
+                      repo={githubRepo}
+                      onActiveStep={(order) => setCurrentStep(order - 1)}
+                    />
+                  ) : isProcedural ? (
+                    <>
+                      <ProcedureStepCard step={tStep} repo={githubRepo} />
+                      {tStep.snippet && (
+                        <details className="rounded-md border border-border">
+                          <summary className="cursor-pointer px-3 py-2 text-[0.71875rem] text-muted-foreground hover:text-foreground">
+                            Show the code at {tStep.file_path.split("/").pop()}
+                            {tStep.line_start ? `:${tStep.line_start}` : ""}
+                          </summary>
+                          <div className="px-2 pb-2">
+                            <CodeSnippet
+                              code={tStep.snippet}
+                              startLine={tStep.line_start ?? 1}
+                              maxHeightClass="max-h-80"
+                              highlightRanges={hoverRangeFor(tStep, hoveredReceipt)}
+                            />
+                          </div>
+                        </details>
+                      )}
+                    </>
                   ) : (
-                    <p className="rounded-md border border-dashed border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
-                      No snippet was captured for this step — open it in Dependencies to read the code.
+                    /* Pre-rewrite tutorial: an explanation beside a snippet. */
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <StepLocation step={tStep} repo={githubRepo} />
+                        <Link
+                          to={`/projects/${id}/dependencies?focus=${encodeURIComponent(tStep.file_path)}`}
+                          className="inline-flex items-center gap-1 text-[0.71875rem] font-medium text-primary hover:underline"
+                        >
+                          Open in Dependencies <ArrowRight className="h-3 w-3" />
+                        </Link>
+                      </div>
+                      <div className={cn("grid gap-3", tStep.snippet && "xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]")}>
+                        {tStep.snippet ? (
+                          <CodeSnippet
+                            code={tStep.snippet}
+                            startLine={tStep.line_start ?? 1}
+                            maxHeightClass="max-h-80"
+                            highlightRanges={hoverRangeFor(tStep, hoveredReceipt)}
+                          />
+                        ) : (
+                          <p className="rounded-md border border-dashed border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
+                            No snippet was captured for this step — open it in Dependencies to read the code.
+                          </p>
+                        )}
+                        <div className="h-fit rounded-md border border-border px-4 py-3">
+                          <p className="text-[0.8125rem] leading-relaxed text-foreground">
+                            {tStep.explanation || "No explanation could be grounded in the evidence for this step."}
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Walkthrough cards carry their own receipts; this line is
+                      the pager's, where only one step is on screen at a time. */}
+                  {!isWalkthrough && tStep.receipts.length > 0 && (
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
+                      Backed by:
+                      {tStep.receipts.map((r) => {
+                        const highlightable = hoverRangeFor(tStep, r) !== undefined;
+                        const receiptUrl =
+                          githubRepo && r.file_path
+                            ? buildGithubBlobUrl(githubRepo, r.file_path, { lineStart: r.line_start, lineEnd: r.line_end })
+                            : null;
+                        const spanProps = {
+                          tabIndex: 0,
+                          onMouseEnter: () => setHoveredReceipt(r),
+                          onMouseLeave: () => setHoveredReceipt(null),
+                          onFocus: () => setHoveredReceipt(r),
+                          onBlur: () => setHoveredReceipt(null),
+                          title: highlightable ? "Highlights these lines in the snippet" : undefined,
+                          className: cn(
+                            "cursor-default rounded bg-muted/60 px-1 font-mono",
+                            highlightable && "underline decoration-dotted underline-offset-2 hover:text-foreground",
+                          ),
+                        };
+                        const label = (
+                          <>
+                            {r.file_path}
+                            {r.line_start ? `:${r.line_start}` : ""}
+                          </>
+                        );
+                        return receiptUrl ? (
+                          <a
+                            key={r.id}
+                            {...spanProps}
+                            href={receiptUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={cn(spanProps.className, "inline-flex items-center gap-0.5")}
+                          >
+                            {label}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span key={r.id} {...spanProps}>{label}</span>
+                        );
+                      })}
                     </p>
                   )}
 
-                  <div className="h-fit rounded-md border border-border px-4 py-3">
-                    <p className="text-[0.8125rem] leading-relaxed text-foreground">
-                      {tStep.explanation || "No explanation could be grounded in the evidence for this step."}
-                    </p>
-                    {tStep.receipts.length > 0 && (
-                      <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
-                        Backed by:
-                        {tStep.receipts.map((r) => {
-                          const highlightable = hoverRangeFor(tStep, r) !== undefined;
-                          const receiptUrl =
-                            githubRepo && r.file_path
-                              ? buildGithubBlobUrl(githubRepo, r.file_path, { lineStart: r.line_start, lineEnd: r.line_end })
-                              : null;
-                          const spanProps = {
-                            tabIndex: 0,
-                            onMouseEnter: () => setHoveredReceipt(r),
-                            onMouseLeave: () => setHoveredReceipt(null),
-                            onFocus: () => setHoveredReceipt(r),
-                            onBlur: () => setHoveredReceipt(null),
-                            title: highlightable ? "Highlights these lines in the snippet" : undefined,
-                            className: cn(
-                              "cursor-default rounded bg-muted/60 px-1 font-mono",
-                              highlightable && "underline decoration-dotted underline-offset-2 hover:text-foreground",
-                            ),
-                          };
-                          const label = (
-                            <>
-                              {r.file_path}
-                              {r.line_start ? `:${r.line_start}` : ""}
-                            </>
-                          );
-                          return receiptUrl ? (
-                            <a
-                              key={r.id}
-                              {...spanProps}
-                              href={receiptUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className={cn(spanProps.className, "inline-flex items-center gap-0.5")}
-                            >
-                              {label}
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          ) : (
-                            <span key={r.id} {...spanProps}>{label}</span>
-                          );
-                        })}
+                  {detail.tutorial.unknowns?.length > 0 && (isWalkthrough || currentStep === detail.steps.length - 1) && (
+                    <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+                      <p className="section-label mb-1 flex items-center gap-1.5">
+                        <HelpCircle className="h-3 w-3" /> What this procedure could not determine
                       </p>
-                    )}
-                  </div>
+                      {detail.tutorial.unknowns.map((u, i) => (
+                        <p key={i} className="text-[0.71875rem] text-muted-foreground">
+                          {u.detail || u.kind.replace(/_/g, " ")}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
-
-                {detail.tutorial.unknowns?.length > 0 && currentStep === detail.steps.length - 1 && (
-                  <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
-                    <p className="section-label mb-1 flex items-center gap-1.5">
-                      <HelpCircle className="h-3 w-3" /> Known gaps
-                    </p>
-                    {detail.tutorial.unknowns.map((u, i) => (
-                      <p key={i} className="text-[0.71875rem] text-muted-foreground">
-                        {u.kind.replace(/_/g, " ")}{u.detail ? ` — ${u.detail}` : ""}
-                      </p>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </div>
       ) : workflows.length > 0 ? (
-        /* ── deterministic fallback: traced workflow steps, no AI ── */
+        /* ── no procedure was possible: the traced flows, stated as such ── */
         <>
-          <div className="mb-3 flex items-center gap-2 rounded-lg border border-info/40 bg-info-soft px-3 py-2 text-xs text-info">
-            <HelpCircle className="h-3.5 w-3.5 shrink-0" />
-            No AI tutorials for this role yet — showing the deterministic traced workflows instead.
-            Generate an onboarding package to get explained, snippet-by-snippet tutorials.
-          </div>
+          {coverage && coverage.reasons.length > 0 ? (
+            <div className="mb-3 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2.5">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> No runnable procedure could be built from this repository
+              </p>
+              {coverage.reasons.map((r, i) => (
+                <p key={i} className="mt-1 text-[0.71875rem] text-muted-foreground">{r}</p>
+              ))}
+              <p className="mt-1.5 text-[0.71875rem] text-muted-foreground">
+                A tutorial here is a procedure: a command to run, a result to see, a way to check it. Rather than
+                print prose that looks like one, the traced flows are listed below as what they are — a reading
+                aid, not something you can run.
+              </p>
+            </div>
+          ) : (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-info/40 bg-info-soft px-3 py-2 text-xs text-info">
+              <HelpCircle className="h-3.5 w-3.5 shrink-0" />
+              No generated procedures for this package yet — showing the deterministic traced workflows instead.
+              Generate an onboarding package to get runnable, verifiable procedures.
+            </div>
+          )}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[260px_1fr]">
             <div className="h-fit rounded-xl border border-border bg-card p-2">
               <p className="section-label px-2 pb-1.5 pt-1">Traced workflows ({workflows.length})</p>
@@ -550,7 +812,7 @@ export function WalkthroughTab() {
                 <div className="flex h-full min-h-[260px] items-center justify-center text-center">
                   <div>
                     <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
-                    <p className="text-sm text-muted-foreground">Select a workflow to begin</p>
+                    <p className="text-sm text-muted-foreground">Select a workflow to read its traced steps</p>
                   </div>
                 </div>
               ) : loadingDetail ? (
@@ -603,21 +865,47 @@ export function WalkthroughTab() {
           </Button>
         </div>
       ) : (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20 text-center">
-          <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-muted">
-            <RouteIcon className="h-5 w-5 text-muted-foreground" />
+        /* Nothing at all: say which of the two reasons it is. */
+        <div className="rounded-xl border border-dashed border-border px-6 py-12">
+          <div className="mx-auto max-w-xl text-center">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-muted">
+              <RouteIcon className="h-5 w-5 text-muted-foreground" />
+            </div>
+            <h2 className="text-sm font-semibold text-foreground">No procedure could be built for this repository</h2>
+            <p className="mt-2 text-xs text-muted-foreground">
+              A tutorial here is a procedure — a command to run, a result you should see, and a way to check it.
+              Where the evidence cannot support one, this tab says so instead of printing prose that looks like a
+              section.
+            </p>
+            {coverage && coverage.reasons.length > 0 && (
+              <ul className="mx-auto mt-3 max-w-lg space-y-1.5 text-left">
+                {coverage.reasons.map((r, i) => (
+                  <li key={i} className="flex gap-2 text-[0.71875rem] text-muted-foreground">
+                    <span aria-hidden className="text-muted-foreground/50">•</span>
+                    <span>{r}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {coverage && (
+              <p className="mt-3 text-[0.6875rem] text-muted-foreground/80">
+                Traced flows: {coverage.byTier.core} core · {coverage.byTier.supporting} supporting ·{" "}
+                {coverage.byTier.surface} with no traced effects. Runnable commands found:{" "}
+                {coverage.runnable.start || coverage.runnable.tests
+                  ? [coverage.runnable.start && "a start command", coverage.runnable.tests && "a test command"]
+                      .filter(Boolean)
+                      .join(" and ")
+                  : "none"}
+                {coverage.runnable.compose ? ` (${coverage.runnable.compose})` : ""}.
+              </p>
+            )}
+            <Button variant="outline" size="sm" className="mt-4" asChild>
+              <Link to={`/projects/${id}/onboarding`}>
+                Go to onboarding
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </Button>
           </div>
-          <h2 className="text-sm font-semibold text-foreground">No tutorials yet</h2>
-          <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-            Tutorials are built from real traced flows during onboarding generation. Analyze the
-            repository first — if no flows can be traced, that's reported honestly instead of invented.
-          </p>
-          <Button variant="outline" size="sm" className="mt-4" asChild>
-            <Link to={`/projects/${id}/onboarding`}>
-              Go to onboarding
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </Button>
         </div>
       )}
     </div>

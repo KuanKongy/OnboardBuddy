@@ -1,22 +1,30 @@
-import { AlertTriangle, CornerLeftUp, Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, CornerLeftUp, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import type { Viewport } from "reactflow";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
+import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   fetchDependencyGraph,
   fetchNodeDetail,
   type GraphResponse,
   type NodeDetail,
 } from "@/lib/graphData";
+import type { DrillFrame } from "@/lib/drillStack";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDrillStack } from "@/hooks/useDrillStack";
+import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge } from "@/types/graph";
@@ -27,6 +35,17 @@ const VIEWS: { key: GraphView; label: string }[] = [
   { key: "files", label: "Files" },
   { key: "classes", label: "Classes & interfaces" },
 ];
+
+/** The directory a cluster node stands for (`cluster:src/lib` → `src/lib`). */
+function clusterDirectory(nodeId: string): string {
+  return nodeId.slice("cluster:".length);
+}
+
+/** True when `filePath` lives in the directory a cluster node covers. */
+function clusterContains(nodeId: string, filePath: string): boolean {
+  const dir = clusterDirectory(nodeId);
+  return dir === "." ? !filePath.includes("/") : filePath === dir || filePath.startsWith(`${dir}/`);
+}
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
@@ -55,95 +74,141 @@ export function GraphPage() {
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeCluster = searchParams.get("cluster");
+  const [searchParams] = useSearchParams();
+  const stack = useDrillStack();
+  /**
+   * Dependencies is a TWO-level ladder: directory groups → files. Owner E1:
+   * "have only two level, the current third level drill down is not useful and
+   * annoying" — the `file` rung (a file's symbols) is gone.
+   *
+   * A `?drill=…|file,…` link made before that removal must still land
+   * somewhere sensible, so the stack is read up to the first non-cluster frame
+   * and the URL is rewritten to match. Truncating rather than erroring is the
+   * same tolerance `decodeDrill` already applies to a mangled param.
+   */
+  const clusterFrames = useMemo(() => {
+    const cut = stack.frames.findIndex((f) => f.kind !== "cluster");
+    return cut === -1 ? stack.frames : stack.frames.slice(0, cut);
+  }, [stack.frames]);
+  const staleFrames = clusterFrames.length !== stack.frames.length;
+  const currentFrame: DrillFrame | null = clusterFrames[clusterFrames.length - 1] ?? null;
+  useEffect(() => {
+    if (staleFrames) stack.jumpTo(clusterFrames.length - 1);
+  }, [staleFrames, clusterFrames.length]);
+  /** Class/interface handed over to the Classes view by "See inheritance". */
+  const [inheritanceFocus, setInheritanceFocus] = useState<string | null>(null);
   // Suppresses React Flow's own declarative initial fitView on this mount
   // so ViewportFocus is the sole viewport writer while resolving a
   // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
   const hasFocusTarget = !!searchParams.get("focus");
+  // A deep link has no viewport the user chose, so its target must be framed
+  // for them. Every other selection only nudges the camera.
+  const [focusIntent, setFocusIntent] = useState<"deeplink" | "user">(
+    hasFocusTarget ? "deeplink" : "user",
+  );
 
-  /** Drills in/out of a directory cluster — the URL is the source of truth
-   * (?cluster=<path>) so browser Back/Forward walks the drill path instead
-   * of leaving the page; the effect below reacts to the resulting change. */
-  function goToCluster(cluster: string | null, opts?: { replace?: boolean }) {
-    // A single click fires both onNodeClick and onSelectionChange (item 1);
-    // no-op when nothing actually changes so one click doesn't push two
-    // history entries (which would need two Back presses to undo).
-    if (cluster === searchParams.get("cluster")) return;
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (cluster) next.set("cluster", cluster);
-      else next.delete("cluster");
-      return next;
-    }, opts);
-  }
+  /**
+   * Fetches one level and commits it. Returns a promise so the drill
+   * transition can overlap the fetch with its animation and only move the
+   * stack once the data is actually in hand — a failed load then leaves the
+   * user on the level they were already on instead of on a blank one.
+   */
+  const levelKey = (frame: DrillFrame | null) =>
+    `${id ?? ""}::${selectedPackageId ?? ""}::${frame ? `${frame.kind}:${frame.id}` : ""}`;
+  const loadedKeyRef = useRef<string | null>(null);
+  const pendingFocusDrillRef = useRef<string | null>(null);
 
-  function loadGraph(cluster?: string) {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    setSelectedNodeId(null);
-    const focus = searchParams.get("focus");
-    fetchDependencyGraph(id, cluster, selectedPackageId)
-      .then((d) => {
+  const loadLevel = useCallback(
+    async (frame: DrillFrame | null): Promise<void> => {
+      if (!id) return;
+      setLoading(true);
+      setError("");
+      setSelectedNodeId(null);
+      try {
+        const d = await fetchDependencyGraph(
+          id,
+          frame?.kind === "cluster" ? frame.id : undefined,
+          selectedPackageId,
+        );
         setData(d);
-        // Resolve a pending `?focus=<file>` deep link in the SAME state
-        // update as the data that makes it resolvable, instead of a
-        // separate effect a tick later — DependencyGraphView would
-        // otherwise mount with nothing selected (racing React Flow's own
-        // initial `fitView` before the real selection ever arrived),
-        // which is exactly why a redirect into this graph used to
-        // center/zoom inconsistently while a manual node click (on an
-        // already-settled graph) always worked.
+        loadedKeyRef.current = levelKey(frame);
+
+        // Resolve a pending `?focus=<file>` in the SAME commit as the data
+        // that makes it resolvable, rather than in a later effect: mounting
+        // with nothing selected races React Flow's own initial fitView, which
+        // is why arriving by redirect used to frame inconsistently while a
+        // manual click on a settled graph always worked.
+        const focus = searchParams.get("focus");
         if (!focus) return;
         if (d.graph.nodes.some((n) => n.id === focus)) {
           setSelectedNodeId(focus);
           setFocusNotFoundId(null);
           return;
         }
-        // Large repos render as directory clusters at the root — the
-        // target file is never a root-level node there, it lives inside
-        // one of the groups. Drill into its 2-level directory prefix
-        // (mirrors the backend's own clustering rule in graph.ts) before
-        // concluding it's genuinely missing; the resulting ?cluster=
-        // change re-triggers this same function against that cluster's
-        // nodes.
-        if (d.clustered && !cluster) {
-          const parts = focus.split("/");
-          const dir = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : ".";
-          goToCluster(dir);
+        // Not on this canvas: if one of the groups here covers it, that group
+        // is the next hop. Asking the returned nodes — rather than
+        // recomputing the server's directory rule here — is what lets this
+        // keep working now that a level can regroup more than once before
+        // reaching the file.
+        const owningGroup = d.graph.nodes.find(
+          (n) => n.id.startsWith("cluster:") && clusterContains(n.id, focus),
+        );
+        if (owningGroup) {
+          pendingFocusDrillRef.current = clusterDirectory(owningGroup.id);
           return;
         }
         setFocusNotFoundId(focus);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load graph");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [id, selectedPackageId, searchParams],
+  );
 
-  // The drilled-in cluster is read straight from the URL (?cluster=) so
-  // even the very first render already reflects it — including a fresh
-  // page load from a deep link. A real project/package switch invalidates
-  // any drill path from another snapshot's directory layout, so it resets
-  // to the root and drops a stale ?cluster= instead of trying to keep it.
+  // Filled by GraphCanvas from inside the React Flow provider, so the camera
+  // can be captured before navigating away and restored on the way back.
+  const viewportRef = useRef<(() => Viewport) | null>(null);
+
+  const drill = useGraphDrill({
+    stack,
+    loadLevel,
+    readViewport: () => viewportRef.current?.() ?? null,
+  });
+
+  // The level comes straight from the URL, so the first render already
+  // reflects it — including a cold load on a shared link. A real
+  // project/package switch invalidates a drill path built from another
+  // snapshot's directory layout, so it resets to the root rather than
+  // carrying a stale one across.
   const prevGraphKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const key = `${id ?? ""}::${selectedPackageId ?? ""}`;
     const projectOrPackageChanged = prevGraphKeyRef.current !== null && prevGraphKeyRef.current !== key;
     prevGraphKeyRef.current = key;
-    const cluster = activeCluster;
-    if (projectOrPackageChanged && cluster) {
-      goToCluster(null, { replace: true });
+    if (projectOrPackageChanged && stack.depth > 0) {
+      stack.reset();
       return;
     }
-    loadGraph(cluster ?? undefined);
+    // A drill already fetched this level before moving the stack; refetching
+    // here would double-request and clobber the transition mid-flight.
+    if (loadedKeyRef.current === levelKey(currentFrame)) return;
+    void loadLevel(currentFrame).catch(() => {});
   }, [id, selectedPackageId, searchParams]);
 
-  /** One level up the cluster path; root (null) when at the first level. */
-  function drillUp() {
-    const segments = (activeCluster ?? "").split("/").filter(Boolean);
-    const parent = segments.slice(0, -1).join("/") || null;
-    goToCluster(parent);
-  }
+  // A `?focus=` target that lives inside a directory group needs one drill to
+  // become reachable. Done as an effect so it runs after the load that
+  // discovered it, and `replace` keeps it out of the Back history — the user
+  // never chose this hop.
+  useEffect(() => {
+    const target = pendingFocusDrillRef.current;
+    if (!target) return;
+    pendingFocusDrillRef.current = null;
+    setFocusIntent("deeplink");
+    stack.push({ kind: "cluster", id: target, label: target.split("/").filter(Boolean).pop() ?? target });
+  }, [data]);
 
   // ← / → cycle the selectable (non-cluster) nodes; Esc deselects — paired
   // with ViewportFocus, cycling glides the camera node to node.
@@ -184,14 +249,16 @@ export function GraphPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [fullscreen]);
 
-  // Enrich the selected node with the symbol doc, critical-path score and
+  const panelNodeId = selectedNodeId;
+
+  // Enrich the panel's node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
   useEffect(() => {
     setSelectedNodeDetail(null);
-    if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
+    if (!id || !panelNodeId || panelNodeId.startsWith("cluster:")) return;
     setDetailLoading(true);
     let cancelled = false;
-    fetchNodeDetail(id, selectedNodeId, selectedPackageId)
+    fetchNodeDetail(id, panelNodeId, selectedPackageId)
       .then((detail) => {
         if (!cancelled) setSelectedNodeDetail(detail);
       })
@@ -199,7 +266,7 @@ export function GraphPage() {
         if (!cancelled) setDetailLoading(false);
       });
     return () => { cancelled = true; };
-  }, [id, selectedNodeId, selectedPackageId]);
+  }, [id, panelNodeId, selectedPackageId]);
 
   const nodes: GraphNode[] = useMemo(() => {
     if (!data) return [];
@@ -212,6 +279,12 @@ export function GraphPage() {
         importCount: (n.metadata?.importCount as number) ?? 0,
         externalImportCount: (n.metadata?.externalImportCount as number) ?? 0,
         dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        symbolCount: (n.metadata?.symbolCount as number) ?? undefined,
+        exported: (n.metadata?.exported as boolean) ?? undefined,
+        summary: (n.metadata?.summary as string | null) ?? null,
+        role: (n.metadata?.role as string | null) ?? null,
+        fileCount: (n.metadata?.fileCount as number) ?? undefined,
+        internalImportCount: (n.metadata?.internalImportCount as number) ?? undefined,
       },
     }));
   }, [data]);
@@ -261,106 +334,252 @@ export function GraphPage() {
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-  const showPanel = view === "files" && selectedNode && !data?.clustered;
+  const panelNode: GraphNode | undefined = selectedNode;
+  // A cluster node is never selected (clicking it navigates), so the guard is
+  // simply "is there something to describe" — the old `!data.clustered` test
+  // suppressed the panel for real files sitting next to groups on a
+  // regrouped level.
+  const showPanel = view === "files" && !!panelNode;
+  const truncation = data?.truncation ?? null;
+  const levelUnit = data?.level?.unit ?? (data?.clustered ? "groups" : "files");
+  const groupCount = nodes.filter((n) => n.id.startsWith("cluster:")).length;
+  const fileCount = nodes.length - groupCount;
+  /**
+   * What the header prints, and what each number counts.
+   *
+   * Owner F1: "It shows a bigger number of available imports ... when you
+   * click to see details, there are less." Both numbers were real — the header
+   * described the level (227 files, 929 imports) and the canvas drew what fits
+   * (8 boxes, 2 arrows) — but nothing said so. The drawn number now comes
+   * first and the larger one is named as the population it summarises.
+   * `counts` is absent on a server predating this, hence the fallback.
+   */
+  const counts = data?.counts ?? null;
+  const badgeText = (() => {
+    if (!data) return "";
+    if (!counts) return `${data.totalNodes} ${levelUnit} · ${data.totalEdges} edges`;
+    const parts: string[] = [];
+    if (counts.groupsShown > 0) {
+      parts.push(`${counts.groupsShown} group${counts.groupsShown === 1 ? "" : "s"}`);
+      if (counts.filesShown > 0) parts.push(`${counts.filesShown} file${counts.filesShown === 1 ? "" : "s"}`);
+      parts.push(`${counts.filesTotal} files inside`);
+    } else {
+      parts.push(
+        counts.filesShown < counts.filesTotal
+          ? `${counts.filesShown} of ${counts.filesTotal} files`
+          : `${counts.filesTotal} file${counts.filesTotal === 1 ? "" : "s"}`,
+      );
+    }
+    parts.push(`${counts.edgesShown} arrow${counts.edgesShown === 1 ? "" : "s"}`);
+    return parts.join(" · ");
+  })();
+  const badgeDerivation = counts
+    ? [
+        counts.groupsShown > 0
+          ? `${counts.groupsShown} group box${counts.groupsShown === 1 ? "" : "es"} stand for ${counts.filesTotal} files.`
+          : `${counts.filesShown} of this level's ${counts.filesTotal} files are drawn.`,
+        `${counts.linksTotal} file-to-file link${counts.linksTotal === 1 ? "" : "s"} exist here; ${counts.edgesShown} arrow${counts.edgesShown === 1 ? " is" : "s are"} drawn` +
+          (counts.linksInsideGroups > 0
+            ? `, because ${counts.linksInsideGroups} of those links have both ends inside one group and the rest collapse into one arrow per pair.`
+            : "."),
+      ].join(" ")
+    : "Everything at this level is drawn";
+  // A class/interface is reachable in the project-wide Classes view; offer the
+  // hand-off from the symbol that made the reader ask.
+  const inheritanceTarget =
+    selectedNode && (selectedNode.kind === "class" || selectedNode.kind === "interface")
+      ? selectedNode.id
+      : null;
+  const isEmptyLevel = view === "files" && !loading && !error && (!data || nodes.length === 0);
+  const describedFiles = data?.describedFiles ?? 0;
 
   return (
     <div style={{ "--graph-chrome": fullscreen ? "90px" : "230px" } as React.CSSProperties}>
       <PageHeader
         title={
-          // Stable breadcrumb: "Dependencies" never moves — drilling into a
-          // cluster appends its path segments, each clickable to drill back
-          // up to that level; the root text goes back to all groups.
-          activeCluster ? (
-            <span className="flex flex-wrap items-baseline gap-1.5">
+          // Breadcrumb over the real drill stack. It used to be built by
+          // splitting the current cluster path, which meant each crumb was a
+          // path prefix rather than a level the user had visited — so a deep
+          // link that auto-drilled two levels showed crumbs for somewhere the
+          // user had never been. "Dependencies" never moves.
+          // No tooltips on the crumbs: "Back to <label>" restated the label
+          // the crumb already shows (owner H1). No `aria-label` either — an
+          // override would have made the accessible name differ from the
+          // visible one (WCAG 2.5.3); a breadcrumb button is named by its
+          // own text, and `<nav aria-label>` says what the row is.
+          // The Classes view is a separate, project-wide ladder with its own
+          // breadcrumb; leaving the file crumbs up there claimed a file
+          // context the canvas below no longer had (VISUAL QA M4 #3).
+          view === "files" && clusterFrames.length > 0 ? (
+            <span
+              className="flex flex-wrap items-baseline gap-1.5"
+              role="navigation"
+              aria-label="Dependency graph levels"
+            >
               <button
-                className="transition-colors hover:text-primary"
-                onClick={() => goToCluster(null)}
-                title="Back to all groups"
+                type="button"
+                className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
+                onClick={() => drill.jumpTo(-1)}
+                disabled={drill.busy}
               >
                 Dependencies
               </button>
-              {activeCluster.split("/").map((segment, i, segments) => {
-                const prefix = segments.slice(0, i + 1).join("/");
-                const isLast = i === segments.length - 1;
+              {clusterFrames.map((frame, i) => {
+                const isLast = i === clusterFrames.length - 1;
                 return (
-                  <span key={prefix} className="flex items-baseline gap-1.5 text-sm font-normal text-muted-foreground">
+                  <span
+                    key={`${frame.kind}:${frame.id}`}
+                    className="flex items-baseline gap-1.5 text-sm font-normal text-muted-foreground"
+                  >
                     <span>/</span>
                     {isLast ? (
-                      <span className="text-foreground">{segment}</span>
+                      <span className="text-foreground">{frame.label}</span>
                     ) : (
                       <button
-                        className="transition-colors hover:text-primary"
-                        onClick={() => goToCluster(prefix)}
-                        title={`Drill up to ${prefix}`}
+                        type="button"
+                        className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
+                        onClick={() => drill.jumpTo(i)}
+                        disabled={drill.busy}
                       >
-                        {segment}
+                        {frame.label}
                       </button>
                     )}
                   </span>
                 );
               })}
             </span>
+          ) : view === "classes" ? (
+            "Classes & interfaces"
           ) : (
             "Dependencies"
           )
         }
-        subtitle="Which files depend on which — follow the arrows to see how changes ripple."
+        subtitle={
+          view === "classes"
+            ? "Which classes extend or implement which — grouped by folder, each with a line saying what it does."
+            : "Which files depend on which — follow the arrows to see how changes ripple."
+        }
         actions={
           <>
-            {view === "files" && activeCluster && (
-              <Button variant="outline" size="xs" onClick={drillUp} title="Drill up one level">
+            {view === "files" && clusterFrames.length > 0 && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={drill.drillUp}
+                disabled={drill.busy}
+                aria-label="Back to the level you came from"
+              >
                 <CornerLeftUp className="mr-1 h-3 w-3" />
-                Up one level
+                Back
               </Button>
             )}
             {view === "files" && data && (
               <>
-                <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
-                  {data.totalNodes} files · {data.totalEdges} edges
-                  {data.clustered && " (grouped)"}
-                </Badge>
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => setFullscreen((v) => !v)}
-                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-                >
-                  {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-                </Button>
-                <Button
-                  variant={allEdges ? "secondary" : "outline"}
-                  size="xs"
-                  onClick={() => setAllEdges((v) => !v)}
-                  title="By default only each file's 3 strongest edges per direction are drawn to keep the layout readable"
-                >
-                  {allEdges ? "Strongest edges only" : "Show all edges"}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* Focusable: the derivation of these numbers exists only
+                        here, so without a tab stop a keyboard reader cannot
+                        find out how the drawn count relates to the total.
+                        This tooltip stays under owner H1 because it carries
+                        the arithmetic, not a repeat of the badge. */}
+                    <Badge variant="outline" tabIndex={0} className="text-[0.6875rem] tabular-nums">
+                      {badgeText}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none max-w-xs text-left">
+                    {truncation
+                      ? `${badgeDerivation} ${truncation.hidden} ${truncation.unit} were left out by the ${truncation.limit}-node cap, which kept ${truncation.keptBy}.`
+                      : badgeDerivation}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setFullscreen((v) => !v)}
+                      aria-pressed={fullscreen}
+                      aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    >
+                      {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none">
+                    {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                  </TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant={allEdges ? "secondary" : "outline"}
+                      size="xs"
+                      onClick={() => setAllEdges((v) => !v)}
+                      aria-pressed={allEdges}
+                    >
+                      {allEdges ? "Strongest edges only" : "Show all edges"}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none max-w-xs text-left">
+                    By default only each file's 3 strongest edges per direction are drawn to keep the
+                    layout readable
+                  </TooltipContent>
+                </Tooltip>
                 <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
                   {(["LR", "TB"] as const).map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setDirection(d)}
-                      aria-pressed={direction === d}
-                      title={d === "LR" ? "Left-to-right layout" : "Top-to-bottom layout"}
-                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                        direction === d ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {d}
-                    </button>
+                    <Tooltip key={d}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => setDirection(d)}
+                          aria-pressed={direction === d}
+                          className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                            direction === d ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none">
+                        {d === "LR" ? "Left-to-right layout" : "Top-to-bottom layout"}
+                      </TooltipContent>
+                    </Tooltip>
                   ))}
                 </div>
               </>
             )}
             {/* The view toggle stays rightmost so it never shifts when the
-                files-only controls above unmount. */}
-            <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
+                files-only controls above unmount.
+
+                VISUAL QA M4 #5 reproduced "the toggle needs two clicks" twice.
+                Nothing here is asynchronous — `setView` is one state write, and
+                a jsdom click switches the view on the first try — so the click
+                was not reaching the button. The header actions row is
+                `flex-wrap`, and this control sits immediately after four
+                tooltip triggers whose content is a portalled `z-50` box opened
+                with `delayDuration={0}` and, until now, `sideOffset={0}`: on
+                the way to this toggle the pointer opens one of them, and when
+                the row wraps (which the Files view's long count badge makes
+                likely) that box lands on the row below — over this toggle. The
+                first press then landed on the tooltip and only dismissed it.
+                The tooltips above now carry an offset and, more importantly,
+                `pointer-events-none`, so a tooltip can never take a click:
+                none of them contains anything to click.
+
+                `flex-nowrap` on this group keeps the two buttons on one line
+                even when the actions row itself wraps. */}
+            <div className="flex flex-nowrap items-center rounded-lg border border-border bg-card p-0.5">
               {VIEWS.map((v) => (
                 <button
                   key={v.key}
-                  onClick={() => setView(v.key)}
+                  type="button"
+                  onClick={() => {
+                    // Choosing the view from the toggle asks for the whole
+                    // view, not the symbol a previous hand-off focused.
+                    setInheritanceFocus(null);
+                    setView(v.key);
+                  }}
                   aria-pressed={view === v.key}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     view === v.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
@@ -372,38 +591,92 @@ export function GraphPage() {
         }
       />
 
-      {view === "classes" && id && <ClassGraphSection projectId={id} />}
+      {view === "classes" && id && <ClassGraphSection projectId={id} focusNodeId={inheritanceFocus} />}
 
       {view === "files" && loading && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <Skeleton className="graph-canvas" role="status" aria-label="Loading the dependency graph" />
       )}
 
-      {view === "files" && (error || (!data && !loading)) && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">
-              {error || "No graph data available yet"}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Run an analysis first to generate the dependency graph, or retry if analysis has completed.
-            </p>
-          </div>
-          <Button variant="outline" size="xs" onClick={() => loadGraph(activeCluster ?? undefined)}>
-            <RefreshCw className="mr-1 h-3 w-3" />
-            Retry
-          </Button>
-        </div>
+      {/* A successful response with zero nodes used to fall through this guard
+          and render an empty canvas under "0 / 0 files" — the reader could not
+          tell an empty level from a broken one. Same shape as
+          ClassGraphSection's guard. */}
+      {view === "files" && (error || isEmptyLevel) && (
+        <EmptyState
+          className="mb-4"
+          icon={<AlertTriangle className="h-4 w-4 shrink-0 text-warning" />}
+          heading={
+            error ||
+            (currentFrame ? `Nothing to show in ${currentFrame.label}` : "No graph data available yet")
+          }
+          description={
+            error || !currentFrame
+              ? "Run an analysis first to generate the dependency graph, or retry if analysis has completed."
+              : "This group came back empty. It may have been renamed or removed since this link was made."
+          }
+          actions={
+            <>
+              {currentFrame && !error && (
+                <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy}>
+                  <CornerLeftUp className="mr-1 h-3 w-3" />
+                  Back
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => {
+                  // Clear the guard first, or the retry is skipped as
+                  // already-loaded and the button silently does nothing.
+                  loadedKeyRef.current = null;
+                  void loadLevel(currentFrame).catch(() => {});
+                }}
+              >
+                <RefreshCw className="mr-1 h-3 w-3" />
+                Retry
+              </Button>
+            </>
+          }
+        />
       )}
 
-      {view === "files" && data && !loading && (
+      {view === "files" && data && !loading && !isEmptyLevel && (
         <>
-          {data.clustered && (
+          {/* What this level is, and what opening a group will GIVE you.
+              Owner E4: "Drilling down should give more context, right now the
+              feature is just bad" — the reward for a click has to be stated
+              before the click, and the file level has to be visibly richer
+              than the group level once you are there. */}
+          {data.clustered ? (
             <p className="mb-2 text-xs text-muted-foreground">
-              Large codebase ({data.totalNodes} files) — showing directory groups. Click a group to drill in.
+              {currentFrame
+                ? `${currentFrame.label} holds ${data.totalNodes} files — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. `
+                : `${data.totalNodes} files, too many to draw at once — showing ${groupCount} directory group${groupCount === 1 ? "" : "s"}. `}
+              Open a group to see its files, each with a line saying what it does. Numbers on a group
+              box count links crossing its boundary, not links inside it.
             </p>
+          ) : (
+            <p className="mb-2 text-xs text-muted-foreground">
+              {currentFrame ? `Files in ${currentFrame.label}` : "Files in this project"} — each card says
+              what the file does, what it imports and what imports it.{" "}
+              {describedFiles > 0
+                ? `${describedFiles} of ${nodes.length} carry a generated description; the rest show what the analyzer could infer from their path.`
+                : "No generated descriptions exist for this snapshot yet, so the cards show what the analyzer could infer from each path."}{" "}
+              Click a file for its score, callers and receipts.
+            </p>
+          )}
+
+          {/* The cap used to bite in silence below the root. */}
+          {truncation && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="flex-1 text-foreground">
+                Showing {truncation.shown} of {truncation.total} {truncation.unit}
+                {currentFrame ? ` in ${currentFrame.label}` : ""} — {truncation.hidden} not drawn. A single
+                view is capped at {truncation.limit} nodes, so this kept {truncation.keptBy}.
+                {truncation.seeRest ? ` ${truncation.seeRest}` : ""}
+              </span>
+            </div>
           )}
 
           {focusNotFoundId && (
@@ -423,10 +696,27 @@ export function GraphPage() {
             onSearchChange={setSearch}
             matchCount={visibleNodes.length}
             totalCount={nodes.length}
-            noun={data.clustered ? "groups" : "files"}
+            noun={levelUnit}
+            // "60 / 60 files" on a level that holds 107 reads as "that is all
+            // of them"; the count is over what was drawn, so it has to say so.
+            extra={truncation ? `${truncation.hidden} more not drawn` : undefined}
           />
 
           <div className={cn(showPanel ? "grid gap-3 lg:grid-cols-[1fr_340px]" : "", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
+            {/* AUDIT C11 / B81: the fullscreen overlay covers the header that
+                holds the exit toggle, so the only way out was an Esc key
+                nothing on screen mentioned. */}
+            {fullscreen && (
+              <Button
+                variant="outline"
+                size="xs"
+                className="absolute right-4 top-4 z-10"
+                onClick={() => setFullscreen(false)}
+              >
+                <Minimize2 className="mr-1 h-3 w-3" />
+                Exit fullscreen (Esc)
+              </Button>
+            )}
             <div className="graph-canvas">
               <DependencyGraphView
                 nodes={positionedNodes}
@@ -437,24 +727,47 @@ export function GraphPage() {
                 hiddenKinds={hiddenKinds}
                 onToggleKind={toggleKind}
                 refitSignal={`${direction}:${fullscreen}`}
+                showMiniMap={positionedNodes.length >= MINIMAP_MIN_NODES}
+                drill={drill}
+                focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}
+                restoreViewport={stack.savedViewport(stack.depth)}
+                viewportRef={viewportRef}
+                // A group opens the files inside it — navigation, so it gets
+                // the zoom transition. A FILE is the bottom of the ladder:
+                // clicking it opens the detail panel and leaves the camera
+                // alone. There is no third rung any more (owner E1).
+                onDrillInto={(nodeId) => {
+                  if (!nodeId.startsWith("cluster:")) return false;
+                  const path = clusterDirectory(nodeId);
+                  drill.drillInto(
+                    { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+                    nodeId,
+                  );
+                  return true;
+                }}
                 onSelectNode={(nodeId) => {
-                  if (data.clustered && nodeId?.startsWith("cluster:")) {
-                    goToCluster(nodeId.replace("cluster:", ""));
-                  } else {
-                    setSelectedNodeId(nodeId);
-                  }
+                  if (nodeId) setFocusIntent("user");
+                  setSelectedNodeId(nodeId);
                 }}
               />
             </div>
 
-            {showPanel && (
+            {showPanel && panelNode && (
               <aside className="graph-canvas overflow-y-auto !bg-card">
                 <NodeInfoPanel
-                  node={selectedNode}
+                  node={panelNode}
                   detail={selectedNodeDetail}
                   loading={detailLoading}
                   githubRepo={githubRepo}
                   onClose={() => setSelectedNodeId(null)}
+                  onSeeInheritance={
+                    inheritanceTarget
+                      ? () => {
+                          setInheritanceFocus(inheritanceTarget);
+                          setView("classes");
+                        }
+                      : undefined
+                  }
                 />
               </aside>
             )}

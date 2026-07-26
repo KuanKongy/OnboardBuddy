@@ -1,22 +1,56 @@
 node_modules/
 dist/
+build/
 coverage/
 *.tsbuildinfo
 .DS_Store
+Thumbs.db
 
+# ── Secrets ──────────────────────────────────────────────────────────────────
+# Every .env is ignored; the committed *.example files are the documented
+# template. Never relax this — a leaked service-role key gives full DB access.
 .env
 .env.*
 !.env.example
 !.env.local.example
+backend/github-app.pem
+*.pem
+*.key
+!**/testdata/**/*.pem
 
+# ── Build / tooling output ───────────────────────────────────────────────────
 backend/tmp/
 backend/.supabase/
 frontend/.vite/
 frontend/playwright-report/
 frontend/test-results/
+.turbo/
+.next/
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
+# ── Generated verification artifacts ─────────────────────────────────────────
+# The audit probe writes a per-surface ledger (census, flags, tab order, one
+# JSONL row per control) on every sweep — ~90 files that are re-derived by
+# `playwright test e2e/audit/probe.spec.ts`. The instrument is source and IS
+# committed; its output is not.
+frontend/e2e/audit/ledger/
+# Repos cloned by `npm run truth` to diff the pipeline against hand-labeled
+# expectations. The fixtures in backend/test/truth/*.json are source; the
+# clones are just checkouts and are re-fetched on demand.
+backend/.truth-repos/
+
+# ── Editors ──────────────────────────────────────────────────────────────────
 .cursor/
+.claude/
+.idea/
+.vscode/
+*.swp
+*~
 
+# ── Local-only docs and scratch harnesses ────────────────────────────────────
 # Throwaway UI preview harness (see frontend-ui-preview-harness memory)
 frontend/preview.html
 frontend/src/preview.tsx
@@ -27,4 +61,44 @@ doc/Feedback.md
 doc/PLAN.md
 doc/Team*.md
 doc/Design.md
-backend/github-app.pem
+
+# ── Test-runner output (root) ────────────────────────────────────────────────
+# Playwright writes here when invoked from the repo root rather than frontend/.
+# Re-derived by any test run; never review it in a diff.
+test-results/
+playwright-report/
+
+# ── Live-verification probes ─────────────────────────────────────────────────
+# `backend/tmp/` (ignored above) is where every throwaway DB/HTTP probe written
+# this session lives — smoke.mts, census.mts, extract.mts, journeys.mts, the
+# qfix-*/nest* measurement scripts. They are deliberately NOT committed: they
+# hardcode snapshot ids and throwaway credentials, and they are rewritten for
+# whatever is being measured that day. The DURABLE instruments are committed
+# and live in backend/scripts/ (truth-diff, explanation-diff, role-census).
+
+# Repos cloned by measurement harnesses at snapshot SHAs.
+/tmp/obb-fleet/
+backend/.probe-tmp/
+
+# ── Deliberately COMMITTED — do not add ignores for these ────────────────────
+# Recorded because each looks ignorable and is not:
+#   doc/AUDIT_LEDGER.md, CONTENT_AUDIT.md, OWNER_FEEDBACK_M4.md,
+#   READER_REDESIGN.md, TUTORIAL_REDESIGN.md, VISUAL_QA_M4.md,
+#   ROLE_DIFFERENTIATION_PLAN.md, PROJECT_SCORECARD.md
+#     -> the findings/goals corpus the rework is graded against.
+#   doc/reader-audit/, doc/visual-qa-m4-shots/  (~2.4 MB, 23 images)
+#     -> the audit docs cite these by filename as evidence; a dangling
+#        reference is worse than the bytes.
+#   backend/test/truth/*.json, backend/test/golden/*.json
+#     -> hand-labeled expectations; the accuracy gate is meaningless without them.
+#   backend/src/worker/fixtures/**  (incl. pureLibrary/, pureCli/, nested/,
+#     mixed/deploy/secrets.yml)
+#     -> parser fixtures. The "secrets" file is FAKE, on purpose: it is the
+#        hostile input the secret-scanner test asserts against.
+#   *.example env templates -> the documented setup contract.
+
+# ── Working notes: ours, not the reader's ────────────────────────────────────
+# Audits, scorecards, owner-feedback logs, redesign specs and audit screenshots.
+# They live OUTSIDE doc/ so the doc/ folder is exactly what a TA or teammate
+# should read. Kept on disk because the task list and agent briefs cite them.
+.notes/

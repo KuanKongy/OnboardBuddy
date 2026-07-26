@@ -236,9 +236,17 @@ export function AnalysisRunPanel({
         )}
       </div>
 
+      {/* These counters are the SNAPSHOT's, accumulated across every run on
+          this (scope, commit) — not this run's. Budgets cap one run; the
+          per-run figure lives on the run-history row. Labelling it honestly
+          is the difference between "we're over budget" and "this commit has
+          cost this much so far". */}
       {(typeof budget.llm_calls === "number" || typeof budget.estimated_cost_usd === "number") && (
-        <p className="border-t border-border/60 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground">
-          Spend: {typeof budget.llm_calls === "number" ? `${budget.llm_calls} AI calls` : ""}
+        <p
+          className="border-t border-border/60 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground"
+          title="Total across every run on this snapshot. Budget caps apply per run — see the run history for this run's usage."
+        >
+          Lifetime spend on this snapshot: {typeof budget.llm_calls === "number" ? `${budget.llm_calls} AI calls` : ""}
           {typeof budget.input_tokens === "number" ? ` · ${Number(budget.input_tokens).toLocaleString()} input tokens` : ""}
           {typeof budget.output_tokens === "number" ? ` · ${Number(budget.output_tokens).toLocaleString()} output tokens` : ""}
           {typeof budget.estimated_cost_usd === "number" ? ` · ~$${Number(budget.estimated_cost_usd).toFixed(4)}` : ""}

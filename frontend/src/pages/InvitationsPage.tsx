@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
+import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 interface Invitation {
   id: string;
@@ -21,21 +22,13 @@ interface Invitation {
   status: string;
 }
 
-const roleOptions = [
-  { value: "backend", label: "Backend Developer", description: "Server-side logic & APIs" },
-  { value: "frontend", label: "Frontend Developer", description: "UI & client-side code" },
-  { value: "devops", label: "DevOps Engineer", description: "Infrastructure & deployments" },
-  { value: "qa", label: "QA Automation", description: "Testing & quality assurance" },
-  { value: "general", label: "General / Fullstack", description: "End to end" },
-];
-
 export function InvitationsPage() {
   const navigate = useNavigate();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedRole, setSelectedRole] = useState<string>("general");
+  const [selectedRole, setSelectedRole] = useState<string>(FALLBACK_ROLE);
   const [accepting, setAccepting] = useState(false);
 
   useEffect(() => {
@@ -181,11 +174,11 @@ export function InvitationsPage() {
                   <>
                     <p className="mb-2 text-xs font-medium text-foreground">Developer Role</p>
                     {(() => {
-                      const role = roleOptions.find((r) => r.value === selected.developer_role);
+                      const role = ROLE_OPTIONS.find((r) => r.value === selected.developer_role);
                       return (
                         <div className="flex w-full items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
                           <span className="text-xs font-medium capitalize text-foreground">
-                            {role?.label ?? selected.developer_role}
+                            {role?.title ?? selected.developer_role}
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {role?.description ?? "Assigned by inviter"}
@@ -198,7 +191,7 @@ export function InvitationsPage() {
                   <>
                     <p className="mb-2 text-xs font-medium text-foreground">Select Developer Role</p>
                     <div className="space-y-1.5">
-                      {roleOptions.map((role) => (
+                      {ROLE_OPTIONS.map((role) => (
                         <button
                           key={role.value}
                           type="button"
@@ -209,7 +202,7 @@ export function InvitationsPage() {
                               : "border-border hover:border-border/80 hover:bg-accent/50"
                           }`}
                         >
-                          <span className="text-xs font-medium text-foreground">{role.label}</span>
+                          <span className="text-xs font-medium text-foreground">{role.title}</span>
                           <span className="text-xs text-muted-foreground">{role.description}</span>
                         </button>
                       ))}

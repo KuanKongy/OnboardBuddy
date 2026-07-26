@@ -7,7 +7,9 @@ import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
 import { getRepo, isValidGitRef } from "../../lib/github.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
+import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
 import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
+import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
 const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -37,7 +39,7 @@ projectsRouter.get("/", async (req, res) => {
          WHERE sf.snapshot_id = (
            SELECT s.id FROM analysis_snapshots s
            WHERE s.project_id = p.id
-           ORDER BY s.created_at DESC LIMIT 1
+           ORDER BY ${latestSnapshotOrderSql('s', 'p.branch')} LIMIT 1
          )
        ) stale ON true
        ORDER BY p.created_at DESC`,
@@ -316,6 +318,16 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
         auto_reanalyze_on_push?: boolean;
       };
 
+    if (
+      ignored_paths !== undefined &&
+      (!Array.isArray(ignored_paths) ||
+        ignored_paths.length > 200 ||
+        ignored_paths.some((p) => typeof p !== 'string' || p.length > 400))
+    ) {
+      res.status(400).json({ error: "invalid ignored_paths" });
+      return;
+    }
+
     if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
       res.status(400).json({ error: "Invalid privacy_mode" });
       return;
@@ -512,10 +524,10 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     // ai_disabled does not block generation: the worker reads the project's
     // current privacy mode and builds a deterministic (LLM-free) package.
     const snapResult = await query(
-      `SELECT id, commit_hash, branch, scope_id FROM analysis_snapshots
+      `SELECT id, commit_hash, branch, scope_id FROM analysis_snapshots s
        WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
-      [projectId],
+       ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+      [projectId, typeof req.body?.branch === "string" && req.body.branch !== "" ? req.body.branch : null],
     );
     if (snapResult.rows.length === 0) {
       res.status(409).json({ error: "No completed analysis snapshot found — run analysis first" });
@@ -630,9 +642,9 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
 
     const latestSnapshot = await query(
       `SELECT id, file_count, symbol_count, workflow_count, commit_hash, branch, semantic_depth, created_at
-       FROM analysis_snapshots
+       FROM analysis_snapshots s
        WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY ${latestSnapshotOrderSql('s')} LIMIT 1`,
       [projectId],
     );
 
@@ -673,10 +685,18 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
               sc.path_prefix AS scope_path, sc.display_name AS scope_name,
               cost.llm_calls, cost.cached_calls, cost.input_tokens, cost.output_tokens, cost.estimated_cost_usd,
               pkg.id AS package_id, pkg.role AS package_role, pkg.branch AS package_branch, pkg.status AS package_status,
-              sections.generated_sections, sections.cached_sections
+              sections.generated_sections, sections.cached_sections,
+              -- Per-run budget transparency: the zero point this run was
+              -- metered from (null on runs that predate per-run metering),
+              -- the snapshot's lifetime counters, and the cap that applied.
+              aj.checkpoint -> 'budgetBaseline' AS budget_baseline,
+              s.budget_usage AS snapshot_budget_usage,
+              COALESCE(s.semantic_depth, aj.semantic_depth, pst.analysis_depth) AS effective_depth,
+              pst.budget_overrides
        FROM analysis_jobs aj
        LEFT JOIN users u ON u.id = aj.requested_by
        LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       LEFT JOIN project_settings pst ON pst.project_id = aj.project_id
        LEFT JOIN analysis_scopes sc ON sc.id = COALESCE(aj.scope_id, s.scope_id)
        LEFT JOIN LATERAL (
          SELECT COUNT(*) FILTER (WHERE r.status = 'complete')::int AS llm_calls,
@@ -739,6 +759,15 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
         input_tokens: Number(r.input_tokens ?? 0),
         output_tokens: Number(r.output_tokens ?? 0),
       },
+      // Caps apply per run; the snapshot's counters are the lifetime record.
+      // Both are shown so "$0.42 · 40 calls" reads against something.
+      budget: summarizeRunBudget({
+        depth: r.effective_depth as string | null,
+        budgetOverrides: r.budget_overrides,
+        baseline: r.budget_baseline,
+        jobLlmCalls: Number(r.llm_calls ?? 0),
+        snapshotUsage: r.snapshot_budget_usage,
+      }),
       sections: {
         generated: (r.generated_sections as string[] | null) ?? [],
         cached: (r.cached_sections as string[] | null) ?? [],
@@ -932,7 +961,7 @@ projectsRouter.get("/:id/snapshots", requireProjectAccess(), async (req, res) =>
        FROM analysis_snapshots s
        JOIN analysis_scopes sc ON sc.id = s.scope_id
        WHERE s.project_id = $1
-       ORDER BY s.created_at DESC
+       ORDER BY ${latestSnapshotOrderSql('s')}
        LIMIT 30`,
       [projectId],
     );

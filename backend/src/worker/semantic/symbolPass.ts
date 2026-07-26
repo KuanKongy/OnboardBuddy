@@ -485,9 +485,14 @@ export function buildFactsOnlyBody(ctx: Pick<SemanticContext, 'graph' | 'sideEff
   const effects = ctx.sideEffects
     .filter((s) => s.symbolStableKey === node.stableKey || (s.nodeStableKey === node.stableKey && !s.symbolStableKey))
     .map((s) => ({ kind: s.kind, description: s.target ? `target: ${s.target}` : 'detected deterministically', mergedWithDeterministic: true }));
-  const signals = Array.isArray(node.metadata.purposeSignals) ? (node.metadata.purposeSignals as string[]) : [];
+  // Mechanism, not domain. This read `purposeSignals` — the deleted phrase
+  // table that turned `/ast/` inside "toaster" into "repository analysis" —
+  // and so a facts-only record, the one record type that is supposed to state
+  // only what was observed, carried a guess about what the product was for.
+  // `behaviorSignals` are what the code demonstrably calls.
+  const signals = Array.isArray(node.metadata.behaviorSignals) ? (node.metadata.behaviorSignals as string[]) : [];
   const purpose = signals.length > 0
-    ? `${node.type} '${node.name}' (${signals.join(', ')})`
+    ? `${node.type} '${node.name}' (${signals.map((s) => s.replace(/_/g, ' ')).join(', ')})`
     : `${node.type} '${node.name}' in ${node.filePath ?? 'unknown file'}`;
   return {
     purpose,

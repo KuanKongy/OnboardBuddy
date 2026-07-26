@@ -50,7 +50,7 @@ vi.mock("@/lib/graphData", () => {
   return {
     fetchDependencyGraph: vi.fn().mockResolvedValue(mockResponse),
     fetchClassGraph: vi.fn().mockResolvedValue(classResponse),
-    fetchWorkflowsList: vi.fn().mockResolvedValue([]),
+    fetchWorkflowsList: vi.fn().mockResolvedValue({ workflows: [] }),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
   };
@@ -124,6 +124,34 @@ describe("GraphPage", () => {
     await waitFor(() => {
       expect(screen.getByText(/no additional details/i)).toBeInTheDocument();
     });
+  });
+
+  /**
+   * The a11y sweep measured ~38% of this tab's controls outside the tab order:
+   * the icon-only fullscreen toggle, the edge-cap toggle, the LR/TB pair and
+   * the level-count badge were all labelled by a native `title` on an element
+   * that could not be focused, so the whole toolbar was mouse-only.
+   */
+  it("puts every toolbar control in the tab order", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
+
+    const controls: HTMLElement[] = [
+      screen.getByRole("button", { name: "Fullscreen" }),
+      screen.getByRole("button", { name: "Show all edges" }),
+      screen.getByRole("button", { name: "LR" }),
+      screen.getByRole("button", { name: "TB" }),
+      screen.getByRole("button", { name: "Files" }),
+      screen.getByRole("button", { name: "Classes & interfaces" }),
+      screen.getByPlaceholderText(/search files, classes or methods/i),
+      // The truncation badge: not a button, but the only place the node cap is
+      // explained, so it has to be focusable to be readable without a mouse.
+      screen.getByText(/4 files · 3 edges/),
+    ];
+
+    for (const el of controls) {
+      expect(el.tabIndex, `${el.tagName}: ${el.textContent}`).toBeGreaterThanOrEqual(0);
+    }
   });
 
   it("switches to the Classes view and renders class/interface nodes", async () => {

@@ -235,7 +235,11 @@ create table if not exists public.analysis_snapshots (
     check (semantic_depth in ('cheap', 'standard', 'full')),
   privacy_mode varchar not null default 'full_ai'
     check (privacy_mode in ('full_ai', 'facts_only_ai', 'ai_disabled')),
+  -- Every file in scope, including assets/docs/lockfiles. NOT a coverage
+  -- number — see parsed_file_count below and migration 002.
   file_count integer not null default 0,
+  -- Files the AST parser actually read. This is the honest coverage figure.
+  parsed_file_count integer,
   symbol_count integer not null default 0,
   workflow_count integer not null default 0,
   -- Language guardrail output (honest unknowns): supported/unsupported files

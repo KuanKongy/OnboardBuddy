@@ -17,9 +17,14 @@ export function ReceiptChip({
   /** 1-based number matching inline [N] citation markers in the text. */
   index?: number;
 }) {
+  // A11 / §19.3: the chip used to be a number plus a bare path
+  // ("28packages/shared/src/index.ts"). The receipt already carries the symbol
+  // and the line range that §17.1 verified as accurate, so show them:
+  // `index.ts:120–134 · persistWorkflows`. The full path stays in the tooltip.
   const lineRange = receipt.lineStart
-    ? ` ${receipt.lineStart}${receipt.lineEnd ? `–${receipt.lineEnd}` : ""}`
+    ? `:${receipt.lineStart}${receipt.lineEnd && receipt.lineEnd !== receipt.lineStart ? `–${receipt.lineEnd}` : ""}`
     : "";
+  const fileLabel = receipt.filePath?.split("/").pop() || receipt.filePath;
   return (
     <button
       onClick={() => onClick(receipt)}
@@ -27,7 +32,9 @@ export function ReceiptChip({
         "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[0.71875rem] transition-colors hover:border-primary/50 hover:bg-accent",
         receipt.staleness === "stale" ? "border-warning/40 bg-warning-soft" : "border-border bg-muted/40",
       )}
-      title={receipt.snippet ? "Click to view the code snippet" : receipt.filePath}
+      title={`${receipt.filePath}${lineRange}${receipt.symbolName ? ` · ${receipt.symbolName}` : ""}${
+        receipt.snippet ? " — click to view the code snippet" : ""
+      }`}
     >
       {index != null && (
         <span className="shrink-0 rounded bg-muted px-1 text-[0.625rem] font-semibold text-muted-foreground">
@@ -35,8 +42,13 @@ export function ReceiptChip({
         </span>
       )}
       <FileCode2 className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
-      <span className="truncate text-foreground">{receipt.filePath}</span>
-      {lineRange && <span className="shrink-0 text-muted-foreground">{lineRange}</span>}
+      <span className="truncate text-foreground">
+        {fileLabel}
+        {lineRange}
+      </span>
+      {receipt.symbolName && (
+        <span className="shrink-0 truncate text-muted-foreground">· {receipt.symbolName}</span>
+      )}
       {receipt.staleness === "stale" && <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-warning" />}
     </button>
   );
@@ -59,8 +71,10 @@ export function InlineReceiptRef({
     <button
       onClick={() => onClick(receipt)}
       className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-border bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-foreground"
-      title={`${receipt.filePath}${receipt.lineStart ? ` ${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}`}
-      aria-label={`Source reference ${index}: ${receipt.filePath}`}
+      title={`${receipt.filePath}${receipt.lineStart ? `:${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}${
+        receipt.symbolName ? ` · ${receipt.symbolName}` : ""
+      }`}
+      aria-label={`Source reference ${index}: ${receipt.filePath}${receipt.symbolName ? `, ${receipt.symbolName}` : ""}`}
     >
       {index}
     </button>

@@ -187,6 +187,80 @@ export function layoutGraph(
   });
 }
 
+export interface RowBand {
+  /** Rendered above the band by the caller; used here only for spacing. */
+  label?: string;
+  nodes: GraphNode[];
+}
+
+export interface RowLayoutOptions {
+  nodeWidth?: number;
+  nodeHeight?: number;
+  colGap?: number;
+  rowGap?: number;
+  /** Extra space above a band after the first, for its heading. */
+  bandGap?: number;
+  /** Row width in nodes. Derived from the target aspect when omitted. */
+  perRow?: number;
+}
+
+/**
+ * Plain rows of nodes: left to right, wrapping down. No ranks, no edges
+ * consulted, no relationships implied.
+ *
+ * Capabilities are a *set* — "what can this product do" — and running them
+ * through a layered graph layout drew a dependency structure over them that
+ * the evidence does not support and that the reader read as one. Dagre also
+ * cannot help itself: with no edges every node lands in rank 0 and the packer
+ * decides the shape. A grid is the honest picture of a set, and it is the one
+ * that was asked for.
+ *
+ * Bands stack vertically, each starting on a fresh row, so a level can show
+ * "the flows" above "the tables and services they reach" without drawing an
+ * edge between every pair to say so.
+ */
+export function layoutRows(bands: RowBand[], options: RowLayoutOptions = {}): PositionedNode[] {
+  const {
+    nodeWidth = 248,
+    nodeHeight = 92,
+    colGap = 28,
+    rowGap = 32,
+    bandGap = 34,
+  } = options;
+
+  const total = bands.reduce((n, band) => n + band.nodes.length, 0);
+  if (total === 0) return [];
+
+  /**
+   * Wide enough to read as a row, capped so a row never runs past the point
+   * where a reader loses the way back to the start of the next one.
+   *
+   * The aspect term alone under-counts here: these cells are two and a half
+   * times wider than they are tall, so a six-node set solves to two per row —
+   * arithmetically 16:9 and visually a pair of columns, which is the opposite
+   * of what a row of nodes is. Three is the floor, and fewer nodes than that
+   * is the only thing that beats it.
+   */
+  const aspectFit = Math.round(Math.sqrt((total * TARGET_ASPECT * (nodeHeight + rowGap)) / (nodeWidth + colGap)));
+  const perRow = options.perRow ?? Math.min(6, total, Math.max(3, aspectFit));
+
+  const out: PositionedNode[] = [];
+  let y = 0;
+  for (const band of bands) {
+    if (band.nodes.length === 0) continue;
+    band.nodes.forEach((node, i) => {
+      out.push({
+        ...node,
+        x: (i % perRow) * (nodeWidth + colGap),
+        y: y + Math.floor(i / perRow) * (nodeHeight + rowGap),
+      });
+    });
+    const rows = Math.ceil(band.nodes.length / perRow);
+    y += rows * (nodeHeight + rowGap) + bandGap;
+  }
+  return out;
+}
+
 /** Back-compat signature used by the dependency views. */
 export function layoutDependencyGraph(
   nodes: GraphNode[],

@@ -1,0 +1,17 @@
+{
+  "name": "@acme/ledger",
+  "version": "2.1.0",
+  "description": "Archetype fixture: a published library. No routes, no pages, no CLI — the public API IS the entry surface. `main`/`module`/`exports` point at BUILT paths that do not exist in the tree, which is the normal case and the reason the detector resolves manifest entries by path suffix.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": ["dist"]
+}

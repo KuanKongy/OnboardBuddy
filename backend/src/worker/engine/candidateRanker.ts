@@ -6,6 +6,7 @@ import type { ChurnStats } from './churnService.js';
 import { budgetForDepth, type SemanticDepth } from './budgets.js';
 import { isTestOrFixturePath } from './testPaths.js';
 import { query } from '../../lib/db.js';
+import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
 
 /**
  * Phase A deterministic candidate ranking (doc/Pipeline.md "Phase A").
@@ -29,15 +30,76 @@ export const CANDIDATE_WEIGHTS = {
 
 export type CandidateSignal = keyof typeof CANDIDATE_WEIGHTS;
 
+/**
+ * How much of its fan-in a behaviour-free module keeps. Damped, not zeroed:
+ * a shared module everything depends on is still worth knowing, just not
+ * ahead of the code that does something.
+ */
+const LOW_CONTENT_FAN_DAMPING = 0.35;
+
+/**
+ * Node types that declare a shape or hold a literal rather than run: an
+ * interface, a type alias, an enum, a `const` binding. Arrow functions are
+ * typed `function` by the graph builder, so `variable` here really is data.
+ */
+const DECLARATION_NODE_TYPES = new Set(['interface', 'type', 'enum', 'variable']);
+
+/**
+ * How much of its exported surface a declaration-only symbol keeps.
+ *
+ * `exportedSurface` is binary for a symbol, so on a repo with no traced flows
+ * it was the ONLY signal anything scored on, and everything exported tied at
+ * the same number. The tie was then broken by iteration order, and a thin
+ * repo's top slice came out as eight bare `interface` declarations from one
+ * types file ahead of the components that render the product. An exported type
+ * IS public surface — that is why this damps rather than zeroes — but it is
+ * not where a new developer starts reading.
+ *
+ * Damping is self-relativising, which is the whole reason it is a damp and not
+ * an exclusion: signals are normalised against the highest value in the same
+ * snapshot, so in a types-only package where EVERY symbol is a declaration the
+ * damped values renormalise to the full range and the interfaces rank exactly
+ * as they did. There the interfaces are the content.
+ */
+const DECLARATION_SURFACE_DAMPING = 0.25;
+
+/**
+ * Signals that cannot be measured for a target type, and are therefore removed
+ * from its denominator rather than scored as zero.
+ *
+ * Only genuinely undefined signals belong here. `testProximity`,
+ * `configRelevance` and `churn` were also zeroed for workflows before, but
+ * those ARE measurable on a flow (see the workflow branch) — they were missing
+ * data, not inapplicable signals, and the fix was to compute them.
+ */
+export const INAPPLICABLE_SIGNALS: Partial<Record<CandidateRanking['targetType'], CandidateSignal[]>> = {
+  // A workflow is a path through the graph: it has no importers and no exports.
+  workflow: ['fanCentrality', 'exportedSurface'],
+};
+
 export interface CandidateRanking {
   targetType: 'symbol' | 'file' | 'workflow';
   stableKey: string;
   score: number;
   /** Normalized [0,1] per-signal contributions (before weights). */
   breakdown: Record<CandidateSignal, number>;
+  /**
+   * Signals that cannot be measured for this target type. Their `breakdown`
+   * entry is 0 as a placeholder and their weight is excluded from the score's
+   * denominator — so a 0 here means "not applicable", not "scored nothing".
+   */
+  inapplicableSignals: CandidateSignal[];
   /** Raw signal values, kept for auditability. */
   raw: Record<CandidateSignal, number>;
   reasons: string[];
+  /**
+   * Whether this target has behavioural content — anything that runs, calls,
+   * reaches an effect or takes part in a flow. False only for a declaration
+   * that does nothing: a bare interface, a type alias, an enum, a const
+   * literal. Selection uses it as a RELATIVE floor (see `critical25`), never
+   * as an exclusion; files and workflows are always behavioural.
+   */
+  behavioral: boolean;
 }
 
 const SYMBOL_NODE_TYPES = new Set(['function', 'method', 'class', 'interface', 'type', 'enum', 'variable']);
@@ -57,6 +119,10 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
   // ── Index the graph ────────────────────────────────────────────────────────
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
+  // Calls only, separate from `fanOut`: importing something is not doing
+  // something, but invoking something is. This is what separates a const that
+  // builds a value from a const that runs code.
+  const callsOut = new Set<string>();
   const testedFiles = new Set<string>();
   const schemaOwners = new Set<string>();
   const routeHandlers = new Set<string>();
@@ -65,6 +131,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (e.type === 'calls' || e.type === 'imports') {
       fanIn.set(e.targetKey, (fanIn.get(e.targetKey) ?? 0) + 1);
       fanOut.set(e.sourceKey, (fanOut.get(e.sourceKey) ?? 0) + 1);
+      if (e.type === 'calls') callsOut.add(e.sourceKey);
     } else if (e.type === 'tests') {
       testedFiles.add(e.targetKey);
     } else if (e.type === 'touches_schema') {
@@ -102,11 +169,26 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     uiOnlyEntrypointKeys.delete(ep.nodeStableKey);
   }
 
+  // Step nodes carry the behaviour/purpose signals a workflow's own signals are
+  // derived from; the map at the bottom of this file belongs to another function.
+  const nodeByStableKey = new Map(input.graph.nodes.map((n) => [n.stableKey, n]));
+
   const effectCount = new Map<string, number>();
+  // Distinct KINDS, not raw occurrences. Ten writes to the same table is one
+  // thing a symbol does; a write plus an enqueue plus an outbound call is
+  // three, and that breadth is what makes a symbol worth learning first.
+  const effectKinds = new Map<string, Set<string>>();
+  const addKind = (key: string, kind: string) => {
+    const set = effectKinds.get(key);
+    if (set) set.add(kind);
+    else effectKinds.set(key, new Set([kind]));
+  };
   for (const se of input.sideEffects) {
     const key = se.symbolStableKey ?? se.nodeStableKey;
     effectCount.set(key, (effectCount.get(key) ?? 0) + 1);
     effectCount.set(se.nodeStableKey, (effectCount.get(se.nodeStableKey) ?? 0) + 1);
+    addKind(key, se.kind);
+    addKind(se.nodeStableKey, se.kind);
   }
 
   const workflowCount = new Map<string, number>();
@@ -132,6 +214,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     node?: EvidenceNode;
     raw: Record<CandidateSignal, number>;
     reasons: string[];
+    behavioral: boolean;
   }
   const targets: RawTarget[] = [];
 
@@ -147,8 +230,6 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (isTestOrFixturePath(filePath)) continue;
     const signals = Array.isArray(node.metadata.behaviorSignals)
       ? (node.metadata.behaviorSignals as string[]) : [];
-    const purposes = Array.isArray(node.metadata.purposeSignals)
-      ? (node.metadata.purposeSignals as string[]) : [];
 
     const fi = fanIn.get(key) ?? 0;
     const fo = fanOut.get(key) ?? 0;
@@ -160,15 +241,56 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const ownsRouteOrSchema =
       schemaOwners.has(key) || routeHandlers.has(key) || routeEntrypointKeys.has(key) ? 1 : 0;
     const tested = testedFiles.has(filePath) || testedFiles.has(key) ? 1 : 0;
-    const configRelevant = signals.includes('env_read') || purposes.includes('configuration') ? 1 : 0;
+    // Reading configuration is an observable act (`process.env.…`), so that is
+    // what this measures. It used to also fire on a `purposeSignals` entry
+    // derived from `/config|setting|env/i` anywhere in a path or symbol name —
+    // part of the domain phrase table deleted from `behaviorSignals.ts`, and a
+    // substring test that scored `settings`, `Environment` and every
+    // `configureStore` alike.
+    const configRelevant = signals.includes('env_read') ? 1 : 0;
     const churnStats = churnFor(filePath);
     const wfCount = workflowCount.get(key) ?? 0;
 
+    /**
+     * Damps centrality for modules that everything imports but which do
+     * nothing on their own.
+     *
+     * `fanCentrality` alone handed a top-quartile score to `cn()`,
+     * `utils.ts`, a types file — anything imported everywhere. Those then
+     * occupied slots in Critical 25%, which is supposed to answer "what should
+     * I read first", and pushed out the routes and handlers that actually
+     * carry behaviour. Popularity is not importance: a file with no effects,
+     * in no workflow, owning no route or schema, is infrastructure. It is
+     * damped rather than zeroed, because a genuinely central shared module is
+     * still worth knowing about — just not before the login flow.
+     */
+    const carriesBehaviour = effects > 0 || wfCount > 0 || isEntry > 0 || ownsRouteOrSchema > 0;
+    const fanCentrality = (fi + fo * 0.5) * (carriesBehaviour ? 1 : LOW_CONTENT_FAN_DAMPING);
+
+    /**
+     * Declaration with no behaviour: it names a shape or holds a literal, and
+     * nothing in the snapshot says it runs. Every clause is required — a
+     * `variable` that mutates a module store has effects and stays behavioural,
+     * and so does an enum a traced flow steps through.
+     *
+     * Behaviour SIGNALS are deliberately not consulted here. They are regexes
+     * over the symbol's text, and on a declaration there is no body for them to
+     * describe — a field named `enqueueAt` gave one interface `queue_enqueue`.
+     * A file is never declaration-only: it is a container, and its own contents
+     * are ranked separately.
+     */
+    const declarationOnly = isSymbol
+      && DECLARATION_NODE_TYPES.has(node.type)
+      && !carriesBehaviour
+      && !callsOut.has(key);
+
     const raw: Record<CandidateSignal, number> = {
       workflowParticipation: wfCount,
-      fanCentrality: fi + fo * 0.5,
-      exportedSurface: exported,
-      sideEffects: effects,
+      fanCentrality,
+      // Damped, not dropped — see DECLARATION_SURFACE_DAMPING.
+      exportedSurface: declarationOnly ? exported * DECLARATION_SURFACE_DAMPING : exported,
+      // Breadth of behaviour, not repetition of it.
+      sideEffects: effectKinds.get(key)?.size ?? 0,
       entrypointParticipation: isEntry,
       routeSchemaOwnership: ownsRouteOrSchema,
       testProximity: tested,
@@ -179,7 +301,11 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const reasons: string[] = [];
     if (wfCount > 0) reasons.push(`Participates in ${wfCount} workflow${wfCount > 1 ? 's' : ''}`);
     if (fi >= 3) reasons.push(isFile ? `Imported by ${fi} files` : `Called by ${fi} symbols`);
-    if (isSymbol && node.exported) reasons.push('Exported public surface');
+    if (isSymbol && node.exported) {
+      reasons.push(declarationOnly
+        ? `Exported ${node.type} declaration — no calls, effects or flow participation, so it ranks below code that runs`
+        : 'Exported public surface');
+    }
     if (isFile && exported >= 3) reasons.push(`Exports ${exported} symbols`);
     if (effects > 0) reasons.push(`Has ${effects} detected side effect${effects > 1 ? 's' : ''}`);
     if (isEntry === 1) reasons.push('Entry point');
@@ -192,60 +318,104 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       reasons.push(`${churnStats!.commitCount90d} commits in the last 90 days`);
     }
 
-    targets.push({ targetType: isFile ? 'file' : 'symbol', stableKey: key, node, raw, reasons });
+    targets.push({
+      targetType: isFile ? 'file' : 'symbol', stableKey: key, node, raw, reasons,
+      behavioral: !declarationOnly,
+    });
   }
 
   for (const wf of input.workflows) {
-    const effectSteps = wf.steps.filter((s) =>
-      s.stepKind === 'data_read' || s.stepKind === 'data_write' ||
-      s.stepKind === 'async_work' || s.stepKind === 'side_effect').length;
+    const effectStepKinds = new Set(
+      wf.steps.map((s) => s.stepKind).filter((k) =>
+        k === 'data_read' || k === 'data_write' || k === 'async_work' || k === 'side_effect'),
+    );
     const raw: Record<CandidateSignal, number> = {
-      workflowParticipation: wf.steps.length,
+      // The workflow's own tier-aware score, NOT its length. `wf.steps.length`
+      // here was the same length-is-importance bug the extractor had, in a
+      // second place: it fed criticality_scores, so a 20-step trace through
+      // shared components outranked a 4-step login in Critical 25% as well as
+      // in the workflow list.
+      workflowParticipation: wf.importanceScore,
       fanCentrality: 0,
       exportedSurface: 0,
-      sideEffects: effectSteps,
+      // Breadth of behaviour, matching how symbols are now scored.
+      sideEffects: effectStepKinds.size,
       entrypointParticipation: 1,
       routeSchemaOwnership: wf.steps.some((s) => s.stepKind === 'data_read' || s.stepKind === 'data_write') ? 1 : 0,
-      testProximity: 0,
-      configRelevance: 0,
-      churn: 0,
+      // These three were hard-coded to 0, which cost every workflow 15% of the
+      // weight for signals that are perfectly measurable on a flow — they were
+      // simply never computed. A flow is tested if its code is, reads config if
+      // any step does, and churns as much as the files it runs through.
+      testProximity: wf.steps.some((s) => testedFiles.has(s.filePath) || testedFiles.has(s.nodeStableKey)) ? 1 : 0,
+      configRelevance: wf.steps.some((s) => {
+        const node = nodeByStableKey.get(s.nodeStableKey);
+        const sig = Array.isArray(node?.metadata.behaviorSignals) ? (node!.metadata.behaviorSignals as string[]) : [];
+        return sig.includes('env_read');
+      }) ? 1 : 0,
+      // Busiest file the flow touches: a flow through churning code is itself
+      // churning, even when no single step dominates.
+      churn: Math.max(0, ...wf.steps.map((s) => churnFor(s.filePath)?.commitCount90d ?? 0)),
     };
     targets.push({
       targetType: 'workflow',
       stableKey: wf.stableKey,
       raw,
+      // The extractor already explained its own ranking in plain language;
+      // repeating the step count here contradicted it.
       reasons: [
-        `Traces ${wf.triggerType} through ${wf.steps.length} steps`,
-        ...(effectSteps > 0 ? [`Reaches ${effectSteps} side-effect step${effectSteps > 1 ? 's' : ''}`] : []),
+        `${wf.tier === 'core' ? 'Core user flow' : wf.tier === 'surface' ? 'Entry point, no traced effects' : 'Supporting flow'} — ${wf.triggerType}`,
+        ...wf.rankingReasons.slice(0, 2),
       ],
+      // A flow is behaviour by definition.
+      behavioral: true,
     });
   }
 
   // ── Normalize per target type, weight, score ──────────────────────────────
   const rankings: CandidateRanking[] = [];
-  const byType = new Map<string, RawTarget[]>();
+  const byType = new Map<CandidateRanking['targetType'], RawTarget[]>();
   for (const t of targets) byType.set(t.targetType, [...(byType.get(t.targetType) ?? []), t]);
 
-  for (const group of byType.values()) {
+  for (const [targetType, group] of byType) {
     const maxima = {} as Record<CandidateSignal, number>;
     for (const signal of Object.keys(CANDIDATE_WEIGHTS) as CandidateSignal[]) {
       maxima[signal] = Math.max(...group.map((t) => t.raw[signal]), 0);
     }
+    // Weight that can actually be earned by this target type. A workflow has no
+    // fan-in and exports nothing, so those two signals are not "zero" for a
+    // flow — they are undefined, and scoring them as zero silently capped every
+    // workflow at 0.55 while a file could reach 1.0. Dividing by the applicable
+    // weight instead means each type spans the full 0–1 range and a top-ranked
+    // flow reads as ~100, not as a mysterious 55.
+    const inapplicable = new Set(INAPPLICABLE_SIGNALS[targetType] ?? []);
+    const applicableWeight = (Object.entries(CANDIDATE_WEIGHTS) as Array<[CandidateSignal, number]>)
+      .reduce((sum, [signal, weight]) => (inapplicable.has(signal) ? sum : sum + weight), 0);
+
     for (const t of group) {
       const breakdown = {} as Record<CandidateSignal, number>;
       let score = 0;
       for (const [signal, weight] of Object.entries(CANDIDATE_WEIGHTS) as Array<[CandidateSignal, number]>) {
+        if (inapplicable.has(signal)) {
+          // Present but zero, so nothing summing all nine keys produces NaN.
+          // `inapplicableSignals` below is what tells a reader this 0 means
+          // "not measurable here" rather than "measured, found nothing".
+          breakdown[signal] = 0;
+          continue;
+        }
         const normalized = maxima[signal] > 0 ? t.raw[signal] / maxima[signal] : 0;
         breakdown[signal] = Math.round(normalized * 1000) / 1000;
         score += normalized * weight;
       }
+      score = applicableWeight > 0 ? score / applicableWeight : 0;
       rankings.push({
         targetType: t.targetType,
         stableKey: t.stableKey,
         score: Math.round(score * 100000) / 100000,
         breakdown,
+        inapplicableSignals: [...inapplicable],
         raw: t.raw,
         reasons: t.reasons,
+        behavioral: t.behavioral,
       });
     }
   }
@@ -360,11 +530,19 @@ export async function persistCandidateRankings(
     const values: unknown[] = [];
     const tuples = part.map(({ r, nodeId, targetId }, j) => {
       values.push(snapshotId, r.targetType, nodeId, targetId, r.stableKey, r.score,
-        JSON.stringify({ normalized: r.breakdown, raw: r.raw }), r.reasons);
+        // `behavioral` rides in the breakdown because the Critical-25 floor is
+        // applied at READ time, over stored rows, and must not have to re-derive
+        // the graph to know whether a target runs. Rows written before this key
+        // existed read back as behavioural, which is the honest degradation.
+        JSON.stringify({ normalized: r.breakdown, raw: r.raw, behavioral: r.behavioral }), r.reasons);
       const base = j * 8;
       return `($${base + 1}, 'candidate', 'candidate', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, 'general', $${base + 6}, $${base + 7}, $${base + 8})`;
     });
-    await query(
+    // Safe to repeat: autocommit (no caller transaction) and ON CONFLICT DO
+    // UPDATE, so a chunk that lands twice writes the same values. A 57014
+    // cancels the statement and rolls its implicit transaction back, so the
+    // retry never sees a half-applied chunk.
+    await withStatementTimeoutRetry('persistCandidateRankings/upsert', () => query(
       `INSERT INTO criticality_scores
          (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
        VALUES ${tuples.join(', ')}
@@ -373,7 +551,7 @@ export async function persistCandidateRankings(
                      reasons = EXCLUDED.reasons, target_node_id = EXCLUDED.target_node_id,
                      target_id = EXCLUDED.target_id`,
       values,
-    );
+    ));
     written += part.length;
   }
   return written;
