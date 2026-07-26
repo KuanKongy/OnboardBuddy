@@ -1,6 +1,7 @@
 import * as ts from 'typescript';
 import type { FileEntry } from '../types/analysis.js';
 import { collectPathAliases } from './tsconfigPaths.js';
+import { redactSecrets } from './secretRedactor.js';
 
 export interface ParsedSourceFile {
   filePath: string;
@@ -74,7 +75,9 @@ export function getLeadingJsDoc(node: ts.Node, sourceFile: ts.SourceFile): strin
   const trivia = fullText.slice(triviaStart, triviaEnd);
 
   const match = trivia.match(/\/\*\*([\s\S]*?)\*\//);
-  return match ? match[0].trim() : undefined;
+  // Doc comments reach prompts via serializer.toSlimSymbol, and `@example`
+  // blocks are a common place for a real key to be pasted.
+  return match ? redactSecrets(match[0].trim()) : undefined;
 }
 
 export function isExported(node: ts.Node): boolean {
