@@ -221,3 +221,54 @@ describe('tutorialProcedure — a pipeline walkthrough shows the whole pipeline'
       .to.equal(2);
   });
 });
+
+/**
+ * A socket handler is not reached by a request (task #41.1).
+ *
+ * The detector now finds `socket:*` registrations, so a realtime repo finally
+ * produces walkthroughs — and a walkthrough of one used to render identically
+ * to a walkthrough of a route, leaving the reader to assume a door that does
+ * not exist. The entry statement is the correction, and it must never carry a
+ * command: for an event handler there is nothing to send.
+ */
+describe('tutorialProcedure — the entry statement names the real trigger', () => {
+  const step = (over: Partial<TraceStep> = {}): TraceStep => ({
+    order: 1, filePath: 'server/src/handlers.js', symbolName: 'on create-room',
+    lineStart: 40, lineEnd: 54, stepKind: 'data_write', description: 'writes',
+    nodeId: null, nodeHash: null, snippet: null, ...over,
+  });
+  const socket = attemptWalkthrough({
+    title: 'event handler: on create-room', purpose: 'p', tier: 'core',
+    triggerType: 'event_handler', routePath: 'socket:create-room', httpMethod: null,
+    coveringTests: [], steps: [step()],
+    emitSites: [
+      // The class body contains the method's literal too; the narrower node wins.
+      { filePath: 'src/services/socket.ts', symbolName: 'SocketService', lineStart: 13, lineEnd: 130 },
+      { filePath: 'src/services/socket.ts', symbolName: 'SocketService.createRoom', lineStart: 87, lineEnd: 90 },
+      { filePath: 'server/src/handlers.js', symbolName: 'on connection', lineStart: 36, lineEnd: 182 },
+    ],
+  });
+
+  it('states the emitting call site and prints no request to send', () => {
+    const entry = socket.ok ? socket.draft.steps[0]!.entry : null;
+    expect({ kind: entry?.kind, command: entry?.command, at: entry?.emitters?.[0]?.lineStart })
+      .to.deep.equal({ kind: 'event', command: undefined, at: 87 });
+  });
+
+  it('one card per place in the code, not one per traced step', () => {
+    // Same node, three effect rows: the extractor's shape, which used to render
+    // as three cards of byte-identical lines.
+    const merged = attemptWalkthrough({
+      title: 'f', purpose: 'p', tier: 'core', triggerType: 'event_handler',
+      routePath: 'socket:x', httpMethod: null, coveringTests: [],
+      steps: [
+        step({ order: 1, nodeId: 'n1', stepKind: 'trigger', description: 'entry' }),
+        step({ order: 2, nodeId: 'n1', description: 'writes' }),
+        step({ order: 3, nodeId: 'n1', stepKind: 'async_work', description: 'enqueues' }),
+        step({ order: 4, nodeId: 'n2', filePath: 'server/src/roomManager.js', symbolName: 'create', description: 'persists' }),
+      ],
+    });
+    expect(merged.ok ? merged.draft.steps.map((s) => s.symbolName) : [])
+      .to.deep.equal(['on create-room', 'create']);
+  });
+});

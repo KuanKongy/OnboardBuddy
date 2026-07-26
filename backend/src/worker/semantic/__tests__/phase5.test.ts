@@ -135,14 +135,17 @@ describe('phase 5 — symbol batching (cross-file, 1M-context sizing)', () => {
 
 describe('phase 5 — facts-only records', () => {
   it('renders purpose, callee narrative, and deterministic side effects', () => {
-    const node = makeNode({ metadata: { purposeSignals: ['auth'] } });
+    // CONTRACT CHANGE: facts-only purpose is built from `behaviorSignals` (a
+    // mechanism the code demonstrably performs) instead of the deleted
+    // `purposeSignals` domain phrase table — see `behaviorSignals.ts`.
+    const node = makeNode({ metadata: { behaviorSignals: ['auth_check'] } });
     const graph = makeGraph([node], [
       { sourceKey: 'a.ts#fn', targetKey: 'b.ts#save', type: 'calls', confidence: 'high', metadata: {} },
     ]);
     const body = buildFactsOnlyBody({ graph, sideEffects: [
       { nodeStableKey: 'a.ts', symbolStableKey: 'a.ts#fn', kind: 'database_write', target: 'sessions', filePath: 'a.ts' },
     ] }, node);
-    expect(body.purpose).to.include('auth');
+    expect(body.purpose).to.include('auth check');
     expect(body.dependencies_narrative).to.include('b.ts#save');
     expect(body.side_effects[0]).to.deep.include({ kind: 'database_write', mergedWithDeterministic: true });
     expect(body.claims).to.deep.equal([]);
@@ -339,6 +342,78 @@ describe('phase 5 — capability derivation binds or emits nothing', () => {
     expect(cap.whereToStart[0]!.stable_key).to.equal('src/createProject.ts#handler');
     expect(cap.whereToStart[1]!.stable_key).to.equal('src/store.ts#insert');
     expect(derived.unbound.map((u) => u.title)).to.deep.equal(['about']);
+  });
+
+  /**
+   * A capability is something the product does for someone. When DOM listener
+   * detection began feeding `dom:*` entrypoints into this pass, a static WebGL
+   * portfolio site's capability list became `Keyboard Input`, `Mouse Button
+   * Press`, `Mouse Button Release`, `Mouse Movement`, `Mouse Wheel Scroll` and
+   * `WebGL Context Loss` — seven rows, zero capabilities. The mechanism was
+   * `routeResource('dom:mousedown')` returning `dom-mousedown` as if a browser
+   * event name were a domain noun.
+   */
+  describe('raw input events are not capabilities', () => {
+    const eventFlow = (event: string, key: string, over: Partial<ExtractedWorkflow> = {}): ExtractedWorkflow => ({
+      ...flow({ key }),
+      ...over,
+      entrypoint: {
+        nodeStableKey: `src/${key}.ts`, kind: 'event_handler',
+        filePath: `src/${key}.ts`, symbolName: 'handler',
+        symbolStableKey: `src/${key}.ts#handler`, routePattern: event,
+      },
+      steps: [step(1, `src/${key}.ts#handler`, 'trigger'), step(2, 'src/state.ts#persist', 'data_write')],
+    });
+    const persistEffect = (key: string) => ({
+      nodeStableKey: 'src/state.ts', symbolStableKey: 'src/state.ts#persist',
+      kind: 'database_write' as const, target: key, filePath: 'src/state.ts',
+    });
+
+    it('drops a group reachable only by dom:* listeners, and says why', () => {
+      const derived = deriveCapabilities({
+        workflows: [eventFlow('dom:mousedown', 'camera'), eventFlow('dom:wheel', 'zoom')],
+        sideEffects: [persistEffect('camera'), persistEffect('zoom')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities).to.deep.equal([]);
+      expect(derived.unbound.map((u) => u.missing)).to.have.length(2);
+      for (const u of derived.unbound) expect(u.missing).to.contain('only raw input events reach it');
+    });
+
+    it('keeps a named protocol event — socket handlers are the product surface', () => {
+      // Skribbl's twelve `socket.on(…)` handlers ARE its interaction surface;
+      // a caller sends those messages on purpose. This is the line the fix
+      // must not cross.
+      const derived = deriveCapabilities({
+        workflows: [eventFlow('socket:create-room', 'createRoom')],
+        sideEffects: [persistEffect('rooms')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities.map((c) => c.key)).to.deep.equal(['room']);
+    });
+
+    it('lets an input-event flow ride along in a group an addressable flow formed', () => {
+      // The rule is about what may CONSTITUTE a group, not who may belong: a
+      // scroll listener that writes the same resource as a real page stays
+      // attached to it rather than being deleted from the evidence.
+      const page = {
+        ...flow({ key: 'settings', route: '/settings' }),
+        entrypoint: {
+          nodeStableKey: 'src/settings.ts', kind: 'ui_route', filePath: 'src/settings.ts',
+          symbolName: 'Settings', symbolStableKey: 'src/settings.ts#Settings', routePattern: '/settings',
+        },
+        steps: [step(1, 'src/settings.ts#Settings', 'trigger'), step(2, 'src/state.ts#persist', 'data_write')],
+      } as ExtractedWorkflow;
+      const derived = deriveCapabilities({
+        workflows: [page, eventFlow('dom:scroll', 'scroller')],
+        sideEffects: [persistEffect('preferences')],
+        graph: { nodes: [], edges: [] },
+        architecture: { clusters: [], edges: [] },
+      });
+      expect(derived.capabilities.map((c) => [c.key, c.flows.length])).to.deep.equal([['preference', 2]]);
+    });
   });
 });
 

@@ -1,5 +1,8 @@
 import { Component, useState, type ReactNode } from "react";
-import { Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Compass } from "lucide-react";
+import { LogoMark } from "@/components/BrandLogo";
+import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
@@ -58,6 +61,56 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
     }
     return this.props.children;
   }
+}
+
+/**
+ * Catch-all for a URL no route matches.
+ *
+ * VISUAL QA M4 #12: there was no `path="*"`, so an unknown URL (`/projects`,
+ * whose real route is `/list`) painted a completely blank page whose only
+ * trace was a `No routes matched location` warning in the console — a reader
+ * who mistypes or follows an old link gets nothing at all, not even the shell.
+ * Deliberately outside `ProtectedRoute`: a wrong URL is not a reason to bounce
+ * someone to the login screen, and a signed-out visitor should see the same
+ * explanation.
+ */
+function NotFoundPage() {
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+      <div className="w-full max-w-md text-center">
+        <LogoMark className="mx-auto mb-4 h-10 w-10" />
+        <p className="section-label mb-1">404</p>
+        <h1 className="mb-2 text-lg font-semibold text-foreground">This page does not exist</h1>
+        <p className="mb-1 text-sm text-muted-foreground">
+          Nothing is served at{" "}
+          <code className="break-all rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+            {pathname}
+          </code>
+          .
+        </p>
+        <p className="mb-5 text-sm text-muted-foreground">
+          The link may be out of date, or the project may have been removed.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button asChild size="sm">
+            <Link to="/list">
+              <Compass className="mr-1.5 h-3.5 w-3.5" />
+              Your projects
+            </Link>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => navigate(-1)}>
+            Go back
+          </Button>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/help">Help &amp; FAQ</Link>
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function AuthenticatedLayout() {
@@ -143,6 +196,9 @@ export default function App() {
               <Route path="settings" element={<ProjectSettingsPage />} />
             </Route>
           </Route>
+
+          {/* Last, so it only matches what nothing above did. */}
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </TooltipProvider>
     </AuthProvider>

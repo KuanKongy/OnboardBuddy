@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { MarkerType, type Edge, type Node, type Viewport } from "reactflow";
 import "reactflow/dist/style.css";
-import { GraphCanvas } from "@/components/graph/GraphCanvas";
+import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
@@ -591,6 +591,9 @@ export function ArchitecturePage() {
                 drill={drill}
                 fitPadding={0.15}
                 minZoom={0.2}
+                // Under the threshold the minimap is a shrunken copy of the
+                // picture already on screen, drawn over the bottom-right of it.
+                showMiniMap={flowNodes.length >= MINIMAP_MIN_NODES}
                 // Fullscreen only. `refitSignal` is React Flow's `key`, so
                 // changing it on a level change would REMOUNT the canvas
                 // mid-drill and throw away the transition DrillCamera is in the
@@ -718,6 +721,14 @@ export function ArchitecturePage() {
                   data={asideCluster.provenance}
                   sectionLabel="Criticality"
                   buttonLabel={`Explain how the criticality score for ${asideCluster.label} was derived`}
+                  // VISUAL QA M4 #7: the amber caveat here is a reconciliation
+                  // note written for whoever audits the ranker ("Averaging the
+                  // 16 member scores stored here gives 35.9, not 29.6 … only
+                  // scores inside the snapshot's top 500 are kept"), and it
+                  // fires wherever the cap truncates members — the big repos.
+                  // The reader of this panel is told what the score means and
+                  // how much of the component the list covers, right below.
+                  showCaveat={false}
                   headline={
                     <div className="flex items-center gap-2">
                       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
@@ -817,6 +828,8 @@ export function ArchitecturePage() {
                   data={selectedMember.provenance}
                   sectionLabel="Criticality"
                   buttonLabel={`Explain how the criticality score for ${selectedMember.label} was derived`}
+                  // Same internal note, same reason (VISUAL QA M4 #7).
+                  showCaveat={false}
                   headline={
                     selectedMember.criticalScore === null ? (
                       <p className="text-[0.71875rem] text-muted-foreground">

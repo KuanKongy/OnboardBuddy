@@ -1025,34 +1025,31 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
     }
   }
 
-  // Effect-free / router-less repos: a static site or a component library has
-  // no route table, no server and no writes, so every branch above declines and
-  // the product renders as a blank list. Its rendering units ARE its structure,
-  // and an honest inventory of them beats nothing. Applied only when no real
-  // entry surface was found anywhere — where one was, this would bury it.
+  // REMOVED, and not to be re-added in this shape: a router-less fallback that
+  // swept every JSX file with an exported PascalCase function and emitted it as
+  // `ui_route`.
   //
-  // A DOM listener does not count as that entry surface. It is an interaction
-  // WITHIN a rendering unit, not a place a person can be, so it cannot stand in
-  // for the page inventory: when the listener detection above was allowed to
-  // satisfy this gate, kuankongy.github.io went from 25 rendering units to 13
-  // keyboard and pointer events and lost its entire component surface.
-  const hasRealEntry = entrypoints.some((e) => e.kind !== 'export' && !isDomEvent(e));
-  if (!hasRealEntry) {
-    for (const fa of fileAnalyses) {
-      const relativePath = normalizePath(fa.relativePath);
-      if (!JSX_EXT.test(relativePath) || isTestOrFixturePath(relativePath)) continue;
-      const unit = pageComponentOf(fa);
-      if (!unit) continue;
-      entrypoints.push({
-        nodeStableKey: relativePath,
-        kind: 'ui_route',
-        filePath: relativePath,
-        symbolName: unit.name,
-        symbolStableKey: symbolKey(relativePath, unit.name),
-      });
-      if (entrypoints.length >= MAX_FALLBACK_UNITS) break;
-    }
-  }
+  // It was written for the honest reason that a static site otherwise renders
+  // as a blank list. But "exported component in a .tsx file" is the shape of
+  // EVERY React component ever written, so what it inventoried was not pages.
+  // Measured on a student club's one-page marketing site: 19 `ui_route` rows,
+  // including `Page: MicroscopeIcon`, `Page: Sparkle`, `Page: BlobLayer` and
+  // `Page: Footer` — an icon, a decoration, a background and a footer, each
+  // reported to the reader as a place they can navigate to. kuankongy.github.io
+  // produced 25 of them on a site with no router at all.
+  //
+  // A page is a claim about routing, and only the repo can make it: a router
+  // registration (`<Route path=… element={<X/>}/>`, a data-router config), a
+  // file-based router's directory (`app/**/page.tsx`, `pages/`, `views/`,
+  // `screens/`, `routes/*.tsx`), or nothing. All three are checked in the loop
+  // above. Where the repo declares no pages the honest output is zero pages and
+  // zero traced flows — which the empty states now say — not a component
+  // inventory wearing route names.
+  //
+  // What this deliberately does NOT do is require a resolved URL. A file the
+  // repo put in `pages/` is a page even when the router never references it
+  // (MasterPokedex's `PokemonList.tsx`); that row keeps a null path, and the
+  // truth fixture asserts exactly that.
 
   // Library archetype: nothing above claimed a route, a page, a CLI or an
   // event, so every entry this repo has is an export — it is imported, not run.
@@ -1060,17 +1057,22 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
   // `export` guess above was standing in for up to forty published symbols.
   // Runs last so it can see what the other branches concluded, and declines the
   // moment any of them found an application surface.
+  //
+  // The manifest must actually publish something. That gate used to fall back
+  // to "whatever `index.*`/`main.*` file the loop happened to flag", which is a
+  // guess about FILES being expanded into a claim about a PUBLISHED API. On a
+  // one-page marketing site with no router — the same repo the page-inventory
+  // fallback above used to mis-serve — the flagged file was
+  // `src/components/icons/index.tsx`, and the branch reported four SVG icons as
+  // the product's entire entry surface. A repo that is a library says so in
+  // `main`/`module`/`exports`; p-limit's `"exports": "./index.js"` is the case
+  // this branch exists for, and it still fires.
   if (
+    manifest.entryFiles.size > 0 &&
     manifest.binByFile.size === 0 &&
     !entrypoints.some((e) => APPLICATION_KINDS.has(e.kind) && !isDomEvent(e))
   ) {
-    // The manifest is authoritative about what is published; where there is
-    // none in scope, the `index`/`main` files the loop already flagged are the
-    // only entry claim available.
-    const entryFiles = manifest.entryFiles.size > 0
-      ? manifest.entryFiles
-      : new Set(entrypoints.filter((e) => e.kind === 'export').map((e) => e.filePath));
-    const publicApi = detectPublicApi(analysesByPath, entryFiles);
+    const publicApi = detectPublicApi(analysesByPath, manifest.entryFiles);
     if (publicApi.length > 0) {
       // The named surface supersedes the file-level guesses it was standing in
       // for. Leaving them would list each entry module twice AND keep the
@@ -1084,9 +1086,6 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
 
   return entrypoints;
 }
-
-/** Cap for the router-less fallback above — an inventory, not an explosion. */
-const MAX_FALLBACK_UNITS = 40;
 
 // Maps detector kinds onto the entrypoints.trigger_type enum. Exported so a
 // verification probe can report the persisted trigger types without re-deriving

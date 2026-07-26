@@ -5,6 +5,7 @@ import {
   Code2,
   Copy,
   CornerDownRight,
+  DoorOpen,
   ExternalLink,
   FileCode2,
   FlagTriangleRight,
@@ -64,6 +65,21 @@ export interface WalkthroughPhase {
   member: string;
 }
 
+/**
+ * How the path is entered, stated on the first card.
+ *
+ * `command` is present on exactly one entry kind — an HTTP route — because
+ * that is the only one a reader can set off by hand. A socket or queue handler
+ * names the publishing call sites instead: those, not a request, are its door.
+ */
+export interface WalkthroughEntry {
+  kind: string;
+  text: string;
+  command?: string | null;
+  token?: string | null;
+  emitters?: Array<{ filePath: string; symbolName: string | null; lineStart: number | null }> | null;
+}
+
 export interface WalkthroughStepData {
   id: string;
   step_order: number;
@@ -81,6 +97,7 @@ export interface WalkthroughStepData {
   handoff?: WalkthroughHandoff | null;
   landing?: string | null;
   boundary?: { kind: string; detail: string } | null;
+  entry?: WalkthroughEntry | null;
   narration_source?: string | null;
   collapsed?: boolean;
   appendix?: {
@@ -228,6 +245,54 @@ function HandoffConnector({ handoff, boundary }: { handoff: WalkthroughHandoff; 
 }
 
 /**
+ * "How this path starts" — the sentence the reading used to leave out.
+ *
+ * A walkthrough of a socket handler used to render identically to a walkthrough
+ * of a route, so a reader reasonably assumed the same door and there was
+ * nothing on screen to correct them. The copy button appears only when the
+ * backend supplied a command, which it does only for an HTTP route; every other
+ * entry kind gets the publishing call sites instead, as real file links.
+ */
+function EntryBlock({ entry, repo }: { entry: WalkthroughEntry; repo?: GithubRepoRef }) {
+  const emitters = entry.emitters ?? [];
+  return (
+    <div className="space-y-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5">
+      <p className="flex items-start gap-2 text-[0.78125rem] leading-relaxed text-foreground">
+        <DoorOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+        <span>
+          <span className="font-medium">How this path starts. </span>
+          {entry.text}
+        </span>
+      </p>
+      {entry.command && <CommandLine command={entry.command} label="request" />}
+      {emitters.length > 0 && (
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 pl-5 text-[0.6875rem] text-muted-foreground">
+          Emitted from:
+          {emitters.map((e, i) => {
+            const label = `${e.filePath}${e.lineStart ? `:${e.lineStart}` : ""}`;
+            const url = repo ? buildGithubBlobUrl(repo, e.filePath, { lineStart: e.lineStart, lineEnd: e.lineStart }) : null;
+            return url ? (
+              <a
+                key={i}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-0.5 rounded bg-muted/60 px-1 font-mono hover:text-foreground hover:underline"
+              >
+                {label}
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            ) : (
+              <span key={i} className="rounded bg-muted/60 px-1 font-mono">{label}</span>
+            );
+          })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
  * One card: the code, the lines that matter in it, and what it does here.
  *
  * The snippet is windowed to ~32 lines around the first highlight so a 300-line
@@ -272,6 +337,8 @@ function WalkthroughStepCard({
           <Badge variant="secondary" className="text-[0.625rem]">deterministic</Badge>
         )}
       </div>
+
+      {step.entry && <EntryBlock entry={step.entry} repo={repo} />}
 
       <StepLocation step={{ ...step, step_kind: null }} repo={repo} />
 

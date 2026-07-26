@@ -230,8 +230,6 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (isTestOrFixturePath(filePath)) continue;
     const signals = Array.isArray(node.metadata.behaviorSignals)
       ? (node.metadata.behaviorSignals as string[]) : [];
-    const purposes = Array.isArray(node.metadata.purposeSignals)
-      ? (node.metadata.purposeSignals as string[]) : [];
 
     const fi = fanIn.get(key) ?? 0;
     const fo = fanOut.get(key) ?? 0;
@@ -243,7 +241,13 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const ownsRouteOrSchema =
       schemaOwners.has(key) || routeHandlers.has(key) || routeEntrypointKeys.has(key) ? 1 : 0;
     const tested = testedFiles.has(filePath) || testedFiles.has(key) ? 1 : 0;
-    const configRelevant = signals.includes('env_read') || purposes.includes('configuration') ? 1 : 0;
+    // Reading configuration is an observable act (`process.env.…`), so that is
+    // what this measures. It used to also fire on a `purposeSignals` entry
+    // derived from `/config|setting|env/i` anywhere in a path or symbol name —
+    // part of the domain phrase table deleted from `behaviorSignals.ts`, and a
+    // substring test that scored `settings`, `Environment` and every
+    // `configureStore` alike.
+    const configRelevant = signals.includes('env_read') ? 1 : 0;
     const churnStats = churnFor(filePath);
     const wfCount = workflowCount.get(key) ?? 0;
 
@@ -346,8 +350,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       configRelevance: wf.steps.some((s) => {
         const node = nodeByStableKey.get(s.nodeStableKey);
         const sig = Array.isArray(node?.metadata.behaviorSignals) ? (node!.metadata.behaviorSignals as string[]) : [];
-        const pur = Array.isArray(node?.metadata.purposeSignals) ? (node!.metadata.purposeSignals as string[]) : [];
-        return sig.includes('env_read') || pur.includes('configuration');
+        return sig.includes('env_read');
       }) ? 1 : 0,
       // Busiest file the flow touches: a flow through churning code is itself
       // churning, even when no single step dominates.

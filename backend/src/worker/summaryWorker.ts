@@ -28,7 +28,7 @@ import { settlePackageStaleness } from './incrementalAnalyzer.js';
 import { SECTION_SPECS, SECTION_TITLES, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
 import { generateDeterministicSection } from './generation/deterministicSectionGenerator.js';
-import { generateTutorials } from './generation/tutorialGenerator.js';
+import { generateDeterministicTutorials, generateTutorials } from './generation/tutorialGenerator.js';
 import {
   isRunControlError,
   recordFailedSectionGap,
@@ -195,12 +195,27 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         done += 1;
         await updateJob('running', `Generated section: ${sectionType} (${done}/${SECTION_TYPES.length})`, 10 + Math.floor((done / SECTION_TYPES.length) * 85));
       }
+      // Tutorials are NOT an AI feature: the walkthrough skeleton — order,
+      // files, line spans, snippets, highlights, phases, hand-off targets, the
+      // entry statement, the landing facts — is computed from the trace, and a
+      // model only annotates it. Deleting them above and writing none back left
+      // the tab blank, which read as "switching AI off removed a feature".
+      let deterministicTutorials = 0;
+      try {
+        const built = await generateDeterministicTutorials({
+          snapshotId, projectId, packageId, role,
+          commitHash: snap.commit_hash, projections: deps.projections,
+        });
+        deterministicTutorials = built.tutorials;
+      } catch (err) {
+        console.warn('[summaryWorker] deterministic tutorials failed:', err instanceof Error ? err.message : err);
+      }
       await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
       // Same #80(c) rule as the AI path: a finished generation un-pauses its
       // own snapshot, so a project that paused under full_ai and was then
       // regenerated with AI off does not stay stuck on 'paused'.
       await restoreSnapshotAfterGeneration(snapshotId).catch(() => {});
-      await markPhase(snapshotId, 'generation', 'complete', { sections: SECTION_TYPES.length, mode: 'deterministic' });
+      await markPhase(snapshotId, 'generation', 'complete', { sections: SECTION_TYPES.length, tutorials: deterministicTutorials, mode: 'deterministic' });
       await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
       await updateJob('complete', 'Deterministic onboarding package ready (AI disabled)', 100);
       await setMemberDefaultPackage(projectId, triggeredBy, packageId);

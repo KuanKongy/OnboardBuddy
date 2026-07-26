@@ -188,6 +188,29 @@ describe('narration — pipeline internals reaching the reader', () => {
     expect(has(r.findings, 'evidence_narration')).to.equal(false);
   });
 
+  it('flags the prompt\'s own voice shipped as prose (OBSERVED — FloowForge/big_picture, live)', () => {
+    // Verbatim from `package_sections.content`: a directive that had been
+    // written into a DETERMINISTIC FACT (`snapshot.unreadStacks.sentence`), so
+    // the model narrated it like any other fact. Three phrasings, one rule.
+    const shipped =
+      '100 files (60% of this repository) are written in python, which OnboardBuddy does not parse. '
+      + 'NOTHING in this package describes them. You MUST say so plainly in your own words — '
+      + 'a reader who is not told will assume this part of the system does not exist.';
+    expect(has(lintExplanation(shipped).findings, 'prompt_voice')).to.equal(true);
+    expect(has(lintExplanation('Do not invent a rationale the comments do not state.').findings, 'prompt_voice')).to.equal(true);
+  });
+
+  it('does NOT flag a tutorial telling the reader to do something (OBSERVED — StudyFlow/setup_run)', () => {
+    // The discriminator is the VERB, not the pronoun: `howto` and `tutorial`
+    // sections address the reader in second person as their normal register.
+    // Also verbatim from the live corpus — a blanket "you must" ban would have
+    // rewritten correct prose here and on 141 other stored sections.
+    const legitimate =
+      'Before running the services, you must configure environment variables for the `api` and `worker` services. '
+      + 'You should also confirm that `mongo` and `redis` are reachable from the container network.';
+    expect(has(lintExplanation(legitimate, { mode: 'howto' }).findings, 'prompt_voice')).to.equal(false);
+  });
+
   it('leaves fenced code alone — identifiers may contain anything', () => {
     const r = lintExplanation(
       ['```ts', "const key = 'cluster:server/modules';", "// This section details the routes", '```', 'The route is mounted at `/health`.'].join('\n'),

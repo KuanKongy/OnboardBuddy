@@ -272,6 +272,7 @@ export function ScoreProvenanceDisclosure({
   buttonLabel,
   headline,
   extra,
+  showCaveat = true,
   className,
 }: {
   data: ScoreProvenanceData | null | undefined;
@@ -283,6 +284,17 @@ export function ScoreProvenanceDisclosure({
   headline?: ReactNode;
   /** Optional trailing control on the heading row. */
   extra?: ReactNode;
+  /**
+   * Forwarded to `ScoreProvenance` — see its `showCaveat`. A disclosure is one
+   * press away from any reader, so "behind a control" is not the same as "not
+   * shown to readers": VISUAL QA M4 #7 found the top-500 reconciliation note
+   * ("Averaging the 16 member scores stored here gives 35.9, not 29.6 … only
+   * scores inside the snapshot's top 500 are kept") rendered in amber under
+   * Architecture → Explain on the flagship repo, and it fires wherever the cap
+   * truncates members — i.e. on exactly the big repos. Reader surfaces pass
+   * `false`; the API payload is untouched and still carries `caveat`.
+   */
+  showCaveat?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -313,7 +325,12 @@ export function ScoreProvenanceDisclosure({
       {headline}
       {open && (
         <div id={panelId} className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2">
-          <ScoreProvenance data={data} detail={showAll ? "full" : "headline"} showReasons={false} />
+          <ScoreProvenance
+            data={data}
+            detail={showAll ? "full" : "headline"}
+            showReasons={false}
+            showCaveat={showCaveat}
+          />
           {data?.available && (data.inputs.length > HEADLINE_INPUTS || !showAll) && (
             <button
               type="button"

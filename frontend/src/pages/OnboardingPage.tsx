@@ -662,7 +662,12 @@ export function SectionView({
             open={gapsOpen}
             onToggle={() => setGapsOpen((v) => !v)}
             controls={`gaps-${section.id}`}
-            label={`${section.unknowns!.length} known gap${section.unknowns!.length === 1 ? "" : "s"}${
+            // VISUAL QA M4 #6: this said "6 known gaps" while the trust
+            // strip at the top of the same screen said "66 known gaps".
+            // Both were right — this counts THIS section, the strip counts
+            // the whole package — but neither said which, so one word
+            // described two populations. Each number now names its scope.
+            label={`${section.unknowns!.length} known gap${section.unknowns!.length === 1 ? "" : "s"} in this section${
               gapGroups.length < section.unknowns!.length ? ` · ${gapGroups.length} kinds` : ""
             }`}
             icon={<HelpCircle className="h-3 w-3 shrink-0" aria-hidden />}
@@ -1713,15 +1718,18 @@ export function OnboardingPage() {
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="cursor-help text-warning underline decoration-dotted underline-offset-2">
                     {pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length} known gap
-                    {(pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length) === 1 ? "" : "s"}
+                    {(pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length) === 1 ? "" : "s"}{" "}
+                    in this package
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-80">
                   {pkg.coverage.gaps && (
                     <p className="mb-1 font-medium">
-                      {pkg.coverage.gaps.total} things this analysis knows it could not determine:{" "}
-                      {pkg.coverage.gaps.sections} raised while writing the sections (shown under
-                      &ldquo;known gaps&rdquo; in each one, grouped into {pkg.coverage.gaps.groups} kinds)
+                      {pkg.coverage.gaps.total} things this analysis knows it could not determine,
+                      across the whole package:{" "}
+                      {pkg.coverage.gaps.sections} raised while writing the sections (each section
+                      lists its own share under &ldquo;known gaps in this section&rdquo;; grouped
+                      into {pkg.coverage.gaps.groups} kinds in total)
                       {pkg.coverage.gaps.detection > 0
                         ? ` and ${pkg.coverage.gaps.detection} found by detection:`
                         : "."}

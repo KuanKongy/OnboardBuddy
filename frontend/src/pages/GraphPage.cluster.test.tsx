@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
-import { fetchDependencyGraph } from "@/lib/graphData";
+import { fetchClassGraph, fetchDependencyGraph } from "@/lib/graphData";
 
 /**
  * Drill-down navigation.
@@ -102,13 +102,42 @@ vi.mock("@/lib/graphData", () => {
     fileAnalyses: [],
   });
 
+  // The Classes ladder: above the node cap the server groups classes by
+  // directory using the same `cluster:` ids as the Files ladder.
+  const classRoot = {
+    projectId: "proj-1", snapshotId: "snap-1", clustered: true, totalNodes: 267, totalEdges: 5,
+    level: { kind: "root", id: null, unit: "groups" }, truncation: null,
+    graph: {
+      nodes: [
+        { id: "cluster:backend/src", label: "backend/src/ (184 classes)", kind: "cluster", filePath: "backend/src",
+          metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0, internalImportCount: 5, fileCount: 184, groupNoun: "classes" } },
+      ],
+      edges: [], entryPoints: [],
+    },
+    fileAnalyses: [],
+  };
+  const classChild = {
+    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 1, totalEdges: 0,
+    level: { kind: "cluster", id: "backend/src", unit: "classes" }, truncation: null, describedNodes: 1,
+    graph: {
+      nodes: [
+        { id: "backend/src/writer.ts#SnapshotWriter", label: "SnapshotWriter", kind: "class", filePath: "backend/src/writer.ts",
+          metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0, summary: "Writes a snapshot" } },
+      ],
+      edges: [], entryPoints: [],
+    },
+    fileAnalyses: [],
+  };
+
   return {
     fetchDependencyGraph: vi.fn().mockImplementation((_p: string, cluster?: string) =>
       Promise.resolve(
         !cluster ? root : cluster === "src/lib" ? lib : cluster === "src/big" ? big : leaf(cluster),
       ),
     ),
-    fetchClassGraph: vi.fn().mockResolvedValue(null),
+    fetchClassGraph: vi.fn().mockImplementation((_p: string, _pkg?: unknown, dir?: string | null) =>
+      Promise.resolve(dir ? classChild : classRoot),
+    ),
     fetchWorkflowsList: vi.fn().mockResolvedValue({ workflows: [] }),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
     fetchNodeDetail: vi.fn().mockResolvedValue(null),
@@ -284,6 +313,31 @@ describe("GraphPage drill-down", () => {
     renderGraphPage("/projects/proj-1/dependencies?drill=cluster,src%2Flib,lib");
     await waitFor(() => expect(fetchDependencyGraph).toHaveBeenCalledWith("proj-1", "src/lib", null));
     await waitFor(() => expect(screen.getByText("lib")).toBeInTheDocument());
+  });
+
+  /**
+   * ASSERTION 3 — the Classes folder ladder is not a dead end.
+   *
+   * VISUAL QA M4 #8: on the only repo big enough to need the ladder,
+   * OnboardBuddy's 267 classes collapsed to two folder boxes that were
+   * "completely inert" — no drill, no selection, no interactive control — so
+   * the class-detail path was unreachable exactly where grouping was
+   * introduced to make it reachable. One click on the toggle reaches the
+   * Classes view, and opening a folder must produce its classes.
+   */
+  it("opens a class folder and shows the classes inside it", async () => {
+    renderGraphPage();
+    await screen.findByText("src/lib/ (40 files)");
+    // One click reaches the Classes view (VISUAL QA M4 #5 needed two).
+    fireEvent.click(screen.getByRole("button", { name: "Classes & interfaces" }));
+    await screen.findByText("backend/src/ (184 classes)");
+
+    // The explicit control, not only the canvas gesture: a React Flow node is
+    // a plain div with a click handler, so the ladder cannot depend on it.
+    fireEvent.click(await screen.findByRole("button", { name: /Open backend\/src and list its 184 classes/ }));
+
+    expect(await screen.findByText("SnapshotWriter", undefined, { timeout: 3000 })).toBeInTheDocument();
+    expect(fetchClassGraph).toHaveBeenCalledWith("proj-1", null, "backend/src");
   });
 
   it("still understands a legacy ?cluster= link", async () => {

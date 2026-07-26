@@ -115,6 +115,66 @@ describe('entrypointDetector — trigger types', () => {
   });
 });
 
+/**
+ * A page is a claim about routing, and only the repo may make it.
+ *
+ * A router-less fallback used to sweep every JSX file holding an exported
+ * PascalCase function and report it as `ui_route`. On a one-page club website
+ * that produced 19 "pages" — `Page: MicroscopeIcon`, `Page: Sparkle`,
+ * `Page: BlobLayer`, `Page: Footer` — and on a static portfolio site, 25.
+ */
+describe('entrypointDetector — a component is not a page (F4 over-fire)', () => {
+  const component = (relativePath: string, name: string): FileAnalysis => ({
+    relativePath,
+    symbols: [{
+      name, kind: 'function', exported: true, isDefault: true,
+      snippet: `export default function ${name}() { return <div/>; }`,
+    }],
+  } as unknown as FileAnalysis);
+
+  it('reports zero entrypoints for a router-less site of plain components', () => {
+    const eps = detectEntrypoints([
+      component('src/components/icons/index.tsx', 'MicroscopeIcon'),
+      component('src/components/shared/Sparkle.tsx', 'Sparkle'),
+      component('src/components/shared/BlobLayer.tsx', 'BlobLayer'),
+      component('src/components/layout/Footer.tsx', 'Footer'),
+      component('src/components/sections/About.tsx', 'About'),
+    ]);
+    // Zero is the honest answer for a static site: no router registers these,
+    // no file-based router directory holds them, nothing else can be traced.
+    expect(eps.filter((e) => e.kind === 'ui_route')).to.deep.equal([]);
+  });
+
+  it('still reports a page the repo itself declares, even with no resolved URL', () => {
+    // `pages/` IS the repo saying "this is a page". MasterPokedex's
+    // PokemonList.tsx lives there and no <Route> references it; the truth
+    // fixture asserts it is a ui_route with a null path, so the tightening
+    // must not reach it.
+    const eps = detectEntrypoints([
+      component('src/pages/PokemonList.tsx', 'PokemonList'),
+      component('src/components/ui/Badge.tsx', 'Badge'),
+    ]);
+    expect(eps.filter((e) => e.kind === 'ui_route').map((e) => [e.filePath, e.routePattern ?? null]))
+      .to.deep.equal([['src/pages/PokemonList.tsx', null]]);
+  });
+
+  it('does not expand an unpublished index.tsx barrel into a library API', () => {
+    // With no `main`/`module`/`exports` in scope, the library archetype used to
+    // fall back to whatever `index.*` file the loop flagged — which on the club
+    // website was `src/components/icons/index.tsx`, so four SVG icons became
+    // the product's entire entry surface.
+    const barrel = {
+      relativePath: 'src/components/icons/index.tsx',
+      symbols: ['LeafIcon', 'TrophyIcon', 'PeopleIcon'].map((name) => ({
+        name, kind: 'function', exported: true,
+        snippet: `export function ${name}() { return <svg/>; }`,
+      })),
+    } as unknown as FileAnalysis;
+    expect(detectEntrypoints([barrel]).map((e) => [e.kind, e.symbolName ?? null]))
+      .to.deep.equal([['export', null]]);
+  });
+});
+
 describe('entrypointDetector — BullMQ queue consumers (audit P2 §15)', () => {
   const synthetic = (initializer: string): FileAnalysis[] => [
     {

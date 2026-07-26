@@ -1,12 +1,14 @@
-import { AlertTriangle, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronRight, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Viewport } from "reactflow";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
+import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Button } from "@/components/ui/button";
 import { fetchClassGraph, fetchNodeDetail, type GraphResponse, type NodeDetail } from "@/lib/graphData";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
+import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useLocalDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
@@ -230,12 +232,35 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const truncation = data?.truncation ?? null;
-  const groupCount = nodes.filter((n) => n.id.startsWith("cluster:")).length;
+  const groupNodes = useMemo(() => nodes.filter((n) => n.id.startsWith("cluster:")), [nodes]);
+  const groupCount = groupNodes.length;
   const classCount = nodes.length - groupCount;
   const describedNodes = data?.describedNodes ?? 0;
   const levelUnit = data?.level?.unit ?? (data?.clustered ? "groups" : "classes");
 
-  if (loading) {
+  /**
+   * Open a folder. One entry point for the canvas gesture and the explicit
+   * buttons below it, so both can never drift apart.
+   */
+  const openFolder = useCallback(
+    (nodeId: string) => {
+      const path = groupDirectory(nodeId);
+      drill.drillInto(
+        { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+        nodeId,
+      );
+    },
+    [drill],
+  );
+
+  // Only the FIRST load blanks the section. A drill used to run
+  // `setLoading(true)` and swap the whole subtree for a spinner, which tears
+  // down the React Flow instance (and DrillCamera, and the viewport probe)
+  // in the middle of the transition it is supposed to be animating, then
+  // mounts a fresh one that re-applies node selection — re-entering
+  // `activate()` and re-triggering the drill. Keeping the previous level on
+  // screen while the child loads makes the transition what it claims to be.
+  if (loading && !data) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -350,8 +375,10 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
             {currentFrame
               ? `${currentFrame.label} holds ${data.totalNodes} classes — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${classCount > 0 ? ` and ${classCount} class${classCount === 1 ? "" : "es"}` : ""}. `
               : `${data.totalNodes} classes and interfaces, too many to draw at once — showing ${groupCount} folder${groupCount === 1 ? "" : "s"}. `}
-            Open a folder to see its classes, each with a line saying what it does. Arrows are
-            extends/implements links crossing a folder boundary.
+            {groupCount > 0
+              ? "Open a folder below (or click its box) to see its classes, each with a line saying what it does. "
+              : "Each class card carries a line saying what it does. "}
+            Arrows are extends/implements links crossing a folder boundary.
           </>
         ) : (
           <>
@@ -364,6 +391,51 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
           </>
         )}
       </p>
+
+      {/* Every folder on this level as a real, focusable control.
+          VISUAL QA M4 #8 measured the canvas-only version on OnboardBuddy:
+          267 classes collapse to two folder boxes, and a React Flow node is
+          only ever a `<div>` with a click handler — it carries no control of
+          its own, it is unreachable by keyboard whenever the canvas freezes
+          input, and nothing on screen looks pressable. Since the ladder is
+          the only route to a class on a big repo, the route cannot depend on
+          the canvas behaving: the same drill is also spelled out here.
+          Mirrors Architecture's "Open N files ›" (owner I1). */}
+      {data.clustered && groupNodes.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {groupNodes.map((group) => {
+            const path = groupDirectory(group.id);
+            const count = group.metadata.fileCount ?? 0;
+            const noun = group.metadata.groupNoun ?? "classes";
+            return (
+              <button
+                key={group.id}
+                type="button"
+                onClick={() => openFolder(group.id)}
+                disabled={drill.busy}
+                aria-label={`Open ${path} and list its ${count} ${noun}`}
+                className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-50"
+              >
+                <span className="font-mono">{path}/</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {count} {noun}
+                </span>
+                <ChevronRight className="h-3 w-3 text-muted-foreground" />
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* A drill that failed used to do so in complete silence: the hook
+          recorded the reason and nobody rendered it, so a dead level and an
+          ignored click looked identical. */}
+      {drill.error && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+          <span className="flex-1 text-foreground">{drill.error}</span>
+        </div>
+      )}
 
       {/* The cap, disclosed (AUDIT C14) rather than left as a silent cut. */}
       {truncation && (
@@ -391,7 +463,12 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
       />
 
       <div className={selectedNode ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
-        <div className="graph-canvas">
+        {/* Dimmed rather than blanked while the next level loads — see the
+            first-load guard above. */}
+        <div
+          className={cn("graph-canvas transition-opacity", (loading || drill.busy) && "opacity-70")}
+          aria-busy={loading || drill.busy}
+        >
           <DependencyGraphView
             nodes={positionedNodes}
             edges={visibleEdges}
@@ -407,15 +484,12 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
             viewportRef={viewportRef}
             // Never fit below a readable label (VISUAL QA M4 #3 measured 3px).
             minZoom={0.35}
-            // Top-left sat over the first two columns of the grid.
-            legendPosition="top-right"
+            // Two folder boxes do not need a map of themselves in the corner
+            // they are drawn next to.
+            showMiniMap={positionedNodes.length >= MINIMAP_MIN_NODES}
             onDrillInto={(nodeId) => {
               if (!nodeId.startsWith("cluster:")) return false;
-              const path = groupDirectory(nodeId);
-              drill.drillInto(
-                { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
-                nodeId,
-              );
+              openFolder(nodeId);
               return true;
             }}
           />

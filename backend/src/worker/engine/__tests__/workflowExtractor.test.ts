@@ -85,6 +85,37 @@ describe('workflowExtractor (call-graph traversal)', () => {
     expect(login.triggerType).to.contain('HTTP');
   });
 
+  /**
+   * Purpose used to carry a domain phrase from a seven-row table keyed on path
+   * and symbol substrings — this product's own vocabulary, stamped onto every
+   * repo analysed. A student club's marketing site was told its About page
+   * existed for "onboarding generation" (`src/components/sections/`), its Team
+   * page for "project management", and `Toaster` for "repository analysis"
+   * (`/ast/` inside to·ast·er). The subject now comes from the flow's own
+   * evidence or it is absent.
+   */
+  it('names only what the flow itself reaches, never a product-domain phrase', () => {
+    const login = workflows.find((w) => w.stableKey.endsWith(':loginHandler'))!;
+    // `sessions` is this fixture's own table, from its own migration.
+    expect(login.purpose).to.contain('on sessions');
+
+    const domainPhrases = [
+      'onboarding generation', 'project management', 'repository analysis',
+      'github integration', 'authentication', 'configuration', '(ui)',
+    ];
+    for (const wf of workflows) {
+      for (const phrase of domainPhrases) {
+        expect(wf.purpose.toLowerCase(), `"${wf.purpose}" must not assert a domain`).to.not.contain(phrase);
+      }
+    }
+  });
+
+  it('says nothing about a subject when the flow reaches no named resource', () => {
+    const logout = workflows.find((w) => w.stableKey.endsWith(':logoutHandler'))!;
+    expect(logout.purpose).to.not.contain(' on ');
+    expect(logout.purpose).to.not.contain(' against ');
+  });
+
   it('sorts workflows by importance score descending', () => {
     for (let i = 1; i < workflows.length; i++) {
       expect(workflows[i]!.importanceScore).to.be.at.most(workflows[i - 1]!.importanceScore);
