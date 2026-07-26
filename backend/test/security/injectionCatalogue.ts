@@ -11,9 +11,10 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-export const MALICIOUS_REPO_DIR = new URL('../../src/worker/fixtures/maliciousRepo/', import.meta.url).pathname;
+export const MALICIOUS_REPO_DIR = fileURLToPath(new URL('../../src/worker/fixtures/maliciousRepo/', import.meta.url));
 
 export interface InjectionPayload {
   /** Stable id used in tests, PAYLOADS.md, and the report. */
@@ -55,7 +56,7 @@ export function readFixtureRepo(): Array<{ file: string; text: string }> {
       return statSync(full).isDirectory() ? walk(full) : [full];
     });
   return walk(MALICIOUS_REPO_DIR)
-    .map((full) => ({ file: relative(MALICIOUS_REPO_DIR, full), text: readFileSync(full, 'utf8') }))
+    .map((full) => ({ file: relative(MALICIOUS_REPO_DIR, full).split(sep).join('/'), text: readFileSync(full, 'utf8') }))
     .sort((a, b) => a.file.localeCompare(b.file));
 }
 
