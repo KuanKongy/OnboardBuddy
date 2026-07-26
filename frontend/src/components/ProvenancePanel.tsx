@@ -110,6 +110,27 @@ export function ProvenancePanel({
                       No LLM calls recorded — this package was built deterministically.
                     </p>
                   )}
+                  {/* Cost with no cap beside it is a number, not a budget.
+                      The cap applies per run; the snapshot's counters are the
+                      lifetime record across every run on this commit. */}
+                  {data.budget && (
+                    <div className="border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground">
+                      {data.budget.usedThisRun === null ? (
+                        <>
+                          Budget: cap {data.budget.capLlmCalls.toLocaleString()} calls per run · usage this run not
+                          recorded{data.budget.note ? ` (${data.budget.note})` : ""}
+                        </>
+                      ) : (
+                        <>
+                          Budget: {data.budget.usedThisRun.toLocaleString()} of{" "}
+                          {data.budget.capLlmCalls.toLocaleString()} calls used by this run
+                          {data.budget.remaining !== null && ` · ${data.budget.remaining.toLocaleString()} left`}
+                        </>
+                      )}
+                      {" · "}lifetime on this snapshot: {data.budget.lifetimeLlmCalls.toLocaleString()} calls, $
+                      {data.budget.lifetimeCostUsd.toFixed(4)}
+                    </div>
+                  )}
                   {data.models.map((m, i) => (
                     <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5 text-xs">
                       <span className="font-mono text-foreground">{m.model}</span>

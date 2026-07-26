@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, Circle, Info, Loader2, Maximize2, Minimize2, RefreshCw, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronDown, Circle, Info, Loader2, Maximize2, Minimize2, RefreshCw, Sparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -15,18 +15,20 @@ import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { apiFetch } from "@/lib/api";
 import {
-  fetchWorkflowGraph,
   fetchWorkflowsList,
+  triggerLabel,
   WORKFLOW_TIERS,
-  type WorkflowGraphResponse,
   type WorkflowOrdering,
   type WorkflowSummary,
 } from "@/lib/graphData";
 import { layoutGraph } from "@/lib/graphLayout";
-import { layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
+import { buildStepChain, layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
 import { ScoreProvenance } from "@/components/ScoreProvenance";
 import { fetchNodeDetail, type NodeDetail } from "@/lib/graphData";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
@@ -53,21 +55,136 @@ const HANDLE_SIDES = [
   { id: "l", position: Position.Left },
 ] as const;
 
-interface StepNodeData {
-  label: string;
+// ── Step data ────────────────────────────────────────────────────────────────
+
+/**
+ * One row per step, from `/workflows/:id/walkthrough`.
+ *
+ * Snake_case duplicates of the same fields are also served, and the e2e
+ * fixtures only carry those, so every read below goes through `normalizeStep`.
+ */
+interface WalkthroughStepRaw {
+  stepOrder?: number;
+  step_order?: number;
+  filePath?: string;
+  file_path?: string;
+  symbolName?: string | null;
+  symbol_name?: string | null;
+  lineStart?: number | null;
+  line_start?: number | null;
+  lineEnd?: number | null;
+  line_end?: number | null;
+  stepKind?: string;
+  step_kind?: string;
+  deterministicDescription?: string | null;
+  deterministic_description?: string | null;
+  explanation?: string | null;
+  explanationSource?: "narrated" | "deterministic";
+  nodeKey?: string | null;
+  syntheticReturn?: boolean;
+}
+
+interface WalkthroughStep {
+  stepOrder: number;
   filePath: string;
+  symbolName: string | null;
+  lineStart: number | null;
+  lineEnd: number | null;
   stepKind: string;
-  order: number | null;
+  /** What this step does. Never empty — see `describeStep`. */
+  explanation: string;
+  /** True when a narration pass wrote it; false when a formatter did. */
+  narrated: boolean;
+  nodeKey: string | null;
+  syntheticReturn: boolean;
+}
+
+interface WalkthroughResponse {
+  workflow: { id: string; title: string; trigger_type: string; purpose: string | null; confidence: string };
+  steps: WalkthroughStepRaw[];
+  counts?: { stepCount: number; narratedSteps: number; distinctFiles: number; distinctSymbols: number };
+}
+
+/**
+ * What the step does, in the best words we actually have.
+ *
+ * `explanation` is written by the narration pass and covers a small minority of
+ * steps — 37 of OnboardBuddy's 774. The rest carry a formatter's sentence, and
+ * that sentence is a real structural statement ("Touches database table
+ * \"sessions\"", "Persists data (database write) in processSummaryJob"), so it
+ * is shown rather than replaced with a placeholder. Nothing is invented for a
+ * step that has neither; it says which file the step is in, which is the one
+ * thing that is always true.
+ *
+ * The trailing "(path/to/file.ts)" is dropped when it repeats the path already
+ * rendered under the step — the node has room for behaviour, not for the same
+ * path twice.
+ */
+function describeStep(raw: WalkthroughStepRaw): { explanation: string; narrated: boolean } {
+  const narratedText = (raw.explanation ?? "").trim();
+  if (narratedText) return { explanation: narratedText, narrated: true };
+
+  const filePath = raw.filePath ?? raw.file_path ?? "";
+  const deterministic = (raw.deterministicDescription ?? raw.deterministic_description ?? "").trim();
+  if (deterministic) {
+    const trimmed = filePath ? deterministic.replace(` (${filePath})`, "") : deterministic;
+    return { explanation: trimmed, narrated: false };
+  }
+  return {
+    explanation: filePath ? `Runs in ${filePath}. No description was recorded for this step.` : "No description was recorded for this step.",
+    narrated: false,
+  };
+}
+
+function normalizeStep(raw: WalkthroughStepRaw, index: number): WalkthroughStep {
+  const { explanation, narrated } = describeStep(raw);
+  return {
+    stepOrder: raw.stepOrder ?? raw.step_order ?? index + 1,
+    filePath: raw.filePath ?? raw.file_path ?? "",
+    symbolName: raw.symbolName ?? raw.symbol_name ?? null,
+    lineStart: raw.lineStart ?? raw.line_start ?? null,
+    lineEnd: raw.lineEnd ?? raw.line_end ?? null,
+    stepKind: raw.stepKind ?? raw.step_kind ?? "transform",
+    explanation,
+    narrated,
+    nodeKey: raw.nodeKey ?? null,
+    syntheticReturn: raw.syntheticReturn === true,
+  };
+}
+
+/** "backend/src/api/routes/ask.ts" → "ask.ts" */
+function stepTitle(step: WalkthroughStep): string {
+  const base = step.filePath.split("/").pop() ?? step.filePath;
+  const name = step.symbolName ?? base;
+  return step.syntheticReturn ? `Response from ${name}` : name;
+}
+
+// ── Node ─────────────────────────────────────────────────────────────────────
+
+interface StepNodeData {
+  order: number;
+  title: string;
+  stepKind: string;
+  explanation: string;
+  narrated: boolean;
   selected: boolean;
 }
 
+/**
+ * A step, with what it does written on it.
+ *
+ * There is deliberately no tooltip anywhere in here. The three that used to be
+ * — on the label, and on the file path — repeated text already on the node,
+ * and their hover layer sat over the node and made it harder to click. What
+ * they showed in full is in the panel a click opens.
+ */
 function StepNode({ data }: NodeProps<StepNodeData>) {
   const palette = STEP_KIND_PALETTE[data.stepKind] ?? "shared";
   const color = `var(--node-${palette})`;
   return (
     <div
       className={cn(
-        "w-56 rounded-lg border bg-card px-3 py-2 shadow-sm transition-all",
+        "w-64 rounded-lg border bg-card px-3 py-2 shadow-sm transition-all",
         data.selected ? "ring-2 ring-ring" : "hover:shadow-md",
       )}
       style={{ borderColor: data.selected ? color : "var(--border)" }}
@@ -100,16 +217,14 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
         />
       ))}
       <div className="flex items-center gap-2">
-        {data.order !== null && (
-          <span
-            className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold"
-            style={{ color, background: `color-mix(in oklab, ${color} 16%, transparent)` }}
-          >
-            {data.order}
-          </span>
-        )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] font-medium text-foreground" title={data.label}>
-          {data.label}
+        <span
+          className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold"
+          style={{ color, background: `color-mix(in oklab, ${color} 16%, transparent)` }}
+        >
+          {data.order}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] font-medium text-foreground">
+          {data.title}
         </span>
         <span
           className="shrink-0 rounded px-1 py-0.5 text-[0.59375rem] font-semibold uppercase tracking-wide"
@@ -118,14 +233,21 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
           {data.stepKind.replace(/_/g, " ")}
         </span>
       </div>
-      <p className="mt-0.5 truncate text-[0.65625rem] text-muted-foreground" title={data.filePath}>
-        {data.filePath}
+      {/* What the step does. The marker is the audit's ask: a reader can see
+          which steps were understood by the narration pass and which carry a
+          formatter's sentence, without opening anything. */}
+      <p className="mt-1 line-clamp-3 text-[0.65625rem] leading-snug text-muted-foreground">
+        {data.narrated && <Sparkles className="mr-1 inline h-2.5 w-2.5 align-[-1px] text-primary" />}
+        {data.explanation}
       </p>
     </div>
   );
 }
 
 const nodeTypes = { step: StepNode };
+
+const NODE_WIDTH = 256;
+const NODE_HEIGHT = 88;
 
 export function WorkflowsPage() {
   const { id } = useParams<{ id: string }>();
@@ -137,7 +259,7 @@ export function WorkflowsPage() {
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string>(
     () => searchParams.get("workflow") ?? "",
   );
-  const [detail, setDetail] = useState<WorkflowGraphResponse | null>(null);
+  const [detail, setDetail] = useState<WalkthroughResponse | null>(null);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingGraph, setLoadingGraph] = useState(false);
   const [error, setError] = useState("");
@@ -147,6 +269,7 @@ export function WorkflowsPage() {
   const [layoutMode, setLayoutMode] = useState<"auto" | "snake" | "column">("auto");
   const [fullscreen, setFullscreen] = useState(false);
   const [search, setSearch] = useState("");
+  const [showScoring, setShowScoring] = useState(false);
 
   function loadWorkflows() {
     if (!id) return;
@@ -184,19 +307,18 @@ export function WorkflowsPage() {
     // keep showing above it.
     setError("");
     setSelectedNodeId(null);
-    fetchWorkflowGraph(id, selectedWorkflowId)
-      .then(setDetail)
-      .catch((err: Error) => setError(err.message))
+    // The walkthrough route, not the folded workflow graph: it serves one row
+    // per step, which is the number the rail beside this canvas advertises.
+    apiFetch(`/projects/${id}/workflows/${encodeURIComponent(selectedWorkflowId)}/walkthrough`)
+      .then((res) => setDetail(res as WalkthroughResponse))
+      .catch(() => setError("Failed to load workflow steps"))
       .finally(() => setLoadingGraph(false));
   }, [id, selectedWorkflowId]);
 
-  const stepByNodeId = useMemo(() => {
-    const m = new Map<string, { order: number; kind: string; filePath: string }>();
-    for (const s of detail?.steps ?? []) {
-      if (!m.has(s.nodeId)) m.set(s.nodeId, { order: s.stepOrder, kind: s.stepKind, filePath: s.filePath });
-    }
-    return m;
-  }, [detail]);
+  const steps = useMemo(
+    () => (detail?.steps ?? []).map(normalizeStep),
+    [detail],
+  );
 
   /**
    * A workflow is a chain, so it snakes: left to right, drop a row, right to
@@ -204,57 +326,64 @@ export function WorkflowsPage() {
    * one wide, so at any readable zoom you saw about three steps and scrolled
    * to follow a single trace.
    *
-   * Short flows and branch-heavy graphs still go through dagre — snaking three
-   * steps adds turns for nothing, and a hub-and-spoke shape is not a chain.
+   * Short flows still go through dagre — snaking three steps adds turns for
+   * nothing. Branch-heavy graphs used to be excluded too; a chain built one
+   * node per step has no branches to weigh, and the gate keeps the test only
+   * because `shouldSerpentine` is shared.
    */
+  const chain = useMemo(
+    () => buildStepChain(steps, (s) => ({ label: stepTitle(s), kind: s.stepKind })),
+    [steps],
+  );
+
   const layout = useMemo(() => {
-    if (!detail) return { nodes: [], routing: null as SerpentineLayout["edgeRouting"] | null };
-    const graphNodes = detail.graph.nodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-      kind: n.kind,
-      metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
-    }));
-    const snake = layoutMode === "snake" || (layoutMode === "auto" && shouldSerpentine(graphNodes, detail.graph.edges));
+    if (chain.nodes.length === 0) return { nodes: [], routing: null as SerpentineLayout["edgeRouting"] | null };
+    const snake = layoutMode === "snake" || (layoutMode === "auto" && shouldSerpentine(chain.nodes, chain.edges));
     if (!snake) {
       return {
-        nodes: layoutGraph(graphNodes, detail.graph.edges, {
-          direction: "TB", nodeWidth: 224, nodeHeight: 64, ranksep: 46, nodesep: 30,
+        nodes: layoutGraph(chain.nodes, chain.edges, {
+          direction: "TB", nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, ranksep: 46, nodesep: 30,
         }),
         routing: null,
       };
     }
-    const out = layoutSerpentine(graphNodes, detail.graph.edges, { nodeWidth: 224, nodeHeight: 64 });
+    const out = layoutSerpentine(chain.nodes, chain.edges, {
+      nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, rowGap: 84,
+    });
     return { nodes: out.nodes, routing: out.edgeRouting };
-  }, [detail, layoutMode]);
+  }, [chain, layoutMode]);
 
-  const positioned = layout.nodes;
+  const stepByNodeId = useMemo(() => {
+    const m = new Map<string, WalkthroughStep>();
+    for (const s of steps) m.set(`step:${s.stepOrder}`, s);
+    return m;
+  }, [steps]);
 
   const flowNodes: Node<StepNodeData>[] = useMemo(
     () =>
-      positioned.map((p) => {
+      layout.nodes.map((p) => {
         const step = stepByNodeId.get(p.id);
         return {
           id: p.id,
           type: "step",
           position: { x: p.x, y: p.y },
           data: {
-            label: p.label,
-            filePath: step?.filePath ?? p.id,
-            stepKind: step?.kind ?? p.kind,
-            order: step?.order ?? null,
+            order: step?.stepOrder ?? 0,
+            title: p.label,
+            stepKind: step?.stepKind ?? p.kind,
+            explanation: step?.explanation ?? "",
+            narrated: step?.narrated ?? false,
             selected: p.id === selectedNodeId,
           },
         };
       }),
-    [positioned, stepByNodeId, selectedNodeId],
+    [layout.nodes, stepByNodeId, selectedNodeId],
   );
 
   const flowEdges: Edge[] = useMemo(
     () =>
-      (detail?.graph.edges ?? []).map((e) => {
+      chain.edges.map((e) => {
         const route = layout.routing?.get(e.id);
-        const isBranch = route?.kind === "branch";
         return {
           id: e.id,
           source: e.source,
@@ -262,37 +391,32 @@ export function WorkflowsPage() {
           // Without explicit handles a snaked edge picks whichever side React
           // Flow guesses and loops back around the node.
           ...(route ? { sourceHandle: route.sourceHandle, targetHandle: route.targetHandle } : {}),
-          // Rounded orthogonal segments follow the snake; a fork off the main
-          // line is dashed so it reads as leaving the chain.
-          type: route ? (isBranch ? "default" : "smoothstep") : "default",
-          ...(route && !isBranch ? { pathOptions: { borderRadius: 16 } } : {}),
-          animated: !isBranch,
+          // Rounded orthogonal segments follow the snake.
+          type: route ? "smoothstep" : "default",
+          ...(route ? { pathOptions: { borderRadius: 16 } } : {}),
+          animated: true,
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--primary)" },
-          style: {
-            stroke: "var(--primary)",
-            strokeWidth: 1.5,
-            opacity: isBranch ? 0.45 : 0.7,
-            ...(isBranch ? { strokeDasharray: "4 3" } : {}),
-          },
+          style: { stroke: "var(--primary)", strokeWidth: 1.5, opacity: 0.7 },
         };
       }),
-    [detail, layout.routing],
+    [chain.edges, layout.routing],
   );
 
-  const selectedStep = detail?.steps.find((s) => s.nodeId === selectedNodeId) ?? null;
+  const selectedStep = selectedNodeId ? stepByNodeId.get(selectedNodeId) ?? null : null;
 
   // Enrich the selected step with its symbol doc (AI summary, snippet,
   // side effects) — the deterministic description alone is thin.
   const [stepDetail, setStepDetail] = useState<NodeDetail | null>(null);
   useEffect(() => {
     setStepDetail(null);
-    if (!id || !selectedStep?.nodeId) return;
+    const key = selectedStep?.nodeKey;
+    if (!id || !key) return;
     let cancelled = false;
-    fetchNodeDetail(id, selectedStep.nodeId, selectedPackageId).then((d) => {
+    fetchNodeDetail(id, key, selectedPackageId).then((d) => {
       if (!cancelled) setStepDetail(d);
     });
     return () => { cancelled = true; };
-  }, [id, selectedStep?.nodeId, selectedPackageId]);
+  }, [id, selectedStep?.nodeKey, selectedPackageId]);
 
   const selectedSummary = workflows?.find((w) => w.id === selectedWorkflowId) ?? null;
 
@@ -307,6 +431,19 @@ export function WorkflowsPage() {
     );
   }, [workflows, search]);
 
+  /**
+   * A flow whose every step is the same file with no symbols is not a traced
+   * path — it is one file counted N times. Saying that is more useful than
+   * drawing N identical boxes joined by arrows, which is what FloowForge's
+   * "ci_pipeline, 3 steps, high confidence" screen was.
+   */
+  const untraceable = useMemo(() => {
+    if (steps.length < 2) return null;
+    const files = new Set(steps.map((s) => s.filePath));
+    if (files.size > 1 || steps.some((s) => s.symbolName)) return null;
+    return steps[0]!.filePath;
+  }, [steps]);
+
   return (
     <div style={{ "--graph-chrome": "170px" } as React.CSSProperties}>
       <PageHeader
@@ -316,7 +453,7 @@ export function WorkflowsPage() {
           <>
             {detail && (
               <Badge variant="outline" className="text-[0.6875rem]">
-                {detail.workflow.trigger_type} · {detail.workflow.confidence} confidence
+                {triggerLabel(detail.workflow.trigger_type)} · {steps.length} step{steps.length === 1 ? "" : "s"} · {detail.workflow.confidence} confidence
               </Badge>
             )}
             {detail && (
@@ -324,32 +461,48 @@ export function WorkflowsPage() {
                 {/* Parity with the other graph tabs, which have had these all
                     along — Workflows shipped without a minimap, search or
                     fullscreen, on the tab whose graphs are the longest. */}
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => setFullscreen((v) => !v)}
-                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-                >
-                  {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setFullscreen((v) => !v)}
+                      aria-pressed={fullscreen}
+                      aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    >
+                      {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                  </TooltipContent>
+                </Tooltip>
                 <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
                   {(["auto", "snake", "column"] as const).map((m) => (
-                    <button
-                      key={m}
-                      onClick={() => setLayoutMode(m)}
-                      aria-pressed={layoutMode === m}
-                      title={
-                        m === "auto" ? "Snake long chains, column for short ones"
-                        : m === "snake" ? "Always snake left-right, wrapping down"
-                        : "Always one top-to-bottom column"
-                      }
-                      className={cn(
-                        "rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors",
-                        layoutMode === m ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {m}
-                    </button>
+                    <Tooltip key={m}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          onClick={() => setLayoutMode(m)}
+                          aria-pressed={layoutMode === m}
+                          className={cn(
+                            "rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors",
+                            layoutMode === m ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {m}
+                        </button>
+                      </TooltipTrigger>
+                      {/* Kept: these say what the mode DOES, which the
+                          one-word label cannot. */}
+                      <TooltipContent side="bottom">
+                        {m === "auto"
+                          ? "Snake long chains, column for short ones"
+                          : m === "snake"
+                            ? "Always snake left-right, wrapping down"
+                            : "Always one top-to-bottom column"}
+                      </TooltipContent>
+                    </Tooltip>
                   ))}
                 </div>
               </>
@@ -359,29 +512,35 @@ export function WorkflowsPage() {
       />
 
       {loadingList && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <Skeleton className="graph-canvas" role="status" aria-label="Loading traced workflows" />
       )}
 
-      {!loadingList && (error || !workflows || workflows.length === 0) && (
-        <div className="flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">{error || "No workflows traced yet"}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Workflows are traced from entry points during analysis. If the repo has no detectable
-              entry points, none can be traced — that's reported honestly, not invented.
-            </p>
-          </div>
-          <Button variant="outline" size="xs" onClick={loadWorkflows}>
-            <RefreshCw className="mr-1 h-3 w-3" />
-            Retry
-          </Button>
-        </div>
+      {/* Two different situations that used to share one message. A failed
+          request is ours; an empty list is a finding about the repository, and
+          only the first is worth a Retry button. */}
+      {!loadingList && error && (
+        <EmptyState
+          icon={<AlertTriangle className="h-4 w-4 shrink-0 text-warning" />}
+          heading={error}
+          description="The workflow list could not be loaded. This is a request failure, not a statement about the repository."
+          actions={
+            <Button variant="outline" size="xs" onClick={loadWorkflows}>
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Retry
+            </Button>
+          }
+        />
       )}
 
-      {!loadingList && workflows && workflows.length > 0 && (
+      {!loadingList && !error && (!workflows || workflows.length === 0) && (
+        <EmptyState
+          icon={<Info className="h-4 w-4 shrink-0 text-muted-foreground" />}
+          heading="No workflows were traced in this snapshot"
+          description="A workflow is traced from an entry point — an HTTP route, page, event handler, queue consumer, command or CI pipeline — and kept when the trace reaches a side effect. Zero can mean none of those were detected, or that every trace stopped before reaching one. Both are findings about what the analyzer could see, not proof that the repository does nothing."
+        />
+      )}
+
+      {!loadingList && !error && workflows && workflows.length > 0 && (
         <div
           className={cn(
             "grid gap-3 lg:grid-cols-[250px_1fr]",
@@ -391,42 +550,49 @@ export function WorkflowsPage() {
           {/* workflow rail — ranked most-critical first */}
           <div className="graph-canvas overflow-y-auto !bg-card p-2" data-tour="workflow-list">
             <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
+              {/* Ranking language is suppressed for a list of one: "most
+                  critical first" over a single row claims a comparison that
+                  was never made. */}
               <p className="section-label">
                 {search
                   ? `${visibleWorkflows.length} of ${workflows.length} flows`
-                  : `Traced flows (${workflows.length}) — most critical first`}
+                  : workflows.length === 1
+                    ? "1 traced flow"
+                    : `Traced flows (${workflows.length}) — most critical first`}
               </p>
               {/* What "most critical first" actually means here is the rail's
                   sort order, not any one flow's score — tier decides before a
                   score is compared. The sequence is served by the API beside
                   the ORDER BY that implements it; each flow's own criticality
                   is derived under the flow, where that number is shown. */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
-                    <Info className="h-3 w-3" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-sm text-left">
-                  {ordering ? (
-                    <div className="space-y-1 text-[0.6875rem]">
-                      <p className="font-medium">{ordering.summary}</p>
-                      <ol className="list-inside list-decimal space-y-0.5 opacity-80">
-                        {ordering.steps.map((step) => (
-                          <li key={step}>{step}</li>
-                        ))}
-                      </ol>
-                      <p className="opacity-70">
-                        Select a flow to see how its own criticality score was derived.
-                      </p>
-                    </div>
-                  ) : (
-                    <span className="text-[0.6875rem]">
-                      This response did not say how the list was ordered.
+              {workflows.length > 1 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
+                      <Info className="h-3 w-3" />
                     </span>
-                  )}
-                </TooltipContent>
-              </Tooltip>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-sm text-left">
+                    {ordering ? (
+                      <div className="space-y-1 text-[0.6875rem]">
+                        <p className="font-medium">{ordering.summary}</p>
+                        <ol className="list-inside list-decimal space-y-0.5 opacity-80">
+                          {ordering.steps.map((step) => (
+                            <li key={step}>{step}</li>
+                          ))}
+                        </ol>
+                        <p className="opacity-70">
+                          Select a flow to see how its own criticality score was derived.
+                        </p>
+                      </div>
+                    ) : (
+                      <span className="text-[0.6875rem]">
+                        This response did not say how the list was ordered.
+                      </span>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              )}
             </div>
             {/* Searching the rail, not the canvas: on this tab the thing you
                 are hunting for is a flow, and a repo can trace dozens. */}
@@ -484,9 +650,19 @@ export function WorkflowsPage() {
                     <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                   )}
                   <span className="min-w-0">
-                    <span className="block truncate text-[0.78125rem] font-medium" title={wf.title}>{wf.title}</span>
+                    {/* The row is the tab stop; this tooltip is hover-only
+                        overflow relief. It shows what the truncation hides,
+                        which is the one thing a tooltip is for. */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="block truncate text-[0.78125rem] font-medium">{wf.title}</span>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs text-left">
+                        {wf.title}
+                      </TooltipContent>
+                    </Tooltip>
                     <span className="block text-[0.6875rem] opacity-60">
-                      {wf.trigger_type}
+                      {triggerLabel(wf.trigger_type)}
                       {key === "surface" ? "" : ` · ${wf.step_count} steps`}
                       {wf.realizes_capability ? " · capability" : ""}
                     </span>
@@ -502,33 +678,42 @@ export function WorkflowsPage() {
           {/* flow graph + step detail */}
           <div>
             {/* Why this flow matters — plain-language ranking reasons, and the
-                derivation of the score that ranked it. Shown for any selected
-                flow now: the criticality block is always meaningful, where the
-                purpose/reasons text is not always present. */}
+                derivation of the score that ranked it. The derivation is behind
+                a toggle: it is detail a reader asks for, not a wall they have
+                to read past to reach the diagram. */}
             {selectedSummary && (
               <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
                 {selectedSummary.purpose && (
                   <p className="text-foreground">{selectedSummary.purpose}</p>
                 )}
-                {(selectedSummary.reasons?.length ?? 0) > 0 && (
-                  <p className="mt-0.5 text-muted-foreground">
-                    <span className="font-medium text-foreground">Why it matters:</span>{" "}
-                    {selectedSummary.reasons!.slice(0, 3).join(" · ")}
-                  </p>
-                )}
-                {/* The score behind the rail's "most critical" claim, with the
-                    signals that produced it. Reasons are suppressed here
-                    because the line above already prints the same stored
-                    strings. */}
-                <div className="mt-2 border-t border-border pt-2">
-                  <div className="mb-1 flex items-center gap-1.5">
-                    <p className="section-label">Criticality</p>
-                    <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
-                      {Math.round(Number(selectedSummary.composite_score ?? 0) * 100)} / 100
-                    </span>
-                  </div>
-                  <ScoreProvenance data={selectedSummary.provenance} showReasons={false} />
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+                  <span className="font-medium text-foreground">Criticality</span>
+                  <span className="tabular-nums">
+                    {Math.round(Number(selectedSummary.composite_score ?? 0) * 100)} / 100
+                  </span>
+                  {(selectedSummary.reasons?.length ?? 0) > 0 && (
+                    <span className="min-w-0">· {selectedSummary.reasons![0]}</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowScoring((v) => !v)}
+                    aria-expanded={showScoring}
+                    className="ml-auto inline-flex items-center gap-1 rounded-sm text-[0.6875rem] font-medium text-primary hover:underline"
+                  >
+                    {showScoring ? "Hide" : "How this was scored"}
+                    <ChevronDown className={cn("h-3 w-3 transition-transform", showScoring && "rotate-180")} />
+                  </button>
                 </div>
+                {showScoring && (
+                  <div className="mt-2 border-t border-border pt-2">
+                    {(selectedSummary.reasons?.length ?? 0) > 1 && (
+                      <p className="mb-1.5 text-muted-foreground">
+                        {selectedSummary.reasons!.slice(1).join(" · ")}
+                      </p>
+                    )}
+                    <ScoreProvenance data={selectedSummary.provenance} showReasons={false} />
+                  </div>
+                )}
               </div>
             )}
           <div className={selectedStep ? "grid gap-3 xl:grid-cols-[1fr_300px]" : ""}>
@@ -537,6 +722,27 @@ export function WorkflowsPage() {
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
                 </div>
+              )}
+              {untraceable && (
+                <div className="absolute left-2 top-2 z-10 max-w-md rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[0.6875rem] leading-snug text-foreground">
+                  All {steps.length} steps of this flow are in <span className="font-mono">{untraceable}</span> with no
+                  symbols resolved — there is one file here, counted {steps.length} times, not a traced path between
+                  {" "}{steps.length} places.
+                </div>
+              )}
+              {/* Fullscreen's own exit: the header control that toggles it is
+                  outside this overlay, so once it covers the viewport there was
+                  nothing visible to click. Esc still works and says so. */}
+              {fullscreen && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => setFullscreen(false)}
+                  className="absolute right-2 top-2 z-10"
+                >
+                  <Minimize2 className="mr-1 h-3 w-3" />
+                  Exit fullscreen (Esc)
+                </Button>
               )}
               {/* Shared canvas: selection no longer moves the camera here
                   either, and this tab finally gets a minimap. */}
@@ -555,30 +761,64 @@ export function WorkflowsPage() {
 
             {selectedStep && (
               <aside className="graph-canvas overflow-y-auto !bg-card p-4">
-                <p className="section-label mb-2">Step {selectedStep.stepOrder}</p>
+                <p className="section-label mb-2">
+                  Step {selectedStep.stepOrder} of {steps.length}
+                </p>
                 <p className="font-mono text-[0.8125rem] font-medium text-foreground">
                   {selectedStep.symbolName ?? selectedStep.filePath}
                 </p>
-                <p className="mt-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+                <p className="mt-0.5 break-all font-mono text-[0.6875rem] text-muted-foreground">
                   {selectedStep.filePath}
                   {selectedStep.lineStart && ` · L${selectedStep.lineStart}${selectedStep.lineEnd ? `–${selectedStep.lineEnd}` : ""}`}
                 </p>
                 <Badge variant="secondary" className="mt-2 text-[0.625rem] uppercase">{selectedStep.stepKind.replace(/_/g, " ")}</Badge>
-                <p className="mt-3 text-[0.8125rem] leading-relaxed text-muted-foreground">{selectedStep.description}</p>
+
+                {/* What the step does, and where the sentence came from. The
+                    audit's finding was not that the deterministic text is
+                    wrong — it is that 95% of steps carry it with nothing
+                    distinguishing them from the 5% a model actually read. */}
+                <p className="mt-3 text-[0.8125rem] leading-relaxed text-foreground">{selectedStep.explanation}</p>
+                <p className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/80">
+                  {selectedStep.narrated ? (
+                    <>
+                      <Sparkles className="h-2.5 w-2.5 text-primary" />
+                      Written by the narration pass for this step
+                    </>
+                  ) : (
+                    "Deterministic description — derived from the step's kind and target, not written about this code"
+                  )}
+                </p>
 
                 {stepDetail?.doc?.summary && (
-                  <p className="mt-3 text-[0.78125rem] leading-relaxed text-foreground">
-                    <Sparkles className="mr-1 inline h-3 w-3 text-primary" />
-                    {stepDetail.doc.summary}
-                  </p>
+                  <div className="mt-3 border-t border-border pt-3">
+                    <p className="section-label mb-1">What this symbol is</p>
+                    <p className="text-[0.78125rem] leading-relaxed text-foreground">
+                      {stepDetail.doc.summary}
+                    </p>
+                  </div>
                 )}
                 {(stepDetail?.side_effects?.length ?? 0) > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1">
-                    {stepDetail!.side_effects!.map((se, i) => (
-                      <Badge key={i} variant="outline" className="h-5 px-1.5 text-[0.625rem]" title={se.target ?? undefined}>
-                        {se.type.replace(/_/g, " ")}
-                      </Badge>
-                    ))}
+                    {stepDetail!.side_effects!.map((se, i) =>
+                      se.target ? (
+                        // Focusable, and kept: the target is the one thing the
+                        // chip does not show.
+                        <Tooltip key={i}>
+                          <TooltipTrigger asChild>
+                            <Badge variant="outline" tabIndex={0} className="h-5 px-1.5 text-[0.625rem]">
+                              {se.type.replace(/_/g, " ")}
+                            </Badge>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="max-w-xs break-all text-left">
+                            {se.target}
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : (
+                        <Badge key={i} variant="outline" className="h-5 px-1.5 text-[0.625rem]">
+                          {se.type.replace(/_/g, " ")}
+                        </Badge>
+                      ),
+                    )}
                   </div>
                 )}
                 {stepDetail?.doc?.signature && (

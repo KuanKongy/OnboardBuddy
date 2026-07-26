@@ -579,6 +579,22 @@ export function attemptRunTestsProcedure(
 
 // ── trace_flow: watch one real flow execute ─────────────────────────────────
 
+/**
+ * A detected side effect attached to the step that performs it.
+ *
+ * `evidence` is the matched call expression text — the only thing that makes
+ * deterministic highlighting possible, because `DetectedSideEffect` carries no
+ * line number and graph edges carry no call-site lines. Highlights are
+ * therefore LOCATED by scanning the verified snippet for this string, never
+ * looked up (see `deriveHighlights`).
+ */
+export interface StepEffect {
+  /** `side_effects.type` — a structural kind, never a domain word. */
+  kind: string;
+  target: string | null;
+  evidence: string;
+}
+
 export interface TraceStep {
   order: number;
   filePath: string;
@@ -590,13 +606,31 @@ export interface TraceStep {
   nodeId: string | null;
   nodeHash: string | null;
   snippet: string | null;
+  /** Side effects recorded against this step's node, for highlight location. */
+  effects?: StepEffect[];
+  /** `workflow_steps.metadata` — see the WorkflowStep JSDoc in workflowExtractor. */
+  metadata?: {
+    syntheticReturn?: boolean;
+    syntheticSeedEffect?: boolean;
+    journeyMember?: string;
+    journeyBoundary?: string;
+  } | null;
 }
 
 export interface TraceInput {
   title: string;
   purpose: string;
   tier: 'core' | 'supporting' | 'surface';
+  /** The flow's own trigger type; `journey` for a composed journey. */
   triggerType: string;
+  /**
+   * How a composed journey's FIRST member is triggered ("HTTP POST", "UI
+   * page"). A journey's own trigger type is the word `journey`, which is not
+   * something a reader can send — but its first member is a real route or
+   * page, and that is what sets the whole chain off. Absent for ordinary
+   * flows, where `triggerType` already describes the entry point.
+   */
+  entryTriggerType?: string | null;
   routePath: string | null;
   httpMethod: string | null;
   steps: TraceStep[];
@@ -605,11 +639,167 @@ export interface TraceInput {
 }
 
 /** Step kinds that mean the flow changed something you can watch for. */
-const EFFECT_KINDS = new Set(['data_write', 'async_work', 'side_effect', 'data_read']);
+// `auth_guard` is here for the same reason it counts as a state change in the
+// extractor: a login's observable effect IS the session it creates. Without
+// it, every auth flow reached this function and was turned away with "no
+// traced step that reads, writes, enqueues or calls out" — a false statement
+// about a handler that calls an identity SDK, and the reason the shipped
+// tutorial set had no login in it.
+const EFFECT_KINDS = new Set(['data_write', 'async_work', 'side_effect', 'data_read', 'auth_guard']);
 /** Files where a one-line marker is a safe, revertible edit we can spell out. */
 const JS_LIKE = /\.(?:m|c)?[jt]sx?$/;
 
 const identifier = (step: TraceStep): string => step.symbolName ?? baseOf(step.filePath);
+
+// ── composed journeys ───────────────────────────────────────────────────────
+
+/**
+ * How far execution actually travels from ONE trigger.
+ *
+ * A queue hand-off is crossed by the job itself, so a marker on the consumer
+ * side still prints after a single request. A `group` boundary means "another
+ * entry point on the same surface" and a `redirect` hands control to a third
+ * party — neither is reached by the request the reader sends, so a marker over
+ * there would never print and the verification telling them to expect it would
+ * be a lie.
+ */
+const CONTINUES_FROM_ONE_TRIGGER = new Set(['queue']);
+
+interface JourneyWalk {
+  /** The crossings between members, in order. One procedure step each. */
+  boundaries: TraceStep[];
+  /** The prefix of the chain that a single trigger really executes. */
+  reachable: TraceStep[];
+  /** Members past the first non-continuing boundary: reachable, but not from here. */
+  separateEntryPoints: number;
+  /** True when the reader's request hands off to a queue before the marker. */
+  crossesQueue: boolean;
+}
+
+/**
+ * Composed journeys (`journeyComposer.ts`) are persisted as workflows, but
+ * they are stitched from several members and run to 14 steps against an
+ * 8-step procedure budget. Walking all of them would blow the budget and cut
+ * the revert step off the end, leaving the reader's marker in the tree.
+ *
+ * What a reader needs from a journey is its SPINE: where the request enters,
+ * every place it crosses from one member to the next, and where it finally
+ * lands — "request enters → crosses to the queue → worker consumes → sections
+ * written". The composer already marks exactly those steps
+ * (`metadata.journeyBoundary` on a crossing, `metadata.journeyMember` on a
+ * member's own steps), so this reads its annotations rather than guessing at
+ * the shape a second time.
+ */
+function journeyWalkOf(ordered: TraceStep[]): JourneyWalk | null {
+  if (!ordered.some((s) => s.metadata?.journeyMember || s.metadata?.journeyBoundary)) return null;
+  const boundaries = ordered.filter((s) => typeof s.metadata?.journeyBoundary === 'string');
+  const stopAt = ordered.findIndex((s) =>
+    typeof s.metadata?.journeyBoundary === 'string'
+    && !CONTINUES_FROM_ONE_TRIGGER.has(s.metadata.journeyBoundary));
+  const reachable = stopAt === -1 ? ordered : ordered.slice(0, stopAt);
+  return {
+    boundaries,
+    reachable,
+    separateEntryPoints: stopAt === -1
+      ? 0
+      : boundaries.filter((b) => b.order >= ordered[stopAt]!.order).length,
+    crossesQueue: reachable.some((s) => s.metadata?.journeyBoundary === 'queue'),
+  };
+}
+
+/** A trigger the reader can send by hand, with the marker's expected output. */
+interface ManualTrigger {
+  action: string;
+  command?: string;
+  expected: string;
+  verify: string;
+}
+
+/**
+ * The deepest effect we can name a line for: the further in it sits, the more
+ * of the flow a marker printing there actually proves. Shared by the how-to
+ * trace procedure and the walkthrough's optional "prove it live" appendix, so
+ * the two can never disagree about which line is the observable one.
+ */
+function selectProbe(effects: TraceStep[], entry: TraceStep): TraceStep | undefined {
+  return [...effects].reverse().find((s) => s.lineStart != null && JS_LIKE.test(s.filePath))
+    ?? (entry.lineStart != null && JS_LIKE.test(entry.filePath) ? entry : undefined);
+}
+
+/**
+ * How a reader sets this flow off by hand — a route to curl, a page to open,
+ * or a covering test to run — plus whatever the evidence could not pin down.
+ */
+function buildTrigger(
+  input: TraceInput,
+  env: RunEnvironment,
+  entry: TraceStep,
+  probe: TraceStep,
+): { trigger: ManualTrigger | null; gaps: ProcedureGap[] } {
+  const gaps: ProcedureGap[] = [];
+  // The port that serves THIS flow, not just the first one published. A repo
+  // with `db`, `api` and `web` publishes three; curling the Postgres port
+  // because it is listed first is the sort of confident-and-wrong instruction
+  // that made the old tutorials untrustworthy. Prefer the service whose build
+  // context contains the traced file; fall back to any HTTP port.
+  const httpPorts = env.ports.filter((p) => p.kind === 'http');
+  const port =
+    (httpPorts.find((p) => p.buildContext && entry.filePath.startsWith(p.buildContext.replace(/\/$/, '') + '/'))
+      ?? httpPorts[0])?.port ?? null;
+  // A journey is set off by its first member, not by the word "journey".
+  const triggerType = input.entryTriggerType ?? input.triggerType;
+  const isHttp = Boolean(input.routePath) && /^HTTP/i.test(triggerType);
+  const isUi = triggerType === 'UI page' && Boolean(input.routePath);
+  const test = env.test[0];
+
+  if (isHttp || isUi) {
+    const host = port ? `http://localhost:${port}` : 'http://localhost:PORT';
+    if (!port) {
+      gaps.push({
+        kind: 'port_unknown',
+        detail: 'no compose file publishes a host port, so the port is whatever the start command printed — substitute it below.',
+      });
+    }
+    if (input.routePath && /[:{*]/.test(input.routePath)) {
+      gaps.push({
+        kind: 'route_params_unfilled',
+        detail: `\`${input.routePath}\` contains path parameters; substitute real values from your running instance before sending the request.`,
+      });
+    }
+    if (isHttp) {
+      const method = (input.httpMethod ?? 'GET').toUpperCase();
+      return {
+        gaps,
+        trigger: {
+          action: `Set the flow off: send ${method} ${input.routePath} to the app you started.`,
+          command: `curl -i -X ${method} ${host}${input.routePath}`,
+          expected: `curl prints a status line, and the \`[trace]\` marker from the previous step appears in the output of the process from step 1.`,
+          verify: `The marker printed. If it did not, the request never reached \`${identifier(probe)}\` — check the port and that the path matches ${input.routePath}.`,
+        },
+      };
+    }
+    return {
+      gaps,
+      trigger: {
+        action: `Set the flow off: open ${host}${input.routePath} in a browser.`,
+        expected: `The page renders, and the \`[trace]\` marker from the previous step appears — in the browser console for client code, in the terminal from step 1 for server code.`,
+        verify: `The marker printed. If it did not, this page does not reach \`${identifier(probe)}\` on load; it may need an interaction first.`,
+      },
+    };
+  }
+  if (input.coveringTests.length > 0 && test) {
+    return {
+      gaps,
+      trigger: {
+        action: `Set the flow off by running the test that covers it.`,
+        command: test.command,
+        expected: `The suite runs and the \`[trace]\` marker from the previous step appears in its output, printed from \`${input.coveringTests[0]}\`.`,
+        verify: `The marker printed. If it did not, \`${input.coveringTests[0]}\` does not reach this line and the coverage is narrower than the graph suggests.`,
+      },
+    };
+  }
+  return { trigger: null, gaps };
+}
 
 /**
  * "Watch this flow actually run." The replacement for the four
@@ -653,15 +843,15 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
 
   const ordered = [...input.steps].sort((a, b) => a.order - b.order);
   const entry = ordered[0];
-  const effects = ordered.filter((s) => s.stepKind != null && EFFECT_KINDS.has(s.stepKind));
+  // A journey's marker may only be planted in the part of the chain one
+  // request reaches; see `journeyWalkOf`.
+  const journey = journeyWalkOf(ordered);
+  const effects = (journey?.reachable ?? ordered).filter((s) => s.stepKind != null && EFFECT_KINDS.has(s.stepKind));
   if (!entry || effects.length === 0) {
     return { ok: false, skip: { reason: 'surface_tier_no_traced_effects', detail: `"${input.title}" has no traced step that reads, writes, enqueues or calls out.` } };
   }
 
-  // Mark the deepest effect we can name a line for: the further in it sits,
-  // the more of the flow its printing actually proves.
-  const probe = [...effects].reverse().find((s) => s.lineStart != null && JS_LIKE.test(s.filePath))
-    ?? (entry.lineStart != null && JS_LIKE.test(entry.filePath) ? entry : undefined);
+  const probe = selectProbe(effects, entry);
   if (!probe) {
     return {
       ok: false,
@@ -672,77 +862,39 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     };
   }
 
-  const gaps: ProcedureGap[] = [];
-  // The port that serves THIS flow, not just the first one published. A repo
-  // with `db`, `api` and `web` publishes three; curling the Postgres port
-  // because it is listed first is the sort of confident-and-wrong instruction
-  // that made the old tutorials untrustworthy. Prefer the service whose build
-  // context contains the traced file; fall back to any HTTP port.
-  const httpPorts = env.ports.filter((p) => p.kind === 'http');
-  const port =
-    (httpPorts.find((p) => p.buildContext && entry.filePath.startsWith(p.buildContext.replace(/\/$/, '') + '/'))
-      ?? httpPorts[0])?.port ?? null;
-  const isHttp = Boolean(input.routePath) && /^HTTP/i.test(input.triggerType);
-  const isUi = input.triggerType === 'UI page' && Boolean(input.routePath);
-
-  let trigger: { action: string; command?: string; expected: string; verify: string } | null = null;
-  if (isHttp || isUi) {
-    const host = port ? `http://localhost:${port}` : 'http://localhost:PORT';
-    if (!port) {
-      gaps.push({
-        kind: 'port_unknown',
-        detail: 'no compose file publishes a host port, so the port is whatever the start command printed — substitute it below.',
-      });
-    }
-    if (input.routePath && /[:{*]/.test(input.routePath)) {
-      gaps.push({
-        kind: 'route_params_unfilled',
-        detail: `\`${input.routePath}\` contains path parameters; substitute real values from your running instance before sending the request.`,
-      });
-    }
-    if (isHttp) {
-      const method = (input.httpMethod ?? 'GET').toUpperCase();
-      trigger = {
-        action: `Set the flow off: send ${method} ${input.routePath} to the app you started.`,
-        command: `curl -i -X ${method} ${host}${input.routePath}`,
-        expected: `curl prints a status line, and the \`[trace]\` marker from the previous step appears in the output of the process from step 1.`,
-        verify: `The marker printed. If it did not, the request never reached \`${identifier(probe)}\` — check the port and that the path matches ${input.routePath}.`,
-      };
-    } else {
-      trigger = {
-        action: `Set the flow off: open ${host}${input.routePath} in a browser.`,
-        expected: `The page renders, and the \`[trace]\` marker from the previous step appears — in the browser console for client code, in the terminal from step 1 for server code.`,
-        verify: `The marker printed. If it did not, this page does not reach \`${identifier(probe)}\` on load; it may need an interaction first.`,
-      };
-    }
-  } else if (input.coveringTests.length > 0 && test) {
-    trigger = {
-      action: `Set the flow off by running the test that covers it.`,
-      command: test.command,
-      expected: `The suite runs and the \`[trace]\` marker from the previous step appears in its output, printed from \`${input.coveringTests[0]}\`.`,
-      verify: `The marker printed. If it did not, \`${input.coveringTests[0]}\` does not reach this line and the coverage is narrower than the graph suggests.`,
-    };
-  }
+  const built = buildTrigger(input, env, entry, probe);
+  const gaps: ProcedureGap[] = [...built.gaps];
+  let trigger = built.trigger;
+  const triggerType = input.entryTriggerType ?? input.triggerType;
 
   if (!trigger) {
     return {
       ok: false,
       skip: {
         reason: 'no_way_to_trigger',
-        detail: `"${input.title}" is triggered by ${input.triggerType}, and no route, page or covering test was found that a reader could use to set it off by hand.`,
+        detail: `"${input.title}" is triggered by ${triggerType}, and no route, page or covering test was found that a reader could use to set it off by hand.`,
       },
+    };
+  }
+  // An async hand-off is not a delay in the request — say so, or the reader
+  // reads a silent curl as a failure and starts debugging the wrong half.
+  if (journey?.crossesQueue) {
+    trigger = {
+      ...trigger,
+      expected: `${trigger.expected} The hand-off is asynchronous: the marker prints when the job is consumed, after the request has already returned.`,
     };
   }
 
   const steps: ProcedureStep[] = [];
   const push = (s: UnorderedStep) => steps.push({ ...s, order: steps.length + 1 });
   const run = start ?? test!;
+  const needsInstall = /(^|\/)package\.json$/.test(run.source);
 
   // A script-backed run command fails on a fresh clone until dependencies are
   // installed, and "npm run dev" is the run command for every repo with no
   // compose file — which is most of them. Compose builds its own images, so
   // this step only exists where it is actually needed.
-  if (/(^|\/)package\.json$/.test(run.source)) {
+  if (needsInstall) {
     push({
       kind: 'setup',
       action: 'Install dependencies.',
@@ -778,6 +930,58 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     workflowStepOrder: entry.order,
   });
 
+  // The hops, between "where it starts" and "where it lands". Budgeted
+  // explicitly rather than trimmed at the end: the tail of this procedure is
+  // the revert step, and a slice() that drops it leaves the reader's marker
+  // committed to their working tree.
+  //
+  // Fixed cost below: run, inspect-entry, edit-marker, trigger, revert
+  // (+ install where the run command needs one).
+  const hopBudget = Math.max(0, MAX_PROCEDURE_STEPS - (needsInstall ? 6 : 5));
+  // When the budget cannot hold every hop, keep the FIRST ones and the LAST
+  // one rather than a prefix: the final boundary is where the journey lands
+  // ("connection complete — POST /api/projects registers the repository"),
+  // and a walk that stops one hop short of the destination teaches the
+  // hand-offs without ever showing what they were for.
+  const hops = !journey ? []
+    : journey.boundaries.length <= hopBudget ? journey.boundaries
+    : [...journey.boundaries.slice(0, Math.max(0, hopBudget - 1)), journey.boundaries[journey.boundaries.length - 1]!];
+  for (const hop of hops) {
+    const continues = CONTINUES_FROM_ONE_TRIGGER.has(hop.metadata?.journeyBoundary ?? '');
+    push({
+      kind: 'inspect',
+      action: `Open \`${hop.filePath}\`${hop.lineStart ? ` at line ${hop.lineStart}` : ''}${hop.symbolName ? ` (\`${hop.symbolName}\`)` : ''} — the next leg of this journey.`,
+      filePath: hop.filePath,
+      symbolName: hop.symbolName,
+      lineStart: hop.lineStart,
+      lineEnd: hop.lineEnd,
+      expected: `Where this flow crosses from one part of the system into the next. The trace records the hop as: ${hop.description}`,
+      verify: continues
+        ? `The lines you print are the far side of the hand-off. Nothing calls them directly — the job does, which is why the next steps watch for a marker instead of a return value.`
+        : `The lines you print are a separate entry point on the same surface. The request in the trigger step below does not reach them; set this one off on its own to watch it run.`,
+      verifyCommand: hop.lineStart
+        ? `sed -n '${hop.lineStart},${hop.lineEnd ?? hop.lineStart + 15}p' ${hop.filePath}`
+        : undefined,
+      evidence: hop.lineStart ? `${hop.filePath}:${hop.lineStart}` : hop.filePath,
+      nodeId: hop.nodeId,
+      nodeHash: hop.nodeHash,
+      snippet: hop.snippet,
+      workflowStepOrder: hop.order,
+    });
+  }
+  if (journey && hops.length < journey.boundaries.length) {
+    gaps.push({
+      kind: 'journey_hops_not_walked',
+      detail: `This journey crosses ${journey.boundaries.length} boundaries and the procedure has room for ${hops.length} — the first and the last. The middle hops are on the Workflows tab.`,
+    });
+  }
+  if (journey && journey.separateEntryPoints > 0) {
+    gaps.push({
+      kind: 'journey_members_triggered_separately',
+      detail: `${journey.separateEntryPoints} later leg${journey.separateEntryPoints === 1 ? ' is a' : 's are'} separate entry point${journey.separateEntryPoints === 1 ? '' : 's'} on the same surface — one request does not reach ${journey.separateEntryPoints === 1 ? 'it' : 'them'}, so the marker is planted in the leg this trigger really runs.`,
+    });
+  }
+
   const marker = `console.log('[trace] ${identifier(probe)} reached');`;
   push({
     kind: 'edit',
@@ -811,7 +1015,10 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
   // this would restate the previous step, which is exactly the essay habit.
   // It must also sit AFTER the marker: the verification below says the marker
   // printed before this point, and that is only true downstream of it.
-  const terminal = [...ordered].reverse().find(
+  // Not for journeys: their last step usually sits past a boundary this
+  // trigger never crosses, so "the marker printed before this point" would be
+  // false — the hops above are where a journey's later legs are accounted for.
+  const terminal = journey ? undefined : [...ordered].reverse().find(
     (s) => s.order !== probe.order && s.order !== entry.order && s.order > probe.order,
   );
   if (terminal && steps.length < MAX_PROCEDURE_STEPS - 1) {
@@ -849,7 +1056,9 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
   if (ordered.length > steps.length) {
     gaps.push({
       kind: 'steps_not_walked',
-      detail: `The trace has ${ordered.length} steps; this procedure stops at the ${effects.length} that change something. The full trace is on the Workflows tab.`,
+      detail: journey
+        ? `This journey is stitched from ${ordered.length} traced steps; the procedure walks its spine — where it starts, the boundaries it crosses, and the line that proves it ran. The full chain is on the Workflows tab.`
+        : `The trace has ${ordered.length} steps; this procedure stops at the ${effects.length} that change something. The full trace is on the Workflows tab.`,
     });
   }
 
@@ -858,6 +1067,637 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     return { ok: false, skip: { reason: 'too_few_steps', detail: `only ${renumbered.length} verifiable step(s) could be built for "${input.title}"` } };
   }
   return { ok: true, draft: { kind: 'trace_flow', title: `Watch ${input.title} run end to end`, steps: renumbered, gaps } };
+}
+
+// ── walkthrough: an annotated reading of one real path ──────────────────────
+
+/**
+ * What a walkthrough step IS (doc/TUTORIAL_REDESIGN.md §2).
+ *
+ * The owner's sentence is the spec: *"code and it highlighted the important
+ * lines, while explaining what it does, what is happening with handoff to next
+ * step."* So one step is four things and nothing else:
+ *
+ *   1. a real snippet — the verified bytes already on `graph_nodes.snippet`,
+ *      windowed to what fits a reader's eye (`window`);
+ *   2. highlighted lines — LOCATED in those bytes, never guessed (§2.3);
+ *   3. narration — 2-3 sentences on what this code does *in this flow*;
+ *   4. one hand-off sentence naming where control or data goes next, or, on
+ *      the last step, a landing statement naming what now exists.
+ *
+ * The `Do this / You should see / Check it worked` triptych is gone from here.
+ * It was the right shape for a runbook and the wrong shape for a reading, and
+ * it survives unchanged on the how-to procedures above.
+ *
+ * Every field below is deterministic. The model's whole remaining job is to
+ * replace `narration` and `handoff.text` with better prose over a skeleton it
+ * cannot alter — which is also why a facts-only package can render a complete
+ * walkthrough with zero model calls.
+ */
+export type WalkthroughRole = 'entry' | 'hop' | 'effect' | 'landing';
+
+export interface WalkthroughHighlight {
+  /** Absolute file line numbers, always inside [lineStart, lineEnd]. */
+  start: number;
+  end: number;
+  source: 'side_effect' | 'call_to_next' | 'boundary_token' | 'signature';
+  /** Deterministic, from the evidence that located the range. */
+  label: string;
+}
+
+export interface WalkthroughHandoff {
+  text: string;
+  /** `call` for an ordinary call edge; otherwise the boundary kind the composer emitted. */
+  kind: string;
+  toStep: number;
+  toSymbol: string | null;
+  toFile: string | null;
+  source: 'ai' | 'deterministic';
+}
+
+export interface WalkthroughPhase {
+  index: number;
+  count: number;
+  title: string;
+  /** Journey member stable key; '' for a single flow's implicit phase. */
+  member: string;
+}
+
+export interface WalkthroughStep {
+  order: number;
+  role: WalkthroughRole;
+  filePath: string;
+  symbolName: string | null;
+  lineStart: number | null;
+  lineEnd: number | null;
+  snippet: string | null;
+  /** Absolute line span of the ~32-line reading window inside `snippet`. */
+  window: { start: number; end: number } | null;
+  narration: string;
+  narrationSource: 'ai' | 'deterministic';
+  highlights: WalkthroughHighlight[];
+  handoff: WalkthroughHandoff | null;
+  /** Last step only: what exists once the path has run. */
+  landing: string | null;
+  boundary: { kind: string; detail: string } | null;
+  phase: WalkthroughPhase | null;
+  /** Folded under its phase by default — nothing is cut, §3.2. */
+  collapsed: boolean;
+  evidence: string;
+  nodeId?: string | null;
+  nodeHash?: string | null;
+  workflowStepOrder?: number;
+  /** The optional "prove it live" appendix, on its own card. */
+  appendix?: {
+    marker: string;
+    triggerAction: string;
+    triggerCommand?: string;
+    expected: string;
+    revertCommand: string;
+  };
+}
+
+export interface WalkthroughDraft {
+  kind: 'walkthrough';
+  title: string;
+  steps: WalkthroughStep[];
+  gaps: ProcedureGap[];
+}
+
+export type WalkthroughAttempt =
+  | { ok: true; draft: WalkthroughDraft }
+  | { ok: false; skip: ProcedureSkip };
+
+/** Whatever `journeyComposer` emits on `workflows.metadata.journey`. */
+export interface WalkthroughJourney {
+  members: string[];
+  memberTitles: string[];
+  /** `kind` is read as an opaque string — boundary vocabulary is the composer's. */
+  boundaries: Array<{ after: number; kind: string; detail?: string; token?: string }>;
+}
+
+export interface WalkthroughInput extends TraceInput {
+  journey?: WalkthroughJourney | null;
+  /** Each journey member's OWN traced steps, keyed by member stable key. */
+  memberSteps?: Map<string, TraceStep[]>;
+}
+
+/**
+ * One card is enough.
+ *
+ * A reading has no setup overhead to amortise, so a flow whose trace is a
+ * single symbol still yields something real: the snippet, the lines that
+ * matter in it, and a landing statement saying what exists afterwards. That is
+ * §7's "thin trace" fallback — render what was traced, state the thinness —
+ * and it is strictly more honest than dropping the flow and showing nothing.
+ */
+export const MIN_WALKTHROUGH_STEPS = 1;
+/** ~32 lines centred on the first highlight; the UI expands to the whole capture. */
+export const WALKTHROUGH_WINDOW_LINES = 32;
+/** Visible cards per phase before the rest fold (§3.2, soft). */
+export const PHASE_STEP_BUDGET = 3;
+/**
+ * Beyond this many visible cards the reader stops scrolling. Unlike
+ * `MAX_PROCEDURE_STEPS` this is NOT a slice: it tightens the per-phase budget
+ * and folds, because the completeness invariant forbids dropping a member or a
+ * boundary. That is the direct fix for "the onboarding package generation is
+ * just 2 steps".
+ */
+export const MAX_VISIBLE_WALKTHROUGH_STEPS = 16;
+/** Folded sub-steps kept per phase; the remainder is stated as a gap. */
+const MAX_COLLAPSED_PER_PHASE = 8;
+
+/**
+ * Structural boundary kinds → the one clause a reader needs about them.
+ * Unknown kinds fall back to the composer's own `detail`, so a new boundary
+ * vocabulary needs no edit here.
+ */
+const BOUNDARY_CLAUSE: Record<string, string> = {
+  queue: 'asynchronous: the request has already returned, and the next step runs when the job is consumed',
+  async_token: 'asynchronous: the request has already returned, and the next step runs when the job is consumed',
+  redirect: 'control leaves this process and comes back on a different route',
+  external_roundtrip: 'control leaves this process and comes back on a different route',
+  group: 'the next step is a separate entry point on the same surface — one request does not reach it',
+  capability_unlock: 'the credential issued here is what the next step checks',
+  resource_lifecycle: 'the identity created here is what the next step operates on',
+};
+
+/** `side_effects.type` → the verb a highlight label uses. Structural, not domain. */
+const EFFECT_VERB: Record<string, string> = {
+  database_write: 'writes',
+  database_read: 'reads',
+  http_request: 'calls out to',
+  queue_enqueue: 'enqueues onto',
+  queue_consume: 'consumes from',
+  filesystem_read: 'reads the file',
+  filesystem_write: 'writes the file',
+  auth_check: 'checks identity with',
+  env_read: 'reads configuration from',
+  response_output: 'returns the response',
+  external_integration: 'calls',
+};
+
+/** `side_effects.type` → what exists afterwards, for the landing statement. */
+const EFFECT_RESULT: Record<string, string> = {
+  database_write: 'rows written to',
+  queue_enqueue: 'a job queued on',
+  filesystem_write: 'a file written at',
+  http_request: 'a call made to',
+  external_integration: 'a call made to',
+  auth_check: 'a session established through',
+  response_output: 'a response returned by',
+};
+
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Absolute line number of `index` in a snippet whose first line is `startLine`. */
+function lineAt(snippet: string, index: number, startLine: number): number {
+  let line = startLine;
+  for (let i = 0; i < index && i < snippet.length; i++) {
+    if (snippet.charCodeAt(i) === 10) line += 1;
+  }
+  return line;
+}
+
+/**
+ * Where a literal appears in the verified snippet, as absolute lines.
+ *
+ * A miss returns null and the caller emits NO highlight — a guessed range on a
+ * reformatted file is exactly the fabrication this tab exists to avoid. The
+ * one concession is a retry on the needle's first line, because effect
+ * evidence is often a multi-line call expression the snippet wraps differently.
+ */
+function locate(snippet: string, startLine: number, needle: string): { start: number; end: number } | null {
+  const trimmed = needle.trim();
+  if (trimmed.length < 3) return null;
+  let idx = snippet.indexOf(trimmed);
+  let match = trimmed;
+  if (idx === -1) {
+    const head = trimmed.split('\n')[0]!.trim();
+    if (head.length < 6) return null;
+    idx = snippet.indexOf(head);
+    if (idx === -1) return null;
+    match = head;
+  }
+  const start = lineAt(snippet, idx, startLine);
+  return { start, end: lineAt(snippet, idx + match.length, startLine) };
+}
+
+/**
+ * The lines that matter AT THIS STEP, in the priority order of §2.3. Every
+ * range is located in the snippet's bytes — the same bytes the receipts prove
+ * — and clamped to the step's own span. Zero highlights is a legal outcome.
+ */
+function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary: { detail?: string; token?: string } | null): WalkthroughHighlight[] {
+  const snippet = step.snippet;
+  const startLine = step.lineStart;
+  if (!snippet || startLine == null) return [];
+  const endLine = step.lineEnd ?? startLine + snippet.split('\n').length;
+  const out: WalkthroughHighlight[] = [];
+  const seen = new Set<string>();
+  const push = (range: { start: number; end: number } | null, source: WalkthroughHighlight['source'], label: string): void => {
+    if (!range) return;
+    const start = Math.max(range.start, startLine);
+    const end = Math.min(Math.max(range.end, start), endLine);
+    if (end < start) return;
+    const key = `${start}-${end}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ start, end, source, label });
+  };
+
+  // 1. side_effect — the recorded call expression, found in the snippet.
+  for (const effect of step.effects ?? []) {
+    if (!effect.evidence) continue;
+    const verb = EFFECT_VERB[effect.kind] ?? effect.kind.replace(/_/g, ' ');
+    push(locate(snippet, startLine, effect.evidence), 'side_effect',
+      effect.target ? `${verb} ${effect.target}` : verb);
+  }
+
+  // 2. call_to_next — where this step hands control to the next one.
+  if (next?.symbolName && next.symbolName !== step.symbolName && /^[\w$]+$/.test(next.symbolName)) {
+    const re = new RegExp(`(?<![\\w$.])${escapeRe(next.symbolName)}\\s*(?=[(.])`);
+    const m = re.exec(snippet);
+    if (m) {
+      push(
+        { start: lineAt(snippet, m.index, startLine), end: lineAt(snippet, m.index + m[0].length, startLine) },
+        'call_to_next',
+        `calls ${next.symbolName}`,
+      );
+    }
+  }
+
+  // 3. boundary_token — the literal the hand-off matches on. The composer's
+  //    own normalized token when it carried one; otherwise any literal quoted
+  //    in its detail text. No boundary vocabulary is assumed either way.
+  if (boundary) {
+    const tokens = boundary.token
+      ? [boundary.token]
+      : [...(boundary.detail ?? '').matchAll(/['"`]([\w.:@/-]{3,})['"`]/g)].map((m) => m[1]!);
+    for (const token of tokens) {
+      const found = locate(snippet, startLine, `'${token}'`)
+        ?? locate(snippet, startLine, `"${token}"`)
+        ?? locate(snippet, startLine, `\`${token}\``)
+        ?? locate(snippet, startLine, token);
+      push(found, 'boundary_token', `the token this hand-off matches on: ${token}`);
+    }
+  }
+
+  // 4. signature — always known, so a step is never left with nothing to look at.
+  if (out.length === 0 && step.symbolName) {
+    push({ start: startLine, end: startLine }, 'signature', `${step.symbolName} is declared here`);
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** ~32 lines centred on the first highlight; the whole snippet when shorter. */
+function windowFor(step: TraceStep, highlights: WalkthroughHighlight[]): { start: number; end: number } | null {
+  if (!step.snippet || step.lineStart == null) return null;
+  const total = step.snippet.replace(/\n$/, '').split('\n').length;
+  const first = step.lineStart;
+  const last = first + total - 1;
+  if (total <= WALKTHROUGH_WINDOW_LINES) return { start: first, end: last };
+  const focus = highlights[0]?.start ?? first;
+  let start = Math.max(first, focus - Math.floor(WALKTHROUGH_WINDOW_LINES / 2));
+  const end = Math.min(last, start + WALKTHROUGH_WINDOW_LINES - 1);
+  start = Math.max(first, end - WALKTHROUGH_WINDOW_LINES + 1);
+  return { start, end };
+}
+
+/**
+ * The 1-3 cards a phase shows by default: where the member is entered, its
+ * strongest effects (distinct kinds first — a chain of `transform`s teaches
+ * nothing), and, when a boundary follows, the step that performs the hand-off.
+ */
+function selectVisible(steps: TraceStep[], budget: number, mustEndOnHandoff: boolean): TraceStep[] {
+  if (steps.length === 0) return [];
+  const chosen = new Map<number, TraceStep>();
+  chosen.set(steps[0]!.order, steps[0]!);
+
+  const effects = steps.filter((s) =>
+    s.order !== steps[0]!.order && s.stepKind != null && EFFECT_KINDS.has(s.stepKind) && !s.metadata?.syntheticReturn);
+  const distinctKinds = new Set<string>();
+  const distinctFirst = effects.filter((s) => {
+    if (distinctKinds.has(s.stepKind!)) return false;
+    distinctKinds.add(s.stepKind!);
+    return true;
+  });
+  const handoffStep = mustEndOnHandoff
+    ? (effects[effects.length - 1] ?? steps[steps.length - 1]!)
+    : undefined;
+  if (handoffStep) chosen.set(handoffStep.order, handoffStep);
+
+  for (const s of [...distinctFirst, ...effects]) {
+    if (chosen.size >= budget) break;
+    chosen.set(s.order, s);
+  }
+  if (chosen.size < budget) {
+    const last = steps[steps.length - 1]!;
+    chosen.set(last.order, last);
+  }
+  return [...chosen.values()].sort((a, b) => a.order - b.order);
+}
+
+/** What exists once the path has run, from the terminal step's own effects. */
+function landingStatement(step: TraceStep, phaseTitle: string | null): string {
+  const facts = (step.effects ?? [])
+    .map((e) => {
+      const noun = EFFECT_RESULT[e.kind];
+      if (!noun) return null;
+      return e.target ? `${noun} \`${e.target}\`` : noun.replace(/ (to|on|at|through|by)$/, '');
+    })
+    .filter((f): f is string => Boolean(f));
+  const unique = [...new Set(facts)];
+  if (unique.length > 0) {
+    return `When this path finishes: ${unique.join('; ')}.`;
+  }
+  return `This is where the path ends${phaseTitle ? ` — in ${phaseTitle}` : ''}: ${step.description}`;
+}
+
+/** `Next: \`sym\` in file — clause`. Always available, never shipped broken. */
+function handoffTemplate(next: TraceStep, boundary: { kind: string; detail?: string } | null): string {
+  const where = next.symbolName ? `\`${next.symbolName}\` in ${baseOf(next.filePath)}` : baseOf(next.filePath);
+  if (!boundary) return `Execution continues in ${where}.`;
+  const clause = BOUNDARY_CLAUSE[boundary.kind] ?? boundary.detail ?? `a ${boundary.kind.replace(/_/g, ' ')} hand-off`;
+  return `Control crosses into ${where} — ${clause}.`;
+}
+
+/**
+ * The reading walkthrough, whole (doc/TUTORIAL_REDESIGN.md §2 and §3).
+ *
+ * The bound here is STRUCTURAL, not numeric. Every journey member becomes a
+ * phase and every boundary becomes a connector; compression may only fold
+ * sub-steps, never drop a member or a crossing. That invariant is the whole
+ * answer to "the onboarding package generation is just 2 steps": v3's fixed
+ * overhead (install, marker, trigger, revert) left a 4-member pipeline two
+ * slots, and a reading has no setup overhead at all — the entire budget is the
+ * path.
+ */
+export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment): WalkthroughAttempt {
+  const ordered = [...input.steps].sort((a, b) => a.order - b.order);
+  if (ordered.length === 0) {
+    return { ok: false, skip: { reason: 'too_few_steps', detail: `"${input.title}" has no persisted steps to read.` } };
+  }
+  const gaps: ProcedureGap[] = [];
+  const journey = input.journey && input.journey.members.length > 0 ? input.journey : null;
+
+  // ── phases: one per journey member, always ────────────────────────────────
+  const phaseSources: Array<{ member: string; title: string; steps: TraceStep[] }> = [];
+  if (journey) {
+    journey.members.forEach((member, i) => {
+      const own = input.memberSteps?.get(member) ?? [];
+      // The composer's compressed spine is the fallback when a member's own
+      // workflow row could not be loaded — the member still gets its phase.
+      const spine = ordered.filter((s) => s.metadata?.journeyMember === member);
+      const source = own.length > 0 ? own : spine;
+      phaseSources.push({
+        member,
+        title: journey.memberTitles[i] ?? member,
+        steps: [...source].sort((a, b) => a.order - b.order),
+      });
+    });
+    const untraced = phaseSources.filter((p) => p.steps.length === 0);
+    if (untraced.length > 0) {
+      gaps.push({
+        kind: 'phase_not_traced',
+        detail: `${untraced.length} leg${untraced.length === 1 ? '' : 's'} of this path (${untraced.map((p) => p.title).join(', ')}) had no persisted trace, so ${untraced.length === 1 ? 'it has' : 'they have'} no card below.`,
+      });
+    }
+  } else {
+    phaseSources.push({ member: '', title: input.title, steps: ordered });
+  }
+  const phases = phaseSources.filter((p) => p.steps.length > 0);
+  if (phases.length === 0) {
+    return { ok: false, skip: { reason: 'too_few_steps', detail: `no leg of "${input.title}" has a traced step to read.` } };
+  }
+
+  const boundaryAfter = new Map((journey?.boundaries ?? []).map((b) => [b.after, b]));
+  // Boundaries are indexed against the composer's full member list; the phases
+  // that survived tracing keep their original index so a fold never silently
+  // renumbers a crossing away.
+  const memberIndex = new Map(phaseSources.map((p, i) => [p.member, i]));
+
+  // ── per-phase visible budget, tightened rather than sliced ────────────────
+  let budget = PHASE_STEP_BUDGET;
+  let picked = phases.map((p) => selectVisible(p.steps, budget, boundaryAfter.has(memberIndex.get(p.member) ?? -1)));
+  if (picked.reduce((n, s) => n + s.length, 0) > MAX_VISIBLE_WALKTHROUGH_STEPS && budget > 2) {
+    budget = 2;
+    picked = phases.map((p) => selectVisible(p.steps, budget, boundaryAfter.has(memberIndex.get(p.member) ?? -1)));
+  }
+  const visibleTotal = picked.reduce((n, s) => n + s.length, 0);
+  if (visibleTotal > MAX_VISIBLE_WALKTHROUGH_STEPS) {
+    gaps.push({
+      kind: 'walkthrough_longer_than_budget',
+      detail: `This path has ${phases.length} legs and renders ${visibleTotal} cards — past the ${MAX_VISIBLE_WALKTHROUGH_STEPS} a reader normally scrolls. Nothing was dropped: every leg and every crossing is still below.`,
+    });
+  }
+
+  // ── flatten into ordered cards, visible first then this phase's folded rest ─
+  interface Slot { trace: TraceStep; phaseIdx: number; collapsed: boolean }
+  const slots: Slot[] = [];
+  phases.forEach((phase, i) => {
+    const visible = picked[i]!;
+    const visibleOrders = new Set(visible.map((s) => s.order));
+    for (const s of visible) slots.push({ trace: s, phaseIdx: i, collapsed: false });
+    const folded = phase.steps.filter((s) => !visibleOrders.has(s.order));
+    for (const s of folded.slice(0, MAX_COLLAPSED_PER_PHASE)) {
+      slots.push({ trace: s, phaseIdx: i, collapsed: true });
+    }
+    if (folded.length > MAX_COLLAPSED_PER_PHASE) {
+      gaps.push({
+        kind: 'phase_substeps_truncated',
+        detail: `${folded.length - MAX_COLLAPSED_PER_PHASE} further traced step${folded.length - MAX_COLLAPSED_PER_PHASE === 1 ? '' : 's'} inside "${phase.title}" ${folded.length - MAX_COLLAPSED_PER_PHASE === 1 ? 'is' : 'are'} on the Workflows tab.`,
+      });
+    }
+  });
+  if (slots.length < MIN_WALKTHROUGH_STEPS) {
+    return { ok: false, skip: { reason: 'too_few_steps', detail: `"${input.title}" has no traced step that could be read.` } };
+  }
+  if (slots.length === 1) {
+    gaps.push({
+      kind: 'trace_is_one_step',
+      detail: `Only one step was traced from "${input.title}", so this reading is a single card — the flow reaches no further symbol the graph could follow.`,
+    });
+  }
+
+  // Hand-offs chain the VISIBLE cards; folded sub-steps are detail inside a
+  // phase, not links in the path.
+  const visibleSlots = slots.filter((s) => !s.collapsed);
+  const orderOf = new Map<Slot, number>();
+  slots.forEach((s, i) => orderOf.set(s, i + 1));
+
+  const steps: WalkthroughStep[] = slots.map((slot) => {
+    const t = slot.trace;
+    const order = orderOf.get(slot)!;
+    const phase = phases[slot.phaseIdx]!;
+    const vIdx = slot.collapsed ? -1 : visibleSlots.indexOf(slot);
+    const nextSlot = vIdx >= 0 ? visibleSlots[vIdx + 1] : undefined;
+    const isLastVisible = vIdx >= 0 && vIdx === visibleSlots.length - 1;
+    // A crossing sits after a phase's LAST visible card, and only when the
+    // composer recorded one after that member.
+    const crossesHere = Boolean(
+      nextSlot && nextSlot.phaseIdx !== slot.phaseIdx
+      && boundaryAfter.has(memberIndex.get(phase.member) ?? -1),
+    );
+    const rawBoundary = crossesHere ? boundaryAfter.get(memberIndex.get(phase.member) ?? -1)! : null;
+    const boundary = rawBoundary ? { kind: rawBoundary.kind, detail: rawBoundary.detail ?? `${rawBoundary.kind.replace(/_/g, ' ')} hand-off` } : null;
+
+    const highlights = deriveHighlights(t, nextSlot?.trace, boundary);
+    const win = windowFor(t, highlights);
+    const role: WalkthroughRole =
+      order === 1 ? 'entry'
+      : isLastVisible ? 'landing'
+      : crossesHere ? 'hop'
+      : (t.stepKind != null && EFFECT_KINDS.has(t.stepKind)) ? 'effect'
+      : 'hop';
+
+    return {
+      order,
+      role,
+      filePath: t.filePath,
+      symbolName: t.symbolName,
+      lineStart: t.lineStart,
+      lineEnd: t.lineEnd,
+      snippet: t.snippet,
+      window: win,
+      narration: t.symbolName ? `\`${t.symbolName}\` — ${t.description}` : t.description,
+      narrationSource: 'deterministic',
+      highlights,
+      handoff: nextSlot
+        ? {
+          text: handoffTemplate(nextSlot.trace, boundary),
+          kind: boundary?.kind ?? 'call',
+          toStep: orderOf.get(nextSlot)!,
+          toSymbol: nextSlot.trace.symbolName,
+          toFile: nextSlot.trace.filePath,
+          source: 'deterministic',
+        }
+        : null,
+      landing: isLastVisible ? landingStatement(t, journey ? phase.title : null) : null,
+      boundary,
+      phase: journey
+        ? { index: slot.phaseIdx + 1, count: phases.length, title: phase.title, member: phase.member }
+        : null,
+      collapsed: slot.collapsed,
+      evidence: t.lineStart ? `${t.filePath}:${t.lineStart}` : t.filePath,
+      nodeId: t.nodeId,
+      nodeHash: t.nodeHash,
+      workflowStepOrder: t.order,
+    };
+  });
+
+  // ── the optional "prove it live" appendix (§5) ────────────────────────────
+  // v3's marker / trigger / revert trio, compressed onto one collapsed card.
+  // The verification machinery survives as an appendix instead of the spine.
+  if (env) {
+    const effects = ordered.filter((s) => s.stepKind != null && EFFECT_KINDS.has(s.stepKind));
+    const probe = selectProbe(effects, ordered[0]!);
+    const built = probe ? buildTrigger(input, env, ordered[0]!, probe) : null;
+    if (probe && built?.trigger && probe.lineStart != null) {
+      gaps.push(...built.gaps);
+      steps.push({
+        order: steps.length + 1,
+        role: 'landing',
+        filePath: probe.filePath,
+        symbolName: probe.symbolName,
+        lineStart: probe.lineStart,
+        lineEnd: probe.lineEnd,
+        snippet: null,
+        window: null,
+        narration: `Optional. Plant one revertible marker at the line this reading claims does the work, set the flow off, and watch it print.`,
+        narrationSource: 'deterministic',
+        highlights: [],
+        handoff: null,
+        landing: null,
+        boundary: null,
+        phase: null,
+        collapsed: true,
+        evidence: `${probe.filePath}:${probe.lineStart}`,
+        nodeId: probe.nodeId,
+        nodeHash: probe.nodeHash,
+        appendix: {
+          marker: `console.log('[trace] ${identifier(probe)} reached');`,
+          triggerAction: built.trigger.action,
+          triggerCommand: built.trigger.command,
+          expected: built.trigger.expected,
+          revertCommand: `git checkout -- ${probe.filePath}`,
+        },
+      });
+    }
+  }
+
+  const title = journey
+    ? `Read ${input.title} end to end`
+    : `Read ${input.title} in the code`;
+  return { ok: true, draft: { kind: 'walkthrough', title, steps, gaps } };
+}
+
+/**
+ * The reading contract, checked — sibling of `lintProcedure`, which stays for
+ * how-tos. Its most load-bearing check is path completeness: the moment a
+ * member or a boundary can vanish silently, the tab is back to claiming a
+ * four-stage pipeline is two steps.
+ */
+export interface WalkthroughFinding {
+  stepOrder: number;
+  code:
+    | 'handoff_missing' | 'handoff_does_not_name_next' | 'landing_missing'
+    | 'highlight_out_of_range' | 'narration_cites_absent_highlight'
+    | 'member_not_covered' | 'boundary_not_covered';
+  detail: string;
+}
+
+/** True when `text` names the next step's symbol or its file basename. */
+export function handoffNamesNext(text: string, handoff: WalkthroughHandoff): boolean {
+  const symbol = handoff.toSymbol;
+  const base = handoff.toFile ? baseOf(handoff.toFile) : null;
+  const lower = text.toLowerCase();
+  return Boolean((symbol && lower.includes(symbol.toLowerCase())) || (base && lower.includes(base.toLowerCase())));
+}
+
+const HIGHLIGHT_REFERENCE = /\bhighlighted\b|\bthe highlight\b|\bhighlights? (?:above|below)\b/i;
+
+export function lintWalkthrough(draft: WalkthroughDraft, journey?: WalkthroughJourney | null): WalkthroughFinding[] {
+  const findings: WalkthroughFinding[] = [];
+  const visible = draft.steps.filter((s) => !s.collapsed);
+  visible.forEach((step, i) => {
+    const isLast = i === visible.length - 1;
+    if (!isLast && !step.handoff) {
+      findings.push({ stepOrder: step.order, code: 'handoff_missing', detail: 'no hand-off sentence says where the path goes next' });
+    }
+    if (!isLast && step.handoff && !handoffNamesNext(step.handoff.text, step.handoff)) {
+      findings.push({ stepOrder: step.order, code: 'handoff_does_not_name_next', detail: 'the hand-off names neither the next symbol nor its file' });
+    }
+    if (isLast && !step.landing) {
+      findings.push({ stepOrder: step.order, code: 'landing_missing', detail: 'the last step does not say what now exists' });
+    }
+    if (step.highlights.length === 0 && HIGHLIGHT_REFERENCE.test(step.narration)) {
+      findings.push({ stepOrder: step.order, code: 'narration_cites_absent_highlight', detail: 'the narration points at a highlight this step does not have' });
+    }
+  });
+  for (const step of draft.steps) {
+    for (const h of step.highlights) {
+      if (step.lineStart != null && (h.start < step.lineStart || (step.lineEnd != null && h.end > step.lineEnd))) {
+        findings.push({ stepOrder: step.order, code: 'highlight_out_of_range', detail: `highlight ${h.start}-${h.end} falls outside ${step.lineStart}-${step.lineEnd ?? '?'}` });
+      }
+    }
+  }
+  // Completeness invariant (§3.2): a fold may never lose a leg or a crossing.
+  if (journey) {
+    const covered = new Set(draft.steps.map((s) => s.phase?.member).filter(Boolean));
+    journey.members.forEach((member, i) => {
+      if (!covered.has(member)) {
+        findings.push({ stepOrder: 0, code: 'member_not_covered', detail: `${journey.memberTitles[i] ?? member} is part of this path but has no card` });
+      }
+    });
+    for (const b of journey.boundaries) {
+      const seen = draft.steps.filter((s) => s.boundary && s.handoff?.kind === b.kind).length;
+      if (seen === 0 && b.after < journey.members.length - 1) {
+        findings.push({ stepOrder: 0, code: 'boundary_not_covered', detail: `the ${b.kind.replace(/_/g, ' ')} crossing after ${journey.memberTitles[b.after] ?? journey.members[b.after]} is not shown as a connector` });
+      }
+    }
+  }
+  return findings;
 }
 
 // ── the procedural contract, checked ────────────────────────────────────────

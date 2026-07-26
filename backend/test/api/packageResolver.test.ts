@@ -116,6 +116,59 @@ describe("packageResolver", () => {
       const ctx = await resolvePackageContext({ projectId: PROJECT_ID, userId: TEST_USER.id });
       expect(ctx).to.equal(null);
     });
+
+    /**
+     * Bugs #77 / #80: an unfinished package generation left the newest
+     * snapshot on 'paused'. The chain ended at "latest complete", found none,
+     * and Architecture / Dependencies / Tutorials / Classes all 404'd — over
+     * extraction that had completed.
+     */
+    it("skips a paused newest snapshot for the last complete one, and says so", async () => {
+      const PAUSED_SNAP = "77777777-7777-7777-7777-777777777777";
+      mockQuery((text) => {
+        if (text.includes("pm.default_package_id = op.id")) return { rows: [] };
+        if (text.includes("FROM analysis_snapshots")) {
+          return {
+            rows: [
+              { id: PAUSED_SNAP, scope_id: SCOPE_ID, branch: "main", commit_hash: "newcommit", status: "paused" },
+              { id: SNAP_ID, scope_id: SCOPE_ID, branch: "main", commit_hash: "abc1234def", status: "complete" },
+            ],
+          };
+        }
+        if (text.includes("WHERE snapshot_id = $1")) return { rows: [{ id: PKG_ID, role: "backend", branch: "dev" }] };
+        throw new Error(`unexpected query: ${text}`);
+      });
+
+      const ctx = await resolvePackageContext({ projectId: PROJECT_ID, userId: TEST_USER.id });
+      expect(ctx?.snapshotId).to.equal(SNAP_ID);
+      expect(ctx?.packageId).to.equal(PKG_ID);
+      expect(ctx?.snapshotStatus).to.equal("complete");
+      // Degrading is never silent — the caller can tell the reader which
+      // analysis it is looking at and why it is not the newest.
+      expect(ctx?.servingOlderSnapshot).to.equal(true);
+      expect(ctx?.newerSnapshotStatus).to.equal("paused");
+    });
+
+    it("still serves a paused snapshot when no complete one exists, flagged as such", async () => {
+      const PAUSED_SNAP = "77777777-7777-7777-7777-777777777777";
+      mockQuery((text) => {
+        if (text.includes("pm.default_package_id = op.id")) return { rows: [] };
+        if (text.includes("FROM analysis_snapshots")) {
+          return {
+            rows: [{ id: PAUSED_SNAP, scope_id: SCOPE_ID, branch: "main", commit_hash: "newcommit", status: "paused" }],
+          };
+        }
+        if (text.includes("WHERE snapshot_id = $1")) return { rows: [] };
+        throw new Error(`unexpected query: ${text}`);
+      });
+
+      // The extracted data on this snapshot is real (#80 measured 71 workflows
+      // on exactly this shape), so a 404 was the wrong answer.
+      const ctx = await resolvePackageContext({ projectId: PROJECT_ID, userId: TEST_USER.id });
+      expect(ctx?.snapshotId).to.equal(PAUSED_SNAP);
+      expect(ctx?.snapshotStatus).to.equal("paused");
+      expect(ctx?.servingOlderSnapshot).to.equal(false);
+    });
   });
 
   describe("feature endpoints honor ?package_id=", () => {

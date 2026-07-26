@@ -34,6 +34,8 @@ import { PageHeader } from "@/components/PageHeader";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
+import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 interface Installation {
   id: number;
@@ -50,16 +52,6 @@ interface Repo {
 interface Branch {
   name: string;
 }
-
-const developerRoles = [
-  { value: "backend", label: "Backend" },
-  { value: "frontend", label: "Frontend" },
-  { value: "devops", label: "DevOps" },
-  { value: "qa", label: "QA" },
-  { value: "general", label: "General" },
-];
-
-const IMPORT_TOUR_DISMISSED_KEY = "onboardbuddy:import-tour-dismissed";
 
 /** First-visit walkthrough of the configure step (wizard step 2). */
 const IMPORT_TOUR_STEPS: TourStep[] = [
@@ -82,7 +74,7 @@ const IMPORT_TOUR_STEPS: TourStep[] = [
 
 export function ImportPage() {
   const navigate = useNavigate();
-  const { connectGithub } = useAuth();
+  const { connectGithub, user } = useAuth();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
 
@@ -113,7 +105,7 @@ export function ImportPage() {
   const [selectedBranch, setSelectedBranch] = useState("");
 
   const [strandedProjectId, setStrandedProjectId] = useState<string | null>(null);
-  const [developerRole, setDeveloperRole] = useState("general");
+  const [developerRole, setDeveloperRole] = useState<string>(FALLBACK_ROLE);
 
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
@@ -251,9 +243,10 @@ export function ImportPage() {
       // previewed, and only starts on an explicit click.
       setCreatedProjectId(project.id);
       setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: selectedBranch });
-      try {
-        if (localStorage.getItem(IMPORT_TOUR_DISMISSED_KEY) !== "1") setTourOpen(true);
-      } catch { /* storage unavailable */ }
+      // Same rule as the other four tours: dismissal is per account, and the
+      // Help page's picker can request this one explicitly.
+      if (consumeTourRequest("import")) setTourOpen(true);
+      else if (user && !tourDismissed("import", user.id)) setTourOpen(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to create project");
       // The project row can exist even though settings failed to save right
@@ -267,9 +260,7 @@ export function ImportPage() {
 
   function dismissImportTour() {
     setTourOpen(false);
-    try {
-      localStorage.setItem(IMPORT_TOUR_DISMISSED_KEY, "1");
-    } catch { /* storage unavailable */ }
+    if (user) dismissTour("import", user.id);
   }
 
   async function handleStartAnalysis() {
@@ -527,7 +518,7 @@ export function ImportPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {developerRoles.map((role) => (
+                    {ROLE_OPTIONS.map((role) => (
                       <SelectItem key={role.value} value={role.value}>
                         {role.label}
                       </SelectItem>

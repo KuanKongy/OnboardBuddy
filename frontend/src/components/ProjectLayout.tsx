@@ -1,7 +1,6 @@
 import {
   BookOpen,
   Boxes,
-  GitBranch,
   HelpCircle,
   Keyboard,
   LayoutDashboard,
@@ -22,7 +21,6 @@ import { PackagesProvider, usePackages } from "@/contexts/PackagesContext";
 import { PackageSelector } from "@/components/PackageSelector";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -178,26 +176,29 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
   return (
     <SidebarShell>
       <div className="px-3 py-3">
-        <Link
-          to="/dashboard"
-          onClick={() => setOpen(false)}
-          className="mb-2 flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
-          title="Back to main dashboard"
-        >
-          <LogoMark className="h-7 w-7" />
-          <LogoWordmark />
-        </Link>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Link
+              to="/dashboard"
+              onClick={() => setOpen(false)}
+              className="mb-2 flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
+            >
+              <LogoMark className="h-7 w-7" />
+              <LogoWordmark />
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="right">Back to main dashboard</TooltipContent>
+        </Tooltip>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         ) : project ? (
+          // Owner feedback M2: the repo name and the branch badge that used to
+          // sit here are both already stated by the package chooser below
+          // (`branch@commit · scope · role`) and by the Overview header, where
+          // the repo name is now a real link to GitHub (M1). Two restatements
+          // of the same two strings, one of them carrying a tooltip that only
+          // repeated the label it was attached to (H1), were redundant chrome.
           <div>
-            <h2 className="truncate text-sm font-semibold text-foreground" title={`${project.repo_owner}/${project.repo_name}`}>
-              {project.repo_owner}/{project.repo_name}
-            </h2>
-            <Badge variant="outline" className="mt-1 gap-1 text-xs" title="Default branch for new analysis runs">
-              <GitBranch className="h-2.5 w-2.5" />
-              {project.branch}
-            </Badge>
             {activeJobs.length > 0 && (() => {
               const job = activeJobs[0]!;
               const progress = pipelineProgress(job);
@@ -268,20 +269,26 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
       </div>
       <div className="px-2 pt-1.5">
         <button
+          type="button"
           onClick={onStartTour}
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <HelpCircle className="h-3.5 w-3.5" />
           Take a tour
         </button>
-        <button
-          onClick={onShowShortcuts}
-          title="Also opens with ?"
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <Keyboard className="h-3.5 w-3.5" />
-          Keyboard shortcuts
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onShowShortcuts}
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            >
+              <Keyboard className="h-3.5 w-3.5" />
+              Keyboard shortcuts
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Also opens with ?</TooltipContent>
+        </Tooltip>
         <Link
           to="/help"
           onClick={() => setOpen(false)}

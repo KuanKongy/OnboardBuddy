@@ -363,6 +363,17 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
     explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
+    // The critique rewrite replaces `output` wholesale, which silently
+    // discarded the deterministic repair applied above — measured on
+    // FloowForge: 10 of 12 sections lost the unread-stack disclosure this
+    // way. The repair is idempotent (it only appends when the text omits the
+    // disclosure), so re-running it after every path that replaces the
+    // markdown is the guarantee, not a duplicate.
+    const rerepaired = repairExplanation(output.contentMarkdown ?? '', explanationEvidence);
+    if (rerepaired.repairs.length > 0) {
+      output = { ...output, contentMarkdown: rerepaired.markdown };
+      explain = lintExplanation(rerepaired.markdown, explanationEvidence);
+    }
     coverage = completeness(output);
     critique = await runSectionCritique(params, output, bundle, aliasToId);
     if (critique && critique.contradicted > 0) {

@@ -9,6 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
 import { canonicalJson, computeInputHash } from '../ai/generationRuns.js';
 import type { SemanticDepth } from '../engine/budgets.js';
 import type { EvidenceGraph, EvidenceNode } from '../types/analysis.js';
@@ -312,6 +313,11 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+// Bug #76's one-shot 57014 retry now lives in lib/pgRetry.ts — the analysis
+// side needs the same guard, and the semantic passes were only where it was
+// noticed first. Re-exported here so existing callers keep their import.
+export { withStatementTimeoutRetry, STATEMENT_TIMEOUT_SQLSTATE } from '../../lib/pgRetry.js';
+
 /** Per-pass shared key fields; only stableKey/evidenceHash vary per entry. */
 export interface BulkKeyBase {
   projectId: string;
@@ -385,7 +391,7 @@ export async function insertRecordsBulk(inputs: InsertRecordInput[]): Promise<Ma
   }
 
   for (const part of chunk(inputs, 500)) {
-    await query(
+    await withStatementTimeoutRetry('insertRecordsBulk/supersede', () => query(
       `UPDATE semantic_records sr SET status = 'superseded'
        FROM unnest($4::text[], $5::text[]) AS k(stable_key, evidence_hash)
        WHERE sr.project_id = $1 AND sr.stable_key = k.stable_key AND sr.record_level = $2
@@ -394,7 +400,7 @@ export async function insertRecordsBulk(inputs: InsertRecordInput[]): Promise<Ma
       [k0.projectId, k0.level, k0.depth,
        part.map((i) => i.key.stableKey), part.map((i) => i.key.evidenceHash),
        k0.promptVersion, k0.modelFamily],
-    );
+    ));
 
     const cols = 16;
     const values: unknown[] = [];
@@ -409,7 +415,8 @@ export async function insertRecordsBulk(inputs: InsertRecordInput[]): Promise<Ma
       const base = i * cols;
       return `(${Array.from({ length: cols }, (_, j) => `$${base + j + 1}`).join(', ')})`;
     });
-    const result = await query(
+    // Upsert: repeating it after a cancelled statement lands on the same rows.
+    const result = await withStatementTimeoutRetry('insertRecordsBulk/upsert', () => query(
       `INSERT INTO semantic_records
          (project_id, stable_key, record_level, semantic_depth, evidence_hash, prompt_version,
           model_family, record, summary, confidence, facts_only, status, flags,
@@ -421,7 +428,7 @@ export async function insertRecordsBulk(inputs: InsertRecordInput[]): Promise<Ma
                        flags = EXCLUDED.flags
        RETURNING id, stable_key`,
       values,
-    );
+    ));
     const idByKey = new Map(
       (result.rows as Array<{ id: string; stable_key: string }>).map((r) => [r.stable_key, r.id]),
     );
@@ -474,7 +481,9 @@ export async function attachReceiptsBulk(params: {
       const base = i * cols;
       return `(${Array.from({ length: cols }, (_, j) => `$${base + j + 1}`).join(', ')})`;
     });
-    const result = await query(
+    // No ON CONFLICT here, but a 57014 cancel rolls the whole statement back,
+    // so the retry cannot leave a half-inserted batch behind.
+    const result = await withStatementTimeoutRetry('attachReceiptsBulk/insert', () => query(
       `INSERT INTO source_receipts
          (project_id, snapshot_id, receipt_kind, trust_level, record_id, node_id,
           referenced_record_id, node_stable_key, node_hash, file_path, symbol_name,
@@ -482,7 +491,7 @@ export async function attachReceiptsBulk(params: {
        VALUES ${tuples.join(', ')}
        RETURNING id, record_id`,
       values,
-    );
+    ));
     const rows = result.rows as Array<{ id: string; record_id: string }>;
     if (rows.length !== part.length) {
       throw new Error(`attachReceiptsBulk: inserted ${rows.length} receipts for ${part.length} drafts`);
@@ -510,14 +519,14 @@ export async function attachReceiptsBulk(params: {
     record.receiptIds = receiptIds;
     return { id: record.id, rids: receiptIds, claims: rewrittenClaims };
   });
-  await query(
+  await withStatementTimeoutRetry('attachReceiptsBulk/stamp', () => query(
     `UPDATE semantic_records sr
      SET receipt_ids = ARRAY(SELECT jsonb_array_elements_text(u.rids))::uuid[],
          record = jsonb_set(sr.record, '{claims}', u.claims)
      FROM jsonb_to_recordset($1::jsonb) AS u(id uuid, rids jsonb, claims jsonb)
      WHERE sr.id = u.id`,
     [JSON.stringify(updates)],
-  );
+  ));
 }
 
 /** Prior mapping identity for the carry-forward gate (Track E). */
@@ -574,24 +583,24 @@ export async function mapToSnapshotBulk(
   entries: Array<{ record: StoredRecord; nodeId: string | null }>,
 ): Promise<void> {
   for (const part of chunk(entries, 1_000)) {
-    await query(
+    await withStatementTimeoutRetry('mapToSnapshotBulk/delete', () => query(
       `DELETE FROM snapshot_semantic_records ssr
        USING unnest($2::text[], $3::text[]) AS k(stable_key, record_level)
        WHERE ssr.snapshot_id = $1 AND ssr.stable_key = k.stable_key
          AND ssr.record_level = k.record_level`,
       [snapshotId, part.map((e) => e.record.stableKey), part.map((e) => e.record.recordLevel)],
-    );
+    ));
     const values: unknown[] = [];
     const tuples = part.map((e, i) => {
       values.push(snapshotId, e.record.id, e.nodeId, e.record.stableKey, e.record.recordLevel);
       const base = i * 5;
       return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`;
     });
-    await query(
+    await withStatementTimeoutRetry('mapToSnapshotBulk/insert', () => query(
       `INSERT INTO snapshot_semantic_records (snapshot_id, record_id, node_id, stable_key, record_level)
        VALUES ${tuples.join(', ')}
        ON CONFLICT (snapshot_id, record_id) DO NOTHING`,
       values,
-    );
+    ));
   }
 }

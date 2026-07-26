@@ -205,6 +205,13 @@ export interface SymbolInfo {
   exported: boolean;
   isDefault: boolean;
   jsDoc?: string;
+  /**
+   * Name of the enclosing symbol for a function expression declared inside
+   * another function's body (`function Outer() { const inner = () => … }`).
+   * Set only on nested symbols; `name` is then `Outer.inner` and the stable
+   * key `path#Outer.inner`, mirroring how class members are keyed.
+   */
+  containerName?: string;
   // evidence identity (doc/Pipeline.md "Symbol extraction")
   stableKey?: string;        // relative/path.ts#SymbolName
   signatureHash?: string;

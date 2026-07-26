@@ -5,14 +5,32 @@ import { resolveForRequest } from "../services/packageResolver.js";
 
 export const tutorialsRouter = Router({ mergeParams: true });
 
+/**
+ * `mode` is the Diátaxis split, exposed (doc/TUTORIAL_REDESIGN.md §5).
+ *
+ * `run_it` and `run_tests` are how-to guides, not tutorials: their titles name
+ * a goal, they assume competence, and they serve application rather than
+ * acquisition. The tab groups on this field — "Code walkthroughs" above
+ * "Run & verify" — instead of deleting them, and the COALESCE derives it for
+ * every row written before v4 so old deep links keep resolving into the right
+ * group.
+ */
+const TUTORIAL_MODE = `
+  COALESCE(
+    t.generation_context->>'mode',
+    CASE WHEN t.generation_context->>'procedure_kind' IN ('run_it', 'run_tests')
+         THEN 'howto' ELSE 'walkthrough' END)`;
+
 const TUTORIAL_LIST_SELECT = `
   SELECT t.id, t.stable_key, t.title, t.summary, t.status, t.confidence,
          t.unknowns, t.created_at, t.workflow_id,
          t.generation_context->>'goal' AS goal,
          t.generation_context->>'procedure_kind' AS procedure_kind,
+         ${TUTORIAL_MODE} AS mode,
          COALESCE((t.generation_context->>'rank')::int, 99) AS rank,
          w.trigger_type, w.purpose,
          COALESCE(w.metadata->>'tier', 'supporting') AS tier,
+         w.metadata->'journey'->'member_titles' AS journey_members,
          op.role AS package_role, op.analyzed_commit, op.branch AS package_branch,
          (SELECT count(*)::int FROM tutorial_steps ts WHERE ts.tutorial_id = t.id) AS step_count
   FROM tutorials t
@@ -99,12 +117,12 @@ async function buildCoverage(snapshotId: string, emitted: number): Promise<Recor
     } else if (byTier.core === 0 && byTier.supporting === 0) {
       reasons.push(
         `${byTier.surface} entry point${byTier.surface === 1 ? " was" : "s were"} found, but no side effect was traced from any of them. ` +
-        "A procedure needs an effect to watch for — without one there is nothing to verify, and a walkthrough would just be prose.",
+        "A walkthrough follows a path from an entry point to something it changes — without a traced effect there is no path to follow, only a file to open.",
       );
     }
     if (!hasStart && !hasTests) {
       reasons.push(
-        "Nothing in this repository says how to run it — no compose file and no start or test script — so no step here could be a command you could actually execute.",
+        "Nothing in this repository says how to run it — no compose file and no start or test script — so there is no task guide to put beside the walkthroughs.",
       );
     }
     if (reasons.length === 0 && (selection.skipped?.length ?? 0) === 0) {
@@ -202,12 +220,14 @@ tutorialsRouter.get("/", requireProjectAccess(), async (req, res) => {
 });
 
 /**
- * One step, as the reader needs it: what to do, what to expect, how to check.
+ * One step, flattened out of `tutorial_steps.metadata`.
  *
- * `action`/`expected`/`verify` live in `tutorial_steps.metadata` because the
- * table predates the procedural rewrite and has no columns for them. Steps
- * written by the old essay generator have none of these keys, so every field
- * is nullable and the client falls back to the note alone.
+ * Three generations of step shape share this table, because it has columns for
+ * none of them: the v2 essay (an `explanation` beside a snippet), the v3
+ * procedure (action / expected / verify), and the v4 walkthrough (highlights,
+ * hand-off, phase, landing). Everything rides jsonb, which is what makes each
+ * rewrite migration-free — and why every field below is nullable and the
+ * client picks its rendering off `mode`.
  */
 function presentStep(row: Record<string, unknown>, receiptById: Map<string, unknown>): Record<string, unknown> {
   const meta = (row.metadata ?? {}) as Record<string, unknown>;
@@ -215,6 +235,8 @@ function presentStep(row: Record<string, unknown>, receiptById: Map<string, unkn
   return {
     ...rest,
     receipt_ids: receiptIds ?? [],
+    // v3 procedure fields — still the how-to group's whole rendering.
+    mode: (meta.mode as string) ?? (meta.action ? "howto" : null),
     kind: (meta.stepKind as string) ?? null,
     action: (meta.action as string) ?? null,
     command: (meta.command as string) ?? null,
@@ -222,6 +244,17 @@ function presentStep(row: Record<string, unknown>, receiptById: Map<string, unkn
     verify: (meta.verify as string) ?? null,
     verify_command: (meta.verify_command as string) ?? null,
     evidence: (meta.evidence as string) ?? null,
+    // v4 walkthrough fields (doc/TUTORIAL_REDESIGN.md §2.2).
+    role: (meta.role as string) ?? null,
+    phase: meta.phase ?? null,
+    highlights: meta.highlights ?? [],
+    window: meta.window ?? null,
+    handoff: meta.handoff ?? null,
+    landing: (meta.landing as string) ?? null,
+    boundary: meta.boundary ?? null,
+    narration_source: (meta.narration_source as string) ?? null,
+    collapsed: meta.collapsed === true,
+    appendix: meta.appendix ?? null,
     receipts: (receiptIds ?? []).map((id) => receiptById.get(id)).filter(Boolean),
   };
 }
@@ -236,9 +269,11 @@ tutorialsRouter.get("/:tutorialId", requireProjectAccess(), async (req, res) => 
               t.unknowns, t.workflow_id,
               t.generation_context->>'goal' AS goal,
               t.generation_context->>'procedure_kind' AS procedure_kind,
+              ${TUTORIAL_MODE} AS mode,
               t.generation_context->'selection' AS selection,
               w.trigger_type, w.purpose,
               COALESCE(w.metadata->>'tier', 'supporting') AS tier,
+              w.metadata->'journey'->'member_titles' AS journey_members,
               op.role AS package_role, op.analyzed_commit
        FROM tutorials t
        LEFT JOIN workflows w ON w.id = t.workflow_id

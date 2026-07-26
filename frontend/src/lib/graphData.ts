@@ -12,18 +12,40 @@ export interface GraphTruncation {
   hidden: number;
   /** The per-view node cap that caused the cut. */
   limit: number;
-  unit: "groups" | "files" | "symbols" | "groups and files";
+  unit: "groups" | "files" | "groups and files";
   /** The rule that chose the survivors. */
   keptBy: string;
   /** Where the rest can still be reached, when anywhere. */
   seeRest: string | null;
 }
 
-/** Which rung of the ladder this response is, and what it holds. */
+/**
+ * Which rung of the two-level ladder this response is (groups → files).
+ * `file` was a third rung — the symbols inside one file — removed as unhelpful;
+ * the type is gone so nothing can reintroduce it by accident.
+ */
 export interface GraphLevel {
-  kind: "root" | "cluster" | "file";
+  kind: "root" | "cluster";
   id: string | null;
   unit: GraphTruncation["unit"];
+}
+
+/**
+ * Every number the header may print, and what each one counts.
+ *
+ * The header used to print the level's totals over a canvas drawing far fewer
+ * things ("227 files · 929 edges" above 8 boxes and 2 arrows). Both were true;
+ * neither said what it counted. The UI now always shows the drawn number
+ * first, and names the population the bigger number belongs to.
+ */
+export interface GraphLevelCounts {
+  nodesShown: number;
+  groupsShown: number;
+  filesShown: number;
+  edgesShown: number;
+  filesTotal: number;
+  linksTotal: number;
+  linksInsideGroups: number;
 }
 
 export interface GraphResponse {
@@ -35,6 +57,10 @@ export interface GraphResponse {
   totalEdges: number;
   /** Absent on responses from a server predating the ladder. */
   level?: GraphLevel;
+  /** Absent on responses from a server predating count reconciliation. */
+  counts?: GraphLevelCounts;
+  /** Drawn files carrying a "what this file does" line. */
+  describedFiles?: number;
   truncation?: GraphTruncation | null;
   graph: { nodes: Array<{ id: string; label: string; kind: string; metadata: Record<string, unknown> }>; edges: Array<{ id: string; source: string; target: string; kind: string }>; entryPoints: string[] };
   fileAnalyses: unknown[];
@@ -44,6 +70,10 @@ export interface SymbolDoc {
   summary: string | null;
   summaryConfidence: string | null;
   factsOnly: boolean | null;
+  /** File records only: "route file", "service", "config glue". */
+  role?: string | null;
+  /** File records only: the names the record calls this file's headline symbols. */
+  keySymbols?: string[];
   signature: string | null;
   params: Array<{ name?: string; type?: string }>;
   returns: string | null;
@@ -80,6 +110,12 @@ export interface NodeDetail {
    * so the panel matches the on-node badge semantics. */
   callers?: Array<{ stable_key: string; name: string; file_path: string | null }>;
   callees?: Array<{ stable_key: string; name: string; file_path: string | null }>;
+  /**
+   * How many relations EXIST, against the ≤8 listed above. Without it the
+   * panel contradicted itself: the reasons said "Imported by 12 files" and the
+   * list header below said "Imported by (8)".
+   */
+  relation_totals?: { inbound: number; outbound: number };
   relation_labels?: { inbound: string; outbound: string };
   side_effects?: Array<{ type: string; target: string | null }>;
   cluster?: { stable_key: string; label: string } | null;
@@ -125,6 +161,28 @@ export const WORKFLOW_TIERS: Array<{ key: WorkflowTier; label: string; note?: st
   { key: "surface", label: "Endpoints & pages", note: "no side effects traced from these" },
 ];
 
+/**
+ * Trigger kinds that reach the UI as raw enum values.
+ *
+ * Most already arrive as prose ("HTTP GET", "UI page"), which is what made the
+ * rest look like a leak: one list mixing `message_consumer` with `HTTP POST`
+ * reads as two half-finished features. Anything unmapped falls through to
+ * underscore-stripping rather than being hidden.
+ */
+const TRIGGER_LABELS: Record<string, string> = {
+  ci_pipeline: "CI pipeline",
+  dev_command: "Dev command",
+  event_handler: "Event handler",
+  export: "Exported function",
+  journey: "User journey",
+  message_consumer: "Queue consumer",
+};
+
+export function triggerLabel(raw: string | null | undefined): string {
+  if (!raw) return "flow";
+  return TRIGGER_LABELS[raw] ?? raw.replace(/_/g, " ");
+}
+
 export interface WorkflowGraphStep {
   stepOrder: number;
   filePath: string;
@@ -161,25 +219,6 @@ export async function fetchDependencyGraph(
   } catch {
     // No mock fallback: a failed load shows the honest empty/error state.
     throw new Error("Failed to load dependency graph data");
-  }
-}
-
-/**
- * The bottom rung: the symbols one file declares, with the calls between
- * them. Kept as its own function rather than a fourth argument to
- * `fetchDependencyGraph` because it is a different level of the ladder, not a
- * different filter on the same one.
- */
-export async function fetchFileSymbolGraph(
-  projectId: string,
-  filePath: string,
-  packageId?: string | null,
-): Promise<GraphResponse> {
-  const url = `/projects/${projectId}/graph/dependencies${queryString({ file: filePath, package_id: packageId ?? undefined })}`;
-  try {
-    return (await apiFetch(url)) as GraphResponse;
-  } catch {
-    throw new Error("Failed to load the symbols in this file");
   }
 }
 

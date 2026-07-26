@@ -149,4 +149,19 @@ describe('side-effect sink detection (DETECTION_COVERAGE.md §2)', () => {
     } as never));
     expect(effects.filter((e) => e.kind === 'unknown_external')).to.have.length(0);
   });
+  // Contract: a data client that is not an ORM still writes. `Jobs.insertOne`
+  // matched no pattern before, so the flows that were the product measured as
+  // changing nothing and never bound a capability.
+  it('detects a document-store write through a file-level resource binding and names the resource', () => {
+    const effects = detectSideEffects(fileWith({
+      relativePath: 'api/src/index.js',
+      symbols: [
+        { name: 'Jobs', kind: 'variable', initializer: `db.collection("jobs")` },
+        { name: 'createJob', callsSymbols: ['Jobs.insertOne'], snippet: `const { insertedId } = await Jobs.insertOne(job);` },
+      ],
+    } as never));
+    const write = effects.find((e) => e.kind === 'database_write' && e.symbolName === 'createJob');
+    expect(write, 'insertOne through a bound collection is a write').to.not.equal(undefined);
+    expect(write!.target).to.equal('jobs');
+  });
 });

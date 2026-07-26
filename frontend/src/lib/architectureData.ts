@@ -38,7 +38,18 @@ export interface ArchitectureCluster {
   summary: string;
   summarySource: "semantic" | "deterministic";
   confidence: string | null;
+  /**
+   * Ordered by the server: most critical first, then by path. It used to
+   * arrive in join order, which is neither stable across requests nor
+   * meaningful to read.
+   */
   members: Array<{ key: string; name: string; filePath: string | null }>;
+  /**
+   * Architecture edges touching this component. 0 means it is drawn as an
+   * island, which the UI has to explain rather than leave looking broken
+   * (AUDIT C7 / SC F11). Absent on a response predating this field.
+   */
+  degree?: number;
   metadata: ClusterMetadata;
 }
 

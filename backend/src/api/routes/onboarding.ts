@@ -12,8 +12,10 @@ import {
   receiptStaleness,
   receiptVerification,
 } from "../lib/receiptPresentation.js";
+import { groupGaps, summarizeGaps, type RawGap } from "../lib/gapSummary.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { BadPackageParamError, readPackageParam, resolveForRequest } from "../services/packageResolver.js";
+import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 export const onboardingRouter = Router({ mergeParams: true });
 
@@ -339,19 +341,48 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
 
     const pkg = (await query(
       `SELECT op.id, op.role, op.analyzed_commit, op.branch, op.created_at,
-              s.semantic_depth, s.privacy_mode
+              s.semantic_depth, s.privacy_mode,
+              s.budget_usage AS snapshot_budget_usage,
+              pst.budget_overrides
        FROM onboarding_packages op
        JOIN analysis_snapshots s ON s.id = op.snapshot_id
+       LEFT JOIN project_settings pst ON pst.project_id = op.project_id
        WHERE op.id = $1 AND op.project_id = $2`,
       [packageId, projectId],
     )).rows[0] as
       | { id: string; role: string; analyzed_commit: string; branch: string;
-          created_at: string; semantic_depth: string; privacy_mode: string }
+          created_at: string; semantic_depth: string; privacy_mode: string;
+          snapshot_budget_usage: unknown; budget_overrides: unknown }
       | undefined;
     if (!pkg) {
       res.status(404).json({ error: "Package not found" });
       return;
     }
+
+    // Budget block for the run that BUILT this package: the generation job is
+    // the one whose ai_generation_runs rows carry this package_id. Its
+    // checkpoint holds the baseline the enforcer metered from — packages
+    // built before per-run metering have none and report usedThisRun: null.
+    const genJob = (await query(
+      `SELECT aj.id, aj.checkpoint -> 'budgetBaseline' AS budget_baseline,
+              (SELECT COUNT(*) FROM ai_generation_runs r2
+                WHERE r2.job_id = aj.id AND r2.status = 'complete')::int AS llm_calls
+       FROM analysis_jobs aj
+       WHERE aj.id = (
+         SELECT r.job_id FROM ai_generation_runs r
+          WHERE r.package_id = $1 AND r.job_id IS NOT NULL
+          ORDER BY r.created_at DESC LIMIT 1
+       )`,
+      [packageId],
+    )).rows[0] as { id: string; budget_baseline: unknown; llm_calls: number } | undefined;
+
+    const budget = summarizeRunBudget({
+      depth: pkg.semantic_depth,
+      budgetOverrides: pkg.budget_overrides,
+      baseline: genJob?.budget_baseline ?? null,
+      jobLlmCalls: genJob?.llm_calls ?? 0,
+      snapshotUsage: pkg.snapshot_budget_usage,
+    });
 
     const models = (await query(
       `SELECT provider, model, model_tier,
@@ -403,6 +434,7 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
         analysisPrivacyMode: pkg.privacy_mode,
         generation,
       },
+      budget: { ...budget, jobId: genJob?.id ?? null },
       models: models.map((m) => ({
         provider: m.provider,
         model: m.model,
@@ -699,6 +731,17 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
               // (trace dead-ends, unmodeled packages, journey gaps) are shown,
               // never silently dropped.
               detectionUnknowns: Array.isArray(snapMeta.unknowns) ? snapMeta.unknowns : [],
+              // A10: the strip used to print ONLY the detection unknowns while
+              // the sections printed their own, under the same word — "6 known
+              // unknowns" above a page holding 89 gap entries. One population
+              // now, counted once, with both provenances broken out so the
+              // strip's number is the sum of what the reader can scroll to.
+              gaps: summarizeGaps(
+                sections.map((sec) =>
+                  Array.isArray(sec.unknowns) ? (sec.unknowns as unknown[] as RawGap[]) : [],
+                ),
+                (Array.isArray(snapMeta.unknowns) ? snapMeta.unknowns : []) as unknown[] as RawGap[],
+              ),
               // The weight table with its formula attached. The strip used to
               // ship bare signal/weight pairs and the frontend supplied its own
               // labels and its own sentence about what they meant — two copies
@@ -724,6 +767,13 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             reviewedAt: sec.reviewed_at,
             diagrams: sec.diagrams ?? [],
             unknowns: sec.unknowns ?? [],
+            // A10 / UX §19.4: one section shipped 34 gap lines that differed
+            // only by an env-var name. Same entries, collapsed onto their
+            // template deterministically, so the reader sees `kind × N` with
+            // the names behind an expander instead of 34 near-identical rows.
+            unknownGroups: groupGaps(
+              Array.isArray(sec.unknowns) ? (sec.unknowns as unknown[] as RawGap[]) : [],
+            ),
             analyzedCommit: sec.analyzed_commit,
             confidenceReason: confidenceReasonFor(sec.generation_context, sec.receipts.length),
             blocks: [

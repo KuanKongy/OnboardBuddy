@@ -94,7 +94,7 @@
  * that earned it.
  */
 
-export type ExplanationRule = 'level' | 'grounding' | 'gaps' | 'narration';
+export type ExplanationRule = 'level' | 'grounding' | 'gaps' | 'narration' | 'repetition';
 
 export interface ExplanationFinding {
   rule: ExplanationRule;
@@ -168,6 +168,8 @@ export interface ExplanationLintResult {
     claimBlocks: number;
     citedBlocks: number;
     narrationHits: number;
+    /** Distinct sentence templates repeated with only identifiers changed. */
+    repetitionHits: number;
     disclosesGaps: boolean;
     /** null when no subject was supplied to judge against. */
     namesSubject: boolean | null;
@@ -249,8 +251,29 @@ interface Block {
   text: string;
   /** True when the block carried a receipt marker, `rN` alias, or file:line locator. */
   cited: boolean;
+  /** True when the block is the mechanical unread-stack disclosure (see below). */
+  disclosure: boolean;
   sentences: string[];
 }
+
+/**
+ * The mechanical unread-stack disclosure, in the two forms the pipeline emits.
+ *
+ * `sectionSpecs.ts` asks for a `## Not covered here` subsection whenever
+ * `snapshot.unreadStacks.mustDisclose` is true, and `repairExplanation` in
+ * `sectionGenerator.ts` appends `> **Not covered here.** …` when the model
+ * omitted it. Both are rendered from `analysis_snapshots.language_inventory` —
+ * a file count per unparsed language — not from anything the model asserted.
+ *
+ * They must not be counted as UNCITED CLAIMS, for the same reason
+ * `isClaimSentence` already drops gap-disclosure sentences: the grounding rule
+ * would otherwise fine a section for admitting what was never read, which is
+ * precisely what the gaps rule pays it to do. Recognised by the emitted marker
+ * and heading rather than by prose shape, so a model paragraph that merely
+ * talks about coverage is still held to a receipt.
+ */
+const DISCLOSURE_HEADING = /^not\s+covered\s+here\b/i;
+const DISCLOSURE_MARKER = /^>?\s*\*\*not\s+covered\s+here[.:]?\*\*/i;
 
 /**
  * Paragraph / list-item blocks. Grounding is judged here rather than per
@@ -261,6 +284,8 @@ function toBlocks(markdown: string): Block[] {
   const lines = stripFences(markdown).split('\n');
   const blocks: Block[] = [];
   let current: string[] = [];
+  /** Nearest preceding heading — carried only to recognise the disclosure block. */
+  let heading = '';
 
   const flush = () => {
     if (current.length === 0) return;
@@ -270,6 +295,7 @@ function toBlocks(markdown: string): Block[] {
       new RegExp(RECEIPT_MARKER.source).test(raw) ||
       new RegExp(ALIAS_CITATION.source).test(raw) ||
       FILE_LOCATOR.test(raw);
+    const disclosure = DISCLOSURE_HEADING.test(heading) || DISCLOSURE_MARKER.test(raw.trim());
     const text = raw
       .replace(RECEIPT_MARKER, '')
       .replace(ALIAS_CITATION, '')
@@ -277,10 +303,16 @@ function toBlocks(markdown: string): Block[] {
       .replace(/\s{2,}/g, ' ')
       .trim();
     if (!text) return;
-    blocks.push({ text, cited, sentences: splitSentences(text) });
+    blocks.push({ text, cited, disclosure, sentences: splitSentences(text) });
   };
 
   for (const line of lines) {
+    const asHeading = line.trim().match(/^#{1,6}\s+(.*)$/);
+    if (asHeading) {
+      flush();
+      heading = asHeading[1]!.replace(/[`*_#]/g, '').trim();
+      continue;
+    }
     if (isStructuralLine(line)) {
       flush();
       continue;
@@ -664,10 +696,17 @@ function checkLevel(
  */
 const GAP_PHRASE = new RegExp(
   [
-    String.raw`\bnot\s+(?:visible|provided|detected|detailed|analy[sz]ed|parsed|read|included|shown|covered|documented|captured|extracted|available|determined|explicitly)\b`,
+    // Present tense alongside the participle: the disclosure `repairExplanation`
+    // appends says "which OnboardBuddy does not parse", and only "parsed" was listed.
+    String.raw`\bnot\s+(?:visible|provided|detected|detailed|analy[sz]ed|parse|parses|parsed|read|included|shown|covered|documented|captured|extracted|available|determined|explicitly)\b`,
     // "This project does not specify a run command in its package.json" is a
-    // disclosure, and was being counted as an uncited claim.
-    String.raw`\bnot\s+(?:specify|specified|declare|declared|define|defined|configure|configured|expose|exposed|present|exist|exists|found|set)\b`,
+    // disclosure, and was being counted as an uncited claim. `applicable` joins
+    // the family for the same reason: `sectionSpecs.ts` asks traced_flows to
+    // answer "queue between phases?" and "auth guard placement?" for every
+    // journey, and "Not applicable as this is a linear CI process" is the honest
+    // answer to a question about something the repo does not have — an absence
+    // statement, exactly like "not present" and "not configured" beside it.
+    String.raw`\bnot\s+(?:specify|specified|declare|declared|define|defined|configure|configured|expose|exposed|present|exist|exists|found|set|applicable)\b`,
     String.raw`\bno\s+(?:evidence|receipt|test|trace|record|visible)\b`,
     String.raw`\bcould\s+not\s+(?:be\s+)?(?:determine|determined|resolve|resolved|read|parse|parsed|see|find)\b`,
     String.raw`\bcannot\s+be\s+(?:determined|verified|resolved|read)\b`,
@@ -718,6 +757,42 @@ function checkGaps(
     });
   }
 
+  /**
+   * The gaps rule is gameable, and the corpus shows it being gamed.
+   *
+   * `isClaimSentence` drops any sentence that `disclosesGap`, so an apology is
+   * exempt from the grounding rule AND satisfies this one. On the small repos
+   * the model therefore fills every mandated heading with "the evidence does
+   * not specify …" and scores well: `MasterPokedex/setup_run` is 202 words with
+   * five of them, including a port-in-use failure box that names no port, and
+   * `FloowForge/traced_flows` answers the prompt's own checklist with "Not
+   * applicable" twice. That is the "generic, padded, not useful" shape.
+   *
+   * So disclosure is now bounded on BOTH sides: silence is still a failure, and
+   * so is a text that is mostly apology. Only fires once the text is long
+   * enough for the share to mean something.
+   */
+  const absences = blocks.reduce(
+    (n, b) => n + b.sentences.filter((s) => disclosesGap(s)).length,
+    0,
+  );
+  const absenceWords = blocks.reduce(
+    (n, b) => n + b.sentences.filter((s) => disclosesGap(s)).reduce((m, s) => m + contentWords(s).length, 0),
+    0,
+  );
+  if (words >= 60 && absences >= 3 && absenceWords * 100 >= words * 20) {
+    findings.push({
+      rule: 'gaps',
+      code: 'gap_padding',
+      sentence: blocks.flatMap((b) => b.sentences).find((s) => disclosesGap(s)) ?? firstSentence,
+      detail:
+        `${absences} sentences (${Math.round((absenceWords * 100) / words)}% of this text) say only what could not be determined — ` +
+        'a section built out of apologies is padding, and the Known Gaps panel already records them. ' +
+        'Drop the headings you cannot fill and keep the ones you can; a short section that is all substance beats a complete-looking one',
+      severity: 'error',
+    });
+  }
+
   for (const required of evidence.mustDisclose ?? []) {
     if (!required) continue;
     if (!lower.includes(required.toLowerCase())) {
@@ -734,6 +809,97 @@ function checkGaps(
   }
 
   return { findings, disclosesGaps: disclosed };
+}
+
+// ── rule 5: repetition ──────────────────────────────────────────────────────
+
+/**
+ * One sentence written N ways — the hole the four original rules left open.
+ *
+ * Every rule above is per-sentence and severity-only, so seven paraphrases of
+ * one sentence cost exactly what one costs. Measured in the live corpus (104
+ * sections, 9 repos), that is the dominant bloat shape:
+ *
+ *   "the evidence does not specify the exact tables, services, or extension
+ *    seams for this capability"          ×7 in OnboardBuddy/capabilities
+ *                                        (~105 of 561 words = 19% of it)
+ *   "keeping it separate prevents <deps> from spreading into other parts of
+ *    the codebase"                       ×5 in OnboardBuddy/architecture_deep
+ *   "provides common functionality … avoiding duplication"  ×4, same section
+ *   "The evidence for <file> does not specify the number of files that import
+ *    it."                                ×14 across the corpus's gap lists
+ *
+ * Exact-string dedupe cannot see any of these: the model reorders and
+ * re-words just enough. So compare CONTENT-WORD SETS with identifiers blanked,
+ * which is what makes "Keeping it separate prevents `jose` from spreading into
+ * other parts of the codebase" and "Its separation prevents `simple-git` and
+ * `glob` from spreading into other parts of the codebase" the same sentence.
+ *
+ * Deliberately conservative — this accuses, and a wrong accusation costs a
+ * model call:
+ *   • short sentences are exempt (a repeated 5-word line is usually a real
+ *     table-ish enumeration, not padding);
+ *   • the threshold is a HIGH Jaccard overlap, not a fuzzy match;
+ *   • two occurrences are a `warn`, three or more an `error` — a pair can be
+ *     deliberate parallelism, a trio is a template.
+ */
+const MIN_WORDS_FOR_REPETITION = 7;
+/** Share of content words two sentences must share to count as one template. */
+const REPETITION_OVERLAP = 0.8;
+/** Below this many repeats it is parallelism, not padding. */
+const REPETITION_ERROR_AT = 3;
+
+/** Content words with identifiers, paths and digits blanked to `<id>`. */
+function templateWords(sentence: string): string[] {
+  const blanked = sentence
+    .replace(/`[^`\n]*`/g, ' <id> ')
+    .replace(/[\w@$.-]*[./][\w@$.-]*/g, ' <id> ')
+    .replace(/\b\d[\d,._]*\b/g, ' <id> ');
+  return contentWords(blanked).filter((w) => w !== 'id');
+}
+
+const overlap = (a: Set<string>, b: Set<string>): number => {
+  if (a.size === 0 || b.size === 0) return 0;
+  let shared = 0;
+  for (const w of a) if (b.has(w)) shared += 1;
+  // Against the SMALLER set: "X prevents A from spreading" fully contained in
+  // "Keeping X separate prevents A and B from spreading" is the same template.
+  return shared / Math.min(a.size, b.size);
+};
+
+function checkRepetition(blocks: Block[]): ExplanationFinding[] {
+  const sentences: Array<{ text: string; words: Set<string> }> = [];
+  for (const block of blocks) {
+    for (const sentence of block.sentences) {
+      const words = templateWords(sentence);
+      if (words.length < MIN_WORDS_FOR_REPETITION) continue;
+      sentences.push({ text: sentence, words: new Set(words) });
+    }
+  }
+
+  // Greedy clustering: each sentence joins the first template it matches.
+  const clusters: Array<{ first: string; members: string[]; words: Set<string> }> = [];
+  for (const s of sentences) {
+    const hit = clusters.find((c) => overlap(c.words, s.words) >= REPETITION_OVERLAP);
+    if (hit) hit.members.push(s.text);
+    else clusters.push({ first: s.text, members: [s.text], words: s.words });
+  }
+
+  const findings: ExplanationFinding[] = [];
+  for (const c of clusters) {
+    if (c.members.length < 2) continue;
+    findings.push({
+      rule: 'repetition',
+      code: 'template_repetition',
+      sentence: c.first,
+      detail:
+        `this sentence appears ${c.members.length} times with only the identifiers changed ` +
+        `(e.g. "${(c.members[1] ?? '').slice(0, 110)}") — one finding restated N times is padding, not thoroughness. ` +
+        'Write it ONCE and name every item it applies to in that one sentence',
+      severity: c.members.length >= REPETITION_ERROR_AT ? 'error' : 'warn',
+    });
+  }
+  return findings;
 }
 
 // ── rule 2: grounding ───────────────────────────────────────────────────────
@@ -774,7 +940,12 @@ function checkGrounding(
   if (evidence.mode === 'reference') return { findings: [], claimBlocks: 0, citedBlocks: 0 };
 
   const findings: ExplanationFinding[] = [];
-  const claimful = blocks.filter((b) => b.sentences.some((s) => isClaimSentence(s, evidence.mode)));
+  // The mechanical unread-stack disclosure is evidence-backed by construction —
+  // it is rendered from the language inventory, not asserted by the model — so
+  // it is neither a claim that owes a receipt nor denominator for the ones that do.
+  const claimful = blocks.filter(
+    (b) => !b.disclosure && b.sentences.some((s) => isClaimSentence(s, evidence.mode)),
+  );
   const uncited = claimful.filter((b) => !b.cited);
   const claimBlocks = claimful.length;
   const citedBlocks = claimBlocks - uncited.length;
@@ -811,9 +982,10 @@ const RULE_HEADLINE: Record<ExplanationRule, string> = {
   level: 'WRONG ALTITUDE: the explanation is not about the thing it is filed under',
   grounding: 'UNGROUNDED CLAIMS: assertions with no receipt behind them',
   gaps: 'UNDISCLOSED GAPS: the text does not say what it could not determine',
+  repetition: 'PADDING: one sentence restated with the identifiers swapped',
 };
 
-const RULE_ORDER: ExplanationRule[] = ['narration', 'level', 'grounding', 'gaps'];
+const RULE_ORDER: ExplanationRule[] = ['repetition', 'narration', 'level', 'grounding', 'gaps'];
 
 /**
  * Lints one generated explanation against the four-rule contract.
@@ -830,8 +1002,11 @@ export function lintExplanation(markdown: string, evidence: ExplanationEvidence 
   const level = checkLevel(blocks, evidence);
   const grounding = checkGrounding(blocks, evidence);
   const gaps = checkGaps(source, blocks, evidence);
+  // Reference sections splice deterministic tables whose rows legitimately
+  // share a shape; only the prose modes are held to the repetition rule.
+  const repetition = evidence.mode === 'reference' ? [] : checkRepetition(blocks);
 
-  const findings = [...narration, ...level.findings, ...grounding.findings, ...gaps.findings];
+  const findings = [...repetition, ...narration, ...level.findings, ...grounding.findings, ...gaps.findings];
 
   // One issue string per rule that produced an error, each quoting a real
   // sentence — a retry prompt that says "you wrote X" beats one that says
@@ -857,6 +1032,7 @@ export function lintExplanation(markdown: string, evidence: ExplanationEvidence 
       claimBlocks: grounding.claimBlocks,
       citedBlocks: grounding.citedBlocks,
       narrationHits: narration.length,
+      repetitionHits: repetition.length,
       disclosesGaps: gaps.disclosesGaps,
       namesSubject: level.namesSubject,
       domainNounsHit: level.domainNounsHit,

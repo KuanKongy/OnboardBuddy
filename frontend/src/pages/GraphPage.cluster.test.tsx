@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
-import { fetchDependencyGraph, fetchFileSymbolGraph } from "@/lib/graphData";
+import { fetchDependencyGraph } from "@/lib/graphData";
 
 /**
  * Drill-down navigation.
@@ -13,8 +13,9 @@ import { fetchDependencyGraph, fetchFileSymbolGraph } from "@/lib/graphData";
  * auto-drilled therefore offered crumbs for levels nobody had visited, and
  * Back went to a synthesized prefix instead of the previous view.
  *
- * The contract now: the breadcrumb lists levels actually visited, and Back
- * returns to the previous one.
+ * The contract now: the breadcrumb lists levels actually visited, Back returns
+ * to the previous one, and the ladder is exactly TWO rungs deep — groups then
+ * files, with nothing under a file (owner E1).
  */
 
 vi.mock("@/lib/graphData", () => {
@@ -22,7 +23,7 @@ vi.mock("@/lib/graphData", () => {
     id: `cluster:${dir}`,
     label: `${dir}/ (${files} files)`,
     kind: "cluster",
-    metadata: { exportedSymbols: [], importCount: files, dependentCount: 0, fileCount: files, directory: dir },
+    metadata: { exportedSymbols: [], importCount: 2, dependentCount: 1, internalImportCount: files, fileCount: files, directory: dir },
   });
   const fileNode = (path: string, label: string, symbolCount = 0) => ({
     id: path,
@@ -30,17 +31,15 @@ vi.mock("@/lib/graphData", () => {
     kind: "module",
     metadata: { exportedSymbols: [label], importCount: 1, dependentCount: 0, symbolCount },
   });
-  const symbolNode = (path: string, label: string, kind: string) => ({
-    id: path,
-    label,
-    kind,
-    metadata: { exportedSymbols: [], importCount: 1, dependentCount: 1, exported: true },
-  });
 
   const root = {
     projectId: "proj-1", snapshotId: "snap-1", clustered: true, totalNodes: 187, totalEdges: 120,
     level: { kind: "root", id: null, unit: "groups" },
     truncation: null,
+    counts: {
+      nodesShown: 3, groupsShown: 3, filesShown: 0, edgesShown: 1,
+      filesTotal: 187, linksTotal: 120, linksInsideGroups: 110,
+    },
     graph: {
       nodes: [clusterNode("src/lib", 40), clusterNode("src/api", 40), clusterNode("src/big", 107)],
       edges: [{ id: "e0", source: "cluster:src/lib", target: "cluster:src/api", kind: "dependency" }],
@@ -68,15 +67,21 @@ vi.mock("@/lib/graphData", () => {
     fileAnalyses: [],
   };
 
-  // A level the node cap actually bites into: 107 files, 60 drawn.
+  // A level the node cap actually bites into: 107 files, 60 drawn, and only 4
+  // of its 91 file-to-file links survive with both ends on the canvas.
   const big = {
-    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 107, totalEdges: 4,
+    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 107, totalEdges: 91,
     level: { kind: "cluster", id: "src/big", unit: "files" },
     truncation: {
       shown: 60, total: 107, hidden: 47, limit: 60, unit: "files",
       keptBy: "the files that import the most other project files",
       seeRest: null,
     },
+    counts: {
+      nodesShown: 60, groupsShown: 0, filesShown: 60, edgesShown: 4,
+      filesTotal: 107, linksTotal: 91, linksInsideGroups: 0,
+    },
+    describedFiles: 12,
     graph: {
       nodes: Array.from({ length: 60 }, (_, i) => fileNode(`src/big/f${i}.ts`, `f${i}`)),
       edges: [],
@@ -97,32 +102,12 @@ vi.mock("@/lib/graphData", () => {
     fileAnalyses: [],
   });
 
-  const symbols = {
-    projectId: "proj-1", snapshotId: "snap-1", clustered: false, totalNodes: 3, totalEdges: 1,
-    level: { kind: "file", id: "src/lib/api.ts", unit: "symbols" },
-    truncation: null,
-    graph: {
-      nodes: [
-        symbolNode("src/lib/api.ts#createClient", "createClient", "function"),
-        symbolNode("src/lib/api.ts#request", "request", "function"),
-        symbolNode("src/lib/api.ts#ApiError", "ApiError", "class"),
-      ],
-      edges: [{
-        id: "s1", source: "src/lib/api.ts#createClient", target: "src/lib/api.ts#request",
-        kind: "calls", weight: 1,
-      }],
-      entryPoints: [],
-    },
-    fileAnalyses: [],
-  };
-
   return {
     fetchDependencyGraph: vi.fn().mockImplementation((_p: string, cluster?: string) =>
       Promise.resolve(
         !cluster ? root : cluster === "src/lib" ? lib : cluster === "src/big" ? big : leaf(cluster),
       ),
     ),
-    fetchFileSymbolGraph: vi.fn().mockResolvedValue(symbols),
     fetchClassGraph: vi.fn().mockResolvedValue(null),
     fetchWorkflowsList: vi.fn().mockResolvedValue({ workflows: [] }),
     fetchWorkflowGraph: vi.fn().mockResolvedValue(null),
@@ -223,29 +208,62 @@ describe("GraphPage drill-down", () => {
     expect(screen.queryByText("index.ts")).not.toBeInTheDocument();
   });
 
-  it("drills a file into the symbols it declares, and a symbol is the leaf", async () => {
-    // The rung the ladder was missing: cluster → nested cluster → file →
-    // symbols. `index` (no symbols) stays a leaf; `api` (3) opens a level.
+  /**
+   * ASSERTION 1 — the ladder is two rungs, and a link into the removed third
+   * rung degrades instead of erroring.
+   *
+   * Owner E1: "have only two level, the current third level drill down is not
+   * useful and annoying." `api` declares 3 symbols, which used to be exactly
+   * the condition that turned a file into a door.
+   */
+  it("stops at the file level, and a stale symbols link degrades to it", async () => {
     renderGraphPage();
     await drillInto("src/lib/ (40 files)");
-    await drillInto("api");
+    await waitFor(() => expect(screen.getByText("api")).toBeInTheDocument());
+    const callsBefore = vi.mocked(fetchDependencyGraph).mock.calls.length;
 
-    await waitFor(() =>
-      expect(fetchFileSymbolGraph).toHaveBeenCalledWith("proj-1", "src/lib/api.ts", null),
+    fireEvent.click(screen.getByText("api"));
+
+    // No level opened: no fetch, the canvas still shows the group's contents,
+    // and `lib` is still the LAST crumb rather than an intermediate one.
+    expect(vi.mocked(fetchDependencyGraph).mock.calls.length).toBe(callsBefore);
+    expect(screen.getByText("src/lib/deep/ (8 files)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dependencies" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "lib" })).not.toBeInTheDocument();
+
+    // A URL written before the rung was removed lands on the file's GROUP,
+    // and the dead frame is dropped from the breadcrumb rather than erroring.
+    vi.mocked(fetchDependencyGraph).mockClear();
+    renderGraphPage(
+      "/projects/proj-1/dependencies?drill=cluster,src%2Flib,lib|file,src%2Flib%2Fapi.ts,api.ts",
     );
-    // The file becomes a level of its own, so the group it came from turns
-    // into an intermediate crumb.
-    await waitFor(() => expect(screen.getByRole("button", { name: "lib" })).toBeInTheDocument());
-    expect(screen.getByText("createClient")).toBeInTheDocument();
-    expect(screen.getByText("ApiError")).toBeInTheDocument();
-    expect(screen.getByText(/Symbols declared in/)).toBeInTheDocument();
+    await waitFor(() => expect(fetchDependencyGraph).toHaveBeenCalledWith("proj-1", "src/lib", null));
+    expect(vi.mocked(fetchDependencyGraph).mock.calls.every(([, c]) => c !== "src/lib/api.ts")).toBe(true);
+  });
 
-    const symbolCalls = vi.mocked(fetchFileSymbolGraph).mock.calls.length;
-    fireEvent.click(screen.getByText("createClient"));
+  /**
+   * ASSERTION 2 — the header describes the canvas, not a bigger population.
+   *
+   * Owner F1: "It shows a bigger number of available imports, steps, but when
+   * you click to see details, there are less." Measured before this change:
+   * the root badge read "227 files · 929 edges" over 8 boxes and 2 arrows, and
+   * a drilled group read "107 files · 481 edges" over 5 boxes and 10 arrows.
+   */
+  it("reports what the canvas draws, and names the larger population", async () => {
+    renderGraphPage();
+    // Root: 3 group boxes standing for 187 files, 1 arrow standing for 120
+    // file-to-file links, 110 of which are inside a single group.
+    await waitFor(() =>
+      expect(screen.getByText("3 groups · 187 files inside · 1 arrow")).toBeInTheDocument(),
+    );
 
-    // A symbol has nothing below it: selection, not navigation.
-    expect(vi.mocked(fetchFileSymbolGraph).mock.calls.length).toBe(symbolCalls);
-    expect(screen.getByText("request")).toBeInTheDocument();
+    await drillInto("src/big/ (107 files)");
+    // Capped file level: drawn count first, level total named beside it.
+    await waitFor(() =>
+      expect(screen.getByText("60 of 107 files · 4 arrows")).toBeInTheDocument(),
+    );
+    // And the level says how many of the drawn files it can actually explain.
+    expect(screen.getByText(/12 of 60 carry a generated description/)).toBeInTheDocument();
   });
 
   it("says how much of a capped level it is not drawing", async () => {

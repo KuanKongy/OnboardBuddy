@@ -61,3 +61,59 @@ doc/Feedback.md
 doc/PLAN.md
 doc/Team*.md
 doc/Design.md
+
+# ── Test-runner output (root) ────────────────────────────────────────────────
+# Playwright writes here when invoked from the repo root rather than frontend/.
+# Re-derived by any test run; never review it in a diff.
+test-results/
+playwright-report/
+
+# ── Live-verification probes ─────────────────────────────────────────────────
+# `backend/tmp/` (ignored above) is where every throwaway DB/HTTP probe written
+# this session lives — smoke.mts, census.mts, extract.mts, journeys.mts, the
+# qfix-*/nest* measurement scripts. They are deliberately NOT committed: they
+# hardcode snapshot ids and throwaway credentials, and they are rewritten for
+# whatever is being measured that day. The DURABLE instruments are committed
+# and live in backend/scripts/ (truth-diff, explanation-diff, role-census).
+
+# Repos cloned by measurement harnesses at snapshot SHAs.
+/tmp/obb-fleet/
+backend/.probe-tmp/
+
+# ── Deliberately COMMITTED — do not add ignores for these ────────────────────
+# Recorded because each looks ignorable and is not:
+#   doc/AUDIT_LEDGER.md, CONTENT_AUDIT.md, OWNER_FEEDBACK_M4.md,
+#   READER_REDESIGN.md, TUTORIAL_REDESIGN.md, VISUAL_QA_M4.md,
+#   ROLE_DIFFERENTIATION_PLAN.md, PROJECT_SCORECARD.md
+#     -> the findings/goals corpus the rework is graded against.
+#   doc/reader-audit/, doc/visual-qa-m4-shots/  (~2.4 MB, 23 images)
+#     -> the audit docs cite these by filename as evidence; a dangling
+#        reference is worse than the bytes.
+#   backend/test/truth/*.json, backend/test/golden/*.json
+#     -> hand-labeled expectations; the accuracy gate is meaningless without them.
+#   backend/src/worker/fixtures/**  (incl. pureLibrary/, pureCli/, nested/,
+#     mixed/deploy/secrets.yml)
+#     -> parser fixtures. The "secrets" file is FAKE, on purpose: it is the
+#        hostile input the secret-scanner test asserts against.
+#   *.example env templates -> the documented setup contract.
+
+# ── Working docs: ours, not the reader's ─────────────────────────────────────
+# doc/ is for the TA and teammates. Audits, scorecards, owner-feedback logs and
+# redesign specs are the working notes behind the rework — they stay on disk and
+# the task list still points at them, they just are not part of what someone
+# reviewing this project should have to wade through.
+doc/AUDIT_LEDGER.md
+doc/CONTENT_AUDIT.md
+doc/OWNER_FEEDBACK_M4.md
+doc/VISUAL_QA_M4.md
+doc/UX_AUDIT_FINDINGS.md
+doc/UX_VISUAL_AUDIT.md
+doc/PROJECT_SCORECARD.md
+doc/ONBOARDING_UX_VALIDATION.md
+doc/ONBOARDING_FIX_IMPLEMENTATION.md
+doc/REWORK_PLAN.md
+doc/ROLE_DIFFERENTIATION_PLAN.md
+doc/READER_REDESIGN.md
+doc/TUTORIAL_REDESIGN.md
+doc/reader-audit/
+doc/visual-qa-m4-shots/

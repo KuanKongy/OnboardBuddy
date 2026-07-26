@@ -247,7 +247,11 @@ describe('phase 5 — capability derivation binds or emits nothing', () => {
     rankingReasons: [], externalDependencies: [],
   });
 
-  it('emits nothing when traced flows reach no schema table and no named service', () => {
+  // CONTRACT CHANGE: the third leg is now "reaches a persistence or external
+  // surface", not "reaches a schema table or a named service" — a flow that
+  // persists to disk, a queue or the network binds too. `unknown_external` is
+  // still not a surface, which is the property this case pins.
+  it('emits nothing when traced flows reach no persistence or external surface', () => {
     const derived = deriveCapabilities({
       // Two real routes, each traced past its trigger — but every effect they
       // reach is an unrecognized npm package, which is the honesty fallback,
@@ -261,10 +265,40 @@ describe('phase 5 — capability derivation binds or emits nothing', () => {
     });
     expect(derived.capabilities).to.have.length(0);
     expect(derived.unbound.map((u) => u.missing)).to.deep.equal([
-      'no schema table or external service reached',
-      'no schema table or external service reached',
+      'no persistence or external surface reached',
+      'no persistence or external surface reached',
     ]);
     expect(derived.totals.consideredFlows).to.equal(2);
+  });
+
+  /**
+   * A project whose persistence is a disk write behind a client the effect
+   * detector has no pattern for reached "nothing" and shipped zero
+   * capabilities, while a chart component that happened to match `.save(`
+   * shipped one. The surface a step node's own behaviour signal names is the
+   * evidence that closes that gap.
+   */
+  it('binds a flow whose only surface is the filesystem its steps reach', () => {
+    const derived = deriveCapabilities({
+      workflows: [flow({
+        key: 'datasets', route: '/datasets',
+        steps: [
+          step(1, 'src/datasets.ts#handler', 'trigger'),
+          step(2, 'src/persist.ts#write', 'side_effect'),
+        ],
+      })],
+      sideEffects: [],
+      graph: {
+        nodes: [{
+          stableKey: 'src/persist.ts#write', type: 'method', name: 'write',
+          filePath: 'src/persist.ts', trustLevel: 'code',
+          metadata: { behaviorSignals: ['filesystem'] },
+        }],
+        edges: [],
+      },
+      architecture: { clusters: [], edges: [] },
+    });
+    expect(derived.capabilities.map((c) => [c.key, c.surfaces])).to.deep.equal([['dataset', ['filesystem']]]);
   });
 
   it('emits one capability per bound group, keyed on the table it writes', () => {
@@ -321,7 +355,12 @@ describe('phase 5 — role projections', () => {
   it('projects view scores through the weight table', () => {
     const scores = Object.fromEntries(SEMANTIC_VIEWS.map((v) => [v, 1])) as Record<(typeof SEMANTIC_VIEWS)[number], number>;
     expect(projectRoleScore(scores, DEFAULT_ROLE_WEIGHTS.backend)).to.be.closeTo(1.0, 1e-9);
-    expect(projectRoleScore({ critical_for_runtime: 1 }, DEFAULT_ROLE_WEIGHTS.backend)).to.be.closeTo(0.2, 1e-9);
+    // A single view projects to exactly its own weight. Read the weight from
+    // the table rather than restating it: this asserts the projection MATH,
+    // and hardcoding 0.20 here turned a deliberate weight tune into a test
+    // failure that said nothing about whether the math still holds.
+    expect(projectRoleScore({ critical_for_runtime: 1 }, DEFAULT_ROLE_WEIGHTS.backend))
+      .to.be.closeTo(DEFAULT_ROLE_WEIGHTS.backend.critical_for_runtime, 1e-9);
   });
 
   it('custom ranking_weight_configs override defaults per view', async () => {

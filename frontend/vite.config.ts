@@ -11,7 +11,14 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173
+    port: 5173,
+    // Dev-only: lets a local `vite` session run against the compose API from
+    // any port (the API's CORS allowlist pins http://localhost:5173, which
+    // the docker frontend owns). Start with VITE_API_URL=/api to use it —
+    // requests become same-origin and CORS never applies. No effect on builds.
+    proxy: {
+      "/api": { target: "http://localhost:3000", changeOrigin: true },
+    },
   },
   test: {
     environment: "jsdom",

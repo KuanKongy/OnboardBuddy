@@ -5,6 +5,7 @@ import type { CandidateRanking } from './candidateRanker.js';
 import type { ExtractedWorkflow } from './workflowExtractor.js';
 import { frameworksOfPackage } from './repoIngester.js';
 import { pool, query } from '../../lib/db.js';
+import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
 
 /**
  * Deterministic architecture clustering (doc/Pipeline.md "Architecture
@@ -843,17 +844,28 @@ export async function persistArchitecture(
   client?: PoolClient,
 ): Promise<void> {
   if (!client) {
-    const own = await pool.connect();
-    try {
-      await own.query('BEGIN');
-      await persistArchitecture(snapshotId, map, nodeIdMap, own);
-      await own.query('COMMIT');
-    } catch (err) {
-      await own.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      own.release();
-    }
+    // Retried at the TRANSACTION level, never per statement: the body below runs
+    // inside this BEGIN…COMMIT, and after a 57014 the transaction is aborted
+    // (25P02) so no individual statement can be retried in place.
+    //
+    // Re-running the whole body is safe even though `INSERT INTO
+    // architecture_edges` has no ON CONFLICT clause: ROLLBACK has already erased
+    // everything the failed attempt wrote, so the second pass starts from the
+    // same state the first one did and cannot double any row. (The clusters and
+    // members writes are upsert / DO NOTHING and would be safe regardless.)
+    await withStatementTimeoutRetry('persistArchitecture/transaction', async () => {
+      const own = await pool.connect();
+      try {
+        await own.query('BEGIN');
+        await persistArchitecture(snapshotId, map, nodeIdMap, own);
+        await own.query('COMMIT');
+      } catch (err) {
+        await own.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        own.release();
+      }
+    });
     return;
   }
 

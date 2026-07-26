@@ -151,6 +151,13 @@ export function findSpine(nodes: GraphNode[], edges: GraphEdge[]): string[] {
  * a final row holding a single node is exactly the lopsided shape this layout
  * is supposed to prevent, and shifting the row width by one usually fixes it
  * at no cost to the overall proportions.
+ *
+ * Ties break WIDE. The candidates are consecutive integers, so a tie is common
+ * (a 20-step flow scores 4 and 5 identically), and picking the smaller one
+ * turned a 20-step flow into five rows of four — still technically snaked, but
+ * taller than it is wide, which is the shape the reader asked us to stop
+ * producing. The wider member of a tie is also the one nearer the target
+ * aspect, since `ideal` is the aspect-correct width rounded down as often as up.
  */
 export function choosePerRow(spineLength: number, cellWidth: number, cellHeight: number): number {
   if (spineLength <= MIN_PER_ROW) return Math.max(1, spineLength);
@@ -165,7 +172,75 @@ export function choosePerRow(spineLength: number, cellWidth: number, cellHeight:
   };
 
   const candidates = [...new Set([clamp(ideal - 1), clamp(ideal), clamp(ideal + 1)])];
-  return candidates.reduce((best, p) => (score(p) > score(best) ? p : best));
+  return candidates.reduce((best, p) => {
+    const delta = score(p) - score(best);
+    return delta > 0 || (delta === 0 && p > best) ? p : best;
+  });
+}
+
+/**
+ * One node per step, edges between consecutive steps.
+ *
+ * The workflow graph endpoint folds a path down to one node per distinct
+ * symbol. Two defects fell out of that fold. The rail advertises
+ * `COUNT(*) workflow_steps` — on OnboardBuddy its top-ranked flow says
+ * "8 steps" and the folded graph drew four nodes, and across the project 774
+ * steps drew 650 nodes. And `shouldSerpentine` needs a chain of six, so it was
+ * judging the folded count: ten of OnboardBuddy's first fourteen flows fell
+ * under the threshold and were laid out as short vertical columns while their
+ * rail entries advertised 7–14 steps. Both readings were of the same missing
+ * rows.
+ *
+ * A step that re-enters a file it already visited is a later step in the
+ * trace, not a repeat of an earlier one, so it gets its own node here. Node ids
+ * are step-scoped for that reason; `nodeKey` carries the shared identity the
+ * detail lookups still need.
+ */
+export function buildStepChain<S extends { stepOrder: number }>(
+  steps: readonly S[],
+  describe: (step: S) => { label: string; kind: string },
+): { nodes: GraphNode[]; edges: GraphEdge[]; idOf: (step: S) => string } {
+  const idOf = (step: S) => `step:${step.stepOrder}`;
+  const nodes: GraphNode[] = steps.map((s) => ({
+    id: idOf(s),
+    ...describe(s),
+    metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
+  }));
+  const edges: GraphEdge[] = steps.slice(1).map((s, i) => ({
+    id: `${idOf(steps[i]!)}->${idOf(s)}`,
+    source: idOf(steps[i]!),
+    target: idOf(s),
+    kind: "step",
+  }));
+  return { nodes, edges, idOf };
+}
+
+/**
+ * The shortest chain worth snaking.
+ *
+ * Five, not six. The gate used to need six nodes, and the owner's flagship
+ * case sat one under it: the "Analysis → onboarding generation" journey is
+ * advertised as eight steps in the rail and arrives as FIVE walkthrough rows
+ * (a journey's step numbers are the composed flows' own orders, so they are
+ * not contiguous). Auto therefore drew a five-node vertical column while Snake
+ * handled the same flow correctly when forced by hand. Four nodes still read
+ * fine as a column; five is where the column starts costing scroll.
+ */
+const MIN_SPINE = 5;
+
+/**
+ * Trigger types whose flows are a chain by construction.
+ *
+ * A journey is stitched from several traced flows across process boundaries
+ * (route → queue → worker). Where it fans out, the fan-out IS part of the path
+ * a reader follows, so the branch veto below — written for hub-and-spoke
+ * import graphs — must not hand a journey to dagre.
+ */
+const CHAIN_TRIGGERS = new Set(["journey"]);
+
+export interface SerpentineGateOptions {
+  /** The flow's `trigger_type`, when the caller knows it. */
+  triggerType?: string | null;
 }
 
 /**
@@ -173,12 +248,18 @@ export function choosePerRow(spineLength: number, cellWidth: number, cellHeight:
  *
  * A three-step flow is already readable as a column, and snaking it would add
  * turns for no gain. A graph that is mostly branches is not a chain at all and
- * belongs in dagre, whose whole job is layered layout.
+ * belongs in dagre, whose whole job is layered layout — unless it is a journey,
+ * which is a chain even when it forks (see `CHAIN_TRIGGERS`).
  */
-export function shouldSerpentine(nodes: GraphNode[], edges: GraphEdge[]): boolean {
-  if (nodes.length < 6 || nodes.length > 60) return false;
+export function shouldSerpentine(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  options: SerpentineGateOptions = {},
+): boolean {
+  if (nodes.length < MIN_SPINE || nodes.length > 60) return false;
   const spine = findSpine(nodes, edges);
-  if (spine.length < 6) return false;
+  if (spine.length < MIN_SPINE) return false;
+  if (CHAIN_TRIGGERS.has((options.triggerType ?? "").toLowerCase())) return true;
   const branchRatio = (nodes.length - spine.length) / nodes.length;
   return branchRatio < 0.5;
 }

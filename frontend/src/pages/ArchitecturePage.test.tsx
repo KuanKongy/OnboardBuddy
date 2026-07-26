@@ -91,7 +91,13 @@ function renderPage() {
 describe("ArchitecturePage", () => {
   beforeEach(() => vi.mocked(fetchArchitecture).mockReset());
 
-  it("opens a component in the graph instead of only listing links out of it", async () => {
+  it("opens a component only when asked, and then shows its files", async () => {
+    // Owner I1: "The architecture, doesn't drill down, it doesn't show files.
+    // You may add the button, to allow drilling down, it shouldn't by
+    // default." A click used to drill immediately — the same gesture that
+    // means "select" everywhere else — so the component's own narrative was
+    // only ever visible on the way past, and readers reported the tab as
+    // having no files level at all.
     vi.mocked(fetchArchitecture).mockImplementation((_p, _pkg, key) =>
       Promise.resolve((key ? API_LEVEL : ROOT) as never),
     );
@@ -99,6 +105,20 @@ describe("ArchitecturePage", () => {
 
     await waitFor(() => expect(screen.getByText("API Routes")).toBeInTheDocument());
     fireEvent.click(screen.getByText("API Routes"));
+
+    // Selecting does NOT navigate: no level fetch, siblings still on canvas,
+    // and the aside now explains what the component is for.
+    expect(fetchArchitecture).not.toHaveBeenCalledWith("proj-1", null, "cluster:api");
+    expect(screen.getByText("Database")).toBeInTheDocument();
+    // The aside is open beside the card, so the responsibility line appears
+    // twice — on the node, and under "Responsible for" in the aside.
+    expect(screen.getByText("Responsible for")).toBeInTheDocument();
+    expect(screen.getByText("Why it is separate")).toBeInTheDocument();
+
+    // Opening is the labelled control — one on the card, one in the aside.
+    const open = screen.getAllByRole("button", { name: /Open 2 files/ });
+    expect(open.length).toBeGreaterThan(0);
+    fireEvent.click(open[0]!);
 
     // The level is fetched from the server, not synthesized from the members
     // already in hand — that is what gives it real edges and per-file scores.
@@ -111,7 +131,7 @@ describe("ArchitecturePage", () => {
     expect(screen.queryByText("Database")).not.toBeInTheDocument();
 
     // Back returns to the components.
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Back/ }));
     await waitFor(() => expect(screen.getByText("Database")).toBeInTheDocument());
   });
 

@@ -31,7 +31,7 @@ const BINDING_RULE = {
   legs: [
     "At least one entry point — an HTTP route, page, event handler, job or command something outside the code can trigger.",
     "At least one traced flow that reaches past its own trigger, so there is a path to follow.",
-    "At least one schema table or named external service those flows actually touch.",
+    "At least one persistence or external surface those flows actually reach — a schema table, a named data resource or service, the filesystem, a queue, or the network.",
   ],
 } as const;
 
@@ -50,6 +50,8 @@ type CapMetadata = {
     entrypoints?: Array<{ kind: string; route: string | null; filePath: string; symbol: string | null }>;
     schemas?: string[];
     services?: string[];
+    /** Persistence/IO surfaces with no nameable resource: "filesystem", "job queue", "network". */
+    surfaces?: string[];
     flows?: Array<{ stableKey: string; title: string; tier: string; stepCount: number }>;
   };
 };
@@ -164,6 +166,10 @@ capabilitiesRouter.get("/", requireProjectAccess(), async (req, res) => {
           entrypoints: binding.entrypoints ?? [],
           schemas: binding.schemas ?? [],
           services: binding.services ?? [],
+          // Snapshots analysed before leg 3 accepted disk/queue/network
+          // surfaces have no `surfaces` key; an empty list is the honest
+          // reading, not a missing field.
+          surfaces: binding.surfaces ?? [],
         },
         whereToStart: meta.where_to_start ?? [],
         workflows: members

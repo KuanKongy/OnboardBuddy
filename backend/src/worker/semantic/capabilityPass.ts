@@ -17,9 +17,9 @@
  * for nothing but a name, a sentence and a "when you'd touch it" — it cannot
  * add a group, drop one, or move a flow between them.
  *
- * Zero capabilities is a valid answer. A repo whose flows reach no schema and
- * no named external service has nothing to bind, and the honest output is an
- * empty list plus the derivation report saying which flows were considered
+ * Zero capabilities is a valid answer. A repo whose flows reach no persistence
+ * and no external surface at all has nothing to bind, and the honest output is
+ * an empty list plus the derivation report saying which flows were considered
  * and which leg each one was missing.
  */
 
@@ -49,12 +49,12 @@ export const CAPABILITY_BINDING_RULE = {
   legs: [
     'At least one entry point — an HTTP route, page, event handler, job or command that something outside the code can trigger.',
     'At least one traced flow that reaches past its own trigger, so there is a path to follow.',
-    'At least one schema table or named external service those flows actually touch.',
+    'At least one persistence or external surface those flows actually reach — a schema table, a named data resource or service, the filesystem, a queue, or the network.',
   ],
 } as const;
 
 /** Entry points a person triggers — the same set `rankWorkflow` uses. */
-const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'event_handler']);
+const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_handler']);
 
 /** Steps that mean the flow changed something outside itself. */
 const EFFECT_STEP_KINDS = new Set<WorkflowStep['stepKind']>(['data_write', 'async_work', 'side_effect']);
@@ -67,9 +67,49 @@ const EFFECT_STEP_KINDS = new Set<WorkflowStep['stepKind']>(['data_write', 'asyn
  * capability in the first place.
  */
 const BINDING_EFFECT_KINDS = new Set<DetectedSideEffect['kind']>([
-  'database_write', 'http_call', 'message_publish', 'email_send',
+  // `database_read` is here because the third leg asks whether the flow reaches
+  // a real resource, not whether it changes one. Excluding reads meant every
+  // read-only view in the fleet — a whole half of most products — could never
+  // bind, so repos built entirely of views reported zero capabilities.
+  'database_write', 'database_read', 'http_call', 'message_publish', 'email_send',
   'file_write', 'cache_write', 'auth_call', 'external_service', 'process_exec',
 ]);
+
+/**
+ * Persistence and IO surfaces named by a step node's own behaviour signals.
+ *
+ * The third leg used to accept only two shapes of evidence: a schema node, or
+ * a `DetectedSideEffect` from the pattern detector. Both are ORM/driver-shaped,
+ * so a project that persists to disk, to a queue, or across the network
+ * through a client the detector has no pattern for reached "nothing" — and
+ * every one of its flows was rejected. That is how a repo with four working
+ * REST routes over a disk-backed store shipped ZERO capabilities while its
+ * chart components, which happened to match `.save(`, shipped eight.
+ *
+ * These signals are not a second guess: `workflowExtractor` already treats the
+ * same set as first-class effect evidence (`EFFECT_SIGNALS`), and it is what
+ * tiered those flows `core` and labelled their steps `data_write` in the first
+ * place. Reading them here is what stops Workflows saying "this flow writes
+ * data" while Capabilities says the same flow reaches nothing.
+ *
+ * Deliberately absent, and why:
+ * - `database_read` / `database_write` — the weakest regexes in the set
+ *   (`.save(`, `.create(`, `.delete(` match arrays, Sets and DOM nodes as
+ *   readily as data clients). Where they are right the effect detector has
+ *   already emitted a `database_*` effect, which binds above. Accepting the
+ *   bare signal gave a static personal site one capability built on `.delete(`.
+ * - `response_output`, `auth_check`, `env_read`, `crypto` — a response is the
+ *   flow's own output, config is not a surface, and neither names a resource.
+ * - `unknown_external` stays out of BINDING_EFFECT_KINDS for the same honesty
+ *   reason as before: it is the fallback for any unmodeled package, so it
+ *   would let a design-system import bind a capability.
+ */
+const SURFACE_BY_SIGNAL: Record<string, string> = {
+  filesystem: 'filesystem',
+  queue_enqueue: 'job queue',
+  queue_consume: 'job queue',
+  http_request: 'network',
+};
 
 /**
  * URL segments that are routing scaffolding rather than domain nouns. Every
@@ -102,6 +142,12 @@ export interface CapabilityFlow {
   /** What THIS flow reaches — the capability's totals are the union. */
   schemas: string[];
   services: string[];
+  /**
+   * Persistence/IO surfaces with no nameable resource behind them
+   * ("filesystem", "job queue", "network"). Third-leg evidence, never a
+   * grouping key: every flow in a repo shares them.
+   */
+  surfaces: string[];
 }
 
 export interface CapabilityEntrypoint {
@@ -121,6 +167,7 @@ export interface DerivedCapability {
   entrypoints: CapabilityEntrypoint[];
   schemas: string[];
   services: string[];
+  surfaces: string[];
   tier: CapabilityTier;
   score: number;
   realizesUserAction: boolean;
@@ -206,11 +253,23 @@ interface FlowEvidence {
   /** Table written by the flow, if any — the strongest identity signal. */
   primaryTable: string | null;
   services: string[];
+  surfaces: string[];
   bindingEffects: string[];
   effectStep: WorkflowStep | null;
   key: string;
   keySource: KeySource;
 }
+
+/**
+ * Rejected, so it is not re-tried: inheriting a method's effects from its
+ * declaring class, the way `workflowExtractor.effectsFor` does. The detector
+ * records a class symbol's effects from the WHOLE class body, so the fallback
+ * hands every handler in a route class the union of its siblings' matches. It
+ * was measured: it bound a demo `GET /echo/:msg` endpoint and a keyboard
+ * controller on a `.delete(`/`.save(` match belonging to another method
+ * entirely. Binding here stays on evidence recorded against the flow's own
+ * step nodes.
+ */
 
 function collectFlowEvidence(
   wf: ExtractedWorkflow,
@@ -220,9 +279,18 @@ function collectFlowEvidence(
   const schemas: string[] = [];
   let primaryTable: string | null = null;
   const services = new Set<string>();
+  const surfaces = new Set<string>();
   const bindingEffects = new Set<string>();
   const seamCandidates: WorkflowStep[] = [];
 
+  // A data resource the flow's own effects name — the client-SDK equivalent of
+  // a schema node. An app that talks to its store through a driver or a managed
+  // backend has no `touches_schema` edge to reach, so before this the flow
+  // reached "no table", was keyed on its component name, and grouped with
+  // nothing. The write is preferred over the read for the same reason a written
+  // schema table is.
+  let writtenResource: string | null = null;
+  let readResource: string | null = null;
   for (const step of wf.steps) {
     const node = nodesByKey.get(step.nodeStableKey);
     if (node?.type === 'schema') {
@@ -231,10 +299,23 @@ function collectFlowEvidence(
       // half the read tables in a JOIN belong to somebody else's capability.
       if (step.stepKind === 'data_write' && !primaryTable) primaryTable = node.name;
     }
+    const signals = Array.isArray(node?.metadata.behaviorSignals)
+      ? (node.metadata.behaviorSignals as string[]) : [];
+    for (const signal of signals) {
+      const surface = SURFACE_BY_SIGNAL[signal];
+      if (surface) surfaces.add(surface);
+    }
     for (const effect of effectsByKey.get(step.nodeStableKey) ?? []) {
       if (!BINDING_EFFECT_KINDS.has(effect.kind)) continue;
       bindingEffects.add(effect.kind);
-      if (effect.target) services.add(effect.target);
+      if (!effect.target) continue;
+      if (effect.kind === 'database_write' || effect.kind === 'database_read') {
+        if (!schemas.includes(effect.target)) schemas.push(effect.target);
+        if (effect.kind === 'database_write') writtenResource ??= effect.target;
+        else readResource ??= effect.target;
+      } else {
+        services.add(effect.target);
+      }
     }
     // An `external` node is a boundary crossing into code we did not read, and
     // a schema node is the table, not the code that writes it — neither is a
@@ -251,7 +332,7 @@ function collectFlowEvidence(
     ? null
     : seamCandidates.reduce((best, s) =>
         seamRank(s) < seamRank(best) || (seamRank(s) === seamRank(best) && s.stepOrder < best.stepOrder) ? s : best);
-  if (!primaryTable && schemas.length > 0) primaryTable = schemas[0]!;
+  primaryTable ??= writtenResource ?? readResource ?? schemas[0] ?? null;
 
   // Key precedence: the entity the flow writes, then the noun its URL names,
   // then the component it is, then the service it talks to. Service is last
@@ -280,7 +361,8 @@ function collectFlowEvidence(
 
   return {
     workflow: wf, schemas, primaryTable,
-    services: [...services], bindingEffects: [...bindingEffects], effectStep,
+    services: [...services], surfaces: [...surfaces],
+    bindingEffects: [...bindingEffects], effectStep,
     key, keySource,
   };
 }
@@ -308,6 +390,7 @@ function describeTrigger(kind: string): string {
   switch (kind) {
     case 'http_route': return 'HTTP request';
     case 'ui_route': return 'page visit';
+    case 'ui_action': return 'user action';
     case 'event_handler': return 'event';
     case 'cron_job': return 'schedule';
     case 'message_consumer': return 'queued message';
@@ -356,16 +439,21 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
   for (const [key, members] of groups) {
     const schemas = [...new Set(members.flatMap((m) => m.schemas))];
     const services = [...new Set(members.flatMap((m) => m.services))];
+    const surfaces = [...new Set(members.flatMap((m) => m.surfaces))];
     const effects = [...new Set(members.flatMap((m) => m.bindingEffects))];
 
     // The third leg. No schema, no named service, no effect that leaves the
-    // process — there is nothing for a capability to be about.
-    if (schemas.length === 0 && services.length === 0 && effects.length === 0) {
+    // process, no persistence or IO surface — there is nothing for a
+    // capability to be about. Widened from "schema table or named service" so
+    // that persisting to disk, a queue or the network counts; the honesty rule
+    // is unchanged, because every branch here still requires evidence the
+    // pipeline actually recorded against this flow's own steps.
+    if (schemas.length === 0 && services.length === 0 && surfaces.length === 0 && effects.length === 0) {
       for (const m of members) {
         unbound.push({
           stableKey: m.workflow.stableKey,
           title: m.workflow.title,
-          missing: 'no schema table or external service reached',
+          missing: 'no persistence or external surface reached',
         });
       }
       continue;
@@ -437,7 +525,9 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
         ? `Touches ${schemas.length} schema table${schemas.length === 1 ? '' : 's'}: ${schemas.slice(0, 5).join(', ')}${schemas.length > 5 ? ', …' : ''}.`
         : services.length > 0
           ? `Reaches ${services.length === 1 ? 'the service' : 'services'} ${services.slice(0, 4).join(', ')} — no schema table was traced.`
-          : `Reaches ${effects.map((e) => e.replace(/_/g, ' ')).join(', ')} — no schema table or named service was traced.`,
+          : effects.length > 0
+            ? `Reaches ${effects.map((e) => e.replace(/_/g, ' ')).join(', ')}${surfaces.length > 0 ? ` via the ${surfaces.join(', ')}` : ''} — no schema table or named service was traced.`
+            : `Reaches the ${surfaces.join(', ')} — no schema table, named service or detected effect was traced, so this binds on the persistence surface its own steps carry.`,
     ];
 
     capabilities.push({
@@ -455,6 +545,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
         userTriggered: USER_TRIGGERED.has(m.workflow.entrypoint.kind),
         schemas: m.schemas,
         services: m.services,
+        surfaces: m.surfaces,
       })),
       entrypoints: [...new Map(ordered.map((m) => [
         m.workflow.entrypoint.nodeStableKey + (m.workflow.entrypoint.routePattern ?? ''),
@@ -465,7 +556,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
           symbol: m.workflow.entrypoint.symbolName ?? null,
         },
       ])).values()],
-      schemas, services,
+      schemas, services, surfaces,
       tier,
       score: Math.max(...ordered.map((m) => m.workflow.importanceScore)),
       realizesUserAction,
@@ -561,6 +652,7 @@ export async function runCapabilityPass(ctx: SemanticContext, synthesis: Synthes
     evidenceHash: evidenceHashForChildren([], derivation.capabilities.map((c) => ({
       key: c.key, flows: c.flows.map((f) => f.stableKey).sort(),
       schemas: [...c.schemas].sort(), services: [...c.services].sort(),
+      surfaces: [...c.surfaces].sort(),
     }))),
     promptVersion: PROMPT_VERSIONS.capability,
     depth: ctx.depth,
@@ -611,6 +703,7 @@ async function nameCapabilities(
     `traced flows: ${c.flows.slice(0, 8).map((f) => f.title).join(' · ')}`,
     `schema tables: ${c.schemas.length > 0 ? c.schemas.slice(0, 8).join(', ') : '(none traced)'}`,
     `external services: ${c.services.length > 0 ? c.services.slice(0, 6).join(', ') : '(none named)'}`,
+    `persistence surfaces: ${c.surfaces.length > 0 ? c.surfaces.join(', ') : '(none traced)'}`,
   ].join('\n')).join('\n\n'));
 
   const response = await ctx.ai.call<{ names: CapabilityName[] }>({
@@ -656,13 +749,13 @@ async function persistAggregate(
     bindingRule: typeof CAPABILITY_BINDING_RULE;
   } = {
     purpose: derivation.capabilities.length === 0
-      ? `No business capability could be derived: ${derivation.totals.tracedFlows} flows were traced and none bound to a schema table or a named external service.`
+      ? `No business capability could be derived: ${derivation.totals.tracedFlows} flows were traced and none reached a persistence or external surface.`
       : `Business capabilities derived from traced flows (${derivation.capabilities.length}).`,
     behavior: derivation.capabilities
       .map((c) => `${names.find((n) => n.id === c.key)?.name ?? c.fallbackName}: ${c.flows.length} flows, ${c.schemas.length} tables`)
       .join('; '),
     responsibilities: derivation.capabilities.map((c) => names.find((n) => n.id === c.key)?.name ?? c.fallbackName),
-    business_concepts: [...new Set(derivation.capabilities.flatMap((c) => [...c.schemas, ...c.services]))].slice(0, 20),
+    business_concepts: [...new Set(derivation.capabilities.flatMap((c) => [...c.schemas, ...c.services, ...c.surfaces]))].slice(0, 20),
     side_effects: [], inputs_outputs: null,
     dependencies_narrative: '', design_patterns: [],
     risks_invariants: derivation.unbound.slice(0, 10).map((u) => `${u.title}: ${u.missing}`),
@@ -715,7 +808,7 @@ async function persistCapabilities(
     const named = names.get(cap.key);
     const name = named?.name ?? cap.fallbackName;
     const description = named?.description
-      || `${cap.flows.length} traced flow${cap.flows.length === 1 ? '' : 's'} reaching ${cap.schemas.length > 0 ? cap.schemas.slice(0, 3).join(', ') : cap.services.slice(0, 3).join(', ') || 'external effects'}. Named from its evidence, not described — the naming step produced nothing usable for this group.`;
+      || `${cap.flows.length} traced flow${cap.flows.length === 1 ? '' : 's'} reaching ${cap.schemas.length > 0 ? cap.schemas.slice(0, 3).join(', ') : cap.services.slice(0, 3).join(', ') || cap.surfaces.slice(0, 3).join(', ') || 'external effects'}. Named from its evidence, not described — the naming step produced nothing usable for this group.`;
     const capResult = await query(
       `INSERT INTO capabilities (snapshot_id, stable_key, name, description, record_id, confidence, metadata)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -742,6 +835,7 @@ async function persistCapabilities(
            entrypoints: cap.entrypoints,
            schemas: cap.schemas,
            services: cap.services,
+           surfaces: cap.surfaces,
            flows: cap.flows,
          },
          derivation: cap.derivation,

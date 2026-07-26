@@ -5,7 +5,13 @@ import { OpenRouterProvider, coerceNullArrays } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
-import { BudgetEnforcer, BudgetExceededError, KillSwitchError, normalizeBudgetOverrides } from '../budgetEnforcer.js';
+import {
+  BudgetEnforcer,
+  BudgetExceededError,
+  KillSwitchError,
+  normalizeBudgetOverrides,
+  summarizeRunBudget,
+} from '../budgetEnforcer.js';
 import { AiPausedError, AiFailedError } from '../aiClient.js';
 import { stripSnippetsDeep, applyPrivacyMode, AiDisabledError } from '../privacy.js';
 // Shared fakes (test/helpers/aiHarness.ts) — the privacy-mode suites assert
@@ -274,11 +280,18 @@ describe('phase 4 — budget enforcer', () => {
     expect(persist).to.have.length(1);
   });
 
-  it('load() resumes from persisted counters', async () => {
+  it('load() keeps the lifetime counters but baselines this run at zero', async () => {
     installFakeDb({ budgetUsageRow: { llm_calls: 7, input_tokens: 999, output_tokens: 1, estimated_cost_usd: 0.5 } });
     const budget = await makeBudget().load();
+    // Cumulative totals are still loaded and still written — they are the
+    // lifetime cost record.
     expect(budget.usage.llm_calls).to.equal(7);
     expect(budget.usage.budget_events).to.deep.equal([]);
+    // CONTRACT CHANGE (per-run budgets): caps are measured from where this
+    // run started, so nothing is "already spent" before its first call.
+    expect(budget.baseline.llm_calls).to.equal(7);
+    expect(budget.usedThisRun.llm_calls).to.equal(0);
+    expect(budget.remainingLlmCalls).to.equal(300); // full standard-depth cap
   });
 
   it('trips max_llm_calls with the configured stop behavior and records the event', async () => {
@@ -292,8 +305,111 @@ describe('phase 4 — budget enforcer', () => {
       expect(err).to.be.instanceOf(BudgetExceededError);
       expect((err as BudgetExceededError).behavior).to.equal('degrade');
       expect((err as BudgetExceededError).limit).to.equal('max_llm_calls');
+      // The stop message has to say what was spent against what.
+      expect((err as Error).message).to.equal(
+        'budget exceeded (max_llm_calls) — used 1 of 1 calls this run (lifetime across runs: 1); stop behavior: degrade',
+      );
     }
-    expect(budget.usage.budget_events[0]).to.include({ kind: 'budget_tripped', limit: 'max_llm_calls' });
+    expect(budget.usage.budget_events[0]).to.include({ kind: 'budget_tripped', limit: 'max_llm_calls', scope: 'per_run' });
+    expect(budget.usage.budget_events[0]).to.have.nested.property('usedThisRun.llm_calls', 1);
+  });
+
+  /**
+   * The bug this contract change fixes. analysis_snapshots rows are reused
+   * across reruns of the same (scope, commit), so budget_usage accumulates on
+   * one row forever; enforcing the cap against that total paused a cheap
+   * rerun before it made a single call (observed live on Skribbl:
+   * "budget exceeded (max_llm_calls); stop behavior: pause" at 0 own calls).
+   */
+  it('lets a second run on a spent snapshot proceed, capping only its own delta', async () => {
+    installFakeDb({ budgetUsageRow: { llm_calls: 300, input_tokens: 5_000_000, output_tokens: 400_000, estimated_cost_usd: 4.2 } });
+    const budget = await makeBudget({ stopBehavior: 'pause', overrides: { max_llm_calls: 3 } }).load();
+
+    // Previously: 300 >= 3 → immediate pause with zero work done.
+    await budget.checkBeforeBatch(1);
+    await budget.recordUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.001 });
+    await budget.checkBeforeBatch(1);
+    await budget.recordUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.001 });
+    await budget.checkBeforeBatch(1);
+    await budget.recordUsage({ inputTokens: 10, outputTokens: 5, costUsd: 0.001 });
+
+    // Its own delta is still capped — stop behavior fires on the 4th call.
+    expect(budget.usedThisRun.llm_calls).to.equal(3);
+    expect(budget.remainingLlmCalls).to.equal(0);
+    try {
+      await budget.checkBeforeBatch(1);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).to.be.instanceOf(BudgetExceededError);
+      expect((err as BudgetExceededError).behavior).to.equal('pause');
+      expect((err as BudgetExceededError).limit).to.equal('max_llm_calls');
+      expect((err as Error).message).to.contain('used 3 of 3 calls this run (lifetime across runs: 303)');
+    }
+    // The lifetime record still accumulates — cost transparency is unchanged.
+    expect(budget.usage.llm_calls).to.equal(303);
+    expect(budget.usage.estimated_cost_usd).to.equal(4.203);
+  });
+
+  it('caps input tokens per run too, not against the snapshot lifetime', async () => {
+    installFakeDb({ budgetUsageRow: { llm_calls: 0, input_tokens: 5_900_000, output_tokens: 0, estimated_cost_usd: 0 } });
+    const budget = await makeBudget({ overrides: { max_input_tokens: 1_000 } }).load();
+    await budget.checkBeforeBatch(1); // lifetime 5.9M >> 1k cap, but this run spent 0
+    await budget.recordUsage({ inputTokens: 1_000, outputTokens: 1, costUsd: 0 });
+    try {
+      await budget.checkBeforeBatch(1);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as BudgetExceededError).limit).to.equal('max_input_tokens');
+      expect((err as Error).message).to.contain('used 1,000 of 1,000 input tokens this run');
+    }
+  });
+
+  it('persists the run baseline on the job row and reuses it on a retry', async () => {
+    // Fresh run: the conditional UPDATE claims the baseline.
+    const log = installFakeDb({ budgetUsageRow: { llm_calls: 50, input_tokens: 1, output_tokens: 1, estimated_cost_usd: 0.1 } });
+    const first = await makeBudget({ jobId: 'job-1' }).load();
+    expect(first.baseline.llm_calls).to.equal(50);
+    expect(first.baselineIsDurable).to.equal(true);
+    const claim = log.find((q) => q.text.includes("'{budgetBaseline}'"));
+    expect(claim, 'baseline claim UPDATE was issued').to.not.equal(undefined);
+    expect(JSON.parse(String(claim!.params?.[1]))).to.include({ llm_calls: 50 });
+
+    // Retry of the SAME job after it already burned 120 calls: it must
+    // inherit its original zero point, not re-baseline at 170 and hand
+    // itself a second full allowance.
+    installFakeDb({
+      budgetUsageRow: { llm_calls: 170, input_tokens: 1, output_tokens: 1, estimated_cost_usd: 0.4 },
+      jobBaseline: { llm_calls: 50, input_tokens: 1, output_tokens: 1, estimated_cost_usd: 0.1 },
+    });
+    const retry = await makeBudget({ jobId: 'job-1' }).load();
+    expect(retry.baseline.llm_calls).to.equal(50);
+    expect(retry.usedThisRun.llm_calls).to.equal(120);
+    expect(retry.remainingLlmCalls).to.equal(180); // 300 - 120, not 300
+  });
+
+  it('summarizeRunBudget reports per-run usage, and null (never a guess) for legacy runs', () => {
+    const lifetime = { llm_calls: 812, input_tokens: 9, output_tokens: 9, estimated_cost_usd: 6.251 };
+    expect(summarizeRunBudget({
+      depth: 'standard',
+      budgetOverrides: { max_llm_calls: 120 },
+      baseline: { llm_calls: 772, input_tokens: 9, output_tokens: 9, estimated_cost_usd: 6 },
+      jobLlmCalls: 40,
+      snapshotUsage: lifetime,
+    })).to.deep.equal({
+      capLlmCalls: 120, usedThisRun: 40, remaining: 80,
+      lifetimeLlmCalls: 812, lifetimeCostUsd: 6.251,
+    });
+
+    // No baseline on the job row = the run predates per-run metering. The
+    // number is unknown, so it is reported as unknown.
+    expect(summarizeRunBudget({
+      depth: 'cheap', budgetOverrides: null, baseline: null,
+      jobLlmCalls: 40, snapshotUsage: lifetime,
+    })).to.deep.equal({
+      capLlmCalls: 100, usedThisRun: null, remaining: null,
+      lifetimeLlmCalls: 812, lifetimeCostUsd: 6.251,
+      note: 'recorded before per-run metering',
+    });
   });
 
   it('trips max_runtime_ms via the injected clock', async () => {

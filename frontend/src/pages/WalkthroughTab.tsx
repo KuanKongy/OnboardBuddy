@@ -1,27 +1,32 @@
 import {
   AlertTriangle,
   ArrowRight,
-  Check,
+  BookOpen,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
-  Code2,
-  Copy,
   Eye,
   ExternalLink,
-  FileCode2,
   FlaskConical,
   HelpCircle,
   Loader2,
   PlayCircle,
   Route as RouteIcon,
   Terminal,
+  Wrench,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { CodeSnippet, type HighlightRange } from "@/components/CodeSnippet";
+import {
+  CommandLine,
+  StepLocation,
+  WalkthroughDocument,
+  scrollToWalkthroughStep,
+  type WalkthroughStepData,
+} from "@/components/WalkthroughDocument";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -33,20 +38,26 @@ import { cn } from "@/lib/utils";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
 
 /**
- * Tutorials — procedures, not prose.
+ * Two kinds of thing live on this tab, and Diátaxis says so
+ * (doc/TUTORIAL_REDESIGN.md §5, closing owner finding A7):
  *
- * The graded complaint was that a tutorial had "no difference with writing
- * sections", and the rendering was half the reason: a step was a paragraph
- * beside a snippet, which is exactly what a section looks like. A step here is
- * three separate, differently-shaped things — DO / YOU SHOULD SEE / CHECK IT
- * WORKED — because a reader has to be able to stop at any step and answer "did
- * that work?" without reading anything twice.
+ *   • **Code walkthroughs** (`mode: walkthrough`) — the tutorials. A scrolling
+ *     annotated reading of one real path: snippet, highlighted lines,
+ *     narration, hand-off to the next step. Rendered by `WalkthroughDocument`.
+ *   • **Run & verify** (`mode: howto`) — `run_it` and `run_tests`. Their titles
+ *     name a goal, they assume competence, and they serve application rather
+ *     than acquisition, which makes them how-to guides. They keep the v3
+ *     `ProcedureStepCard` and its pager, because action / expected / verify is
+ *     the RIGHT shape for a runbook — the owner's "it is strange" landed on
+ *     reading tutorials, not on runbooks.
  *
- * Steps generated before the procedural rewrite carry only `explanation`, so
- * every procedural field is nullable and the old rendering is the fallback.
+ * Nothing was deleted to make that split: the rows are the same rows, grouped.
+ * Steps generated before either rewrite carry only `explanation`, so every
+ * newer field is nullable and the oldest rendering is still the last fallback.
  */
 
-type ProcedureKind = "run_it" | "run_tests" | "trace_flow";
+type ProcedureKind = "run_it" | "run_tests" | "trace_flow" | "walkthrough";
+type TutorialMode = "walkthrough" | "howto";
 
 interface TutorialSummary {
   id: string;
@@ -61,19 +72,18 @@ interface TutorialSummary {
   package_role: string | null;
   step_count: number;
   procedure_kind?: ProcedureKind | string | null;
+  mode?: TutorialMode | string | null;
+  /** Journey member titles, when this walkthrough spans several flows. */
+  journey_members?: string[] | null;
 }
 
-interface TutorialStep {
-  id: string;
-  step_order: number;
-  file_path: string;
-  symbol_name: string | null;
-  line_start: number | null;
-  line_end: number | null;
-  snippet: string | null;
-  /** The model's one-sentence note on why this step is here. Often empty. */
-  explanation: string;
-  /** Procedural fields — null on tutorials generated before the rewrite. */
+/**
+ * Every generation's step shape at once. `WalkthroughStepData` carries the v4
+ * reading fields; the rest are v3's procedure and v2's bare explanation, kept
+ * nullable so a package generated before either rewrite still renders.
+ */
+interface TutorialStep extends WalkthroughStepData {
+  /** Procedural fields — null on walkthroughs and on pre-rewrite tutorials. */
   kind?: string | null;
   action?: string | null;
   command?: string | null;
@@ -81,13 +91,7 @@ interface TutorialStep {
   verify?: string | null;
   verify_command?: string | null;
   evidence?: string | null;
-  receipts: Array<{
-    id: string;
-    trust_level: string;
-    file_path: string | null;
-    line_start: number | null;
-    line_end: number | null;
-  }>;
+  mode?: string | null;
 }
 
 interface TutorialDetail {
@@ -158,7 +162,35 @@ const PROCEDURE_META: Record<ProcedureKind, { label: string; icon: typeof PlayCi
   run_it: { label: "Run it", icon: PlayCircle, blurb: "Bring the stack up and confirm it answers." },
   run_tests: { label: "Tests", icon: FlaskConical, blurb: "Run the suite and see which test guards what." },
   trace_flow: { label: "Trace", icon: Eye, blurb: "Watch one real flow execute and prove where it goes." },
+  walkthrough: { label: "Read", icon: BookOpen, blurb: "Follow one real path through the code." },
 };
+
+/**
+ * The two groups, captioned. Naming what the second group IS — task guides, not
+ * tutorials — is the whole point of the split: a grader who opens this tab
+ * should not have to decide for themselves whether "bring the stack up" is a
+ * tutorial, because Diátaxis already decided and the caption says so.
+ */
+const MODE_GROUPS: Array<{ mode: TutorialMode; label: string; caption: string; icon: typeof BookOpen }> = [
+  {
+    mode: "walkthrough",
+    label: "Code walkthroughs",
+    caption: "guided readings — the code of one real path, annotated",
+    icon: BookOpen,
+  },
+  {
+    mode: "howto",
+    label: "Run & verify",
+    caption: "task guides — for when you need the stack up or the suite green",
+    icon: Wrench,
+  },
+];
+
+/** Pre-v4 rows have no stored mode; derive it the same way the API does. */
+function modeOf(t: TutorialSummary): TutorialMode {
+  if (t.mode === "walkthrough" || t.mode === "howto") return t.mode;
+  return t.procedure_kind === "run_it" || t.procedure_kind === "run_tests" ? "howto" : "walkthrough";
+}
 
 const STEP_KIND_LABEL: Record<string, string> = {
   setup: "Set up",
@@ -169,88 +201,6 @@ const STEP_KIND_LABEL: Record<string, string> = {
   observe: "Observe",
   revert: "Undo",
 };
-
-/** A command the reader is meant to run, with a real copy button. */
-function CommandLine({ command, label }: { command: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked (insecure context / denied) — the text is selectable */
-    }
-  };
-
-  return (
-    <div className="flex items-stretch gap-1 rounded-md border border-border bg-muted/50">
-      <Terminal className="ml-2 mt-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
-      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre px-1 py-1.5 font-mono text-[0.75rem] text-foreground">
-        {command}
-      </code>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label={copied ? `${label} copied` : `Copy ${label}`}
-        className="shrink-0 rounded-r-md px-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
-      >
-        {copied ? <Check className="h-3.5 w-3.5 text-success" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
-    </div>
-  );
-}
-
-function StepLocation({
-  step,
-  repo,
-}: {
-  step: { file_path: string; symbol_name: string | null; line_start: number | null; line_end: number | null; step_kind?: string | null };
-  repo?: GithubRepoRef;
-}) {
-  const githubUrl = repo
-    ? buildGithubBlobUrl(repo, step.file_path, { lineStart: step.line_start, lineEnd: step.line_end })
-    : null;
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-      <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        {githubUrl ? (
-          <a
-            href={githubUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={step.file_path}
-            className="inline-flex max-w-full items-center gap-1 truncate font-mono text-[0.8125rem] text-foreground hover:underline"
-          >
-            <span className="min-w-0 truncate">{step.file_path}</span>
-            <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
-          </a>
-        ) : (
-          <p className="truncate font-mono text-[0.8125rem] text-foreground" title={step.file_path}>{step.file_path}</p>
-        )}
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {step.symbol_name && (
-            <span className="flex items-center gap-1">
-              <Code2 className="h-3 w-3" />
-              {step.symbol_name}
-            </span>
-          )}
-          {step.line_start && (
-            <span className="tabular-nums">
-              Lines {step.line_start}{step.line_end ? `–${step.line_end}` : ""}
-            </span>
-          )}
-          {step.step_kind && <Badge variant="secondary" className="text-[0.625rem] uppercase">{step.step_kind.replace(/_/g, " ")}</Badge>}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function StepPager({
   current,
@@ -380,13 +330,13 @@ function CoverageNote({ coverage }: { coverage: Coverage }) {
         <HelpCircle className="h-3.5 w-3.5 shrink-0" />
         {coverage.capBinding && coverage.eligible != null ? (
           <span>
-            <strong className="text-foreground">{coverage.eligible}</strong> procedures could be built from this
+            <strong className="text-foreground">{coverage.eligible}</strong> tutorials could be built from this
             repository; the <strong className="text-foreground">{coverage.emitted}</strong> strongest are shown
             {coverage.cap != null ? ` (the cap is ${coverage.cap})` : ""}.
           </span>
         ) : (
           <span>
-            {coverage.emitted} of {coverage.considered} traced flows could become a runnable procedure.
+            {coverage.emitted} of {coverage.considered} traced flows could be walked end to end.
           </span>
         )}
         {hasDetail && (
@@ -404,7 +354,7 @@ function CoverageNote({ coverage }: { coverage: Coverage }) {
         <div className="mt-2 space-y-1 border-t border-border pt-2">
           {coverage.overflow.map((o, i) => (
             <p key={`o-${i}`} className="text-[0.6875rem] text-muted-foreground">
-              <span className="text-foreground">{o.title}</span> — a valid {o.kind.replace(/_/g, " ")} procedure, dropped by the cap.
+              <span className="text-foreground">{o.title}</span> — a real {o.kind.replace(/_/g, " ")}, dropped by the cap.
             </p>
           ))}
           {coverage.skipped.map((s, i) => (
@@ -433,6 +383,13 @@ export function WalkthroughTab() {
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
+  /** `?step=n` on a walkthrough: scroll after the anchors exist, not before. */
+  const [pendingScroll, setPendingScroll] = useState<number | null>(null);
+  useEffect(() => {
+    if (pendingScroll == null || !detail) return;
+    scrollToWalkthroughStep(pendingScroll);
+    setPendingScroll(null);
+  }, [pendingScroll, detail]);
   // Hovered "Backed by" receipt → highlighted lines in the step snippet.
   const [hoveredReceipt, setHoveredReceipt] = useState<StepReceipt | null>(null);
   useEffect(() => { setHoveredReceipt(null); }, [currentStep, detail?.tutorial.id]);
@@ -451,13 +408,23 @@ export function WalkthroughTab() {
   const [selectedWorkflow, setSelectedWorkflow] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // ← / → page through whichever procedure is open (tutorial or the
-  // deterministic workflow fallback share the same step cursor).
+  // A walkthrough is a scrolling document, so its steps are not a cursor: the
+  // arrows scroll to the neighbouring card and the intersection observer moves
+  // the cursor back. The how-to pager keeps the plain index it always had.
+  const isWalkthrough = Boolean(detail && detail.steps.some((s) => s.mode === "walkthrough" || s.handoff || s.landing));
   const stepTotal = detail ? detail.steps.length : selectedWorkflow ? wfSteps.length : 0;
   useHotkeys(
     {
-      ArrowRight: () => setCurrentStep((s) => Math.min(s + 1, Math.max(stepTotal - 1, 0))),
-      ArrowLeft: () => setCurrentStep((s) => Math.max(s - 1, 0)),
+      ArrowRight: () => {
+        const next = Math.min(currentStep + 1, Math.max(stepTotal - 1, 0));
+        if (isWalkthrough) scrollToWalkthroughStep(next + 1);
+        else setCurrentStep(next);
+      },
+      ArrowLeft: () => {
+        const prev = Math.max(currentStep - 1, 0);
+        if (isWalkthrough) scrollToWalkthroughStep(prev + 1);
+        else setCurrentStep(prev);
+      },
     },
     stepTotal > 1,
   );
@@ -515,7 +482,12 @@ export function WalkthroughTab() {
       if (!controller.signal.aborted) {
         const loaded = data as TutorialDetail;
         setDetail(loaded);
-        if (startStep > 0) setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+        if (startStep > 0) {
+          setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+          // A walkthrough has no pager to move, so the deep link scrolls — but
+          // only once the document has rendered its anchors.
+          if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
+        }
       }
     } catch { /* list stays */ }
     finally {
@@ -551,7 +523,7 @@ export function WalkthroughTab() {
       <div data-tour="tutorials-header">
         <PageHeader
           title="Tutorials"
-          subtitle="Procedures you run against this repository — every step is a command or an edit, with the result you should see and a way to check it. Built only where the evidence supports one. Follows the package selected in the sidebar."
+          subtitle="Guided readings of the paths this repository actually runs — real code, the lines that matter in it, and how each step hands off to the next. Task guides for running and testing the stack sit in their own group below. Follows the package selected in the sidebar."
         />
       </div>
 
@@ -563,46 +535,59 @@ export function WalkthroughTab() {
         <div className="space-y-3">
           {coverage && <CoverageNote coverage={coverage} />}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-[260px_1fr]">
-            {/* tutorial picker */}
-            <div className="h-fit rounded-xl border border-border bg-card p-2">
-              <p className="section-label px-2 pb-1.5 pt-1">Procedures ({tutorials!.length})</p>
-              <div className="space-y-0.5">
-                {tutorials!.map((t) => {
-                  const meta = PROCEDURE_META[t.procedure_kind as ProcedureKind];
-                  const Icon = meta?.icon ?? Zap;
-                  return (
-                    <button
-                      key={t.id}
-                      onClick={() => openTutorial(t.id)}
-                      className={cn(
-                        "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
-                        detail?.tutorial.id === t.id
-                          ? "bg-accent text-accent-foreground"
-                          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
-                      )}
-                    >
-                      <Icon className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium" title={t.title}>{t.title}</span>
-                        <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
-                          {meta ? `${meta.label} · ` : ""}{t.step_count} steps · {t.confidence} confidence
-                          {t.status === "stale" && " · stale"}
-                        </span>
-                      </span>
-                      {t.status === "stale" && <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />}
-                    </button>
-                  );
-                })}
-              </div>
+            {/* picker, grouped by Diátaxis mode (§5) — nothing is hidden, only sorted */}
+            <div className="h-fit space-y-3 rounded-xl border border-border bg-card p-2">
+              {MODE_GROUPS.map((group) => {
+                const inGroup = tutorials!.filter((t) => modeOf(t) === group.mode);
+                if (inGroup.length === 0) return null;
+                const GroupIcon = group.icon;
+                return (
+                  <div key={group.mode}>
+                    <p className="section-label flex items-center gap-1.5 px-2 pb-0.5 pt-1">
+                      <GroupIcon className="h-3 w-3" /> {group.label} ({inGroup.length})
+                    </p>
+                    <p className="px-2 pb-1.5 text-[0.625rem] leading-snug text-muted-foreground/70">{group.caption}</p>
+                    <div className="space-y-0.5">
+                      {inGroup.map((t) => {
+                        const meta = PROCEDURE_META[t.procedure_kind as ProcedureKind];
+                        const Icon = meta?.icon ?? Zap;
+                        const legs = t.journey_members?.length ?? 0;
+                        return (
+                          <button
+                            key={t.id}
+                            onClick={() => openTutorial(t.id)}
+                            className={cn(
+                              "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
+                              detail?.tutorial.id === t.id
+                                ? "bg-accent text-accent-foreground"
+                                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                            )}
+                          >
+                            <Icon className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
+                            <span className="min-w-0">
+                              <span className="block truncate font-medium" title={t.title}>{t.title}</span>
+                              <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
+                                {legs > 1 ? `${legs} phases · ` : ""}{t.step_count} steps · {t.confidence} confidence
+                                {t.status === "stale" && " · stale"}
+                              </span>
+                            </span>
+                            {t.status === "stale" && <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
-            {/* procedure step viewer */}
+            {/* step viewer — a scrolling document for readings, a pager for runbooks */}
             <div className="min-h-[380px] rounded-xl border border-border bg-card p-4">
               {!detail && !loadingDetail ? (
                 <div className="flex h-full min-h-[320px] items-center justify-center text-center">
                   <div>
                     <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
-                    <p className="text-sm text-muted-foreground">Pick a procedure to run against this repository</p>
+                    <p className="text-sm text-muted-foreground">Pick a path to read, or a task guide to run</p>
                   </div>
                 </div>
               ) : loadingDetail ? (
@@ -618,9 +603,11 @@ export function WalkthroughTab() {
                         <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
                       )}
                       <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
-                        {isProcedural
-                          ? "Steps built from repo evidence · notes written by AI"
-                          : "AI explanations"} · {detail.tutorial.confidence} confidence
+                        {isWalkthrough
+                          ? "Code and line ranges from repo evidence · narration written by AI"
+                          : isProcedural
+                            ? "Steps built from repo evidence · notes written by AI"
+                            : "AI explanations"} · {detail.tutorial.confidence} confidence
                       </span>
                     </div>
                     {detail.tutorial.goal && (
@@ -629,16 +616,24 @@ export function WalkthroughTab() {
                     <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
                   </div>
 
-                  <StepPager
-                    current={currentStep}
-                    total={detail.steps.length}
-                    labels={detail.steps.map(stepLabel)}
-                    onPrev={() => setCurrentStep((s) => s - 1)}
-                    onNext={() => setCurrentStep((s) => s + 1)}
-                    onJump={setCurrentStep}
-                  />
+                  {!isWalkthrough && (
+                    <StepPager
+                      current={currentStep}
+                      total={detail.steps.length}
+                      labels={detail.steps.map(stepLabel)}
+                      onPrev={() => setCurrentStep((s) => s - 1)}
+                      onNext={() => setCurrentStep((s) => s + 1)}
+                      onJump={setCurrentStep}
+                    />
+                  )}
 
-                  {isProcedural ? (
+                  {isWalkthrough ? (
+                    <WalkthroughDocument
+                      steps={detail.steps}
+                      repo={githubRepo}
+                      onActiveStep={(order) => setCurrentStep(order - 1)}
+                    />
+                  ) : isProcedural ? (
                     <>
                       <ProcedureStepCard step={tStep} repo={githubRepo} />
                       {tStep.snippet && (
@@ -692,7 +687,9 @@ export function WalkthroughTab() {
                     </>
                   )}
 
-                  {tStep.receipts.length > 0 && (
+                  {/* Walkthrough cards carry their own receipts; this line is
+                      the pager's, where only one step is on screen at a time. */}
+                  {!isWalkthrough && tStep.receipts.length > 0 && (
                     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
                       Backed by:
                       {tStep.receipts.map((r) => {
@@ -738,7 +735,7 @@ export function WalkthroughTab() {
                     </p>
                   )}
 
-                  {detail.tutorial.unknowns?.length > 0 && currentStep === detail.steps.length - 1 && (
+                  {detail.tutorial.unknowns?.length > 0 && (isWalkthrough || currentStep === detail.steps.length - 1) && (
                     <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
                       <p className="section-label mb-1 flex items-center gap-1.5">
                         <HelpCircle className="h-3 w-3" /> What this procedure could not determine

@@ -13,6 +13,7 @@ import { startQueueWatchdog } from '../lib/queueWatchdog.js';
 import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
+import { envInt } from '../lib/env.js';
 import { recomputeProjectStatus } from '../lib/projectStatus.js';
 import { mapLimit } from '../lib/parallel.js';
 import { AiClient, AiPausedError } from './ai/aiClient.js';
@@ -24,10 +25,17 @@ import type { PrivacyMode } from './ai/privacy.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import type { DeveloperRole } from './semantic/projections.js';
 import { settlePackageStaleness } from './incrementalAnalyzer.js';
-import { SECTION_SPECS, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
+import { SECTION_SPECS, SECTION_TITLES, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
 import { generateDeterministicSection } from './generation/deterministicSectionGenerator.js';
 import { generateTutorials } from './generation/tutorialGenerator.js';
+import {
+  isRunControlError,
+  recordFailedSectionGap,
+  recordMissingSection,
+  restoreSnapshotAfterGeneration,
+  settleStoppedPackage,
+} from './runStatus.js';
 
 // ── Snapshot + settings ──────────────────────────────────────────────────────
 
@@ -188,6 +196,10 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         await updateJob('running', `Generated section: ${sectionType} (${done}/${SECTION_TYPES.length})`, 10 + Math.floor((done / SECTION_TYPES.length) * 85));
       }
       await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
+      // Same #80(c) rule as the AI path: a finished generation un-pauses its
+      // own snapshot, so a project that paused under full_ai and was then
+      // regenerated with AI off does not stay stuck on 'paused'.
+      await restoreSnapshotAfterGeneration(snapshotId).catch(() => {});
       await markPhase(snapshotId, 'generation', 'complete', { sections: SECTION_TYPES.length, mode: 'deterministic' });
       await markPhase(snapshotId, 'validation', 'skipped', { reason: 'ai_disabled' });
       await updateJob('complete', 'Deterministic onboarding package ready (AI disabled)', 100);
@@ -264,7 +276,14 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
 
     const saveCheckpoint = async () => {
       const cursor = { completedSections: [...completedSections], tutorialsDone };
-      await query(`UPDATE analysis_jobs SET checkpoint = $2 WHERE id = $1`, [jobId, JSON.stringify(cursor)]);
+      // MERGE, never overwrite: the checkpoint blob also holds this run's
+      // budget baseline (and `sectionType` for regenerations). A blind
+      // `SET checkpoint = $2` wiped the baseline mid-run, so a retry
+      // re-baselined and silently granted itself a second full allowance.
+      await query(
+        `UPDATE analysis_jobs SET checkpoint = COALESCE(checkpoint, '{}'::jsonb) || $2::jsonb WHERE id = $1`,
+        [jobId, JSON.stringify(cursor)],
+      );
       await markPhase(snapshotId, 'generation', 'running', {}, { checkpoint: cursor });
     };
     await markPhase(snapshotId, 'generation', 'running', {}, {
@@ -316,13 +335,42 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     //    concurrently — each persists as soon as it finishes, so the reader
     //    can show sections while the rest are still generating.
     const pending = SECTION_TYPES.filter((t) => !completedSections.has(t));
-    const sectionConcurrency = Number(process.env.SECTION_CONCURRENCY ?? 12);
+    const sectionConcurrency = envInt('SECTION_CONCURRENCY', 12);
     let done = 0;
+    // Sections that hard-failed on their own merits. Kept out of
+    // `completedSections` so a resumed run retries them, and reported as
+    // package gaps so the shipped package says what is missing (#77).
+    const failedSections: Array<{ sectionType: SectionType; reason: string }> = [];
     const runSection = async (sectionType: SectionType): Promise<void> => {
-      const result = await generateSection({
-        ai, snapshotId, projectId, packageId, role, sectionType,
-        privacyMode, commitHash: snap.commit_hash, deps,
-      });
+      let result;
+      try {
+        result = await generateSection({
+          ai, snapshotId, projectId, packageId, role, sectionType,
+          privacyMode, commitHash: snap.commit_hash, deps,
+        });
+      } catch (err) {
+        // Bug #77: one section's hard failure must not strand the other
+        // eleven. Structured-output truncation, a schema mismatch, a provider
+        // 5xx — all of it is this section's problem. Run-control signals still
+        // propagate: pause/kill/budget/AI-disabled mean the whole run stops,
+        // and swallowing them would keep spending after being told not to.
+        if (isRunControlError(err)) throw err;
+        const reason = err instanceof Error ? err.message : String(err);
+        failedSections.push({ sectionType, reason });
+        sectionMetrics[sectionType] = { failed: true, reason: reason.slice(0, 300) };
+        await recordMissingSection({
+          packageId, snapshotId, sectionType, role, reason,
+          title: SECTION_TITLES[sectionType] ?? sectionType,
+          commitHash: snap.commit_hash,
+        }).catch((persistErr) => {
+          console.error(`[summary-worker] could not record missing section ${sectionType}:`,
+            persistErr instanceof Error ? persistErr.message : persistErr);
+        });
+        done += 1;
+        await updateJob('running', `Section failed: ${sectionType} (${done}/${pending.length})`, 15 + Math.floor((done / pending.length) * 75));
+        console.warn(`[summary-worker] section ${sectionType} failed, package continues:`, reason);
+        return;
+      }
       sectionMetrics[sectionType] = {
         confidence: result.validation.confidence,
         issues: result.validation.issues.length,
@@ -356,10 +404,19 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         [snapshotId],
       );
     }
+    // A partial package is a package with a recorded gap, not a silent one (#77).
+    await recordFailedSectionGap(snapshotId, failedSections).catch(() => {});
 
+    // 'draft', never 'generating' — the run is over either way, and a package
+    // wedged on 'generating' is what blanked every tab in #80.
     await query(`UPDATE onboarding_packages SET status = 'draft', updated_at = NOW() WHERE id = $1`, [packageId]);
+    // #80(c): a generation that paused parked the snapshot on 'paused' and
+    // nothing ever moved it back, so two tabs stayed empty indefinitely on a
+    // project whose package had since finished.
+    await restoreSnapshotAfterGeneration(snapshotId).catch(() => {});
     await markPhase(snapshotId, 'generation', 'complete', {
       sections: completedSections.size,
+      failedSections: failedSections.map((f) => ({ type: f.sectionType, reason: f.reason.slice(0, 300) })),
       budgetDegraded,
       llmCalls: ai.stats.calls,
       cacheHits: ai.stats.cacheHits,
@@ -386,10 +443,16 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     // full 5-role fan-out here paid 5x LLM cost for packages nobody may open
     // (bug #17).
 
-    await updateJob('complete', 'Onboarding package ready', 100);
+    await updateJob(
+      'complete',
+      failedSections.length > 0
+        ? `Onboarding package ready with ${failedSections.length} section(s) missing: ${failedSections.map((f) => f.sectionType).join(', ')}`
+        : 'Onboarding package ready',
+      100,
+    );
     await setMemberDefaultPackage(projectId, triggeredBy, packageId);
     await recomputeProjectStatus(projectId);
-    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size}`);
+    console.log(`[summary-worker] job ${job.id} complete — package=${packageId} (role=${role}) sections=${completedSections.size} failed=${failedSections.length}`);
   } catch (err) {
     // A failed/paused regenerate must not leave the section stuck in
     // 'regenerate_requested' (write-only state nothing resets): mark it
@@ -406,13 +469,18 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       const message = err.message.slice(0, 200);
       await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
       await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]).catch(() => {});
-      await updateJob('paused', `Paused: ${message}`, 0).catch(() => {});
+      await settleStoppedPackage(failedPackageId).catch(() => {});
+      // The message now carries the numbers ("used N of M calls this run
+      // (lifetime across runs: L)"); persisting it as error_message too is
+      // what puts them in the paused-run banner, which renders that field.
+      await updateJob('paused', `Paused: ${message}`, 0, message).catch(() => {});
       await recomputeProjectStatus(projectId).catch(() => {});
       console.warn(`[summary-worker] job ${job.id} paused:`, message);
       return; // resumable — a retry would just re-pause
     }
     if (err instanceof KillSwitchError) {
       await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: err.message }).catch(() => {});
+      await settleStoppedPackage(failedPackageId).catch(() => {});
       console.warn(`[summary-worker] job ${job.id} stopped by kill switch (job status: ${err.jobStatus})`);
       return; // status was already set from the API
     }
@@ -447,7 +515,13 @@ function createSummaryWorker(): Worker<SummaryJobData> {
     processSummaryJob,
     {
       connection,
-      concurrency: Number(process.env.WORKER_CONCURRENCY ?? 2),
+      // Parallel package generations. Its OWN knob: this worker is hosted in
+      // the analysis worker's process (worker/index.ts imports this module),
+      // and it used to read WORKER_CONCURRENCY too — so raising analysis
+      // parallelism raised generation parallelism by the same factor and both
+      // drew on one pg pool. Each job additionally fans out SECTION_CONCURRENCY
+      // sections internally; pool sizing for the combination: src/lib/db.ts.
+      concurrency: envInt('SUMMARY_CONCURRENCY', 4),
       drainDelay: 5000,
       stalledInterval: 120_000,
       lockDuration: 600_000,
@@ -489,4 +563,7 @@ startQueueWatchdog({
   },
 });
 
-console.log(`[summary-worker] listening on queue "${SUMMARY_QUEUE}"`);
+console.log(
+  `[summary-worker] listening on queue "${SUMMARY_QUEUE}" ` +
+  `(concurrency=${envInt('SUMMARY_CONCURRENCY', 4)}, sections/job=${envInt('SECTION_CONCURRENCY', 12)})`,
+);

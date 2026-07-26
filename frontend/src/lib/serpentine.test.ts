@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { choosePerRow, findSpine, layoutSerpentine, shouldSerpentine } from "./serpentine";
+import { buildStepChain, choosePerRow, findSpine, layoutSerpentine, shouldSerpentine } from "./serpentine";
 import type { GraphEdge, GraphNode } from "@/types/graph";
 
 const node = (id: string): GraphNode => ({
@@ -180,5 +180,55 @@ describe("when to serpentine", () => {
   it("declines a graph too large to read as a snake", () => {
     const { nodes, edges } = chain(80);
     expect(shouldSerpentine(nodes, edges)).to.equal(false);
+  });
+});
+
+/**
+ * The two regressions the owner reported on live data, pinned.
+ *
+ * The rail advertised `COUNT(*) workflow_steps` while the canvas drew the
+ * folded per-symbol graph, so OnboardBuddy's top-ranked flow said "8 steps"
+ * over four nodes — and, because the same folded count fed `shouldSerpentine`,
+ * ten of its first fourteen flows fell under the six-node threshold and were
+ * laid out as vertical columns while claiming 7 to 14 steps.
+ */
+describe("a traced flow, as the rail describes it", () => {
+  /** Two steps re-entering one symbol — the shape the fold used to collapse. */
+  const steps = Array.from({ length: 14 }, (_, i) => ({
+    stepOrder: i + 1,
+    filePath: i % 2 === 0 ? "backend/src/api/routes/projects.ts" : "backend/src/worker/index.ts",
+  }));
+
+  it("draws one node per step, so the canvas count matches the rail's", () => {
+    const chainOf = buildStepChain(steps, () => ({ label: "step", kind: "transform" }));
+    expect(chainOf.nodes).to.have.length(steps.length);
+    expect(new Set(chainOf.nodes.map((n) => n.id)).size).to.equal(steps.length);
+    expect(chainOf.edges).to.have.length(steps.length - 1);
+  });
+
+  it("snakes that chain into rows wider than the block is tall", () => {
+    const chainOf = buildStepChain(steps, () => ({ label: "step", kind: "transform" }));
+    expect(shouldSerpentine(chainOf.nodes, chainOf.edges)).to.equal(true);
+
+    const out = layoutSerpentine(chainOf.nodes, chainOf.edges, { nodeWidth: 256, nodeHeight: 88, rowGap: 84 });
+    const rows = new Map<number, typeof out.nodes>();
+    for (const n of out.nodes) rows.set(n.row, [...(rows.get(n.row) ?? []), n]);
+
+    // More than one row, and every row runs across rather than down.
+    expect(rows.size).to.be.greaterThan(1);
+    expect(Math.max(...out.nodes.map((n) => n.col))).to.be.greaterThan(0);
+
+    // Row 0 left to right, row 1 back right to left — the snake itself.
+    const inOrder = (row: number) => (rows.get(row) ?? []).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+    const first = inOrder(0);
+    const second = inOrder(1);
+    expect(first[0]!.x).to.be.lessThan(first[first.length - 1]!.x);
+    expect(second[0]!.x).to.be.greaterThan(second[second.length - 1]!.x);
+    expect(second[0]!.y).to.be.greaterThan(first[0]!.y);
+
+    // And the block is landscape, which is the whole point of snaking it.
+    const width = Math.max(...out.nodes.map((n) => n.x)) + 256;
+    const height = Math.max(...out.nodes.map((n) => n.y)) + 88;
+    expect(width).to.be.greaterThan(height);
   });
 });

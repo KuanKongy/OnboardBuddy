@@ -1,8 +1,8 @@
-import { AlertTriangle, CornerLeftUp, Loader2, Maximize2, Minimize2, RefreshCw, Search, Sparkles, X } from "lucide-react";
+import { AlertTriangle, ChevronRight, CornerLeftUp, Maximize2, Minimize2, RefreshCw, Search, Sparkles, Unlink, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
-import type { Edge, Node, Viewport } from "reactflow";
+import { MarkerType, type Edge, type Node, type Viewport } from "reactflow";
 import "reactflow/dist/style.css";
 import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -17,7 +17,9 @@ import {
 } from "@/components/graph/ClusterNode";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   CLUSTER_KIND_LABELS,
@@ -29,13 +31,10 @@ import {
   type ArchitectureResponse,
 } from "@/lib/architectureData";
 import { layoutGraph } from "@/lib/graphLayout";
-import { ScoreProvenance, ScoreProvenanceInfo } from "@/components/ScoreProvenance";
+import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
 import { cn } from "@/lib/utils";
 
 const nodeTypes = { cluster: ClusterNode, member: ClusterMemberNode };
-
-/** Members listed in the aside before the rest are summarised by a count. */
-const MAX_LISTED_MEMBERS = 30;
 
 export function ArchitecturePage() {
   const { id } = useParams<{ id: string }>();
@@ -160,6 +159,24 @@ export function ArchitecturePage() {
   const openCluster: ArchitectureCluster | null =
     insideCluster && openClusterId ? clusterById.get(openClusterId) ?? null : null;
 
+  /**
+   * Opens a component's files.
+   *
+   * Owner I1: "The architecture, doesn't drill down, it doesn't show files.
+   * You may add the button, to allow drilling down, it shouldn't by default."
+   * The level existed and was reachable, but only by clicking the card — the
+   * same gesture that everywhere else in the app means "select", so a reader
+   * who clicked once, saw the canvas change, and clicked Back never learned
+   * there was a files level at all. Selection and opening are now separate
+   * gestures, and opening has a labelled control on the card and in the aside.
+   */
+  const openComponent = useCallback(
+    (clusterId: string, label: string, anchorNodeId?: string) => {
+      drill.drillInto({ kind: "cluster", id: clusterId, label }, anchorNodeId ?? clusterId);
+    },
+    [drill],
+  );
+
   // ── Root level: components ────────────────────────────────────────────────
   const visibleClusters = useMemo(() => {
     if (!data || insideCluster) return [];
@@ -248,22 +265,26 @@ export function ArchitecturePage() {
           kind: c.kind,
           // `members` counts symbols and config nodes too — see clusterSize.
           ...clusterSize(c),
-          countDerivation: clusterCountDerivation(c),
           criticalScore: c.criticalScore,
+          degree: c.degree ?? 0,
           // What it is FOR, not what it contains. `summary` is the fallback for
           // a response that predates narratives.
           responsibility: c.narrative?.responsibility ?? c.summary,
           selected: p.id === selectedId,
           dimmed: neighborIds !== null && !neighborIds.has(p.id),
+          // Owner I1: opening is a decision the reader makes with a button,
+          // not a side effect of clicking the card.
+          onOpen: () => openComponent(c.id, c.label),
         } satisfies ClusterNodeData,
       };
     });
-  }, [insideCluster, positioned, visibleClusters, visibleMembers, level, selectedId, neighborIds]);
+  }, [insideCluster, positioned, visibleClusters, visibleMembers, level, selectedId, neighborIds, openComponent]);
 
   const flowEdges: Edge[] = useMemo(
     () =>
       visibleEdges.map((e) => {
         const active = selectedId !== null && (e.source === selectedId || e.target === selectedId);
+        const stroke = active ? "var(--primary)" : "var(--border)";
         return {
           id: e.id,
           source: e.source,
@@ -274,10 +295,13 @@ export function ArchitecturePage() {
           labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },
           labelBgPadding: [4, 3] as [number, number],
           labelBgBorderRadius: 3,
+          // AUDIT C2: direction is the whole semantic of a dependency arrow and
+          // was not encoded at all — both ends rendered identically.
+          markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: stroke },
           style: {
             opacity: neighborIds === null || active ? 0.9 : 0.12,
             strokeWidth: Math.min(4, 1 + e.weight / 4),
-            stroke: active ? "var(--primary)" : "var(--border)",
+            stroke,
           },
         };
       }),
@@ -291,9 +315,13 @@ export function ArchitecturePage() {
 
   const selectedMember = insideCluster ? visibleMembers.find((n) => n.id === selectedId) ?? null : null;
   // Inside a component the aside describes that component; the member panel
-  // takes over once one is picked. At the root there is no aside — clicking a
-  // component opens it rather than previewing it.
-  const asideCluster = insideCluster && !selectedMember ? openCluster : null;
+  // takes over once one is picked. At the ROOT there is now an aside too:
+  // clicking a component previews it, and opening it is a separate button
+  // (owner I1). Before this, a root click drilled immediately and the
+  // component's own narrative — responsibility, boundary, why it is separate —
+  // was only ever visible on the way past.
+  const rootSelectedCluster = !insideCluster && selectedId ? clusterById.get(selectedId) ?? null : null;
+  const asideCluster = insideCluster ? (selectedMember ? null : openCluster) : rootSelectedCluster;
 
   // A response can legitimately contain zero components — a snapshot where
   // nothing clustered, or an unparsed stack. The old guard was
@@ -310,9 +338,30 @@ export function ArchitecturePage() {
     void loadLevel(openClusterId).catch(() => {});
   };
 
+  /**
+   * The header badge, reconciled with the canvas.
+   *
+   * Owner F1: "It shows a bigger number ... when you click to see details,
+   * there are less." Drilled, this said "74 members" over a canvas drawing 60
+   * (MasterPokedex · UI). At the root it counted every stored edge, including
+   * any whose endpoint did not survive into `clusters`.
+   */
+  const drawableRootEdges = useMemo(() => {
+    const ids = new Set((data?.clusters ?? []).map((c) => c.id));
+    return (data?.edges ?? []).filter((e) => ids.has(e.source) && ids.has(e.target)).length;
+  }, [data]);
   const totals = insideCluster && level
-    ? { primary: `${level.totalNodes} member${level.totalNodes === 1 ? "" : "s"}`, secondary: `${level.edges.length} connections` }
-    : { primary: `${data?.clusters.length ?? 0} components`, secondary: `${data?.edges.length ?? 0} connections` };
+    ? {
+        primary:
+          level.nodes.length < level.totalNodes
+            ? `${level.nodes.length} of ${level.totalNodes} members`
+            : `${level.totalNodes} member${level.totalNodes === 1 ? "" : "s"}`,
+        secondary: `${level.edges.length} connection${level.edges.length === 1 ? "" : "s"} drawn`,
+      }
+    : {
+        primary: `${data?.clusters.length ?? 0} components`,
+        secondary: `${drawableRootEdges} connection${drawableRootEdges === 1 ? "" : "s"}`,
+      };
 
   return (
     <div style={{ "--graph-chrome": fullscreen ? "90px" : "190px" } as React.CSSProperties}>
@@ -321,13 +370,21 @@ export function ArchitecturePage() {
           title={
             // Breadcrumb over the real drill stack — visited levels, not path
             // prefixes. "Architecture" never moves.
+            // No crumb tooltips: "Back to <label>" restated the label the
+            // crumb already shows (owner H1). No `aria-label` override either
+            // — it would make the accessible name differ from the visible one
+            // (WCAG 2.5.3); the row itself is what carries the description.
             stack.depth > 0 ? (
-              <span className="flex flex-wrap items-baseline gap-1.5">
+              <span
+                className="flex flex-wrap items-baseline gap-1.5"
+                role="navigation"
+                aria-label="Architecture levels"
+              >
                 <button
-                  className="transition-colors hover:text-primary disabled:opacity-50"
+                  type="button"
+                  className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
                   onClick={() => drill.jumpTo(-1)}
                   disabled={drill.busy}
-                  title="Back to all components"
                 >
                   Architecture
                 </button>
@@ -343,10 +400,10 @@ export function ArchitecturePage() {
                         <span className="text-foreground">{openCluster?.label ?? frame.label}</span>
                       ) : (
                         <button
-                          className="transition-colors hover:text-primary disabled:opacity-50"
+                          type="button"
+                          className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
                           onClick={() => drill.jumpTo(i)}
                           disabled={drill.busy}
-                          title={`Back to ${frame.label}`}
                         >
                           {frame.label}
                         </button>
@@ -361,8 +418,8 @@ export function ArchitecturePage() {
           }
           subtitle={
             insideCluster
-              ? "Inside one component — the files it is made of, ranked by how critical each one is."
-              : "How the codebase is organized into layers — click a component to open it and see what it is made of."
+              ? "Inside one component — the files it is made of, most critical first."
+              : "How the codebase is organized into layers — click a component to read what it is for, then Open to list its files."
           }
           actions={
             <>
@@ -375,7 +432,7 @@ export function ArchitecturePage() {
                   size="xs"
                   onClick={drill.drillUp}
                   disabled={drill.busy}
-                  title="Back to the level you came from"
+                  aria-label="Back to the level you came from"
                 >
                   <CornerLeftUp className="mr-1 h-3 w-3" />
                   Back
@@ -386,14 +443,22 @@ export function ArchitecturePage() {
                   <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
                     {totals.primary} · {totals.secondary}
                   </Badge>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={() => setFullscreen((v) => !v)}
-                    title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-                  >
-                    {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={() => setFullscreen((v) => !v)}
+                        aria-pressed={fullscreen}
+                        aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                      >
+                        {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                    </TooltipContent>
+                  </Tooltip>
                 </>
               )}
             </>
@@ -402,36 +467,35 @@ export function ArchitecturePage() {
       </div>
 
       {loading && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <Skeleton className="graph-canvas" role="status" aria-label="Loading the architecture map" />
       )}
 
       {showWarning && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-foreground">
-              {error ||
-                (isEmpty
-                  ? insideCluster
-                    ? `${level?.label ?? "This component"} has no members to show`
-                    : "This analysis produced no components"
-                  : "No architecture data available yet")}
-            </p>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {isEmpty
-                ? insideCluster
-                  ? "The component exists on the map but none of its members survived into the graph, so there is nothing to open. Re-analyzing the project rebuilds them."
-                  : "The analysis finished but grouped no files into components — usually because nothing in the scope was in a language this parser reads. The Dependencies tab shows whatever files were parsed."
-                : "The architecture map comes from analysis. Run an analysis first, or retry if one just finished."}
-            </p>
-          </div>
-          <Button variant="outline" size="xs" onClick={retry}>
-            <RefreshCw className="mr-1 h-3 w-3" />
-            Retry
-          </Button>
-        </div>
+        <EmptyState
+          className="mb-4"
+          icon={<AlertTriangle className="h-4 w-4 shrink-0 text-warning" />}
+          heading={
+            error ||
+            (isEmpty
+              ? insideCluster
+                ? `${level?.label ?? "This component"} has no members to show`
+                : "This analysis produced no components"
+              : "No architecture data available yet")
+          }
+          description={
+            isEmpty
+              ? insideCluster
+                ? "The component exists on the map but none of its members survived into the graph, so there is nothing to open. Re-analyzing the project rebuilds them."
+                : "The analysis finished but grouped no files into components — usually because nothing in the scope was in a language this parser reads. The Dependencies tab shows whatever files were parsed."
+              : "The architecture map comes from analysis. Run an analysis first, or retry if one just finished."
+          }
+          actions={
+            <Button variant="outline" size="xs" onClick={retry}>
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Retry
+            </Button>
+          }
+        />
       )}
 
       {drill.error && (
@@ -450,6 +514,7 @@ export function ArchitecturePage() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={insideCluster ? "Search files in this component…" : "Search components or files…"}
+                aria-label={insideCluster ? "Search files in this component" : "Search components or files"}
                 className="h-8 pl-8 text-xs"
               />
             </div>
@@ -484,6 +549,19 @@ export function ArchitecturePage() {
           </div>
 
           <div className={cn(asideCluster || selectedMember ? "grid gap-3 lg:grid-cols-[1fr_320px]" : "", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
+            {/* AUDIT C11 / B81: the overlay covers the header holding the exit
+                toggle, so Esc was the only way out and nothing said so. */}
+            {fullscreen && (
+              <Button
+                variant="outline"
+                size="xs"
+                className="absolute right-4 top-4 z-10"
+                onClick={() => setFullscreen(false)}
+              >
+                <Minimize2 className="mr-1 h-3 w-3" />
+                Exit fullscreen (Esc)
+              </Button>
+            )}
             <div className="graph-canvas">
               <GraphCanvas
                 nodes={flowNodes}
@@ -500,16 +578,10 @@ export function ArchitecturePage() {
                 refitSignal={String(fullscreen)}
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
-                // A component has a level beneath it, so clicking it is
-                // navigation and gets the zoom transition. A member is a leaf:
-                // clicking it opens the panel and leaves the camera alone.
-                onDrillInto={(nodeId) => {
-                  if (insideCluster) return false;
-                  const cluster = clusterById.get(nodeId);
-                  if (!cluster) return false;
-                  drill.drillInto({ kind: "cluster", id: cluster.id, label: cluster.label }, nodeId);
-                  return true;
-                }}
+                // Nothing on this canvas drills on click any more (owner I1).
+                // A click selects — a component opens its aside, a member
+                // opens its panel — and opening a component is the labelled
+                // button on the card and in that aside.
                 onSelectNode={setSelectedId}
               />
             </div>
@@ -529,10 +601,42 @@ export function ArchitecturePage() {
                       {CLUSTER_KIND_LABELS[asideCluster.kind] ?? asideCluster.kind}
                     </span>
                   </div>
-                  <Button variant="ghost" size="xs" onClick={drill.drillUp} disabled={drill.busy} aria-label="Back to all components">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={insideCluster ? drill.drillUp : () => setSelectedId(null)}
+                    disabled={drill.busy}
+                    aria-label={insideCluster ? "Close and return to all components" : "Close component details"}
+                  >
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+
+                {/* Owner I1. At the root this is THE way in to the files, and
+                    it says how many are behind it so the click is informed. */}
+                {!insideCluster && (
+                  <Button
+                    size="xs"
+                    className="mb-3 w-full justify-center"
+                    disabled={drill.busy}
+                    onClick={() => openComponent(asideCluster.id, asideCluster.label)}
+                  >
+                    Open {clusterSize(asideCluster).count} {clusterSize(asideCluster).noun}
+                    {clusterSize(asideCluster).count === 1 ? "" : "s"}
+                    <ChevronRight className="ml-1 h-3 w-3" />
+                  </Button>
+                )}
+
+                {(asideCluster.degree ?? 0) === 0 && (
+                  <p className="mb-3 flex items-start gap-1.5 text-[0.71875rem] text-muted-foreground">
+                    <Unlink className="mt-0.5 h-3 w-3 shrink-0" />
+                    {/* AUDIT C7 / SC F11: an unexplained island reads as a
+                        rendering fault rather than as a finding. */}
+                    No architecture links were traced to or from this component, so it is drawn on its
+                    own. That can mean genuine isolation, or that its relationships are of a kind this
+                    analysis does not model (configuration and deployment links are not edges yet).
+                  </p>
+                )}
 
                 {/* The narrative, as three labelled answers rather than one
                     inventory sentence. These are the SAME sentences the
@@ -586,79 +690,70 @@ export function ArchitecturePage() {
                   )
                 )}
 
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  <p className="section-label">Criticality</p>
-                  <ScoreProvenanceInfo data={asideCluster.provenance} label="How this criticality score was derived" />
-                </div>
-                <div className="mb-2 flex items-center gap-2">
-                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-                    <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.round(asideCluster.criticalScore * 100))}%` }} />
-                  </div>
-                  <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
-                    {(asideCluster.criticalScore * 100).toFixed(0)}%
-                  </span>
-                </div>
-                {/* The full derivation, inline rather than only in the tooltip:
-                    this is the number the bar draws, and "average of 9 members,
-                    top contributor at 71" is the difference between a reader
-                    trusting it and a reader guessing at it. */}
-                <div className="mb-3 rounded-md border border-border bg-muted/30 px-2.5 py-2">
-                  <ScoreProvenance data={asideCluster.provenance} />
-                </div>
-
-                {/* Counts belong in a chip, with their derivation on hover —
-                    "Files" was wrong here too, since `members` holds symbol,
-                    config and schema nodes and a Database Schema cluster listed
-                    48 tables under a heading calling them files. */}
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  <p className="section-label">Made of</p>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span
-                        tabIndex={0}
-                        className="cursor-help rounded bg-muted px-1.5 py-0.5 text-[0.6875rem] tabular-nums text-muted-foreground"
-                      >
-                        {(() => {
-                          const { count, noun } = clusterSize(asideCluster);
-                          return `${count} ${noun}${count === 1 ? "" : "s"}`;
-                        })()}
+                {/* Owner B1 + J1: one explicit control, and staged content
+                    behind it. The derivation used to be an always-open block
+                    here AND a hover ⓘ saying the same thing. */}
+                <ScoreProvenanceDisclosure
+                  className="mb-3"
+                  data={asideCluster.provenance}
+                  sectionLabel="Criticality"
+                  buttonLabel={`Explain how the criticality score for ${asideCluster.label} was derived`}
+                  headline={
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.round(asideCluster.criticalScore * 100))}%` }} />
+                      </div>
+                      <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                        {(asideCluster.criticalScore * 100).toFixed(0)}%
                       </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs text-left">
-                      {clusterCountDerivation(asideCluster)}
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-                {/* The graph beside this is the same list, opened. These links
-                    stay as the cross-tab escape hatch into Dependencies. */}
-                <ul className="space-y-0.5">
-                  {asideCluster.members.slice(0, MAX_LISTED_MEMBERS).map((m) => (
-                    <li key={m.key} className="truncate font-mono text-[0.71875rem]" title={m.filePath ?? m.key}>
+                    </div>
+                  }
+                />
+
+                {/* The count, its derivation printed rather than hovered
+                    (owner H1) — "Files" was wrong here too, since `members`
+                    holds symbol, config and schema nodes and a Database Schema
+                    cluster listed 48 tables under a heading calling them
+                    files. */}
+                <p className="section-label mb-1">Made of</p>
+                <p className="mb-1.5 text-[0.6875rem] leading-snug text-muted-foreground">
+                  {clusterCountDerivation(asideCluster)}
+                </p>
+                {/* Owner I2 + I3: ordered by criticality then path on the
+                    server (it arrived in join order, which is neither stable
+                    nor meaningful), and bounded with its own scrollbar instead
+                    of dumping the first 30 and hiding the rest behind
+                    "+ N more". */}
+                <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border border-border/60 p-1.5">
+                  {asideCluster.members.map((m, i) => (
+                    <li key={m.key} className="flex min-w-0 items-baseline gap-1.5">
+                      <span className="w-5 shrink-0 text-right text-[0.625rem] tabular-nums text-muted-foreground/50">
+                        {i + 1}
+                      </span>
                       <Link
                         to={`/projects/${id}/dependencies?focus=${encodeURIComponent(m.filePath ?? m.key)}`}
-                        className="text-muted-foreground hover:text-primary hover:underline"
+                        className="min-w-0 break-all font-mono text-[0.71875rem] text-muted-foreground hover:text-primary hover:underline"
                       >
                         {m.filePath ?? m.key}
                       </Link>
                     </li>
                   ))}
-                  {asideCluster.members.length > MAX_LISTED_MEMBERS && (
-                    <li className="text-[0.6875rem] text-muted-foreground/70">
-                      + {asideCluster.members.length - MAX_LISTED_MEMBERS} more
-                    </li>
-                  )}
                 </ul>
+                <p className="mt-1 text-[0.625rem] text-muted-foreground/70">
+                  Most critical first, then by path. Each link opens the file on the Dependencies tab.
+                </p>
               </aside>
             )}
 
             {selectedMember && (
               <aside className="graph-canvas overflow-y-auto !bg-card p-4">
+                {/* Wrapped, not truncated behind a tooltip (owner H1). */}
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h2 className="truncate text-sm font-semibold text-foreground" title={selectedMember.label}>
+                    <h2 className="break-words text-sm font-semibold text-foreground">
                       {selectedMember.label}
                     </h2>
-                    <p className="truncate font-mono text-[0.65625rem] text-muted-foreground" title={selectedMember.filePath ?? undefined}>
+                    <p className="break-all font-mono text-[0.65625rem] text-muted-foreground">
                       {selectedMember.filePath ?? selectedMember.id}
                     </p>
                   </div>
@@ -667,13 +762,27 @@ export function ArchitecturePage() {
                   </Button>
                 </div>
 
-                <div className="mb-1.5 flex items-center gap-1.5">
-                  <p className="section-label">Criticality</p>
-                  <ScoreProvenanceInfo data={selectedMember.provenance} label="How this criticality score was derived" />
-                </div>
-                <div className="mb-3 rounded-md border border-border bg-muted/30 px-2.5 py-2">
-                  <ScoreProvenance data={selectedMember.provenance} />
-                </div>
+                <ScoreProvenanceDisclosure
+                  className="mb-3"
+                  data={selectedMember.provenance}
+                  sectionLabel="Criticality"
+                  buttonLabel={`Explain how the criticality score for ${selectedMember.label} was derived`}
+                  headline={
+                    selectedMember.criticalScore === null ? (
+                      <p className="text-[0.71875rem] text-muted-foreground">
+                        Not ranked in this snapshot — tests and fixtures are excluded, and only the top
+                        500 scores per snapshot are kept.
+                      </p>
+                    ) : (
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-base font-semibold tabular-nums text-foreground">
+                          {Math.round(selectedMember.criticalScore * 100)}
+                        </span>
+                        <span className="text-[0.65625rem] text-muted-foreground">/ 100</span>
+                      </div>
+                    )
+                  }
+                />
 
                 {selectedMember.exportedSymbols.length > 0 && (
                   <>

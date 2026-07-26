@@ -67,6 +67,10 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
   // trace from.
   const socketHandlers = extractSocketHandlers(sourceFile, relativePath, ctx, symbols);
 
+  // Handlers declared INSIDE another function's body. Runs last so it sees
+  // every top-level name already taken and cannot shadow one.
+  symbols.push(...extractNestedFunctions(sourceFile, filePath, ctx, symbols));
+
   // A symbol can be exported by a later statement rather than an inline
   // modifier; only this pass sees both halves, so it runs before anything
   // downstream reads `exported`.
@@ -1199,6 +1203,188 @@ function extractVariableStatement(
   }
 
   return results;
+}
+
+// ─── Nested function expressions ─────────────────────────────────────────────
+
+/**
+ * Handlers emitted per container. A rendering unit routinely declares three to
+ * six callbacks; past that a container is either very large — in which case its
+ * graph value is the container, not its twentieth closure — or generated. Eight
+ * keeps the ordinary case complete while bounding a 500-line component to a
+ * constant, and it already exceeds what anything downstream can consume: UI
+ * action detection admits at most four handlers per FILE, so the ninth could
+ * never surface as an entrypoint anyway.
+ */
+const MAX_NESTED_FUNCTIONS_PER_CONTAINER = 8;
+
+/**
+ * Function expressions bound to a `const`/`let` INSIDE another function's body.
+ *
+ * `function AddItemForm() { const handleSubmit = async (e) => { … } }` is the
+ * dominant shape for "the thing a user actually does" in any codebase that
+ * keeps callbacks next to the markup that installs them. The walk used to stop
+ * at the container, so the handler was never a symbol: no effect could be
+ * attributed to it, no entrypoint could seed on it, and such a repo measured as
+ * a list of pages with nothing happening inside them.
+ *
+ * The rule is structural — it names no framework, directory or verb. A nested
+ * binding is emitted when BOTH hold:
+ *   1. the name is referenced elsewhere in the container, i.e. the function is
+ *      handed to something (a prop, an argument, a sibling) that will invoke
+ *      it. An unreferenced closure is dead code.
+ *   2. its body performs a call or an assignment, so it CAN reach an effect. A
+ *      body that only shapes a value is presentation, and presentation is not
+ *      a workflow.
+ *
+ * Emitted as `Container.inner` with key `path#Container.inner` — the shape
+ * class members already use, and the reason two `handleSubmit`s in one file
+ * cannot collapse onto one node.
+ */
+function extractNestedFunctions(
+  sf: ts.SourceFile,
+  filePath: string,
+  ctx: ExtractCtx,
+  existing: SymbolInfo[],
+): SymbolInfo[] {
+  const usedNames = new Set(existing.map((s) => s.name));
+  const out: SymbolInfo[] = [];
+
+  for (const container of topLevelFunctionContainers(sf)) {
+    let emitted = 0;
+    for (const decl of nestedFunctionBindings(container.body)) {
+      if (emitted >= MAX_NESTED_FUNCTIONS_PER_CONTAINER) break;
+      const declName = decl.name as ts.Identifier;
+      const fn = decl.initializer as ts.ArrowFunction | ts.FunctionExpression;
+      if (!isReferencedWithin(container.body, declName)) continue;
+      if (!performsWork(fn.body)) continue;
+
+      let name = `${container.name}.${declName.text}`;
+      for (let i = 2; usedNames.has(name); i++) name = `${container.name}.${declName.text} (${i})`;
+      usedNames.add(name);
+
+      const params = extractParameters(fn.parameters, sf);
+      const retType = fn.type?.getText(sf) ?? decl.type?.getText(sf) ?? 'void';
+      const calls = extractCallSymbols(fn.body, sf);
+      const resolvedCalls = extractResolvedCalls(fn.body, sf, ctx);
+      const signature = buildSignature(params, retType);
+      out.push({
+        name,
+        kind: 'arrow-function',
+        filePath,
+        ...getNodeLocation(decl, sf),
+        exported: false,
+        isDefault: false,
+        containerName: container.name,
+        signature,
+        parameters: params,
+        returnType: retType,
+        isAsync: hasModifier(fn, ts.SyntaxKind.AsyncKeyword),
+        ...(calls.length > 0 ? { callsSymbols: calls } : {}),
+        ...(resolvedCalls.length > 0 ? { resolvedCalls } : {}),
+        signatureHash: sha256(`${name}${signature}`),
+        bodyHash: hashBody(decl.getText(sf)),
+        snippet: snippetOf(decl, sf),
+        isTrivial: isTrivialBody(fn.body, calls.length),
+      });
+      emitted++;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Top-level function declarations and function-valued bindings, with the block
+ * a nested handler could live in. An expression-bodied arrow cannot declare
+ * one, so only block bodies are containers.
+ */
+function topLevelFunctionContainers(sf: ts.SourceFile): Array<{ name: string; body: ts.Block }> {
+  const containers: Array<{ name: string; body: ts.Block }> = [];
+  for (const statement of sf.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
+      containers.push({ name: statement.name.text, body: statement.body });
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const decl of statement.declarationList.declarations) {
+      const init = decl.initializer;
+      if (!ts.isIdentifier(decl.name) || !init) continue;
+      if (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) continue;
+      if (ts.isBlock(init.body)) containers.push({ name: decl.name.text, body: init.body });
+    }
+  }
+  return containers;
+}
+
+/**
+ * `const f = () => …` bindings at any depth inside a container body, in source
+ * order. Depth is deliberately unbounded: a callback registered from inside
+ * another callback is still the handler a person triggers, and the per-container
+ * cap — not the nesting level — is what bounds the output.
+ */
+function nestedFunctionBindings(body: ts.Block): ts.VariableDeclaration[] {
+  const found: ts.VariableDeclaration[] = [];
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      found.push(node);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(body);
+  return found;
+}
+
+/**
+ * True when the binding's name occurs in the container somewhere other than its
+ * own declaration. Member names (`obj.handleSubmit`) are skipped — those name
+ * somebody else's property, not this binding.
+ */
+function isReferencedWithin(body: ts.Block, declName: ts.Identifier): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(node)) {
+      visit(node.expression);
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      if (node !== declName && node.text === declName.text) found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+/** A body that calls something or assigns something — the precondition for reaching any effect. */
+function performsWork(body: ts.Node | undefined): boolean {
+  if (!body) return false;
+  let works = false;
+  const visit = (node: ts.Node): void => {
+    if (works) return;
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isAwaitExpression(node)) {
+      works = true;
+      return;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      works = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return works;
 }
 
 function extractEnum(

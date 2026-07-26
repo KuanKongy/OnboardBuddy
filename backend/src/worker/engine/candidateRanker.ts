@@ -6,6 +6,7 @@ import type { ChurnStats } from './churnService.js';
 import { budgetForDepth, type SemanticDepth } from './budgets.js';
 import { isTestOrFixturePath } from './testPaths.js';
 import { query } from '../../lib/db.js';
+import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
 
 /**
  * Phase A deterministic candidate ranking (doc/Pipeline.md "Phase A").
@@ -37,6 +38,32 @@ export type CandidateSignal = keyof typeof CANDIDATE_WEIGHTS;
 const LOW_CONTENT_FAN_DAMPING = 0.35;
 
 /**
+ * Node types that declare a shape or hold a literal rather than run: an
+ * interface, a type alias, an enum, a `const` binding. Arrow functions are
+ * typed `function` by the graph builder, so `variable` here really is data.
+ */
+const DECLARATION_NODE_TYPES = new Set(['interface', 'type', 'enum', 'variable']);
+
+/**
+ * How much of its exported surface a declaration-only symbol keeps.
+ *
+ * `exportedSurface` is binary for a symbol, so on a repo with no traced flows
+ * it was the ONLY signal anything scored on, and everything exported tied at
+ * the same number. The tie was then broken by iteration order, and a thin
+ * repo's top slice came out as eight bare `interface` declarations from one
+ * types file ahead of the components that render the product. An exported type
+ * IS public surface — that is why this damps rather than zeroes — but it is
+ * not where a new developer starts reading.
+ *
+ * Damping is self-relativising, which is the whole reason it is a damp and not
+ * an exclusion: signals are normalised against the highest value in the same
+ * snapshot, so in a types-only package where EVERY symbol is a declaration the
+ * damped values renormalise to the full range and the interfaces rank exactly
+ * as they did. There the interfaces are the content.
+ */
+const DECLARATION_SURFACE_DAMPING = 0.25;
+
+/**
  * Signals that cannot be measured for a target type, and are therefore removed
  * from its denominator rather than scored as zero.
  *
@@ -65,6 +92,14 @@ export interface CandidateRanking {
   /** Raw signal values, kept for auditability. */
   raw: Record<CandidateSignal, number>;
   reasons: string[];
+  /**
+   * Whether this target has behavioural content — anything that runs, calls,
+   * reaches an effect or takes part in a flow. False only for a declaration
+   * that does nothing: a bare interface, a type alias, an enum, a const
+   * literal. Selection uses it as a RELATIVE floor (see `critical25`), never
+   * as an exclusion; files and workflows are always behavioural.
+   */
+  behavioral: boolean;
 }
 
 const SYMBOL_NODE_TYPES = new Set(['function', 'method', 'class', 'interface', 'type', 'enum', 'variable']);
@@ -84,6 +119,10 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
   // ── Index the graph ────────────────────────────────────────────────────────
   const fanIn = new Map<string, number>();
   const fanOut = new Map<string, number>();
+  // Calls only, separate from `fanOut`: importing something is not doing
+  // something, but invoking something is. This is what separates a const that
+  // builds a value from a const that runs code.
+  const callsOut = new Set<string>();
   const testedFiles = new Set<string>();
   const schemaOwners = new Set<string>();
   const routeHandlers = new Set<string>();
@@ -92,6 +131,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (e.type === 'calls' || e.type === 'imports') {
       fanIn.set(e.targetKey, (fanIn.get(e.targetKey) ?? 0) + 1);
       fanOut.set(e.sourceKey, (fanOut.get(e.sourceKey) ?? 0) + 1);
+      if (e.type === 'calls') callsOut.add(e.sourceKey);
     } else if (e.type === 'tests') {
       testedFiles.add(e.targetKey);
     } else if (e.type === 'touches_schema') {
@@ -174,6 +214,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     node?: EvidenceNode;
     raw: Record<CandidateSignal, number>;
     reasons: string[];
+    behavioral: boolean;
   }
   const targets: RawTarget[] = [];
 
@@ -222,10 +263,28 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const carriesBehaviour = effects > 0 || wfCount > 0 || isEntry > 0 || ownsRouteOrSchema > 0;
     const fanCentrality = (fi + fo * 0.5) * (carriesBehaviour ? 1 : LOW_CONTENT_FAN_DAMPING);
 
+    /**
+     * Declaration with no behaviour: it names a shape or holds a literal, and
+     * nothing in the snapshot says it runs. Every clause is required — a
+     * `variable` that mutates a module store has effects and stays behavioural,
+     * and so does an enum a traced flow steps through.
+     *
+     * Behaviour SIGNALS are deliberately not consulted here. They are regexes
+     * over the symbol's text, and on a declaration there is no body for them to
+     * describe — a field named `enqueueAt` gave one interface `queue_enqueue`.
+     * A file is never declaration-only: it is a container, and its own contents
+     * are ranked separately.
+     */
+    const declarationOnly = isSymbol
+      && DECLARATION_NODE_TYPES.has(node.type)
+      && !carriesBehaviour
+      && !callsOut.has(key);
+
     const raw: Record<CandidateSignal, number> = {
       workflowParticipation: wfCount,
       fanCentrality,
-      exportedSurface: exported,
+      // Damped, not dropped — see DECLARATION_SURFACE_DAMPING.
+      exportedSurface: declarationOnly ? exported * DECLARATION_SURFACE_DAMPING : exported,
       // Breadth of behaviour, not repetition of it.
       sideEffects: effectKinds.get(key)?.size ?? 0,
       entrypointParticipation: isEntry,
@@ -238,7 +297,11 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     const reasons: string[] = [];
     if (wfCount > 0) reasons.push(`Participates in ${wfCount} workflow${wfCount > 1 ? 's' : ''}`);
     if (fi >= 3) reasons.push(isFile ? `Imported by ${fi} files` : `Called by ${fi} symbols`);
-    if (isSymbol && node.exported) reasons.push('Exported public surface');
+    if (isSymbol && node.exported) {
+      reasons.push(declarationOnly
+        ? `Exported ${node.type} declaration — no calls, effects or flow participation, so it ranks below code that runs`
+        : 'Exported public surface');
+    }
     if (isFile && exported >= 3) reasons.push(`Exports ${exported} symbols`);
     if (effects > 0) reasons.push(`Has ${effects} detected side effect${effects > 1 ? 's' : ''}`);
     if (isEntry === 1) reasons.push('Entry point');
@@ -251,7 +314,10 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       reasons.push(`${churnStats!.commitCount90d} commits in the last 90 days`);
     }
 
-    targets.push({ targetType: isFile ? 'file' : 'symbol', stableKey: key, node, raw, reasons });
+    targets.push({
+      targetType: isFile ? 'file' : 'symbol', stableKey: key, node, raw, reasons,
+      behavioral: !declarationOnly,
+    });
   }
 
   for (const wf of input.workflows) {
@@ -297,6 +363,8 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
         `${wf.tier === 'core' ? 'Core user flow' : wf.tier === 'surface' ? 'Entry point, no traced effects' : 'Supporting flow'} — ${wf.triggerType}`,
         ...wf.rankingReasons.slice(0, 2),
       ],
+      // A flow is behaviour by definition.
+      behavioral: true,
     });
   }
 
@@ -344,6 +412,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
         inapplicableSignals: [...inapplicable],
         raw: t.raw,
         reasons: t.reasons,
+        behavioral: t.behavioral,
       });
     }
   }
@@ -458,11 +527,19 @@ export async function persistCandidateRankings(
     const values: unknown[] = [];
     const tuples = part.map(({ r, nodeId, targetId }, j) => {
       values.push(snapshotId, r.targetType, nodeId, targetId, r.stableKey, r.score,
-        JSON.stringify({ normalized: r.breakdown, raw: r.raw }), r.reasons);
+        // `behavioral` rides in the breakdown because the Critical-25 floor is
+        // applied at READ time, over stored rows, and must not have to re-derive
+        // the graph to know whether a target runs. Rows written before this key
+        // existed read back as behavioural, which is the honest degradation.
+        JSON.stringify({ normalized: r.breakdown, raw: r.raw, behavioral: r.behavioral }), r.reasons);
       const base = j * 8;
       return `($${base + 1}, 'candidate', 'candidate', $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, 'general', $${base + 6}, $${base + 7}, $${base + 8})`;
     });
-    await query(
+    // Safe to repeat: autocommit (no caller transaction) and ON CONFLICT DO
+    // UPDATE, so a chunk that lands twice writes the same values. A 57014
+    // cancels the statement and rolls its implicit transaction back, so the
+    // retry never sees a half-applied chunk.
+    await withStatementTimeoutRetry('persistCandidateRankings/upsert', () => query(
       `INSERT INTO criticality_scores
          (snapshot_id, phase, view, target_type, target_node_id, target_id, stable_key, role, score, score_breakdown, reasons)
        VALUES ${tuples.join(', ')}
@@ -471,7 +548,7 @@ export async function persistCandidateRankings(
                      reasons = EXCLUDED.reasons, target_node_id = EXCLUDED.target_node_id,
                      target_id = EXCLUDED.target_id`,
       values,
-    );
+    ));
     written += part.length;
   }
   return written;

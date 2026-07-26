@@ -1,35 +1,39 @@
 /**
- * Tutorials: procedures, not prose.
+ * Tutorials: annotated code walkthroughs, with runbooks kept beside them.
  *
- * The graded complaint — *"tutorial is not effective, it currently has no
- * difference with writing sections"* — was a statement about this file. It and
- * `sectionGenerator.ts` asked a model for paragraphs about traced steps, so
- * both produced essays and the tab had nothing of its own. Every MasterPokedex
- * tutorial came out as *"Trace the X page UI flow"*: 11-20 cards of *"The
- * `fetchPokemonSpecies` function fetches additional data…"*. That is
- * `traced_flows` chopped into cards.
+ * Three generations of this file, each fixing the last one's overcorrection:
  *
- * What changed: the shape of a step, and therefore who writes it.
+ *   v2 essays        one traced step → one LLM card. Graded "no difference
+ *                    with writing sections". Correctly killed.
+ *   v3 procedures    action / expected / verify computed from evidence, an
+ *                    8-step cap, marker-plant-and-revert. It fixed fabrication
+ *                    and overcorrected: the owner read it as "overwhelming and
+ *                    strange", and a four-stage pipeline rendered as 2 steps.
+ *   v4 walkthroughs  the owner's own spec — *"code and it highlighted the
+ *                    important lines, while explaining what it does, what is
+ *                    happening with handoff to next step."*
  *
- *   before                          after
- *   ──────────────────────────      ──────────────────────────────────────
- *   one traced step → one card      one PROCEDURE → 3-8 steps
- *   LLM writes the whole card       `tutorialProcedure.ts` computes
- *                                   action / expected / verify from evidence
- *   selection by score              selection by whether a procedure EXISTS
- *   4 tutorials, always             only what the evidence supports; 0 is a
- *                                   valid answer
+ * What v4 changes here (doc/TUTORIAL_REDESIGN.md §2-§5):
  *
- * The model now annotates rather than authors: a title, a goal, a summary and
- * at most one sentence of `why` per step, over a skeleton it cannot alter.
- * A step's action, its expected result and its verification come from compose
- * services and their published ports, package scripts, CI jobs, `.env`
- * templates and traced workflow steps with real file+line identity. This is
- * the same division `referenceBackbones.ts` makes for CONSULT tables, applied
- * to the DO chapter's most failure-prone surface.
+ *   • Traced flows become WALKTHROUGHS via `attemptWalkthrough`: windowed
+ *     snippet, deterministically located highlights, 2-3 sentences of
+ *     narration, one hand-off sentence per card, a landing statement at the
+ *     end. `mode: 'walkthrough'`.
+ *   • A composed journey becomes PHASES — one per member, walked from that
+ *     member's own trace rather than the composer's two-step spine, with every
+ *     boundary rendered as a connector. Nothing is cut; extra steps fold.
+ *   • `run_it` / `run_tests` keep their v3 procedure shape and gain
+ *     `mode: 'howto'`, because Diátaxis is right that they are how-to guides.
+ *     They are relabelled and regrouped, never deleted.
+ *
+ * What did NOT change is the thing v3 got right: the model annotates, it does
+ * not author. Files, lines, snippets, highlights, phases, hand-off targets and
+ * landing facts are all computed from evidence, and every one of them has a
+ * deterministic fallback — which is why a facts-only package renders a
+ * complete walkthrough with the code never leaving the system.
  *
  * `DEFAULT_MAX_TUTORIALS` is a cap, not a target. When it binds, the number of
- * eligible procedures is recorded and the tab says so; when nothing is
+ * eligible tutorials is recorded and the tab says so; when nothing is
  * eligible, the reasons are recorded per workflow and the tab says *that*.
  */
 
@@ -46,21 +50,36 @@ import { repairExplanation } from './sectionGenerator.js';
 import {
   attemptRunItProcedure,
   attemptRunTestsProcedure,
-  attemptTraceProcedure,
+  attemptWalkthrough,
   buildRunEnvironment,
   detectPackageManager,
+  handoffNamesNext,
   lintProcedure,
+  lintWalkthrough,
   type ProcedureDraft,
   type ProcedureSkipReason,
   type ProcedureStep,
+  type StepEffect,
   type TestGuard,
   type TraceStep,
+  type WalkthroughDraft,
+  type WalkthroughJourney,
+  type WalkthroughStep,
 } from './tutorialProcedure.js';
 
-/** v3 is the procedural rewrite: a bump here invalidates every v2 essay. */
-export const TUTORIAL_PROMPT_VERSION = 'tutorial-v3-procedure';
+/**
+ * v4 is the annotated-walkthrough rewrite (doc/TUTORIAL_REDESIGN.md): a bump
+ * here invalidates every v3 procedure, which is intended — the step SHAPE
+ * changed, so a cached v3 card would render as an empty walkthrough.
+ */
+export const TUTORIAL_PROMPT_VERSION = 'tutorial-v4-walkthrough';
 /** A ceiling on the reader's attention, not a quota to fill. */
-const DEFAULT_MAX_TUTORIALS = 4;
+// 6, up from 4: with run-it and run-tests occupying two slots, 4 left only
+// two traced flows — a senior reviewer opening a repo with five real user
+// flows saw three of them missing and read that as "the tool can't see my
+// app". Still a cap, not a target; it binds only when the evidence supports
+// more, and the overflow list names what was left out.
+const DEFAULT_MAX_TUTORIALS = 6;
 // 1M-context sizing (Track B): fuller step snippets, cheap at flash prices.
 const SNIPPET_CAP = 2_400;
 
@@ -121,8 +140,19 @@ interface WorkflowRow {
   config_flow: string | null;
   route_path: string | null;
   method: string | null;
+  /** For a journey: how its first member is triggered ("HTTP POST", "UI page"). */
+  entry_trigger_type: string | null;
+  /** Whether any step of this flow belongs to a named business capability. */
+  realizes_capability: boolean;
   step_count: number;
   effect_steps: number;
+  /**
+   * `workflows.metadata.journey`, whatever shape the composer emits. Read
+   * defensively and never keyed on a journey *category*: boundary discovery is
+   * being generalized underneath this file, and a walkthrough only needs the
+   * member list and the crossings between them.
+   */
+  journey: WalkthroughJourney | null;
 }
 
 interface StepRow {
@@ -138,17 +168,28 @@ interface StepRow {
   snippet: string | null;
   node_hash: string | null;
   record_summary: string | null;
+  metadata: TraceStep['metadata'];
 }
 
-/** One selected procedure, ready to annotate and persist. */
-interface Candidate {
+/**
+ * One selected tutorial, ready to annotate and persist.
+ *
+ * `mode` is the Diátaxis split made mechanical (doc/TUTORIAL_REDESIGN.md §5):
+ * `run_it`/`run_tests` are how-to guides — their titles name a goal, they
+ * assume competence, they serve application rather than acquisition — and a
+ * reading walkthrough is the tutorial. They are grouped, not deleted; the
+ * action/expected/verify card is the right shape for a runbook and keeps it.
+ */
+interface BaseCandidate {
   workflow: WorkflowRow;
-  draft: ProcedureDraft;
-  /** Traced steps behind the procedure, for the diagram and the evidence hash. */
+  /** Traced steps behind the tutorial, for the diagram and the evidence hash. */
   traceSteps: StepRow[];
   score: number;
   family: string;
 }
+type Candidate =
+  | (BaseCandidate & { mode: 'howto'; draft: ProcedureDraft })
+  | (BaseCandidate & { mode: 'walkthrough'; draft: WalkthroughDraft });
 
 const TUTORIAL_SCHEMA = {
   type: 'object',
@@ -166,6 +207,37 @@ const TUTORIAL_SCHEMA = {
         additionalProperties: false,
         required: ['step_order', 'why'],
         properties: { step_order: { type: 'integer' }, why: { type: 'string' } },
+      },
+    },
+  },
+};
+
+/**
+ * The model's job on a walkthrough: two sentences per card, over a skeleton it
+ * cannot alter. `handoff` is separate from `narration` because the linter
+ * checks it differently — a hand-off that does not name the next step's symbol
+ * or file is replaced by the deterministic template rather than shipped.
+ */
+const WALKTHROUGH_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['goal', 'title', 'summary', 'confidence', 'steps'],
+  properties: {
+    goal: { type: 'string' },
+    title: { type: 'string' },
+    summary: { type: 'string' },
+    confidence: { enum: ['high', 'medium', 'low'] },
+    steps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['step_order', 'narration'],
+        properties: {
+          step_order: { type: 'integer' },
+          narration: { type: 'string' },
+          handoff: { type: 'string' },
+        },
       },
     },
   },
@@ -228,8 +300,91 @@ export function pickDiverseWorkflows<T>(
   return picked.map((e) => e.row);
 }
 
-/** Where a flow sits in the tiered list, as a selection weight. */
-const TIER_WEIGHT: Record<WorkflowRow['tier'], number> = { core: 1.2, supporting: 0.6, surface: 0 };
+/**
+ * Selection order, and why it is this order.
+ *
+ * This mirrors the Workflows rail's contract (`WORKFLOW_ORDERING` in
+ * api/routes/workflows.ts — tier, then business capability, then the flow's
+ * own score) and adds the signal the rail does not have to apply: the role
+ * projection, i.e. the same number that decides the **Critical 25%**
+ * (`roleProjection.ts`). A tab that tutorialises flows the rest of the product
+ * has already ranked as marginal is not a selection bug in one file, it is two
+ * parts of the product disagreeing in public.
+ *
+ * The projection arrives in `params.projections`, already scoped to the
+ * package's role by the caller. Nothing here reads a role name: re-weighting
+ * for backend/frontend/devops/qa is a weight-table change in
+ * `semantic/projections.ts`, not an edit to this file.
+ *
+ * Each weight is a CEILING on that signal's contribution, and they are chosen
+ * so tier cannot be overturned:
+ *
+ *     realizes_capability    1.00   (0 or 1)
+ *     crosses a boundary     0.60   (0 or 1 — see below)
+ *     role projection        0.60   (score ∈ [0,1])
+ *     critical_for_workflow  0.20   (view score ∈ [0,1])
+ *     effect richness        0.40   (0.08 × min(effect_steps, 5))
+ *     mechanised fraction    0.20   (steps with a runnable verification)
+ *     extractor importance   0.15   (0.05 × min(importance_score, 3))
+ *                          ──────
+ *                            3.15  <  core − supporting = 3.20
+ *
+ * The previous comment here claimed the same property for a 1.4 gap while the
+ * secondary terms already summed past 2 — a journey's own importance score is
+ * 2.3 on its own. The arithmetic above is the version that holds.
+ */
+const TIER_WEIGHT: Record<WorkflowRow['tier'], number> = { core: 3.5, supporting: 0.3, surface: 0 };
+const CAPABILITY_WEIGHT = 1.0;
+/**
+ * A flow that crosses a boundary — an enqueue answered by a worker, an OAuth
+ * redirect that comes back, one surface entered by several routes. Those are
+ * the composed journeys of `journeyComposer.ts`, "the product journeys a team
+ * lead would whiteboard", and they are the only candidate shape that shows a
+ * full-stack reader the hand-off itself: the request arriving, the job
+ * crossing, the worker picking it up, the rows appearing. No single-route
+ * trace can teach that, because neither side of a queue can see the other.
+ *
+ * The composer already says so (`importanceScore = maxMemberScore + 1.5`);
+ * clamping the extractor's score to a 0.15 tie-break threw that statement
+ * away, and the four journeys of this product — repo import, analysis,
+ * onboarding generation, authentication — lost their slots to individual page
+ * and route traces. Named and weighted here so the signal is legible instead
+ * of smuggled in through a raw score. Read off the steps, not off
+ * `trigger_type`, so any future composition earns it the same way.
+ */
+const CROSSES_BOUNDARY_WEIGHT = 0.6;
+const PROJECTION_WEIGHT = 0.6;
+const WORKFLOW_VIEW_WEIGHT = 0.2;
+const EFFECT_RICHNESS_WEIGHT = 0.08;
+const MECHANISED_WEIGHT = 0.2;
+const EXTRACTOR_SCORE_WEIGHT = 0.05;
+
+const clamp01 = (n: number): number => (Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : 0);
+
+/**
+ * `mechanised` is the fraction of the procedure the reader can check by
+ * running something — a genuine quality signal, but a small one: it decides
+ * between two flows that are otherwise equally important, never between an
+ * important flow and a convenient one.
+ */
+function rankTraceCandidate(
+  row: WorkflowRow,
+  steps: StepRow[],
+  projection: ProjectedTarget | undefined,
+  mechanised: number,
+): number {
+  const crossesBoundary = steps.some((s) => typeof s.metadata?.journeyBoundary === 'string');
+  return (
+    TIER_WEIGHT[row.tier]
+    + (row.realizes_capability ? CAPABILITY_WEIGHT : 0)
+    + (crossesBoundary ? CROSSES_BOUNDARY_WEIGHT : 0)
+    + PROJECTION_WEIGHT * clamp01(projection?.score ?? 0)
+    + WORKFLOW_VIEW_WEIGHT * clamp01(projection?.viewScores.critical_for_workflow ?? 0)
+    + EFFECT_RICHNESS_WEIGHT * Math.min(row.effect_steps, 5)
+    + MECHANISED_WEIGHT * clamp01(mechanised)
+    + EXTRACTOR_SCORE_WEIGHT * Math.min(Math.max(row.importance_score, 0), 3)
+  );
+}
 
 /**
  * Which workflows can become procedures, and which of those fit under the cap.
@@ -244,7 +399,7 @@ const TIER_WEIGHT: Record<WorkflowRow['tier'], number> = { core: 1.2, supporting
  * A workflow that yields no procedure is recorded with its reason. That
  * record is the tab's honest empty state.
  */
-async function selectProcedures(
+export async function selectProcedures(
   params: GenerateTutorialsParams,
 ): Promise<{ candidates: Candidate[]; report: TutorialSelectionReport }> {
   const max = params.maxTutorials ?? DEFAULT_MAX_TUTORIALS;
@@ -257,12 +412,33 @@ async function selectProcedures(
             COALESCE(w.metadata->>'tier', 'supporting') AS tier,
             COALESCE((w.metadata->>'importance_score')::float, 0) AS importance_score,
             w.metadata->>'config_flow' AS config_flow,
-            ep.route_path, ep.method,
+            -- A composed journey carries its first member's entry point, but
+            -- fall back to resolving that member explicitly: the journey rows
+            -- are the ones a reader most needs a trigger for, and a null here
+            -- kills them all with 'no_way_to_trigger'.
+            COALESCE(ep.route_path, mep.route_path) AS route_path,
+            COALESCE(ep.method, mep.method) AS method,
+            CASE WHEN w.trigger_type = 'journey' THEN mw.trigger_type END AS entry_trigger_type,
+            -- Same signal, same join as the Workflows rail
+            -- (api/routes/workflows.ts): capability_members is polymorphic,
+            -- (member_type, member_id) — there is no cm.node_id column.
+            EXISTS (
+              SELECT 1 FROM workflow_steps ws
+              JOIN capability_members cm
+                ON cm.member_type = 'node' AND cm.member_id = ws.node_id
+              WHERE ws.workflow_id = w.id
+            ) AS realizes_capability,
+            w.metadata->'journey' AS journey,
             (SELECT count(*)::int FROM workflow_steps ws WHERE ws.workflow_id = w.id) AS step_count,
             (SELECT count(*)::int FROM workflow_steps ws WHERE ws.workflow_id = w.id
-              AND ws.step_kind IN ('data_write', 'async_work', 'side_effect')) AS effect_steps
+              AND ws.step_kind IN ('data_write', 'async_work', 'side_effect', 'auth_guard')) AS effect_steps
      FROM workflows w
      LEFT JOIN entrypoints ep ON ep.id = w.entrypoint_id
+     LEFT JOIN workflows mw
+       ON w.trigger_type = 'journey'
+      AND mw.snapshot_id = w.snapshot_id
+      AND mw.stable_key = w.metadata->'journey'->'members'->>0
+     LEFT JOIN entrypoints mep ON mep.id = mw.entrypoint_id
      WHERE w.snapshot_id = $1`,
     [params.snapshotId],
   )).rows as Array<Partial<WorkflowRow> & { id: string; stable_key: string; title: string }>;
@@ -278,8 +454,11 @@ async function selectProcedures(
     config_flow: w.config_flow ?? null,
     route_path: w.route_path ?? null,
     method: w.method ?? null,
+    entry_trigger_type: w.entry_trigger_type ?? null,
+    realizes_capability: w.realizes_capability === true,
     step_count: Number(w.step_count ?? 0),
     effect_steps: Number(w.effect_steps ?? 0),
+    journey: readJourney(w.journey),
   }));
 
   const report: TutorialSelectionReport = {
@@ -300,6 +479,18 @@ async function selectProcedures(
   const projectionByKey = new Map(
     params.projections.filter((p) => p.targetType === 'workflow').map((p) => [p.stableKey, p]),
   );
+  const idByStableKey = new Map(rows.map((r) => [r.stable_key, r.id]));
+  const effectsByNode = await loadSideEffects(params.snapshotId);
+  // A journey and its members are loaded twice by definition (once as rows in
+  // their own right, once as phases); one cache keeps that from being N+1.
+  const stepCache = new Map<string, StepRow[]>();
+  const loadSteps = async (workflowId: string): Promise<StepRow[]> => {
+    const hit = stepCache.get(workflowId);
+    if (hit) return hit;
+    const loaded = await loadWorkflowSteps(params.snapshotId, workflowId);
+    stepCache.set(workflowId, loaded);
+    return loaded;
+  };
 
   const setup: Candidate[] = [];
   const traces: Array<{ row: Candidate; score: number; family: string }> = [];
@@ -311,14 +502,14 @@ async function selectProcedures(
       report.skipped.push({
         title: row.title,
         reason: 'surface_tier_no_traced_effects',
-        detail: `"${row.title}" is a real entry point, but nothing was traced from it — no procedure can be built on an empty trace.`,
+        detail: `"${row.title}" is a real entry point, but nothing was traced from it — there is no path to walk, only a file to open.`,
       });
       continue;
     }
 
     if (row.config_flow === 'compose_up') {
       const attempt = attemptRunItProcedure(env, facts);
-      if (attempt.ok) setup.push({ workflow: row, draft: attempt.draft, traceSteps: [], score: 1_000, family: 'dev_command' });
+      if (attempt.ok) setup.push({ mode: 'howto', workflow: row, draft: attempt.draft, traceSteps: [], score: 1_000, family: 'dev_command' });
       else report.skipped.push({ title: row.title, ...attempt.skip });
       continue;
     }
@@ -327,27 +518,39 @@ async function selectProcedures(
       // compose and a CI file would otherwise get the same steps twice.
       if (setup.some((c) => c.draft.kind === 'run_tests')) continue;
       const attempt = attemptRunTestsProcedure(env, facts, guards);
-      if (attempt.ok) setup.push({ workflow: row, draft: attempt.draft, traceSteps: [], score: 900, family: 'dev_command' });
+      if (attempt.ok) setup.push({ mode: 'howto', workflow: row, draft: attempt.draft, traceSteps: [], score: 900, family: 'dev_command' });
       else report.skipped.push({ title: row.title, ...attempt.skip });
       continue;
     }
     if (row.config_flow) continue; // another config journey; not a procedure
 
-    const steps = await loadWorkflowSteps(params.snapshotId, row.id);
+    const steps = await loadSteps(row.id);
     if (steps.length === 0) {
       report.skipped.push({ title: row.title, reason: 'too_few_steps', detail: `"${row.title}" has no persisted steps.` });
       continue;
     }
-    const attempt = attemptTraceProcedure(
+    // Every journey member is walked from its OWN trace, not from the
+    // composer's two-step-per-member spine. That spine is why "the onboarding
+    // package generation is just 2 steps"; the phases below are why it is not.
+    const memberSteps = new Map<string, TraceStep[]>();
+    for (const member of row.journey?.members ?? []) {
+      const memberId = idByStableKey.get(member);
+      if (!memberId) continue;
+      memberSteps.set(member, (await loadSteps(memberId)).map((s) => toTraceStep(s, effectsByNode)));
+    }
+    const attempt = attemptWalkthrough(
       {
         title: row.title,
         purpose: row.purpose,
         tier: row.tier,
         triggerType: row.trigger_type,
+        entryTriggerType: row.entry_trigger_type,
         routePath: row.route_path,
         httpMethod: row.method,
-        steps: steps.map(toTraceStep),
+        steps: steps.map((s) => toTraceStep(s, effectsByNode)),
         coveringTests: guards.filter((g) => steps.some((s) => g.covers === s.symbol_name)).map((g) => g.testFile),
+        journey: row.journey,
+        memberSteps,
       },
       env,
     );
@@ -357,17 +560,12 @@ async function selectProcedures(
     }
 
     const projection = projectionByKey.get(row.stable_key);
-    const mechanised = attempt.draft.steps.filter((s) => s.verifyCommand).length / attempt.draft.steps.length;
+    // A reading's "mechanised" fraction is how much of it a highlight actually
+    // points at — the walkthrough equivalent of a runnable verification.
+    const highlighted = attempt.draft.steps.filter((s) => s.highlights.length > 0).length / attempt.draft.steps.length;
     traces.push({
-      row: { workflow: row, draft: attempt.draft, traceSteps: steps, score: 0, family: workflowFamily(row.trigger_type) },
-      // Tier first (Phase 3's ranking signal), then role fit, then how much of
-      // the procedure the reader can actually check by running something.
-      score:
-        TIER_WEIGHT[row.tier] +
-        row.importance_score +
-        (projection?.viewScores.critical_for_workflow ?? 0) +
-        (projection?.score ?? 0) +
-        0.4 * mechanised,
+      row: { mode: 'walkthrough', workflow: row, draft: attempt.draft, traceSteps: steps, score: 0, family: workflowFamily(row.trigger_type) },
+      score: rankTraceCandidate(row, steps, projection, highlighted),
       family: workflowFamily(row.trigger_type),
     });
   }
@@ -390,7 +588,7 @@ async function selectProcedures(
 async function loadWorkflowSteps(snapshotId: string, workflowId: string): Promise<StepRow[]> {
   return (await query(
     `SELECT ws.id, ws.step_order, ws.node_id, ws.file_path, ws.symbol_name, ws.line_start,
-            ws.line_end, ws.step_kind, ws.deterministic_description,
+            ws.line_end, ws.step_kind, ws.deterministic_description, ws.metadata,
             n.snippet, n.hash AS node_hash, sr.summary AS record_summary
      FROM workflow_steps ws
      LEFT JOIN graph_nodes n ON n.id = ws.node_id
@@ -402,7 +600,7 @@ async function loadWorkflowSteps(snapshotId: string, workflowId: string): Promis
   )).rows as StepRow[];
 }
 
-const toTraceStep = (s: StepRow): TraceStep => ({
+const toTraceStep = (s: StepRow, effectsByNode?: Map<string, StepEffect[]>): TraceStep => ({
   order: s.step_order,
   filePath: s.file_path,
   symbolName: s.symbol_name,
@@ -413,7 +611,70 @@ const toTraceStep = (s: StepRow): TraceStep => ({
   nodeId: s.node_id,
   nodeHash: s.node_hash,
   snippet: s.snippet,
+  effects: (s.node_id && effectsByNode?.get(s.node_id)) || [],
+  // journeyMember / journeyBoundary: how a composed journey is compressed to
+  // its spine and how far one trigger reaches. See `journeyWalkOf`.
+  metadata: s.metadata ?? null,
 });
+
+/**
+ * The composer's journey annotation, read defensively.
+ *
+ * Boundary discovery is being generalized underneath this file, so nothing
+ * here may key on a journey *category* or a fixed boundary vocabulary: the
+ * only contract is "a list of members and the crossings between them". An
+ * unrecognised `kind` string flows straight through to the reader as the
+ * connector's label, which is exactly what a new detector should get for free.
+ */
+function readJourney(raw: unknown): WalkthroughJourney | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const j = raw as Record<string, unknown>;
+  const members = Array.isArray(j.members) ? j.members.filter((m): m is string => typeof m === 'string') : [];
+  if (members.length < 2) return null;
+  const titles = Array.isArray(j.member_titles) ? j.member_titles.map((t) => String(t)) : [];
+  const boundaries = (Array.isArray(j.boundaries) ? j.boundaries : [])
+    .map((b) => (b && typeof b === 'object' ? (b as Record<string, unknown>) : {}))
+    .filter((b) => typeof b.kind === 'string' && Number.isInteger(b.after))
+    .map((b) => ({
+      after: Number(b.after),
+      kind: String(b.kind),
+      detail: b.detail == null ? undefined : String(b.detail),
+      // The composer's normalized hand-off token, when it emitted one: an
+      // exact literal to scan for beats parsing one back out of prose.
+      token: b.token == null ? undefined : String(b.token),
+    }));
+  return { members, memberTitles: titles, boundaries };
+}
+
+/**
+ * Side effects by the node that performs them, for highlight location.
+ *
+ * `evidence` — the matched call expression — is the only handle a highlight
+ * has: `DetectedSideEffect` carries no line number and graph edges carry no
+ * call-site lines, so the builder scans the verified snippet for this text
+ * rather than looking a range up. Scoped to nodes some trace actually visits,
+ * which bounds this to the traced surface rather than the whole repository.
+ */
+async function loadSideEffects(snapshotId: string): Promise<Map<string, StepEffect[]>> {
+  const rows = (await query(
+    `SELECT DISTINCT se.node_id, se.type, se.target, se.evidence
+     FROM side_effects se
+     WHERE se.snapshot_id = $1
+       AND se.node_id IN (
+         SELECT ws.node_id FROM workflow_steps ws
+         JOIN workflows w ON w.id = ws.workflow_id
+         WHERE w.snapshot_id = $1 AND ws.node_id IS NOT NULL)`,
+    [snapshotId],
+  )).rows as Array<{ node_id: string; type: string; target: string | null; evidence: string | null }>;
+  const byNode = new Map<string, StepEffect[]>();
+  for (const r of rows) {
+    if (!r.evidence) continue;
+    const list = byNode.get(r.node_id) ?? [];
+    list.push({ kind: r.type, target: r.target, evidence: r.evidence });
+    byNode.set(r.node_id, list);
+  }
+  return byNode;
+}
 
 /** Lockfile → package manager, so a printed command is the one that works here. */
 async function detectRepoPackageManager(snapshotId: string): Promise<ReturnType<typeof detectPackageManager>> {
@@ -469,9 +730,16 @@ async function generateOneTutorial(
     workflow: workflow.stable_key,
     kind: draft.kind,
     gaps: draft.gaps,
-    steps: draft.steps.map((s) => [s.order, s.kind, s.action, s.command ?? '', s.filePath,
-      s.lineStart, s.expected, s.verify, s.verifyCommand ?? '',
-      (s.snippet ?? '').slice(0, SNIPPET_CAP)]),
+    steps: candidate.mode === 'walkthrough'
+      // Highlights and phases are part of the skeleton, so they belong in the
+      // key: a re-analysis that moves a highlight must not clone the old card.
+      ? candidate.draft.steps.map((s) => [s.order, s.role, s.filePath, s.lineStart,
+        s.phase?.member ?? '', s.boundary?.kind ?? '', s.collapsed,
+        s.highlights.map((h) => `${h.start}-${h.end}:${h.source}`).join(','),
+        (s.snippet ?? '').slice(0, SNIPPET_CAP)])
+      : candidate.draft.steps.map((s) => [s.order, s.kind, s.action, s.command ?? '', s.filePath,
+        s.lineStart, s.expected, s.verify, s.verifyCommand ?? '',
+        (s.snippet ?? '').slice(0, SNIPPET_CAP)]),
   })).digest('hex');
   // Quality gate on reuse, same contract as the section cache — the cache must
   // never immortalize a bad run. This matters here for a specific reason: the
@@ -499,30 +767,39 @@ async function generateOneTutorial(
     return { cached: true };
   }
 
-  const output = await annotateProcedure(params, candidate);
+  const output = await annotate(params, candidate);
+  // The model wrote narration and hand-offs over a skeleton it cannot alter;
+  // applying them is where a hand-off that names nothing gets replaced by the
+  // deterministic template rather than shipped broken.
+  if (candidate.mode === 'walkthrough') applyWalkthroughAnnotation(candidate.draft, output);
   const lint = lintAnnotation(candidate, output, workflow.title);
-  const procedureFindings = lintProcedure(draft);
+  const structural = candidate.mode === 'walkthrough'
+    ? lintWalkthrough(candidate.draft, workflow.journey).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }))
+    : lintProcedure(candidate.draft).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }));
 
   const unknowns: Array<{ kind: string; detail: string }> = [
     ...draft.gaps.map((g) => ({ kind: g.kind, detail: g.detail })),
-    ...procedureFindings.map((f) => ({ kind: `step_${f.code}`, detail: `step ${f.stepOrder}: ${f.detail}` })),
+    ...structural.map((f) => ({ kind: `step_${f.code}`, detail: f.order > 0 ? `step ${f.order}: ${f.detail}` : f.detail })),
   ];
   if (report.capBinding && rank === 0) {
     unknowns.push({
       kind: 'tutorial_cap_reached',
-      detail: `${report.eligible} procedures could be built from this repository; the ${report.cap} strongest are shown. The rest are listed on this tab.`,
+      detail: `${report.eligible} tutorials could be built from this repository; the ${report.cap} strongest are shown. The rest are listed on this tab.`,
     });
   }
-  // Never "high" when the machine found a hole in the procedure or the prose.
+  // Never "high" when the machine found a hole in the reading or the prose.
   const confidence =
-    procedureFindings.length > 0 || lint.issues.length > 0
+    structural.length > 0 || lint.issues.length > 0
       ? (output.confidence === 'high' ? 'medium' : output.confidence)
       : output.confidence;
 
   const diagramSteps: DiagramStep[] = (candidate.traceSteps.length > 0 ? candidate.traceSteps.map((s) => ({
     stepOrder: s.step_order, filePath: s.file_path, symbolName: s.symbol_name,
     stepKind: s.step_kind, description: s.deterministic_description,
-  })) : draft.steps.map((s) => ({
+  })) : candidate.mode === 'walkthrough' ? candidate.draft.steps.map((s) => ({
+    stepOrder: s.order, filePath: s.filePath, symbolName: s.symbolName ?? null,
+    stepKind: s.role, description: s.narration,
+  })) : candidate.draft.steps.map((s) => ({
     stepOrder: s.order, filePath: s.filePath, symbolName: s.symbolName ?? null,
     stepKind: s.kind, description: s.action,
   })));
@@ -546,7 +823,7 @@ async function generateOneTutorial(
      // drifting title on the tab's first entry is the worst place for one.
      // A traced flow's title carries the flow's own name, so the model's
      // phrasing earns its keep there.
-     (draft.kind === 'trace_flow' ? output.title : '') || draft.title,
+     (candidate.mode === 'walkthrough' ? output.title : '') || draft.title,
      output.summary ?? '', diagramKind, mermaid,
      confidence, JSON.stringify(unknowns),
      JSON.stringify({
@@ -554,17 +831,99 @@ async function generateOneTutorial(
        workflow: workflow.stable_key,
        goal: output.goal ?? '',
        evidence_hash: evidenceHash,
+       // `mode` is what the tab groups on — "Code walkthroughs" above
+       // "Run & verify" (doc/TUTORIAL_REDESIGN.md §5). `procedure_kind` stays
+       // for the icons and for rows written before v4.
+       mode: candidate.mode,
        procedure_kind: draft.kind,
        rank,
        selection: report,
-       procedure_lint: procedureFindings.map((f) => `${f.stepOrder}:${f.code}`),
+       procedure_lint: structural.map((f) => `${f.order}:${f.code}`),
        explanation_lint: lint.hits,
      })],
   )).rows[0] as { id: string }).id;
 
-  await persistSteps(params, tutorialId, workflow, draft.steps, output.whyByOrder);
+  await persistSteps(params, tutorialId, workflow, candidate.mode === 'walkthrough'
+    ? candidate.draft.steps.map((s) => walkthroughRow(s))
+    : candidate.draft.steps.map((s) => procedureRow(s, output.whyByOrder.get(s.order) ?? '')));
   return { cached: false };
 }
+
+/**
+ * A step as the `tutorial_steps` table takes it. The columns predate both
+ * rewrites, so everything with no column of its own rides `metadata` (jsonb) —
+ * which is what makes v4 a migration-free change.
+ */
+interface PersistableStep {
+  order: number;
+  nodeId?: string | null;
+  nodeHash?: string | null;
+  filePath: string;
+  symbolName?: string | null;
+  lineStart?: number | null;
+  lineEnd?: number | null;
+  snippet?: string | null;
+  /** `explanation` holds the reader-visible prose, so pre-v4 consumers keep working. */
+  explanation: string;
+  metadata: Record<string, unknown>;
+  /** What the receipt asserts this step's bytes support. */
+  claim: string;
+}
+
+const procedureRow = (step: ProcedureStep, why: string): PersistableStep => ({
+  order: step.order,
+  nodeId: step.nodeId,
+  nodeHash: step.nodeHash,
+  filePath: step.filePath,
+  symbolName: step.symbolName,
+  lineStart: step.lineStart,
+  lineEnd: step.lineEnd,
+  snippet: step.snippet,
+  explanation: why,
+  metadata: {
+    mode: 'howto',
+    stepKind: step.kind,
+    action: step.action,
+    command: step.command ?? null,
+    expected: step.expected,
+    verify: step.verify,
+    verify_command: step.verifyCommand ?? null,
+    evidence: step.evidence,
+    ...(step.workflowStepOrder != null ? { workflow_step_order: step.workflowStepOrder } : {}),
+  },
+  claim: `${step.action} — expected: ${step.expected}`,
+});
+
+/** doc/TUTORIAL_REDESIGN.md §2.2 — the walkthrough step contract, verbatim. */
+const walkthroughRow = (step: WalkthroughStep): PersistableStep => ({
+  order: step.order,
+  nodeId: step.nodeId,
+  nodeHash: step.nodeHash,
+  filePath: step.filePath,
+  symbolName: step.symbolName,
+  lineStart: step.lineStart,
+  lineEnd: step.lineEnd,
+  snippet: step.snippet,
+  // The narration IS the explanation column: `summaryWorker` copies step
+  // explanations onto workflow steps, and that copy must keep working.
+  explanation: step.narration,
+  metadata: {
+    mode: 'walkthrough',
+    role: step.role,
+    phase: step.phase,
+    highlights: step.highlights,
+    window: step.window,
+    handoff: step.handoff,
+    landing: step.landing,
+    boundary: step.boundary,
+    narration_source: step.narrationSource,
+    collapsed: step.collapsed,
+    evidence: step.evidence,
+    ...(step.appendix ? { appendix: step.appendix } : {}),
+    ...(step.workflowStepOrder != null ? { workflow_step_order: step.workflowStepOrder } : {}),
+  },
+  claim: step.narration,
+});
 
 /**
  * Persist the procedure. `metadata` carries the parts the schema has no column
@@ -581,8 +940,7 @@ async function persistSteps(
   params: GenerateTutorialsParams,
   tutorialId: string,
   workflow: WorkflowRow,
-  steps: ProcedureStep[],
-  whyByOrder: Map<number, string>,
+  steps: PersistableStep[],
 ): Promise<void> {
   if (steps.length === 0) return;
 
@@ -593,17 +951,7 @@ async function persistSteps(
     stepValues.push(
       tutorialId, step.order, step.nodeId ?? null, step.filePath, step.symbolName ?? null,
       step.lineStart ?? null, step.lineEnd ?? null, step.snippet?.slice(0, SNIPPET_CAP) ?? null,
-      whyByOrder.get(step.order) ?? '',
-      JSON.stringify({
-        stepKind: step.kind,
-        action: step.action,
-        command: step.command ?? null,
-        expected: step.expected,
-        verify: step.verify,
-        verify_command: step.verifyCommand ?? null,
-        evidence: step.evidence,
-        ...(step.workflowStepOrder != null ? { workflow_step_order: step.workflowStepOrder } : {}),
-      }),
+      step.explanation, JSON.stringify(step.metadata),
     );
     const base = i * 10;
     return `(${Array.from({ length: 10 }, (_, j) => `$${base + j + 1}`).join(', ')})`;
@@ -628,7 +976,7 @@ async function persistSteps(
       workflow.id, step.symbolName ? `${step.filePath}#${step.symbolName}` : step.filePath,
       step.nodeHash ?? null, step.filePath, step.symbolName ?? null, step.lineStart ?? null, step.lineEnd ?? null,
       step.snippet?.slice(0, SNIPPET_CAP) ?? null, params.commitHash,
-      `${step.action} — expected: ${step.expected}`.slice(0, 1_000),
+      step.claim.slice(0, 1_000),
     );
     const base = i * 15;
     return `($${base + 1}, $${base + 2}, 'workflow_step', $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14}, $${base + 15})`;
@@ -659,15 +1007,157 @@ interface Annotation {
   goal: string;
   summary: string;
   confidence: 'high' | 'medium' | 'low';
+  /** How-to: one `why` per step. Walkthrough: the narration paragraph. */
   whyByOrder: Map<number, string>;
+  /** Walkthrough only: the hand-off sentence, before it is checked. */
+  handoffByOrder: Map<number, string>;
   runId: string | null;
 }
 
-const PROCEDURE_INTENT: Record<ProcedureDraft['kind'], string> = {
+const PROCEDURE_INTENT: Record<string, string> = {
   run_it: 'get this repository running locally and confirm it is actually up',
   run_tests: 'run the automated tests and know which of them guards which behaviour',
   trace_flow: 'watch one real flow execute and prove which lines it reaches',
 };
+
+const annotate = (params: GenerateTutorialsParams, candidate: Candidate): Promise<Annotation> =>
+  candidate.mode === 'walkthrough'
+    ? annotateWalkthrough(params, candidate.workflow, candidate.draft)
+    : annotateProcedure(params, candidate.workflow, candidate.draft);
+
+/**
+ * Narration and hand-offs, over a skeleton the model cannot alter.
+ *
+ * Two hard rules beyond v3's: the hand-off sentence must NAME the next step's
+ * symbol or file basename (checked, not requested — a sentence that names
+ * neither is replaced by the deterministic template), and narration must not
+ * restate the hand-off. `facts_only_ai` skips per-step prose entirely: a
+ * walkthrough without its code in front of the model would be narration about
+ * lines it never saw, so the deterministic templates ship instead, labelled.
+ */
+async function annotateWalkthrough(
+  params: GenerateTutorialsParams,
+  workflow: WorkflowRow,
+  draft: WalkthroughDraft,
+): Promise<Annotation> {
+  const withSnippets = params.privacyMode === 'full_ai';
+  const visible = draft.steps.filter((s) => !s.collapsed && !s.appendix);
+
+  const stepBlocks = visible.map((s) => {
+    const win = s.window;
+    const lines = s.snippet?.replace(/\n$/, '').split('\n') ?? [];
+    const shown = win && s.lineStart != null
+      ? lines.slice(win.start - s.lineStart, win.end - s.lineStart + 1).join('\n')
+      : (s.snippet ?? '');
+    return [
+      `### Step ${s.order} [${s.role}]${s.phase ? ` — phase ${s.phase.index} of ${s.phase.count}: ${s.phase.title}` : ''}`,
+      `Location: ${s.filePath}${s.lineStart ? `:${s.lineStart}${s.lineEnd ? `-${s.lineEnd}` : ''}` : ''}${s.symbolName ? ` (\`${s.symbolName}\`)` : ''}`,
+      `What the trace records: ${s.narration}`,
+      s.highlights.length > 0
+        ? `Highlighted for the reader: ${s.highlights.map((h) => `lines ${h.start}-${h.end} (${h.label})`).join('; ')}`
+        : 'No line could be highlighted on this step — do not refer to highlighted lines.',
+      s.handoff
+        ? `Hand-off goes to step ${s.handoff.toStep}: ${s.handoff.toSymbol ? `\`${s.handoff.toSymbol}\` in ` : ''}${s.handoff.toFile}${s.boundary ? ` (crossing: ${s.boundary.detail})` : ''}`
+        : `This is the last step. What now exists: ${s.landing ?? 'unknown'}`,
+      shown
+        ? (withSnippets
+          ? '```\n' + shown.slice(0, SNIPPET_CAP) + '\n```'
+          : '(code withheld by privacy settings)')
+        : null,
+    ].filter(Boolean).join('\n');
+  });
+
+  const prompt = [
+    `A new contributor is reading the path below in this repository: "${workflow.title}" (${workflow.trigger_type}; ${workflow.purpose}). They have the code on screen with the listed lines highlighted. Your job is the prose between the snippets.`,
+    'Every file, line, snippet, highlight and hand-off target below was read out of this repository. You are NOT choosing them and must not restate them.',
+    [
+      'Produce:',
+      '- title: at most 8 words, naming the path the reader follows.',
+      '- goal: ONE sentence "After this, you can …" naming what they will be able to find or change unaided.',
+      '- summary: 1-2 plain sentences on what this path does end to end, and one clause on what it does not cover.',
+      '- steps: for each step_order —',
+      '    · narration: 2-3 sentences, at most 55 words, on what this code does IN THIS FLOW. Ground every claim in the snippet and the highlight labels.',
+      '    · handoff: EXACTLY ONE sentence saying how control or data reaches the next step. It MUST name the next step\'s symbol or its file name. On the last step, return "" — the landing statement is already written.',
+      '- confidence: how well the evidence supports this reading end to end.',
+    ].join('\n'),
+    [
+      'Hard rules:',
+      '- narration must not restate the hand-off, and the hand-off must not restate the narration.',
+      '- Never invent a file, symbol, table, queue or flag that is not written above. If you want to name one and cannot find it, say nothing.',
+      '- Never refer to "the highlighted line" on a step whose highlights are listed as none.',
+      '- No filler ("this is important", "as we can see", "simply", "essentially"), no tour-guide framing ("let\'s take a look", "we will now"), and no sentence about "this tutorial" or "this step".',
+      '- No sentence that would read the same for any other codebase.',
+      withSnippets
+        ? '- Stay inside the snippets given; write "unknown" rather than guessing.'
+        : '- The code is withheld from you by this project\'s privacy settings — never claim to describe lines you were not given.',
+    ].join('\n'),
+    draft.gaps.length > 0
+      ? `Known limits of this reading (the reader is shown these; do not repeat them verbatim, but do not contradict them):\n${draft.gaps.map((g) => `- ${g.detail}`).join('\n')}`
+      : 'This reading has no recorded evidence gaps.',
+    stepBlocks.join('\n\n'),
+  ].join('\n\n');
+
+  const response = await params.ai.call<{
+    goal: string; title: string; summary: string;
+    confidence: 'high' | 'medium' | 'low';
+    steps: Array<{ step_order: number; narration?: string; handoff?: string }>;
+  }>({
+    tier: 'strong',
+    targetType: 'tutorial',
+    packageId: params.packageId,
+    promptVersion: TUTORIAL_PROMPT_VERSION,
+    schemaName: 'tutorial',
+    schema: WALKTHROUGH_SCHEMA,
+    user: prompt,
+    maxOutputTokens: 6_000,
+  });
+  const value = response.value!;
+
+  const clean = (text: string): string => repairExplanation(text ?? '', {}).markdown.trim();
+  const whyByOrder = new Map<number, string>();
+  const handoffByOrder = new Map<number, string>();
+  // Facts-only: the skeleton is already complete and honest, so nothing the
+  // model wrote without the code is allowed onto a step.
+  if (withSnippets) {
+    for (const s of value.steps ?? []) {
+      const narration = clean(s.narration ?? '');
+      if (narration) whyByOrder.set(s.step_order, narration);
+      const handoff = clean(s.handoff ?? '');
+      if (handoff) handoffByOrder.set(s.step_order, handoff);
+    }
+  }
+
+  return {
+    title: clean(value.title ?? ''),
+    goal: clean(value.goal ?? ''),
+    summary: clean(value.summary ?? ''),
+    confidence: value.confidence ?? 'medium',
+    whyByOrder,
+    handoffByOrder,
+    runId: response.runId ?? null,
+  };
+}
+
+/**
+ * Move the model's prose onto the skeleton, one gate at a time. Nothing that
+ * fails a gate is shipped: the deterministic template stays and the step keeps
+ * saying `deterministic`, which the UI labels exactly as cluster summaries
+ * already label their source.
+ */
+function applyWalkthroughAnnotation(draft: WalkthroughDraft, output: Annotation): void {
+  for (const step of draft.steps) {
+    if (step.appendix) continue;
+    const narration = output.whyByOrder.get(step.order);
+    if (narration && narration.length >= 20) {
+      step.narration = narration;
+      step.narrationSource = 'ai';
+    }
+    const handoff = output.handoffByOrder.get(step.order);
+    if (step.handoff && handoff && handoffNamesNext(handoff, step.handoff)) {
+      step.handoff = { ...step.handoff, text: handoff, source: 'ai' };
+    }
+  }
+}
 
 /**
  * The model annotates; it does not author. Actions, expected results and
@@ -676,8 +1166,11 @@ const PROCEDURE_INTENT: Record<ProcedureDraft['kind'], string> = {
  * genuinely writes better than a template, and the only part that can be
  * empty without breaking the procedure.
  */
-async function annotateProcedure(params: GenerateTutorialsParams, candidate: Candidate): Promise<Annotation> {
-  const { workflow, draft } = candidate;
+async function annotateProcedure(
+  params: GenerateTutorialsParams,
+  workflow: WorkflowRow,
+  draft: ProcedureDraft,
+): Promise<Annotation> {
   const withSnippets = params.privacyMode === 'full_ai';
 
   const stepBlocks = draft.steps.map((s) => [
@@ -698,7 +1191,7 @@ async function annotateProcedure(params: GenerateTutorialsParams, candidate: Can
   ].filter(Boolean).join('\n'));
 
   const prompt = [
-    `A new contributor is about to run the procedure below against the repository. Its purpose is to ${PROCEDURE_INTENT[draft.kind]}${draft.kind === 'trace_flow' ? `, for the flow "${workflow.title}" (${workflow.trigger_type}; ${workflow.purpose})` : ''}.`,
+    `A new contributor is about to run the procedure below against the repository. Its purpose is to ${PROCEDURE_INTENT[draft.kind] ?? 'work with this repository'}.`,
     'Every step is already written and every command, path, port and line below was read out of this repository. You are NOT writing the steps and must not restate them.',
     [
       'Produce:',
@@ -755,16 +1248,17 @@ async function annotateProcedure(params: GenerateTutorialsParams, candidate: Can
     summary: clean(value.summary ?? ''),
     confidence: value.confidence ?? 'medium',
     whyByOrder,
+    handoffByOrder: new Map(),
     runId: response.runId ?? null,
   };
 }
 
 /**
  * The prose the model did write, held to the same contract as every other
- * explanation the product emits. Each `why` is rendered with the file:line its
- * step is grounded in, which is what `explanationLint` counts as a citation —
- * so an uncited claim here means the model wrote something its step does not
- * support.
+ * explanation the product emits. Each sentence is rendered with the file:line
+ * its step is grounded in, which is what `explanationLint` counts as a
+ * citation — so an uncited claim here means the model wrote something its step
+ * does not support.
  */
 function lintAnnotation(candidate: Candidate, output: Annotation, subject: string): { issues: string[]; hits: string[] } {
   const lines = [

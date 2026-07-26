@@ -4,7 +4,7 @@
   "shape": "A five-file published npm library: index.js, index.d.ts, a test, a benchmark. No UI, no server, no database.",
   "whyThisShape": "The few-or-no-entrypoints case. There are no pages, no routes, no jobs and not enough files to cluster, so a prompt that assumes an application shape has nothing to fill its sections with. The interesting failure here is not a wrong claim but an INVENTED structure — a 'Traced Flows' or 'Architecture in Depth' section that manufactures subsystems out of one exported function. That is the same over-fitting the reviewer saw, in its most extreme form.",
   "labeledOn": "2026-07-25",
-  "labeledFrom": "Cloned and probed: 5 files in scope, 1 entrypoint (an export), zero routes/pages/jobs.",
+  "labeledFrom": "Cloned and probed: 5 files in scope, zero routes/pages/jobs. RE-MEASURED 2026-07-25 after the library-archetype contract change (entrypointDetector now resolves the manifest `main`/`module`/`exports` through re-export barrels and seeds the PUBLIC symbols instead of emitting one file-level `export` for index.js): the count is still 3, but it now means `index.js#pLimit` + `index.js#limitFunction` + the shebanged `scripts/benchmarker.js`, i.e. three named seeds rather than one guessed file fanned out by the workflow tracer.",
   "expectShape": {
     "entrypointKinds": { "mustExclude": ["ui_route", "http_route", "worker_job"] },
     "maxEntrypoints": 3

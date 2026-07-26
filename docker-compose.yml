@@ -25,11 +25,21 @@ services:
     env_file:
       - backend/.env
     environment:
-      PG_POOL_MAX: 10
-      # Per-replica knobs (see doc/DEVOPS.md "Scaling workers"):
-      #   WORKER_CONCURRENCY (jobs per process, default 2)
-      #   LLM_MAX_CONCURRENCY (parallel AI calls per run, default 6)
-      #   SECTION_CONCURRENCY (parallel package sections, default 4)
+      # Per-replica knobs (see doc/DEVOPS.md "Scaling workers"). These override
+      # backend/.env — a compose `environment:` entry always wins over
+      # `env_file`, which is why the worker ran on PG_POOL_MAX=10 while
+      # backend/.env said 20.
+      #
+      # Both workers run in THIS one process (worker/index.ts imports
+      # summaryWorker.js), so the pool serves 4 analyses + 4 generations.
+      # Arithmetic for the 30: backend/src/lib/db.ts.
+      PG_POOL_MAX: 30
+      WORKER_CONCURRENCY: 4     # parallel analysis runs per replica
+      SUMMARY_CONCURRENCY: 4    # parallel package generations per replica
+      # Also available (defaults in code): SECTION_CONCURRENCY (12, sections in
+      # parallel within one generation) and LLM_MAX_CONCURRENCY (12, provider
+      # calls per AiClient — i.e. PER RUN, so 4 runs burst 4x that at
+      # OpenRouter; there is no global cross-run LLM limiter).
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
 

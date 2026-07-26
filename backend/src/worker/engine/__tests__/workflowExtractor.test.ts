@@ -144,6 +144,20 @@ describe('workflowExtractor (call-graph traversal)', () => {
     expect(logout, 'supabase logout workflow').to.exist;
   });
 
+  it('tiers an identity-SDK login as core: authentication state IS state', () => {
+    // Contract change. The test above only guaranteed these workflows EXIST;
+    // their tier was `supporting`, because effect accounting counted rows,
+    // jobs and outbound calls and nothing else. That put every login and
+    // signup below read-only endpoints in the rail and out of reach of the
+    // tutorial selector, which is silent — the flows are still listed, just
+    // mis-ranked — so it is pinned here.
+    const login = workflows.find((w) => w.stableKey.endsWith(':supabaseLoginHandler'))!;
+    expect(login.tier, 'a user-triggered flow whose effect is auth state is core').to.equal('core');
+    expect(login.rankingReasons.join(' ')).to.contain('changes who is signed in');
+    expect(login.rankingReasons.join(' '), 'must not claim it traced no effects')
+      .to.not.contain('no side effects traced');
+  });
+
   it('traces queue-consumer registrations into pipeline workflows (audit P2 §15)', () => {
     const wf = workflows.find((w) => w.title === 'Queue consumer: reports');
     expect(wf, 'queue consumer workflow').to.exist;
