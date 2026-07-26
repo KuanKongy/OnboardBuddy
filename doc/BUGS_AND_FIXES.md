@@ -5,10 +5,14 @@ Copy each `## [P…][State] Bug …` block into a GitHub issue.
 **Priority:** P0 crash · P1 intermittent · P2 reproducible · P3 patch later · P4 annoying · P5 idea
 **State:** New (not investigated) · Open (someone is working on it) · Closed (fixed) · Won't-Fix (closed with a reason)
 
-**Bugs #1–#52** — Milestones 2 and 3. **Bugs #53–#74** — Milestone 4 (2026-07-16 → 2026-07-25). **Bugs #75–#83** — found by the eleven-project audit and the owner-directed reader/graph pass on 2026-07-25 (eight P1, one P2).
+**Bugs #1–#52** — Milestones 2 and 3. **Bugs #53–#74** — Milestone 4 (2026-07-16 → 2026-07-25). **Bugs
+#75–#83** — found by the eleven-project audit and the owner-directed reader/graph pass on 2026-07-25
+(eight P1, one P2), and **all nine fixed 2026-07-25/26** in the final pre-submission commits (see each
+bug's Notes for the exact fix).
 
-**M4: 22 issues — 12 Closed** (found and fixed inside the sprint), **10 Open** (the M5 backlog).
-Every Open issue has an owner and a target in [§ M5 bug plan](#m5-bug-plan--every-open-bug-resolved-or-closed).
+**M4 sprint work (#53–#74): 22 issues — 12 Closed** (found and fixed inside the sprint), **10 Open**
+(the M5 backlog). Every pre-#75 Open issue has an owner and a target in
+[§ M5 bug plan](#m5-bug-plan--every-open-bug-resolved-or-closed).
 
 **One issue per root cause.** Where several defects shared a cause or a fix location they are batched
 into one issue and listed inside it — 51 individual defects became these 22 issues. Fixing them one at
@@ -157,11 +161,11 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 extraction shipped in M3, so it is now Closed–Fixed rather than Won't-Fix. There are currently **no**
 Won't-Fix bugs; the ones expected at M5 are declared in the plan below.
 
-### Roll-up as of 2026-07-25 (end of M4)
+### Roll-up as of 2026-07-26 (end of M4, after the audit-fix commits)
 
 | Bucket | Count | Numbers |
 |--------|-------|---------|
-| **Closed** — verified fixed | **48** | #2, #11–#13, #16–#21, #23, #26–#35, #38–#52, #53–#64 |
+| **Closed** — verified fixed | **57** | #2, #11–#13, #16–#21, #23, #26–#35, #38–#52, #53–#64, #75–#83 |
 | **Open** — M4 backlog | **10** | #65–#74 |
 | **Open** — M2/M3 carry-over | **12** | #1, #3–#10, #14, #15, #22 |
 | **Open** — P5 ideas, not defects | **3** | #24, #25, #36 |
@@ -174,8 +178,14 @@ routes throw if the App private key is absent, instead of returning a comprehens
 an auth-provider limitation whose user-facing half we already fixed. Everything else open is P2 or
 below. The M4 backlog is the deliberate output of two audits we ran *at the end* of the sprint (73
 functional/security findings and 20 visual findings, both 2026-07-22) plus the security assessment —
-most of it exists because we went looking, not because it surfaced in use. The two that matter most are
+most of it exists because we went looking, not because it surfaced in use. The two that matter are
 **#65 and #66** (cross-tenant scoping and the auth bypass), and they are the first work of M5.
+
+**A third, later audit (the eleven-project pass, #75–#83) found 9 more the same day** — eight P1 —
+but unlike #65–#74, **all nine were fixed the same sprint** rather than deferred: entrypoint detection
+broadened past HTTP shapes, unparsed languages force-disclosed, run-status/pause semantics made
+truthful, a statement-timeout retry, the fullscreen exit control, and the viewport-reset-on-select all
+landed in the pre-submission commits. See each bug's Notes for the exact fix.
 
 **Regression check: nothing closed in M2 or M3 has re-opened.** The three M3 fixes with the highest
 regression risk — run control (#50), incremental staleness (#52) and receipt citations (#45) — each
@@ -2804,7 +2814,7 @@ first because that is what a reviewer notices. Anything not done by the freeze i
 
 ---
 
-## [P1][New] Bug 75: A failed analysis leaves its snapshot marked `complete`, so the failure is invisible
+## [P1][Closed] Bug 75: A failed analysis leaves its snapshot marked `complete`, so the failure is invisible
 
 **Bug #75**
 
@@ -2813,7 +2823,7 @@ first because that is what a reviewer notices. Anything not done by the freeze i
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Backend — worker pipeline, `analysis_snapshots.status`, `lib/projectStatus.ts` |
 
 ## Expected behavior
@@ -2839,6 +2849,10 @@ This is worse than a visible crash: the worker-restart path produces an excellen
 resume from cache."*) and this path produces silence.
 
 ## Notes
+**Fixed 2026-07-25/26** (`WIP: M4 rework — … concurrency` / `runStatus.test.ts`, "bugs #75 / #77 /
+#80"): the run now owns its snapshot's status end-to-end — a run that dies after persistence marks
+the snapshot `failed` rather than leaving a stale `complete`, and never stomps a genuine `paused`.
+
 
 Three fixes, independent:
 1. Only a run that completes every phase may write `status = 'complete'` on its snapshot; a run that
@@ -2852,7 +2866,7 @@ Found and re-verified in [UX_AUDIT_FINDINGS.md §18.6](./UX_AUDIT_FINDINGS.md#18
 
 ---
 
-## [P1][New] Bug 76: Statement timeout kills ~22% of fresh analyses at the final persistence step
+## [P1][Closed] Bug 76: Statement timeout kills ~22% of fresh analyses at the final persistence step
 
 **Bug #76**
 
@@ -2861,7 +2875,7 @@ Found and re-verified in [UX_AUDIT_FINDINGS.md §18.6](./UX_AUDIT_FINDINGS.md#18
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Backend — worker persistence, Supabase transaction-mode pooler |
 
 ## Expected behavior
@@ -2884,6 +2898,10 @@ insert of semantic records or embeddings — that scales with repo size and is n
 is the **transaction-mode** pooler (port 6543), where a long single statement is exactly what gets cut.
 
 ## Notes
+**Fixed 2026-07-25/26** (`lib/pgRetry.ts`, `statementTimeoutCoverage.test.ts`): a one-shot retry on
+SQLSTATE 57014 now wraps every autocommit-mode bulk write on both the semantic and analysis sides —
+the exact write the six-way-concurrency run of 2026-07-26 showed cancelling.
+
 
 Reproduce directly against `DIRECT_DATABASE_URL` with `log_min_duration_statement` to identify the
 statement, then chunk it the way the record inserts already are. Both runs were resumed successfully
@@ -2892,7 +2910,7 @@ the single biggest reliability number in M4, and it is invisible to the user bec
 
 ---
 
-## [P2][New] Bug 77: One invalid LLM section pauses the entire onboarding package at 0%
+## [P2][Closed] Bug 77: One invalid LLM section pauses the entire onboarding package at 0%
 
 **Bug #77**
 
@@ -2901,7 +2919,7 @@ the single biggest reliability number in M4, and it is invisible to the user bec
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P2 |
-| State | New |
+| State | Closed |
 | Area | Backend — `worker/generation`, structured-output validation |
 
 ## Expected behavior
@@ -2924,6 +2942,11 @@ One section blocked all twelve, leaving the project with a `paused` snapshot and
 per #75, no user-visible explanation.
 
 ## Notes
+**Fixed 2026-07-25/26** (`runStatus.test.ts` "#77: a plain section failure becomes a recorded gap; a
+run-control signal is never absorbed"): one section's hard failure now becomes a named gap instead of
+pausing/discarding the other eleven; a partial package is a package with a recorded gap, not a silent
+one.
+
 
 Cap or stream the section payload so it cannot exceed the output limit, and make the failure per-section
 rather than per-package. `SECTION_CONCURRENCY` already generates them in parallel, so the blast radius
@@ -2931,7 +2954,7 @@ is a policy choice, not an architectural constraint.
 
 ---
 
-## [P1][New] Bug 78: The entrypoint detector only recognises HTTP-shaped code, and blames the repo when it finds nothing
+## [P1][Closed] Bug 78: The entrypoint detector only recognises HTTP-shaped code, and blames the repo when it finds nothing
 
 **Bug #78**
 
@@ -2940,7 +2963,7 @@ is a policy choice, not an architectural constraint.
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Backend — `worker/engine/entrypointDetector.ts`; Frontend — Workflows empty state |
 
 ## Expected behavior
@@ -2974,6 +2997,12 @@ has **no server at all**, reports two workflows named `HTTP InputController.onKe
 `HTTP InputController.clearRepeat` — keyboard listeners presented as HTTP endpoints.
 
 ## Notes
+**Fixed 2026-07-25/26** (`Surface what each project actually does, on every archetype`,
+`entrypointDetector.ts`): adds `ui_action` entrypoints (a component reaching an effect via a resolved
+call, not a string-matched name), library/CLI manifest-surface detection (`exports`/`bin`), and a
+broadened effect vocabulary (document-store, client SDKs, Firestore, browser storage, redis) beyond
+HTTP routes. Validated: MasterPokedex 10→26 entrypoints, StudyFlow 5→22 effects, p-limit/ky libraries.
+
 
 1. Detect the **call**, not the filename: match `X.on('event', …)`, `addEventListener`, `process.on` at
    any path, taking the string literal as the name — exactly as the BullMQ detector already takes its
@@ -2987,7 +3016,7 @@ has **no server at all**, reports two workflows named `HTTP InputController.onKe
 
 ---
 
-## [P1][New] Bug 79: Languages the analyzer cannot parse are never disclosed after import
+## [P1][Closed] Bug 79: Languages the analyzer cannot parse are never disclosed after import
 
 **Bug #79**
 
@@ -2996,7 +3025,7 @@ has **no server at all**, reports two workflows named `HTTP InputController.onKe
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Backend — section generation; Frontend — reader trust strip, Architecture map |
 
 ## Expected behavior
@@ -3025,6 +3054,11 @@ are no specific commands for running the project … documented"* while its READ
 `npm install` / `npm run dev` and a four-row script table.
 
 ## Notes
+**Fixed 2026-07-25/26** (`snapshot.unreadStacks.mustDisclose` + generation prompt rules): sections
+must now state the exact unparsed-language file counts in their opening paragraphs and add a "Not
+covered here" subsection when a whole stack was never parsed. Golden check "the unread Python
+subsystem is named" flipped from red to green on FloowForge.
+
 
 1. Add a coverage clause to the reader trust strip, which already reports ratios of exactly this shape
    (`cites 77 of 435 symbols in 32 files`): `65 of 116 code files analyzed · 49 Python files not parsed`.
@@ -3039,7 +3073,7 @@ are no specific commands for running the project … documented"* while its READ
 
 ---
 
-## [P1][New] Bug 80: A paused package generation blanks completed analysis data, inconsistently across tabs
+## [P1][Closed] Bug 80: A paused package generation blanks completed analysis data, inconsistently across tabs
 
 **Bug #80**
 
@@ -3048,7 +3082,7 @@ are no specific commands for running the project … documented"* while its READ
 | Date created | 2026-07-25 |
 | Reported by | OnboardBuddies (Team 15) — eleven-project audit |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Frontend — WorkflowsPage, CapabilitiesPage; Backend — snapshot status semantics |
 
 ## Expected behavior
@@ -3077,6 +3111,10 @@ project with 71 workflows and a finished package. The Workflows copy is also pro
 entrypoints were detected.
 
 ## Notes
+**Fixed 2026-07-25/26** (`runStatus.test.ts` "#80: a stopped generation never wedges on 'generating',
+and a finished one un-pauses its snapshot"): the status transition is fixed at the source, so a
+completed `generate_package` always returns its snapshot to `complete` and tabs no longer blank.
+
 
 Fix the status transition first — a `generate_package` that completes must return its snapshot to
 `complete`. Then gate tab content on row existence rather than on the snapshot's package status, so a
@@ -3088,7 +3126,7 @@ stuck status can never blank extracted data again. Make the empty state distingu
 
 ---
 
-## [P1][New] Bug 81: Fullscreen graph has no visible exit — the overlay covers its own toggle
+## [P1][Closed] Bug 81: Fullscreen graph has no visible exit — the overlay covers its own toggle
 
 **Bug #81**
 
@@ -3097,7 +3135,7 @@ stuck status can never blank extracted data again. Make the empty state distingu
 | Date created | 2026-07-25 |
 | Reported by | Product owner, reproduced from source |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Frontend — `pages/ArchitecturePage.tsx`, `pages/GraphPage.tsx`, `components/PageHeader.tsx` |
 
 ## Expected behavior
@@ -3128,6 +3166,9 @@ at all**. `GraphPage.tsx:325–328` is structurally identical.
 from CSS and was wrong about the occluder — it is the canvas. The user-visible defect is unchanged.)*
 
 ## Notes
+**Fixed 2026-07-25/26** (`GraphPage.tsx`, tagged `AUDIT C11 / B81` at the call site): an explicit
+"Exit fullscreen (Esc)" control now renders inside the fullscreen overlay itself, not only behind it.
+
 
 Render an exit control **inside** the fullscreen container (top-right, over the canvas), and/or give the
 header `relative z-[60]`. Add a transient "Press Esc to exit" hint on entry. See
@@ -3135,7 +3176,7 @@ header `relative z-[60]`. Add a transient "Press Esc to exit" hint on entry. See
 
 ---
 
-## [P1][New] Bug 82: Selecting a graph node discards the user's viewport (absolute `zoom: 1.15`)
+## [P1][Closed] Bug 82: Selecting a graph node discards the user's viewport (absolute `zoom: 1.15`)
 
 **Bug #82**
 
@@ -3144,7 +3185,7 @@ header `relative z-[60]`. Add a transient "Press Esc to exit" hint on entry. See
 | Date created | 2026-07-25 |
 | Reported by | Product owner, reproduced at runtime and traced to source |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Frontend — `components/graph/ViewportFocus.tsx` (affects Architecture, Workflows, Dependencies) |
 
 ## Expected behavior
@@ -3170,6 +3211,10 @@ Consequences:
   else dims"*; centring at 1.15× often pushes those neighbours off-screen.
 
 ## Notes
+**Fixed 2026-07-25/26** (`components/graph/ViewportFocus.tsx`): selecting a node no longer calls
+`setCenter(..., { zoom: 1.15 })`. Selection is at most a pan-into-view nudge; the absolute-zoom frame
+is reserved for `DrillCamera`'s explicit drill-down transitions.
+
 
 Pan the minimum distance to bring the node inside the remaining pane and keep the current scale
 (`setCenter` with `getZoom()`); no-op when the node is already visible. Put an explicit "zoom to this" in
@@ -3178,7 +3223,7 @@ the detail panel where the user asks for it. See
 
 ---
 
-## [P1][New] Bug 83: Known-gaps and citation blocks bloat the reader; counts disagree with the page
+## [P1][Closed] Bug 83: Known-gaps and citation blocks bloat the reader; counts disagree with the page
 
 **Bug #83**
 
@@ -3187,7 +3232,7 @@ the detail panel where the user asks for it. See
 | Date created | 2026-07-25 |
 | Reported by | Product owner, reproduced and measured |
 | Priority | P1 |
-| State | New |
+| State | Closed |
 | Area | Backend — gap generation; Frontend — reader gap/citation rendering |
 
 ## Expected behavior
@@ -3216,6 +3261,10 @@ And `record_reference` receipts — **459 of FloowForge's 662 (69%)** — carry 
 trustworthiness.
 
 ## Notes
+**Fixed 2026-07-25/26** (`backend/src/api/lib/gapSummary.ts`): known gaps are now deduped by template
+(not rendered string) and reported as one grouped row with a count instead of one row per instance;
+citation counts are reconciled so the trust strip and the sections agree.
+
 
 Group and collapse (`No documented guardrails for 34 environment variables (show)`); dedupe on the gap
 *template* not the rendered string; drop config-name gaps entirely; report `43 citations · 21 you can
