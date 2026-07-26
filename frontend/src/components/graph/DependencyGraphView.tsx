@@ -1,21 +1,13 @@
-import { useMemo } from "react";
-import ReactFlow, {
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  Panel,
-  ReactFlowProvider,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "reactflow";
+import { useMemo, type MutableRefObject } from "react";
+import { Panel, type Edge, type Node, type NodeProps, type Viewport } from "reactflow";
 import "reactflow/dist/style.css";
+import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
 import { GraphLegend } from "@/components/graph/GraphLegend";
-import { ViewportFocus } from "@/components/graph/ViewportFocus";
+import type { FocusMode } from "@/components/graph/ViewportFocus";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
+import type { GraphDrill } from "@/hooks/useGraphDrill";
 import type { PositionedNode } from "@/lib/graphLayout";
 import { inferNodeType } from "@/lib/graphNodeType";
 import type { GraphEdge } from "@/types/graph";
@@ -67,6 +59,13 @@ interface DependencyGraphViewProps {
    * of racing an imperative `fitView()` call against React Flow's own
    * internal position-store sync. */
   refitSignal?: string | number;
+  /** Returns true when this node opens a level below — see GraphCanvas. */
+  onDrillInto?: (nodeId: string) => boolean;
+  drill?: GraphDrill;
+  /** `frame` only while resolving a `?focus=` deep link. */
+  focusMode?: FocusMode;
+  restoreViewport?: { x: number; y: number; zoom: number } | null;
+  viewportRef?: MutableRefObject<(() => Viewport) | null>;
 }
 
 export function DependencyGraphView({
@@ -79,6 +78,11 @@ export function DependencyGraphView({
   onToggleKind,
   suppressInitialFit = false,
   refitSignal,
+  onDrillInto,
+  drill,
+  focusMode,
+  restoreViewport,
+  viewportRef,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
@@ -168,55 +172,26 @@ export function DependencyGraphView({
   );
 
   return (
-    <ReactFlowProvider>
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        nodesDraggable={false}
-        onNodeClick={(_, node) => onSelectNode(node.id)}
-        onSelectionChange={({ nodes: selectedNodes }) => {
-          // Keyboard selection (Tab focuses a node, Enter/Space selects it)
-          // never fires onNodeClick, only this — so it's the path that
-          // covers Tab/Enter. It also fires for mouse clicks (alongside
-          // onNodeClick above), which is harmless: the setter is idempotent
-          // for a given id. Deselection stays on onPaneClick below; an
-          // empty selection here can also mean "nothing has been clicked
-          // in the canvas yet" (e.g. right after a deep-link selection), so
-          // it's ignored rather than clobbering the current selection.
-          if (selectedNodes.length > 0) onSelectNode(selectedNodes[0]!.id);
-        }}
-        onPaneClick={() => onSelectNode(null)}
-        fitView={!suppressInitialFit}
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.05}
-        proOptions={{ hideAttribution: true }}
-        key={refitSignal}
-      >
-        <ViewportFocus selectedNodeId={selectedNodeId} ownsInitialFit={suppressInitialFit} />
-
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.8 0.01 265)"}
-        />
-        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
-
-        <MiniMap
-          pannable
-          zoomable
-          className="!bg-card !border-border"
-          nodeColor={isDark ? "oklch(0.3 0.02 264)" : "oklch(0.85 0.008 265)"}
-          maskColor={isDark ? "oklch(0.17 0.015 264 / 0.7)" : "oklch(0.95 0.005 265 / 0.7)"}
-        />
-        <Panel position="top-left">
-          <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
-        </Panel>
-        <Panel position="bottom-center">
-          <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
-        </Panel>
-      </ReactFlow>
-    </ReactFlowProvider>
+    <GraphCanvas
+      nodes={flowNodes}
+      edges={flowEdges}
+      nodeTypes={nodeTypes}
+      selectedNodeId={selectedNodeId}
+      onSelectNode={onSelectNode}
+      onDrillInto={onDrillInto}
+      drill={drill}
+      focusMode={focusMode}
+      suppressInitialFit={suppressInitialFit}
+      refitSignal={refitSignal}
+      restoreViewport={restoreViewport}
+      viewportRef={viewportRef}
+    >
+      <Panel position="top-left">
+        <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
+      </Panel>
+      <Panel position="bottom-center">
+        <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
+      </Panel>
+    </GraphCanvas>
   );
 }

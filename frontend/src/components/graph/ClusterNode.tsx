@@ -5,7 +5,10 @@ import { cn } from "@/lib/utils";
 export interface ClusterNodeData {
   label: string;
   kind: string;
-  memberCount: number;
+  /** Members of the cluster's primary kind — see `clusterSize`. */
+  count: number;
+  /** "file", "table" or "config file": a schema cluster holds no files. */
+  noun: string;
   criticalScore: number;
   summary: string;
   selected: boolean;
@@ -53,7 +56,7 @@ export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
 
       <div className="mt-2 flex items-center gap-2 border-t border-border/60 px-3 py-1.5">
         <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
-          {data.memberCount} file{data.memberCount === 1 ? "" : "s"}
+          {data.count} {data.noun}{data.count === 1 ? "" : "s"}
         </span>
         <div className="ml-auto flex items-center gap-1.5" title={`Criticality ${(data.criticalScore * 100).toFixed(0)}%`}>
           <div className="h-1 w-16 overflow-hidden rounded-full bg-muted">

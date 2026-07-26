@@ -360,6 +360,8 @@ function buildJourney(input: BuildJourneyInput): ExtractedWorkflow {
     entrypoint: input.members[0]!.entrypoint,
     steps,
     importanceScore: maxMemberScore + 1.5,
+    tier: 'core',
+    rankingReasons: ['end-to-end journey composed from several traced flows'],
     externalDependencies: [...new Set(input.members.flatMap((m) => m.externalDependencies))],
     metadata: {
       journey: {

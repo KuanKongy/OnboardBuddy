@@ -17,7 +17,8 @@
     "security:probe": "node --import tsx scripts/security-probe.ts",
     "security:probe:seed": "node --import tsx scripts/security-probe-seed.ts",
     "security:probe:teardown": "node --import tsx scripts/security-probe-teardown.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "truth": "node --import tsx scripts/truth-diff.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

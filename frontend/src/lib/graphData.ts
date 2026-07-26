@@ -66,7 +66,26 @@ export interface WorkflowSummary {
   /** Deterministic ranking reasons — the "why this matters" line. */
   reasons?: string[];
   score_breakdown?: Record<string, number>;
+  /**
+   * Which band of the list this belongs to. `core` is a flow a person triggers
+   * that changes state, `supporting` is background and developer work, and
+   * `surface` is an entry point whose flow could not be traced — an endpoint
+   * or page that exists but does nothing we could follow. Absent on packages
+   * generated before tiering, which fall back to `supporting`.
+   */
+  tier?: WorkflowTier;
+  /** True when a step of this flow belongs to a named business capability. */
+  realizes_capability?: boolean;
 }
+
+export type WorkflowTier = "core" | "supporting" | "surface";
+
+/** Heading, and the honest qualifier under it. */
+export const WORKFLOW_TIERS: Array<{ key: WorkflowTier; label: string; note?: string }> = [
+  { key: "core", label: "Core user flows" },
+  { key: "supporting", label: "Supporting flows", note: "background jobs, developer commands, admin paths" },
+  { key: "surface", label: "Endpoints & pages", note: "no side effects traced from these" },
+];
 
 export interface WorkflowGraphStep {
   stepOrder: number;
