@@ -128,7 +128,7 @@ Everything else — labels, `title`/`aria-label`, summaries, code lines, reactfl
 - **Structured outputs** — strict `json_schema` + server-side validation + one retry constrain output *structure*.
 - **Mermaid is deterministic + strict** — the LLM never emits mermaid; labels are escaped.
 - **react-markdown without `rehype-raw`** — raw HTML/JS escaped.
-- **Secret files filtered pre-ingestion** by *path*; `facts_only_ai` mode strips code snippets from prompts. Extraction also redacts known token formats from raw text (`worker/engine/secretRedactor.ts`).
+- **Secret files filtered pre-ingestion**; `facts_only_ai` mode strips code snippets from prompts.
 - **`commit` SHA validated**; per-project/snapshot scoping prevents cross-tenant model leakage.
 - **React auto-escaping** used consistently; **no `dangerouslySetInnerHTML`**; open-redirect guarded.
 
