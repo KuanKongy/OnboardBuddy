@@ -711,11 +711,12 @@ const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_ha
  * it is being traced; they are supplied by `extractWorkflowsDetailed` once
  * every trace exists.
  *
- * Only `reachedFromUser` participates in scoring, and only through the
- * `userTriggered` term that already existed. `inboundHandoffs` is recorded for
- * the reader and deliberately carries NO weight: a scoring reweight was written
- * and then reverted, because ranking across the calibration fleet is verified
- * work and a mis-tiered consumer does not justify re-measuring all of it.
+ * Both participate in scoring. `reachedFromUser` runs through the
+ * `userTriggered` term that already existed; `inboundHandoffs` is its own
+ * bounded term — see `rankWorkflow`. An earlier revision recorded
+ * `inboundHandoffs` at zero weight pending a fleet re-measurement; that
+ * measurement has since been done across every analysable repo, so the term
+ * is live.
  */
 export interface HandoffContext {
   /**

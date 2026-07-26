@@ -238,7 +238,7 @@ All five non-trivial features from the design document, as shipped:
 | 2 | **Graph Visualizer, Architecture Map, Module Dependency Graph** — architecture clusters with summaries, searchable file dependency map, class/interface graph (extends/implements), workflow step graphs, capability map; all clustered/capped for readability with receipt drill-down on every node | Functional | Sidebar tabs **Architecture**, **Dependencies** (+ "Classes & interfaces" toggle), **Workflows**, **Capabilities**. Click any node for details + receipts. |
 | 3 | **Generic Workflow Extraction + Walkthrough/Tutorial Generation** — call-graph tracing from entrypoints (routes, UI pages, jobs, exports) to side effects, collapsed into readable steps; tutorials pair each step with a real code snippet, an AI explanation, and receipts | Functional | **Workflows** tab for traced flows; **Tutorials** tab for step-by-step walkthroughs (deterministic fallback when no tutorial is generated for the role). |
 | 4 | **Critical 25% / Critical Path Identification** — two-phase ranking: deterministic composite scoring (entrypoint exposure, downstream impact, centrality, side effects, doc gap, tests, churn) gated, then LLM-blended multi-view scores; role-specific projections with explainable reasons and editable weights | Functional | "Critical 25%" section in the onboarding package; importance + reasons in Dependencies node panels; weights in **Settings → Ranking weights** (applies instantly). |
-| 5 | **Incremental Re-analysis** — file/symbol AST diff against the previous snapshot, evidence-hash invalidation with upward propagation (whitespace-only edits invalidate nothing), stale flags on affected sections/tutorials/packages, per-section regeneration against the newest snapshot, preserved review history | Functional | Push commits → **Analyze…** again (runs incremental) → stale badges appear → **Regenerate** on stale sections. Manual trigger by design (webhooks are future work). |
+| 5 | **Incremental Re-analysis** — file/symbol AST diff against the previous snapshot, evidence-hash invalidation with upward propagation (whitespace-only edits invalidate nothing), stale flags on affected sections/tutorials/packages, per-section regeneration against the newest snapshot, preserved review history | Functional | Push commits → **Analyze…** again (runs incremental) → stale badges appear → **Regenerate** on stale sections. Manual trigger is the supported path; push-triggered re-analysis is built but carried to M5 (see Known gaps). |
 
 #### Milestone 3 pipeline work in detail
 
@@ -354,12 +354,19 @@ targets run in parallel.
 > header; the star sets your personal default. **Overview → Run history** shows every past run with
 > its duration and cost.
 
-**5. Automatic re-analysis on push — new**
+**5. Automatic re-analysis on push — built, not signed off; carried to M5**
 
-Keeping the handbook current no longer requires remembering to press a button.
+The endpoint, the HMAC verification, the per-project opt-in and a guard that skips pushes whose
+commit is no longer the branch HEAD are all implemented, and the setting is in the UI. What it has
+not had is an end-to-end run we are willing to stand behind: a live delivery needs GitHub App consent
+we have not completed on the test account, so every trigger we have exercised has been a replayed
+payload rather than a real push. We would rather call it M5 than claim a feature whose only evidence
+is a simulation. **It is off unless `GITHUB_WEBHOOK_SECRET` is set** — unset, the endpoint answers
+503 and nothing else in the system depends on it.
 
-> **Use it:** **Settings → Automation → Re-analyze on push** (needs a webhook secret in the
-> environment — see [doc/DEVOPS.md](doc/DEVOPS.md); left unset, the feature is simply off).
+> **Use it (at your own risk):** **Settings → Automation → Re-analyze on push**, with a webhook
+> secret in the environment — see [doc/DEVOPS.md](doc/DEVOPS.md). Manual **Analyze…** is the
+> supported path for M4 and is what the test plan exercises.
 
 ---
 
@@ -431,6 +438,10 @@ hidden from the reader in the product.
 - **The pre-analysis language warning is opt-in.** The import screen's preview names how many files
   are in languages we do not parse and warns when most of the repository is unparseable, but only if
   you press *Preview first* before starting.
+- **Push-triggered re-analysis is unverified end to end.** The webhook path is implemented and
+  guarded, but it has only ever been exercised with replayed payloads — a real delivery is blocked on
+  GitHub App consent we have not completed. It ships disabled and is treated as M5 work; manual
+  re-analysis is the supported route.
 - **One parsed language.** TypeScript and JavaScript are analysed to symbol level; everything else is
   read, classified and cited but never parsed into a call graph. A repository whose core logic is in
   another language gets a documentation-and-configuration-level handbook and is told so.
@@ -447,11 +458,13 @@ hidden from the reader in the product.
 
 1. **The 10 open issues**, led by three API routes that need project-scoping and one unused endpoint
    that needs deleting (#65, #66).
-2. **Team lifecycle** — invitation decline, leave project, ownership transfer.
-3. **Repository-picker pagination**, so accounts with more than 100 repositories work.
-4. **Remaining accessibility items** — page titles, skip-to-content, reduced-motion, dark-theme
+2. **Push-triggered re-analysis** — finish GitHub App consent on a test account and run a real
+   delivery end to end, then re-add the endpoint's tests. The code is in place; the sign-off is not.
+3. **Team lifecycle** — invitation decline, leave project, ownership transfer.
+4. **Repository-picker pagination**, so accounts with more than 100 repositories work.
+5. **Remaining accessibility items** — page titles, skip-to-content, reduced-motion, dark-theme
    contrast.
-5. **Deployment.** M5's one piece of genuinely new work. The app runs in Docker Compose today, which
+6. **Deployment.** M5's one piece of genuinely new work. The app runs in Docker Compose today, which
    is what this course requires, but it has never been stood up on a public URL. The plan is a
    three-service deploy (frontend, API, worker) on Railway — the setup is already written up in
    [doc/DEVOPS.md](doc/DEVOPS.md) → "Deploying to Railway", including the environment differences and
