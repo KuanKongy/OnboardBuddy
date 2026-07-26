@@ -319,8 +319,8 @@ this repo and their payloads still did not survive — that result is not a scop
 
 Repo/project state after the audit: the throwaway import project was deleted (exact id, same
 pattern as the rest of this round — DB verified back to the 11-project/14-member baseline). The
-demo repo itself stays pushed to `github.com/ng-eugene/onboardbuddy-injection-demo` (private) —
-that's the durable artifact, not a DB row.
+demo repo itself stays pushed to `github.com/ng-eugene/onboardbuddy-injection-demo` (public, so
+every payload in this report can be inspected at source) — that's the durable artifact, not a DB row.
 
 ## 4. Results — does the central question hold?
 
@@ -455,5 +455,5 @@ Concrete acceptance, reproduced this session (not asserted, run):
   (`git status` at time of writing shows only the intended new/modified files).
 - The account's `full_name`/`avatar_url` (mutated by F5/F6) were restored to their original values
   in the E2E spec's `afterAll`, verified after the run.
-- The demo repo (`github.com/ng-eugene/onboardbuddy-injection-demo`, private) is a deliberate,
+- The demo repo (`github.com/ng-eugene/onboardbuddy-injection-demo`, public) is a deliberate,
   durable artifact of this round, not test residue — left in place per the plan.
