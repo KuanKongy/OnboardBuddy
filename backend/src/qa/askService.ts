@@ -10,6 +10,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { latestSnapshotOrderSql } from '../lib/snapshotOrdering.js';
 import { AiClient } from '../worker/ai/aiClient.js';
 import { BudgetEnforcer } from '../worker/ai/budgetEnforcer.js';
 import { resolveTierConfig } from '../worker/ai/modelTiers.js';
@@ -123,7 +124,7 @@ async function resolveSnapshot(input: AskInput): Promise<ResolvedSnapshot> {
      JOIN analysis_scopes sc ON sc.id = s.scope_id
      LEFT JOIN project_settings ps ON ps.project_id = s.project_id
      WHERE s.project_id = $1 AND ${where}
-     ORDER BY s.created_at DESC
+     ORDER BY ${latestSnapshotOrderSql('s')}
      LIMIT 1`,
     params,
   )).rows[0] as {

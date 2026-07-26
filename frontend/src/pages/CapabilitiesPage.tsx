@@ -19,7 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Handle, MarkerType, Position, type Edge, type Node, type NodeProps } from "reactflow";
 import "reactflow/dist/style.css";
-import { GraphCanvas } from "@/components/graph/GraphCanvas";
+import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { apiFetch } from "@/lib/api";
 import { CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
+import { middleTruncate } from "@/lib/format";
 import { triggerLabel } from "@/lib/graphData";
 import { layoutGraph, layoutRows } from "@/lib/graphLayout";
 import { buildStepChain, layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
@@ -182,6 +183,34 @@ const TIERS: Array<{ key: "core" | "supporting"; label: string; note?: string }>
   { key: "supporting", label: "Delivered by supporting flows", note: "background jobs, admin and developer paths" },
 ];
 
+/** Characters of a rail row's capability/flow name that survive the 280px rail. */
+const RAIL_TITLE_CHARS = 34;
+
+/**
+ * Characters of a flow node's title that survive.
+ *
+ * The node is 224px over two lines. Straight truncation put FIVE nodes on the
+ * capability drill reading the identical string "GET /api/projects/:id/onboar…"
+ * — the same capability's flows share a route prefix by definition, so the
+ * prefix is precisely the part worth throwing away.
+ */
+const FLOW_NODE_TITLE_CHARS = 52;
+
+/**
+ * One treatment for one fact.
+ *
+ * Confidence was a `HIGH CONFIDENCE` badge in the drill header and the words
+ * "high confidence" in a sentence on the canvas node — two styles for the same
+ * stored value, on two levels of the same tab.
+ */
+function ConfidenceBadge({ confidence, className }: { confidence: string; className?: string }) {
+  return (
+    <Badge variant="secondary" className={cn("text-[0.625rem] uppercase", className)}>
+      {confidence} confidence
+    </Badge>
+  );
+}
+
 // ── Nodes ────────────────────────────────────────────────────────────────────
 
 /** Handle ids match `HandleId` in serpentine.ts. */
@@ -239,21 +268,28 @@ function CapabilityNode({ data }: NodeProps<CapNodeData>) {
         "w-60 rounded-lg border bg-card px-3 py-2 shadow-sm transition-all",
         data.selected ? "ring-2 ring-ring" : "hover:shadow-md",
       )}
-      style={{ borderColor: color }}
+      // Neutral unless selected. Every node used to carry its tier colour on
+      // the border, and on a project whose capabilities are all one tier that
+      // rendered the whole canvas in the bright blue the app uses for "this
+      // one is selected" — a hierarchy signal spent on no hierarchy. The tier
+      // still reads off the icon, which is where a colour means a category.
+      style={{ borderColor: data.selected ? color : "var(--border)" }}
     >
       <Ports />
-      <div className="flex items-center gap-2">
-        <Boxes className="h-3.5 w-3.5 shrink-0" style={{ color }} />
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">
+      <div className="flex items-start gap-2">
+        <Boxes className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color }} />
+        <span className="min-w-0 flex-1 line-clamp-2 text-[0.8125rem] font-semibold leading-tight text-foreground">
           {data.name}
         </span>
       </div>
-      <p className="mt-1 text-[0.65625rem] text-muted-foreground">
-        {data.flows} flow{data.flows === 1 ? "" : "s"}
-        {data.tables > 0 && ` · ${data.tables} table${data.tables === 1 ? "" : "s"}`}
-        {data.services > 0 && ` · ${data.services} service${data.services === 1 ? "" : "s"}`}
-        {` · ${data.confidence} confidence`}
-      </p>
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <ConfidenceBadge confidence={data.confidence} />
+        <span className="min-w-0 truncate text-[0.65625rem] text-muted-foreground">
+          {data.flows} flow{data.flows === 1 ? "" : "s"}
+          {data.tables > 0 && ` · ${data.tables} table${data.tables === 1 ? "" : "s"}`}
+          {data.services > 0 && ` · ${data.services} service${data.services === 1 ? "" : "s"}`}
+        </span>
+      </div>
     </div>
   );
 }
@@ -277,13 +313,16 @@ function FlowNode({ data }: NodeProps<FlowNodeData>) {
       style={{ borderColor: data.selected ? color : "var(--border)" }}
     >
       <Ports />
-      <div className="flex items-center gap-2">
-        <Zap className="h-3 w-3 shrink-0" style={{ color }} />
-        <span className="min-w-0 flex-1 truncate text-[0.75rem] font-medium text-foreground">
-          {data.title}
+      <div className="flex items-start gap-2">
+        <Zap className="mt-0.5 h-3 w-3 shrink-0" style={{ color }} />
+        {/* Two lines, and the ROUTE TAIL kept. Sibling flows of one capability
+            share a route prefix by construction, so clipping from the right
+            produced five nodes reading the same string. */}
+        <span className="min-w-0 flex-1 line-clamp-2 break-all text-[0.75rem] font-medium leading-tight text-foreground">
+          {middleTruncate(data.title, FLOW_NODE_TITLE_CHARS)}
         </span>
       </div>
-      <p className="mt-0.5 text-[0.65625rem] text-muted-foreground">
+      <p className="mt-1 text-[0.65625rem] text-muted-foreground">
         {triggerLabel(data.trigger)} · {data.steps} step{data.steps === 1 ? "" : "s"}
       </p>
     </div>
@@ -354,7 +393,7 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
             {data.order}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.71875rem] font-medium text-foreground">
+        <span className="min-w-0 flex-1 line-clamp-2 break-all font-mono text-[0.71875rem] font-medium leading-tight text-foreground">
           {data.label}
         </span>
         <span
@@ -593,7 +632,9 @@ export function CapabilitiesPage() {
   const layout = useMemo(() => {
     if (level === "code") {
       if (graph.nodes.length === 0) return { nodes: [], routing: null as SerpentineLayout["edgeRouting"] | null };
-      if (!shouldSerpentine(graph.nodes, graph.edges)) {
+      // Same gate as the Workflows tab, trigger type included — a journey
+      // opened from a capability must snake for the same reason it does there.
+      if (!shouldSerpentine(graph.nodes, graph.edges, { triggerType: flowGraph?.workflow.trigger_type })) {
         return {
           nodes: layoutGraph(graph.nodes, graph.edges, { direction: "TB", nodeWidth: 256, nodeHeight: 84, ranksep: 44, nodesep: 28 }),
           routing: null,
@@ -614,11 +655,14 @@ export function CapabilitiesPage() {
     return {
       nodes: layoutRows(bands, {
         nodeWidth: level === "capabilities" ? 248 : 232,
-        nodeHeight: level === "capabilities" ? 78 : 70,
+        // Taller than the old 78/70: titles now wrap to a second line rather
+        // than clipping, and a row pitch measured against a one-line node
+        // would let the tall ones touch the row below.
+        nodeHeight: level === "capabilities" ? 96 : 88,
       }),
       routing: null as SerpentineLayout["edgeRouting"] | null,
     };
-  }, [graph, level]);
+  }, [graph, level, flowGraph?.workflow.trigger_type]);
 
   const positioned = layout.nodes;
 
@@ -730,10 +774,10 @@ export function CapabilitiesPage() {
   return (
     <div
       style={{
-        // The capability header sits above the canvas and is worth roughly
-        // 190px; without accounting for it the graph runs off the bottom of
-        // the viewport on every drilled level.
-        "--graph-chrome": fullscreen ? "90px" : activeCapability ? "420px" : "230px",
+        // Page chrome only. What the capability header costs is no longer
+        // guessed here — `graph-shell` below gives the canvas whatever the
+        // header leaves, whatever height that turns out to be.
+        "--graph-chrome": fullscreen ? "28px" : "230px",
       } as React.CSSProperties}
     >
       <PageHeader
@@ -845,7 +889,7 @@ export function CapabilitiesPage() {
       {isEmpty && <EmptyFinding derivation={derivation} bindingRule={bindingRule} onRetry={retry} />}
 
       {!loading && !error && capabilities.length > 0 && (
-        <div className={cn("grid gap-3 lg:grid-cols-[250px_1fr]", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
+        <div className={cn("grid gap-3 lg:grid-cols-[280px_1fr]", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
           {/* Ranked rail — the same list the graph draws, usable without a mouse. */}
           <div className="graph-canvas overflow-y-auto !bg-card p-2">
             <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
@@ -908,7 +952,9 @@ export function CapabilitiesPage() {
                               hover-only overflow relief for a truncated name. */}
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="block truncate text-[0.78125rem] font-medium">{cap.name}</span>
+                              <span className="block truncate text-[0.78125rem] font-medium">
+                                {middleTruncate(cap.name, RAIL_TITLE_CHARS)}
+                              </span>
                             </TooltipTrigger>
                             <TooltipContent side="right" className="max-w-xs text-left">
                               {cap.name}
@@ -966,11 +1012,17 @@ export function CapabilitiesPage() {
             )}
           </div>
 
-          {/* Detail + graph */}
-          <div>
+          {/* Detail + graph. `graph-shell` owns the viewport slice and the
+              canvas takes what the capability header leaves, so the header's
+              real height stops being a magic number that has to be guessed
+              (it was 420px) and the graph stays centred in what is visible. */}
+          <div className="graph-shell">
             {activeCapability && <CapabilityHeader cap={activeCapability} projectId={id!} />}
-            <div className={cn(selectedStep || selectedResource ? "grid gap-3 xl:grid-cols-[1fr_300px]" : "")}>
-              <div className="graph-canvas relative">
+            {/* `min-h-80` is the floor: a capability with a long entry-point
+                list must not squeeze the canvas out of existence — past that
+                the column overflows and the page scrolls, which is right. */}
+            <div className={cn("min-h-80 flex-1", (selectedStep || selectedResource) && "grid gap-3 xl:grid-cols-[1fr_300px]")}>
+              <div className="graph-canvas relative !h-full">
                 {drill.error && (
                   <div className="absolute left-2 top-2 z-10 rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[0.6875rem] text-foreground">
                     {drill.error}
@@ -1001,13 +1053,16 @@ export function CapabilitiesPage() {
                   fitPadding={0.18}
                   fitMinZoom={0.5}
                   minZoom={0.15}
+                  // Eight edge-less boxes that all fit on screen do not need a
+                  // shrunken copy of themselves in the corner.
+                  showMiniMap={flowNodes.length >= MINIMAP_MIN_NODES}
                   refitSignal={`${level}:${capabilityFrame?.id ?? ""}:${flowFrame?.id ?? ""}:${fullscreen}`}
                   restoreViewport={stack.savedViewport(stack.depth)}
                 />
               </div>
 
               {selectedResource && (
-                <aside className="graph-canvas overflow-y-auto !bg-card p-4">
+                <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
                   <p className="section-label mb-2">{selectedResource.kind === "table" ? "Schema table" : "External service"}</p>
                   <p className="font-mono text-[0.8125rem] font-medium text-foreground">{selectedResource.label}</p>
                   <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
@@ -1023,7 +1078,7 @@ export function CapabilitiesPage() {
               )}
 
               {selectedStep && (
-                <aside className="graph-canvas overflow-y-auto !bg-card p-4">
+                <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
                   <p className="section-label mb-2">Step {selectedStep.stepOrder} of {steps.length}</p>
                   <p className="font-mono text-[0.8125rem] font-medium text-foreground">
                     {selectedStep.symbolName ?? selectedStep.filePath}
@@ -1057,7 +1112,7 @@ export function CapabilitiesPage() {
             </div>
 
             {activeFlow && level === "code" && (
-              <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-[0.71875rem]">
+              <div className="mt-2 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-[0.71875rem]">
                 <span className="text-muted-foreground">{activeFlow.purpose || "No purpose recorded for this flow."}</span>
                 <Link
                   to={`/projects/${id}/workflows?workflow=${activeFlow.id}`}
@@ -1083,10 +1138,10 @@ export function CapabilitiesPage() {
  */
 function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: string }) {
   return (
-    <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
+    <div className="mb-2 shrink-0 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-[0.875rem] font-semibold text-foreground">{cap.name}</h2>
-        <Badge variant="secondary" className="text-[0.625rem] uppercase">{cap.confidence} confidence</Badge>
+        <ConfidenceBadge confidence={cap.confidence} />
         {cap.namedBy === "deterministic" && (
           <Tooltip>
             <TooltipTrigger asChild>

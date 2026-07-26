@@ -12,7 +12,7 @@ export interface GraphTruncation {
   hidden: number;
   /** The per-view node cap that caused the cut. */
   limit: number;
-  unit: "groups" | "files" | "groups and files";
+  unit: "groups" | "files" | "groups and files" | "classes" | "groups and classes";
   /** The rule that chose the survivors. */
   keptBy: string;
   /** Where the rest can still be reached, when anywhere. */
@@ -61,6 +61,13 @@ export interface GraphResponse {
   counts?: GraphLevelCounts;
   /** Drawn files carrying a "what this file does" line. */
   describedFiles?: number;
+  /**
+   * Drawn class/interface nodes carrying a "what this does" line. Separate
+   * from `describedFiles` because the two views count different populations
+   * against different record levels, and roughly half of all symbol records
+   * are deterministic restatements that are deliberately not shown.
+   */
+  describedNodes?: number;
   truncation?: GraphTruncation | null;
   graph: { nodes: Array<{ id: string; label: string; kind: string; metadata: Record<string, unknown> }>; edges: Array<{ id: string; source: string; target: string; kind: string }>; entryPoints: string[] };
   fileAnalyses: unknown[];
@@ -222,10 +229,19 @@ export async function fetchDependencyGraph(
   }
 }
 
-export async function fetchClassGraph(projectId: string, packageId?: string | null): Promise<GraphResponse> {
+/**
+ * One level of the class ladder. `dir` opens a directory group; without it the
+ * response is the root level, which is grouped only when the project has more
+ * classes than a canvas can draw.
+ */
+export async function fetchClassGraph(
+  projectId: string,
+  packageId?: string | null,
+  dir?: string | null,
+): Promise<GraphResponse> {
   try {
     return (await apiFetch(
-      `/projects/${projectId}/graph/classes${queryString({ package_id: packageId ?? undefined })}`,
+      `/projects/${projectId}/graph/classes${queryString({ package_id: packageId ?? undefined, dir: dir ?? undefined })}`,
     )) as GraphResponse;
   } catch {
     throw new Error("Failed to load class graph data");

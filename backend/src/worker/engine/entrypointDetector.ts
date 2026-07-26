@@ -164,12 +164,21 @@ function buildDeclaredUiRoutes(fileAnalyses: FileAnalysis[]): Map<string, string
  * The rule is structural, not conventional — nothing here names a framework, a
  * directory or a verb:
  *   1. the file renders UI (it has a JSX extension),
- *   2. the symbol is a function whose name is camelCase, i.e. it is NOT the
- *      PascalCase component and NOT a hook, so it can only be a callback the
- *      component wires to an interaction, and
- *   3. it reaches a recognised effect — its own, or one hop into a symbol that
- *      has one. Without an effect it is presentation, and presentation is not
- *      a workflow.
+ *   2. the symbol is a function and NOT a hook, and
+ *   3. it reaches a recognised effect — its own, or one hop along a RESOLVED
+ *      call edge into a symbol that has one. Without an effect it is
+ *      presentation, and presentation is not a workflow.
+ *
+ * Rule 3 used to compare call-name strings: the callee text `saveDraft` was
+ * matched against the bare name of every effectful symbol in the repo. That is
+ * wrong in both directions. It fired for two unrelated `save`s in different
+ * files, and — the reason a whole class of app measured as inert — it could
+ * never see an effect handed over by REFERENCE, which is how a rendering unit
+ * usually wires one: `useMutation({ mutationFn: insertTrainer })` mentions the
+ * effect in an option object and then calls `<binding>.mutate(…)`, so the
+ * callee strings name nothing effectful anywhere. The TypeChecker already
+ * resolves both shapes to a file-and-symbol identity; consulting that instead
+ * makes the hop exact and makes the hand-off visible.
  *
  * Capped per file so a component with a dozen small callbacks contributes its
  * few most substantial ones rather than drowning the list.
@@ -177,10 +186,15 @@ function buildDeclaredUiRoutes(fileAnalyses: FileAnalysis[]): Map<string, string
 const MAX_UI_ACTIONS_PER_FILE = 4;
 const HOOK_NAME = /^use[A-Z]/;
 
+/** `path#Symbol` / `path#Class.member` — the identity effects are keyed by. */
+function resolvedCallKey(call: NonNullable<SymbolInfo['resolvedCalls']>[number]): string {
+  return symbolKey(call.targetRelativePath, call.targetName, call.targetParentName);
+}
+
 function detectUiActions(
   fa: FileAnalysis,
   relativePath: string,
-  effectfulSymbolNames: Set<string>,
+  effectfulKeys: Set<string>,
   ownEffects: Set<string>,
 ): DetectedEntrypoint[] {
   if (!JSX_EXT.test(relativePath)) return [];
@@ -191,11 +205,9 @@ function detectUiActions(
     // A rendering unit that performs an effect IS the interaction: React and
     // its peers keep callbacks nested inside the component, so the component is
     // the outermost symbol the parser can see for a form submit or a delete
-    // button. A camelCase sibling is admitted on one hop too, for the codebases
-    // that hoist their handlers out.
+    // button. A sibling or nested handler is admitted on one resolved hop too.
     const reaches = ownEffects.has(sym.name)
-      || (/^[a-z]/.test(sym.name)
-          && (sym.callsSymbols ?? []).some((c) => effectfulSymbolNames.has(c.split('.').pop() ?? c)));
+      || (sym.resolvedCalls ?? []).some((c) => effectfulKeys.has(resolvedCallKey(c)));
     if (!reaches) continue;
     found.push({
       nodeStableKey: relativePath,
@@ -769,14 +781,16 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
   // Which symbols actually do something, by bare name — the one-hop reachability
   // check for UI actions. Detection is regex-only, so this second pass is cheap.
   const detected = detectSideEffects(fileAnalyses);
-  const effectfulSymbolNames = new Set<string>();
+  const effectfulKeys = new Set<string>();
   const effectfulByFile = new Map<string, Set<string>>();
   for (const eff of detected) {
     // `unknown_external` is the honesty fallback for any unrecognised package —
     // counting it would make every component that imports a UI library look
     // like it performs work.
     if (eff.kind === 'unknown_external' || !eff.symbolName) continue;
-    effectfulSymbolNames.add(eff.symbolName);
+    // Keyed by file AND symbol: a resolved call edge names both, so the hop no
+    // longer confuses two same-named functions in different files.
+    effectfulKeys.add(eff.symbolStableKey ?? `${normalizePath(eff.filePath)}#${eff.symbolName}`);
     const perFile = effectfulByFile.get(eff.filePath);
     if (perFile) perFile.add(eff.symbolName);
     else effectfulByFile.set(eff.filePath, new Set([eff.symbolName]));

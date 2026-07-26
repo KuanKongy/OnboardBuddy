@@ -406,7 +406,10 @@ export function GraphPage() {
           // override would have made the accessible name differ from the
           // visible one (WCAG 2.5.3); a breadcrumb button is named by its
           // own text, and `<nav aria-label>` says what the row is.
-          clusterFrames.length > 0 ? (
+          // The Classes view is a separate, project-wide ladder with its own
+          // breadcrumb; leaving the file crumbs up there claimed a file
+          // context the canvas below no longer had (VISUAL QA M4 #3).
+          view === "files" && clusterFrames.length > 0 ? (
             <span
               className="flex flex-wrap items-baseline gap-1.5"
               role="navigation"
@@ -444,11 +447,17 @@ export function GraphPage() {
                 );
               })}
             </span>
+          ) : view === "classes" ? (
+            "Classes & interfaces"
           ) : (
             "Dependencies"
           )
         }
-        subtitle="Which files depend on which — follow the arrows to see how changes ripple."
+        subtitle={
+          view === "classes"
+            ? "Which classes extend or implement which — grouped by folder, each with a line saying what it does."
+            : "Which files depend on which — follow the arrows to see how changes ripple."
+        }
         actions={
           <>
             {view === "files" && clusterFrames.length > 0 && (

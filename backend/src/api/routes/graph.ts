@@ -757,10 +757,32 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       loadClusterNarratives(snapshotId),
     ]);
 
-    const membersByCluster = new Map<string, Array<{ key: string; name: string; filePath: string | null }>>();
-    for (const m of membersResult.rows as Array<{ cluster_key: string; member_key: string; name: string; file_path: string | null }>) {
+    type ClusterMemberRow = { cluster_key: string; member_key: string; name: string; file_path: string | null };
+    const memberRows = membersResult.rows as ClusterMemberRow[];
+
+    // Owner I2/H1 follow-up: the member list named files and nothing else, so
+    // opening a component told the reader WHICH files it holds and never what
+    // any of them does. The file records that answer that are the same ones
+    // the Dependencies tab reads — a member's key IS the module node's
+    // stable_key, so no new source and no new prose is involved. Members with
+    // no record keep the path alone: 59% of the fleet's cluster members carry
+    // a file record, and inventing a sentence for the other 41% would be
+    // worse than saying nothing.
+    const briefsByKey = await fileBriefs(snapshotId, [...new Set(memberRows.map((m) => m.member_key))]);
+
+    const membersByCluster = new Map<string, Array<{
+      key: string; name: string; filePath: string | null; summary: string | null; role: string | null;
+    }>>();
+    for (const m of memberRows) {
       if (!membersByCluster.has(m.cluster_key)) membersByCluster.set(m.cluster_key, []);
-      membersByCluster.get(m.cluster_key)!.push({ key: m.member_key, name: m.name, filePath: m.file_path });
+      const brief = briefsByKey.get(m.member_key);
+      membersByCluster.get(m.cluster_key)!.push({
+        key: m.member_key,
+        name: m.name,
+        filePath: m.file_path,
+        summary: brief?.summary ?? null,
+        role: brief?.role ?? null,
+      });
     }
     const recordByCluster = new Map(
       (recordsResult.rows as Array<{ stable_key: string; summary: string; confidence: string }>)
@@ -877,11 +899,16 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       };
       const allMembers = (memberNodesResult.rows as MemberRow[]).map((n) => {
         const row = rowByKey.get(n.stable_key);
+        const brief = briefsByKey.get(n.stable_key);
         return {
           id: n.stable_key,
           label: n.name,
           kind: n.type,
           filePath: n.file_path,
+          // The same line the list in the aside shows, so a member says what
+          // it does whether it is read in the list or opened on the canvas.
+          summary: brief?.summary ?? null,
+          role: brief?.role ?? null,
           criticalScore: row ? Number(row.score) : null,
           // Per-file derivation, not the component's mean: inside a component
           // the question stops being "how critical is this box" and becomes
@@ -942,10 +969,18 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
   }
 });
 
-// Class/interface graph: symbol-level nodes with extends/implements edges
+// Class/interface graph: symbol-level nodes with extends/implements edges.
+//
+// Two levels, the same ladder the Files view uses (directory groups →
+// classes). VISUAL QA M4 #3 measured the old flat version on OnboardBuddy at
+// 267 identical chips with ~3px labels and 5 edges — a project-wide grid whose
+// only readable fact was its own size. Above the node cap the level is grouped
+// by directory; at or below it, the classes themselves are drawn.
 graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
+    /** `?dir=<path>` is the drilled level: the classes under one directory. */
+    const dir = (req.query.dir as string | undefined) || null;
 
     const ctx = await resolveForRequest(req, res);
     if (ctx === false) return;
@@ -979,19 +1014,8 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
     const nodeIdToKey = new Map<string, string>();
     for (const n of allNodes) nodeIdToKey.set(n.id, n.stable_key);
 
-    const nodes = allNodes.map((n) => ({
-      id: n.stable_key,
-      label: n.name,
-      kind: n.type,
-      filePath: n.file_path,
-      metadata: {
-        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
-        importCount: (n.metadata?.importCount as number) ?? 0,
-        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
-      },
-    }));
-
-    const edges = allEdges
+    /** Inheritance links between class nodes, keyed the way the canvas is. */
+    const keyEdges = allEdges
       .map((e) => ({
         id: e.id,
         source: nodeIdToKey.get(e.source_node_id) ?? '',
@@ -1000,12 +1024,184 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
       }))
       .filter((e) => e.source && e.target);
 
+    // The classes this level covers. Prefix-matching the path is what lets a
+    // nested directory resolve to its own classes.
+    const scoped = dir
+      ? allNodes.filter((n) => n.file_path === dir || n.file_path.startsWith(`${dir}/`))
+      : allNodes;
+    const scopedKeys = new Set(scoped.map((n) => n.stable_key));
+    const scopedEdges = keyEdges.filter((e) => scopedKeys.has(e.source) && scopedKeys.has(e.target));
+    const degree = new Map<string, number>();
+    for (const e of scopedEdges) {
+      degree.set(e.source, (degree.get(e.source) ?? 0) + 1);
+      degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
+    }
+
+    // ── grouped level ────────────────────────────────────────────────────────
+    if (scoped.length > MAX_GRAPH_NODES) {
+      // Two segments at the root (`backend/src`), one deeper each time a group
+      // is opened — the same rule and the same `cluster:` ids the Files ladder
+      // uses, so the two views behave identically under the reader's hands.
+      const groupDepth = dir ? pathSegments(dir).length + 1 : 2;
+      const groups = new Map<string, string[]>();
+      const loose: NodeRow[] = [];
+      for (const n of scoped) {
+        const parts = pathSegments(n.file_path);
+        // A class in a file sitting directly in this directory has no deeper
+        // group to join; it is drawn alongside the groups.
+        if (parts.length <= groupDepth) { loose.push(n); continue; }
+        const key = parts.slice(0, groupDepth).join("/");
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(n.stable_key);
+      }
+      // A group holding one class is a click that reveals that one class.
+      const nodeByKey = new Map(scoped.map((n) => [n.stable_key, n]));
+      for (const [key, members] of [...groups]) {
+        if (members.length > 1) continue;
+        const only = nodeByKey.get(members[0]!);
+        if (only) loose.push(only);
+        groups.delete(key);
+      }
+
+      // Only worth it when it actually shrinks the level; a directory whose
+      // classes are all loose regroups into itself and must fall through to
+      // the capped flat list (with the cut disclosed) instead.
+      if (groups.size > 0 && groups.size + loose.length < scoped.length) {
+        const keyToNodeId = new Map<string, string>();
+        for (const [groupDir, members] of groups) for (const k of members) keyToNodeId.set(k, `cluster:${groupDir}`);
+        for (const n of loose) keyToNodeId.set(n.stable_key, n.stable_key);
+
+        const out = new Map<string, number>();
+        const inn = new Map<string, number>();
+        const inside = new Map<string, number>();
+        for (const e of scopedEdges) {
+          const s = keyToNodeId.get(e.source);
+          const t = keyToNodeId.get(e.target);
+          if (!s || !t) continue;
+          if (s === t) { inside.set(s, (inside.get(s) ?? 0) + 1); continue; }
+          out.set(s, (out.get(s) ?? 0) + 1);
+          inn.set(t, (inn.get(t) ?? 0) + 1);
+        }
+
+        const groupNodes = [...groups.entries()]
+          .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+          .map(([groupDir, members]) => ({
+            id: `cluster:${groupDir}`,
+            label: `${dir ? groupDir.split("/").pop() : groupDir}/ (${members.length} classes)`,
+            kind: "cluster" as const,
+            filePath: groupDir,
+            metadata: {
+              exportedSymbols: [] as string[],
+              importCount: out.get(`cluster:${groupDir}`) ?? 0,
+              dependentCount: inn.get(`cluster:${groupDir}`) ?? 0,
+              internalImportCount: inside.get(`cluster:${groupDir}`) ?? 0,
+              fileCount: members.length,
+              // Without this the group card reads "184 files in this folder"
+              // over a box standing for 184 classes.
+              groupNoun: "classes",
+              directory: groupDir,
+            },
+          }));
+
+        const looseBriefs = await symbolBriefs(snapshotId, loose.map((n) => n.stable_key));
+        const looseNodes = loose
+          .sort((a, b) =>
+            (degree.get(b.stable_key) ?? 0) - (degree.get(a.stable_key) ?? 0)
+            || a.stable_key.localeCompare(b.stable_key))
+          .map((n) => ({
+            id: n.stable_key,
+            label: n.name,
+            kind: n.type,
+            filePath: n.file_path,
+            metadata: {
+              exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+              importCount: (n.metadata?.importCount as number) ?? 0,
+              dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+              summary: looseBriefs.get(n.stable_key)?.summary ?? null,
+              summaryConfidence: looseBriefs.get(n.stable_key)?.confidence ?? null,
+            },
+          }));
+
+        const mixed = [...groupNodes, ...looseNodes].slice(0, MAX_GRAPH_NODES);
+        const keptIds = new Set(mixed.map((n) => n.id));
+        const seen = new Set<string>();
+        const mixedEdges: Array<{ id: string; source: string; target: string; kind: string }> = [];
+        for (const e of scopedEdges) {
+          const s = keyToNodeId.get(e.source);
+          const t = keyToNodeId.get(e.target);
+          if (!s || !t || s === t || !keptIds.has(s) || !keptIds.has(t)) continue;
+          const id = `${s}->${t}`;
+          if (seen.has(id)) continue;
+          seen.add(id);
+          mixedEdges.push({ id, source: s, target: t, kind: "inheritance" });
+        }
+
+        res.json({
+          projectId,
+          snapshotId,
+          clustered: true,
+          level: { kind: dir ? "cluster" : "root", id: dir, unit: looseNodes.length > 0 ? "groups and classes" : "groups" },
+          totalNodes: scoped.length,
+          totalEdges: scopedEdges.length,
+          describedNodes: mixed.filter((n) => (n.metadata as { summary?: string | null }).summary).length,
+          truncation: truncationNotice({
+            shown: mixed.length,
+            total: groupNodes.length + looseNodes.length,
+            unit: looseNodes.length > 0 ? "groups and classes" : "groups",
+            keptBy: "the folders holding the most classes",
+            seeRest: null,
+          }),
+          graph: { nodes: mixed, edges: mixedEdges, entryPoints: [] },
+          fileAnalyses: [],
+        });
+        return;
+      }
+    }
+
+    // ── flat level: the classes themselves ───────────────────────────────────
+    // Ranked before capping so the cut drops the least connected classes, and
+    // the cut is reported rather than silently swallowed.
+    const ranked = [...scoped].sort((a, b) =>
+      (degree.get(b.stable_key) ?? 0) - (degree.get(a.stable_key) ?? 0)
+      || a.stable_key.localeCompare(b.stable_key));
+    const shown = ranked.slice(0, MAX_GRAPH_NODES);
+    const briefs = await symbolBriefs(snapshotId, shown.map((n) => n.stable_key));
+
+    const nodes = shown.map((n) => ({
+      id: n.stable_key,
+      label: n.name,
+      kind: n.type,
+      filePath: n.file_path,
+      metadata: {
+        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+        importCount: (n.metadata?.importCount as number) ?? 0,
+        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        // What this class or interface DOES. Absent for the roughly half of
+        // symbol records that are deterministic facts-only restatements of the
+        // name — the card then shows the name alone rather than a filler line.
+        summary: briefs.get(n.stable_key)?.summary ?? null,
+        summaryConfidence: briefs.get(n.stable_key)?.confidence ?? null,
+      },
+    }));
+
+    const shownKeys = new Set(nodes.map((n) => n.id));
+    const edges = scopedEdges.filter((e) => shownKeys.has(e.source) && shownKeys.has(e.target));
+
     res.json({
       projectId,
       snapshotId,
       clustered: false,
-      totalNodes: allNodes.length,
-      totalEdges: edges.length,
+      level: { kind: dir ? "cluster" : "root", id: dir, unit: "classes" },
+      totalNodes: scoped.length,
+      totalEdges: scopedEdges.length,
+      describedNodes: nodes.filter((n) => n.metadata.summary).length,
+      truncation: truncationNotice({
+        shown: nodes.length,
+        total: scoped.length,
+        unit: "classes",
+        keptBy: "the classes with the most inheritance links",
+        seeRest: null,
+      }),
       graph: { nodes, edges, entryPoints: [] },
       fileAnalyses: [],
     });
@@ -1268,12 +1464,18 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
     type RelationRow = { stable_key: string; name: string; file_path: string | null; total: string | number };
     const relationTotal = (rows: unknown[]) =>
       rows.length > 0 ? Number((rows[0] as RelationRow).total) : 0;
-    // The summary is the record's first sentence; a FILE record renders as
-    // "<path>: <purpose>", and the path is already the panel's subtitle.
-    const summarySentence = record ? record.summary.split(/(?<=[.!?])\s/)[0]! : null;
-    const summary = summarySentence?.startsWith(`${nodeRow.stable_key}:`)
-      ? summarySentence.slice(nodeRow.stable_key.length + 1).trim()
-      : summarySentence;
+    // The summary is the record's first sentence. A FILE record renders as
+    // "<path>: <purpose>" and a SYMBOL record as "<Name>: <purpose>" — both
+    // are already the panel's heading, and the symbol form was never stripped,
+    // so a class panel opened with "GitHubUser: interface 'GitHubUser'". That
+    // second half is a facts-only record, which says nothing the badge and the
+    // title do not; it is dropped rather than dressed up as an explanation
+    // (owner H1).
+    const summary = explanationFromSummary(record?.summary, {
+      factsOnly: record?.facts_only,
+      strip: [nodeRow.stable_key, symbolNameFromKey(nodeRow.stable_key)],
+      firstSentence: true,
+    });
     res.json({
       node: {
         ...node,

@@ -240,13 +240,63 @@ const BARE_IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
  *
  * `.on` is far too common to match on its own — `process.on`, `emitter.on` and
  * every EventEmitter in the repo would qualify. So the anchor is
- * `X.on('connection', cb)`: 'connection' is reserved by Socket.IO and is
- * effectively unambiguous. Only `.on` calls **lexically inside that callback**,
- * on the callback's own socket parameter, are then treated as events. That
- * keeps the false-positive surface at essentially zero without needing to know
- * whether the file imports socket.io (Skribbl's handlers.js does not — it takes
- * `io` as a parameter).
+ * `X.on('connection'|'connect', cb)`. Both names are the server's own
+ * documented spelling for the same event, and a repo that writes the alias
+ * (Multiplayer-Tetris does) had its entire server protocol invisible.
+ *
+ * The alias alone would be far too loose — `redis.on('connect')`,
+ * `db.on('connect')` and every client library in the fleet fire one — so the
+ * anchor is qualified STRUCTURALLY rather than by name: the callback's first
+ * parameter must be used as a bidirectional channel inside the body
+ * (`p.on(` / `p.emit(` / `p.join(`). A client's connect callback takes no
+ * parameter at all, and a pool's hands back a client nobody subscribes to, so
+ * both fall out without naming a single package. Only `.on` calls **lexically
+ * inside that callback**, on that same parameter, are then treated as events.
+ * Nothing here needs to know whether the file imports socket.io (Skribbl's
+ * handlers.js does not — it takes `io` as a parameter).
  */
+/** Server-side spellings of the same connection event; `connect` is an alias. */
+const CONNECTION_EVENTS = new Set(['connection', 'connect']);
+
+/** Methods that only a two-way channel offers — a plain result object has none. */
+const CHANNEL_METHODS = new Set(['on', 'emit', 'join']);
+
+/** True for a callback written at the registration site, whose body we can read. */
+function isInlineFunction(node: ts.Expression): node is ts.ArrowFunction | ts.FunctionExpression {
+  return ts.isArrowFunction(node) || ts.isFunctionExpression(node);
+}
+
+/**
+ * The callback's first parameter, IF the body uses it as a two-way channel.
+ * That is what a connection handler receives and what a client library's
+ * connect event does not hand back — the structural difference between
+ * `io.on('connect', socket => socket.on(…))` and `redis.on('connect', () => …)`,
+ * with no package name anywhere in the rule.
+ */
+function socketParameterOf(handler: ts.Expression): string | null {
+  if (!isInlineFunction(handler)) return null;
+  const first = handler.parameters[0]?.name;
+  if (!first || !ts.isIdentifier(first)) return null;
+  const name = first.text;
+  let used = false;
+  const walk = (n: ts.Node): void => {
+    if (used) return;
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      CHANNEL_METHODS.has(n.expression.name.text) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === name
+    ) {
+      used = true;
+      return;
+    }
+    ts.forEachChild(n, walk);
+  };
+  walk(handler.body);
+  return used ? name : null;
+}
+
 function extractSocketHandlers(
   sourceFile: ts.SourceFile,
   relativePath: string,
@@ -321,28 +371,32 @@ function extractSocketHandlers(
 
   function visit(node: ts.Node): void {
     const call = asOnCall(node);
-    if (call && call.event === 'connection') {
-      record('connection', call.handler, node, true);
+    if (call && CONNECTION_EVENTS.has(call.event)) {
+      // The callback must show a channel. A handler passed BY REFERENCE has no
+      // body here to show one, so it is admitted on the reserved spelling
+      // alone — which is the only name a client library never uses.
+      const socketName = socketParameterOf(call.handler);
+      const isSocketServer =
+        socketName !== null || (call.event === 'connection' && !isInlineFunction(call.handler));
+      if (isSocketServer) {
+        record(call.event, call.handler, node, true);
 
-      // Bind the callback's socket parameter, then treat only ITS `.on` calls
-      // as events. Anything else inside the callback stays untouched.
-      if (ts.isArrowFunction(call.handler) || ts.isFunctionExpression(call.handler)) {
-        const socketParam = call.handler.parameters[0]?.name;
-        const socketName = socketParam && ts.isIdentifier(socketParam) ? socketParam.text : null;
+        // Treat only the bound parameter's own `.on` calls as events. Anything
+        // else inside the callback stays untouched.
         if (socketName) {
           const walkInner = (inner: ts.Node): void => {
             const evt = asOnCall(inner);
             // 'disconnect' is a lifecycle event, not a client action, but it
             // still runs cleanup with real side effects — keep it.
-            if (evt && evt.recv === socketName && evt.event !== 'connection') {
+            if (evt && evt.recv === socketName && !CONNECTION_EVENTS.has(evt.event)) {
               record(evt.event, evt.handler, inner, false);
             }
             ts.forEachChild(inner, walkInner);
           };
-          walkInner(call.handler.body);
+          walkInner((call.handler as ts.ArrowFunction | ts.FunctionExpression).body);
         }
+        return; // inner `.on`s already handled
       }
-      return; // inner `.on`s already handled
     }
     ts.forEachChild(node, visit);
   }
@@ -645,6 +699,49 @@ function snippetOf(node: ts.Node, sf: ts.SourceFile): string {
 }
 
 /**
+ * An identifier sitting in VALUE position, where whatever receives it decides
+ * when to run it: a call argument, an object-literal property value, or a JSX
+ * expression. Deliberately positional — it asks where the name appears, never
+ * what it is spelled.
+ */
+function isDeferredInvocation(id: ts.Identifier): boolean {
+  const parent = id.parent as ts.Node | undefined;
+  if (!parent) return false;
+  // The name half of `a.b`, a declaration's own name, or an import clause are
+  // not uses of a value.
+  if (ts.isPropertyAccessExpression(parent) && parent.name === id) return false;
+  if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
+    // The callee itself is already handled as a call.
+    return parent.expression !== id && (parent.arguments ?? []).some((a) => a === id);
+  }
+  if (ts.isPropertyAssignment(parent)) return parent.initializer === id;
+  if (ts.isShorthandPropertyAssignment(parent)) return parent.name === id;
+  if (ts.isJsxExpression(parent)) return parent.expression === id;
+  return false;
+}
+
+/**
+ * Whether the identifier names a repo-local FUNCTION. Anything else in value
+ * position is data being moved around, and an edge to it would say the flow
+ * continues where it does not.
+ */
+function namesLocalFunction(id: ts.Identifier, checker: ts.TypeChecker): boolean {
+  let sym = checker.getSymbolAtLocation(id);
+  if (!sym) return false;
+  if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+  const decl = sym.declarations?.[0];
+  if (!decl) return false;
+  if (ts.isFunctionDeclaration(decl) || ts.isMethodDeclaration(decl)) return true;
+  if (
+    (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl) || ts.isPropertyDeclaration(decl)) &&
+    decl.initializer
+  ) {
+    return ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer);
+  }
+  return false;
+}
+
+/**
  * Resolves each CallExpression's callee through the TypeChecker to a
  * repo-local declaration. External/library targets return no entry — they
  * become `external` handling elsewhere, never guessed edges.
@@ -679,6 +776,15 @@ function extractResolvedCalls(
       if (ts.isIdentifier(tag) && /^[A-Z]/.test(tag.text)) {
         record(tag, tag.text);
       }
+    }
+    // A function handed over by NAME is still called, just not here. The
+    // call-expression walk above sees only what this body invokes itself, so a
+    // body whose whole job is to hand its effect to something else — an
+    // argument, an option-object field, a JSX prop — recorded no edge at all
+    // and the flow ended at the hand-off. Function-valued only: passing a
+    // constant is data, not control.
+    if (ts.isIdentifier(node) && isDeferredInvocation(node) && namesLocalFunction(node, checker!)) {
+      record(node, node.text);
     }
     ts.forEachChild(node, visit);
   }

@@ -220,18 +220,70 @@ describe('architecture_deep — the gate that forces decision→consequence pros
     expect(issues.join(' ')).to.include('0 of 3');
   });
 
+  /** The same prose, now citing — which is the section's other half. */
+  const cited = (markdown: string): string =>
+    markdown
+      .replace('## API Routes\n', '## API Routes\n')
+      .replace('enqueues jobs.', 'enqueues jobs (r3).')
+      .replace('writes results.', 'writes results (r7).');
+
   it('passes once decisions are stated in the required form', () => {
     const withDecisions = structureOnly.replace(
       'Holds 12 files. Receives HTTP requests and enqueues jobs.',
-      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock.',
+      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock (r3).',
     ).replace(
       'Holds 30 files. Consumes jobs and writes results.',
       [
-        'Holds 30 files. Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs.',
+        'Holds 30 files. Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs (r7).',
         'Content-addressed records ⇒ an unchanged file never re-runs the model.',
       ].join(' '),
     );
     expect(spec.completenessCheck!(withDecisions, det)).to.deep.equal([]);
+  });
+
+  // Measured on the stored corpus before this gate existed: SEVEN of eleven
+  // architecture_deep sections shipped with no receipt marker, no `rN` alias
+  // and no file:line anywhere in 3,000-4,900 characters — and every one passed
+  // this check, because it counted headings and arrows and nothing else.
+  it('fails a section that cites nothing at all — the citation desert', () => {
+    const issues = spec.completenessCheck!(structureOnly, det);
+    expect(issues.join(' ')).to.include('cites NOTHING');
+  });
+
+  it('fails when the decisions cite but the component subsections do not', () => {
+    const decisionsOnly = structureOnly.replace(
+      'Holds 12 files. Receives HTTP requests and enqueues jobs.',
+      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock (r3).',
+    );
+    const issues = spec.completenessCheck!(decisionsOnly, det);
+    // The desert complaint is gone — one citation exists — but the component
+    // the reader cannot open a file of is named.
+    expect(issues.join(' ')).to.not.include('cites NOTHING');
+    expect(issues.join(' ')).to.include('Worker Pipeline');
+    expect(issues.join(' ')).to.include('cite nothing');
+  });
+
+  it('accepts a bare file:line locator as a citation, and the post-rewrite marker form', () => {
+    // Cached rows are re-judged against today's rules, and by then the aliases
+    // are already `[[receipt:uuid]]` markers — a check that knew only `(rN)`
+    // would reject every cached section and regenerate the package on hash luck.
+    const locators = structureOnly
+      .replace('enqueues jobs.', 'enqueues jobs — see src/api/routes/projects.ts:41.')
+      .replace('writes results.', 'writes results [[receipt:3f2a1b4c-1234-4abc-9def-0123456789ab]].');
+    const issues = spec.completenessCheck!(locators, { ...det, decisionNotes: [] });
+    expect(issues.join(' ')).to.not.include('cites NOTHING');
+    expect(issues.join(' ')).to.not.include('cite nothing');
+  });
+
+  it('never complains about citations in a subsection too short to carry a claim', () => {
+    // "<label> — purpose not established from the code" is a ONE-LINE answer
+    // the prompt explicitly asks for; gating it on a receipt would force the
+    // model to invent one for the component it just admitted it cannot explain.
+    const oneLiner = cited(structureOnly).replace(
+      'Holds 30 files. Consumes jobs and writes results (r7).',
+      'Worker Pipeline — purpose not established from the code.',
+    );
+    expect(spec.completenessCheck!(oneLiner, { ...det, decisionNotes: [] }).join(' ')).to.not.include('cite nothing');
   });
 
   it('does not demand decisions when no rationale was extracted — never invent one', () => {

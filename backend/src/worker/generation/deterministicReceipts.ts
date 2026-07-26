@@ -135,14 +135,35 @@ export async function collectSectionReceipts(
       );
 
     case 'architecture_deep': {
-      // One representative member per cluster, most-critical clusters first.
+      // TWO representative members per cluster, ranked so the clusters the
+      // prompt actually narrates are the ones that get receipts.
+      //
+      // The previous query said "most-critical clusters first" and did not do
+      // it: `DISTINCT ON (c.id) … ORDER BY c.id` ranks by a random UUID, and
+      // the caller then took the first ten. `sectionSpecs.ts` narrates the top
+      // MAX_NARRATED_CLUSTERS (6) by `critical_score`, so on a repo with more
+      // clusters than that — OnboardBuddy has fourteen — the six components
+      // with subsections and the ten with receipts were two unrelated samples.
+      // Measured consequence: architecture_deep shipped zero citations on 7 of
+      // 11 stored packages. Ranking by the SAME key the prompt ranks by is what
+      // makes "cite this component's receipt" an instruction the model can
+      // follow; preferring a member that carries a snippet is what makes the
+      // receipt worth citing.
       const rows = (await query(
-        `SELECT DISTINCT ON (c.id) ${NODE_FIELDS}, c.label AS cluster_label, m.membership_reason
-         FROM architecture_clusters c
-         JOIN architecture_cluster_members m ON m.cluster_id = c.id
-         JOIN graph_nodes n ON n.id = m.node_id
-         WHERE c.snapshot_id = $1
-         ORDER BY c.id, n.line_start NULLS LAST`,
+        `SELECT ${NODE_FIELDS}, cluster_label, membership_reason FROM (
+           SELECT ${NODE_FIELDS}, c.label AS cluster_label, m.membership_reason,
+                  c.critical_score,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY c.id
+                    ORDER BY (n.snippet IS NULL), n.file_path, n.line_start NULLS LAST
+                  ) AS rn
+           FROM architecture_clusters c
+           JOIN architecture_cluster_members m ON m.cluster_id = c.id
+           JOIN graph_nodes n ON n.id = m.node_id
+           WHERE c.snapshot_id = $1
+         ) ranked
+         WHERE rn <= 2
+         ORDER BY critical_score DESC, cluster_label, rn`,
         [deps.snapshotId],
       )).rows as Array<NodeRow & { cluster_label: string; membership_reason: string }>;
       // Cluster members give the section its STRUCTURE; the decision comments
@@ -152,7 +173,9 @@ export async function collectSectionReceipts(
       // instead of at the symbol it happens to sit above.
       const decisions = await loadDecisionNotes(deps.snapshotId, 8);
       return [
-        ...rows.slice(0, 10).map((r) =>
+        // Two per cluster across the six narrated components, with headroom for
+        // the next few — the generator caps the merge at 28 either way.
+        ...rows.slice(0, 16).map((r) =>
           fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`)),
         ...decisions.map((d) => ({
           receiptKind: kindForTrust(d.trustLevel),

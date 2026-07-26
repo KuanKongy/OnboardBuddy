@@ -7,6 +7,7 @@ import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
 import { getRepo, isValidGitRef } from "../../lib/github.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
+import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
 import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
 import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
@@ -38,7 +39,7 @@ projectsRouter.get("/", async (req, res) => {
          WHERE sf.snapshot_id = (
            SELECT s.id FROM analysis_snapshots s
            WHERE s.project_id = p.id
-           ORDER BY s.created_at DESC LIMIT 1
+           ORDER BY ${latestSnapshotOrderSql('s', 'p.branch')} LIMIT 1
          )
        ) stale ON true
        ORDER BY p.created_at DESC`,
@@ -513,10 +514,10 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     // ai_disabled does not block generation: the worker reads the project's
     // current privacy mode and builds a deterministic (LLM-free) package.
     const snapResult = await query(
-      `SELECT id, commit_hash, branch, scope_id FROM analysis_snapshots
+      `SELECT id, commit_hash, branch, scope_id FROM analysis_snapshots s
        WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
-      [projectId],
+       ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+      [projectId, typeof req.body?.branch === "string" && req.body.branch !== "" ? req.body.branch : null],
     );
     if (snapResult.rows.length === 0) {
       res.status(409).json({ error: "No completed analysis snapshot found — run analysis first" });
@@ -631,9 +632,9 @@ projectsRouter.get("/:id/analysis-status", requireProjectAccess(), async (req, r
 
     const latestSnapshot = await query(
       `SELECT id, file_count, symbol_count, workflow_count, commit_hash, branch, semantic_depth, created_at
-       FROM analysis_snapshots
+       FROM analysis_snapshots s
        WHERE project_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
+       ORDER BY ${latestSnapshotOrderSql('s')} LIMIT 1`,
       [projectId],
     );
 
@@ -950,7 +951,7 @@ projectsRouter.get("/:id/snapshots", requireProjectAccess(), async (req, res) =>
        FROM analysis_snapshots s
        JOIN analysis_scopes sc ON sc.id = s.scope_id
        WHERE s.project_id = $1
-       ORDER BY s.created_at DESC
+       ORDER BY ${latestSnapshotOrderSql('s')}
        LIMIT 30`,
       [projectId],
     );

@@ -10,6 +10,10 @@
  * An explicit package_id that doesn't exist in the project is a 404, never a
  * silent fallback — pinning a package must not quietly show something else.
  *
+ * "Latest" means newest by PUSH recency on the wanted branch, not newest row —
+ * see lib/snapshotOrdering.ts for why `created_at DESC` was wrong and why
+ * branch is a sort preference rather than a `WHERE` clause.
+ *
  * The last rung is the #77/#80 fix. A package generation that paused left its
  * snapshot on 'paused', the chain ended at "latest complete", found none, and
  * every tab 404'd on a project whose extraction had completed. Degrading is
@@ -19,6 +23,7 @@
 
 import type { Request, Response } from 'express';
 import { query } from '../../lib/db.js';
+import { latestSnapshotOrderSql } from '../../lib/snapshotOrdering.js';
 
 export interface ResolvedPackageContext {
   /** Null when resolution landed on a bare snapshot with no package (e.g. generation still running). */
@@ -80,6 +85,12 @@ export async function resolvePackageContext(opts: {
   packageId?: string | null;
   /** Role hint for the best-effort package pick on the "latest" fallback. */
   role?: string | null;
+  /**
+   * Branch to scope the "latest" fallback to. Null = the project's default
+   * branch. It is a sort preference, not a filter (lib/snapshotOrdering.ts), so
+   * a branch with no analysis still resolves to whatever else exists.
+   */
+  branch?: string | null;
 }): Promise<ResolvedPackageContext | null> {
   type PkgRow = {
     package_id: string; snapshot_id: string; scope_id: string | null;
@@ -123,11 +134,15 @@ export async function resolvePackageContext(opts: {
     id: string; scope_id: string | null; branch: string | null;
     commit_hash: string | null; status: string;
   };
+  // "Newest" is push recency scoped to the branch, never row-insertion order —
+  // see lib/snapshotOrdering.ts. The branch preference sorts rather than
+  // filters, so this list is never emptier than it used to be and the #80
+  // fallback below still has the same rows to choose from.
   const snapshots = (await query(
-    `SELECT id, scope_id, branch, commit_hash, status FROM analysis_snapshots
+    `SELECT id, scope_id, branch, commit_hash, status FROM analysis_snapshots s
      WHERE project_id = $1 AND status <> 'pending'
-     ORDER BY created_at DESC LIMIT 10`,
-    [opts.projectId],
+     ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 10`,
+    [opts.projectId, opts.branch ?? null],
   )).rows as SnapRow[];
   if (snapshots.length === 0) return null;
 
@@ -186,15 +201,18 @@ export function packageContextMeta(ctx: ResolvedPackageContext): {
 export async function resolveForRequest(
   req: Request,
   res: Response,
-  opts: { role?: string | null } = {},
+  opts: { role?: string | null; branch?: string | null } = {},
 ): Promise<ResolvedPackageContext | null | false> {
   try {
     const packageId = readPackageParam(req.query.package_id);
+    const branchParam = typeof req.query.branch === 'string' && req.query.branch !== ''
+      ? req.query.branch : null;
     return await resolvePackageContext({
       projectId: String(req.params.id),
       userId: req.user?.id ?? null,
       packageId,
       role: opts.role ?? null,
+      branch: opts.branch ?? branchParam,
     });
   } catch (err) {
     if (err instanceof BadPackageParamError) {

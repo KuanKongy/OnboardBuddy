@@ -263,10 +263,18 @@ const TARGETED_FAMILIES: Array<{ kind: DetectedSideEffect['kind']; patterns: Arr
  * accumulator is not a store, and only a module-scope binding outlives the
  * call that touched it.
  */
+const MODULE_STATE_WRITE_RE =
+  // A declaration is not a mutation. `const LINKS = […]` is where the store
+  // comes from; only a later `LINKS = …` or `LINKS.push(…)` changes it. Without
+  // the lookbehind the binding matched its OWN declaration text, so every
+  // module-level literal in a repo shipped as a low-confidence write and
+  // crowded the real mutators out of the top slice. `=(?![=>])` excludes `=>`
+  // for the same reason: `x => y` declares a parameter, it assigns nothing.
+  /(?<!\b(?:const|let|var)\s+)\b([A-Za-z_$][\w$]*)\s*(?:\.\s*(?:push|unshift|splice|pop|shift|fill|copyWithin)\s*\(|\[[^\]]{0,40}\]\s*=(?![=>])|\s*=(?![=>]))/g;
+
 function moduleStateWrite(callsStr: string, moduleBindings: Set<string>): { evidence: string; target: string } | null {
   if (moduleBindings.size === 0) return null;
-  const re = /\b([A-Za-z_$][\w$]*)\s*(?:\.\s*(?:push|unshift|splice|pop|shift|fill|copyWithin)\s*\(|\[[^\]]{0,40}\]\s*=(?!=)|\s*=(?!=))/g;
-  for (const m of callsStr.matchAll(re)) {
+  for (const m of callsStr.matchAll(MODULE_STATE_WRITE_RE)) {
     if (moduleBindings.has(m[1]!)) return { evidence: m[0], target: m[1]! };
   }
   return null;
@@ -393,7 +401,11 @@ export function detectSideEffects(fileAnalyses: FileAnalysis[]): DetectedSideEff
       // the binding name is a variable, not a resource anyone else can name, and
       // letting it identify a capability groups real flows under whatever array
       // a file happens to keep at the top (an event-listener list, a memo).
-      if (!matchedAny) {
+      // A value binding whose initializer calls nothing IS a declaration, whole
+      // and entire — its text can only describe the store being created, never
+      // a change to one, whatever the declarator list around it looks like.
+      const declaresOnly = sym.kind === 'variable' && (sym.callsSymbols ?? []).length === 0;
+      if (!matchedAny && !declaresOnly) {
         const stateWrite = moduleStateWrite(callsStr, moduleBindings);
         if (stateWrite) {
           effects.push({

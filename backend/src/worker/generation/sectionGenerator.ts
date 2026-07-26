@@ -31,7 +31,14 @@ import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdo
 // (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.4/§5.5): the prompt shape changed,
 // so cached sections generated under the old, unfenced prompt must not be
 // reused — the evidence hash includes this version.
-export const SECTION_PROMPT_VERSION = 'section-v6';
+//
+// v7: receipts now carry an "evidence for: …" label in the prompt, and the
+// inline rewriter drops invented aliases. Both are prompt/output-shape
+// changes that the evidence hash cannot otherwise see (retrieval is
+// deliberately excluded from the key), so without this bump a cache hit would
+// keep serving prose written against the unlabelled receipt list — the exact
+// citation desert this version fixes.
+export const SECTION_PROMPT_VERSION = 'section-v7';
 
 /**
  * Repairs the two contract breaches that do not need a model to fix.
@@ -185,13 +192,40 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   // prose narrates deterministic facts, so the receipts must cover them or
   // every file mention validates as "cites no receipt from it".
   const detReceipts = await collectSectionReceipts(params.sectionType, params.deps);
-  const seenKeys = new Set(bundle.receipts.map((r) => r.nodeStableKey ?? r.filePath ?? r.receiptId));
+  // What each deterministic receipt is evidence OF — "Member of the
+  // \"Backend · Workers\" cluster", "Design rationale recorded in the code: …".
+  //
+  // `collectSectionReceipts` has always computed this (`DeterministicReceiptRow
+  // .claim`, persisted on the receipt row so the receipt viewer can answer
+  // "what does this prove?"), and the merge below has always thrown it away.
+  // That is the architecture_deep citation desert, mechanically: the section is
+  // told to write one subsection per component and to cite each decision note's
+  // receipt, and the receipt list it is handed is a flat run of file paths with
+  // no component attached and no way to tell a rationale comment from any other
+  // snippet. Measured on 11 stored packages: 7 architecture_deep sections carry
+  // ZERO citations. A model cannot cite a cluster claim to evidence that is not
+  // labelled with a cluster.
+  const receiptLabels = new Map<string, string>();
+  const keyToReceiptId = new Map<string, string>();
+  for (const r of bundle.receipts) keyToReceiptId.set(r.nodeStableKey ?? r.filePath ?? r.receiptId, r.receiptId);
+  const seenKeys = new Set(keyToReceiptId.keys());
   let detIdx = 0;
   for (const det of detReceipts) {
     const key = det.nodeStableKey ?? det.filePath ?? '';
-    if (!key || seenKeys.has(key)) continue;
+    if (!key) continue;
+    if (seenKeys.has(key)) {
+      // Semantic retrieval already pulled this node in, so it needs no second
+      // row — but it still needs the LABEL, or the one receipt that could
+      // ground a component subsection arrives anonymous. Dropping the label
+      // with the duplicate is how a cluster's best evidence went unciteable.
+      const existing = keyToReceiptId.get(key);
+      if (existing && det.claim && !receiptLabels.has(existing)) receiptLabels.set(existing, det.claim);
+      continue;
+    }
     seenKeys.add(key);
     detIdx += 1;
+    keyToReceiptId.set(key, `det-${detIdx}`);
+    if (det.claim) receiptLabels.set(`det-${detIdx}`, det.claim);
     bundle.receipts.push({
       receiptId: `det-${detIdx}`,
       receiptKind: det.receiptKind,
@@ -302,7 +336,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     sanitized.autolinks += counts.autolinks;
   };
 
-  const first = await callModel(params, bundle, null, aliasToId);
+  const first = await callModel(params, bundle, null, aliasToId, receiptLabels);
   let output = first.output;
   let runId = first.runId;
   addSanitized(first.sanitized);
@@ -318,7 +352,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   let retried = false;
   if (validation.hardFailure || voice.issues.length > 0 || explain.issues.length > 0 || coverage.length > 0) {
     retried = true;
-    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...explain.issues, ...coverage], aliasToId);
+    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...explain.issues, ...coverage], aliasToId, receiptLabels);
     output = stricter.output;
     runId = stricter.runId;
     addSanitized(stricter.sanitized);
@@ -356,7 +390,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     const issues = critique.verdicts
       .filter((v) => v.verdict !== 'supported')
       .map((v) => `CRITIQUE ${v.verdict}: "${v.claim.slice(0, 140)}" — ${v.reason}`);
-    const rewritten = await callModel(params, bundle, issues, aliasToId);
+    const rewritten = await callModel(params, bundle, issues, aliasToId, receiptLabels);
     output = rewritten.output;
     runId = rewritten.runId;
     addSanitized(rewritten.sanitized);
@@ -573,9 +607,10 @@ async function callModel(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
+  receiptLabels?: Map<string, string>,
 ): Promise<{ output: GeneratedOutput; runId: string | null; sanitized: MarkdownSanitizeCounts }> {
   const spec = SECTION_SPECS[params.sectionType];
-  const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
+  const prompt = renderPrompt(params, bundle, previousIssues, aliasToId, receiptLabels);
   const response = await params.ai.call<GeneratedOutput>({
     tier: 'strong',
     targetType: 'section',
@@ -662,6 +697,13 @@ export function renderPrompt(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
+  /**
+   * What each receipt is evidence OF, by receipt id. Optional because the
+   * semantic half of the bundle has no such label; supplied for the
+   * deterministic half, where it is the difference between a citable receipt
+   * and an anonymous file path.
+   */
+  receiptLabels?: Map<string, string>,
 ): string {
   const spec = SECTION_SPECS[params.sectionType];
   const idToAlias = new Map([...aliasToId.entries()].map(([a, id]) => [id, a]));
@@ -673,7 +715,12 @@ export function renderPrompt(
   const receipts = bundle.receipts.map((r) => {
     const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
     const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 1_500).replace(/\n/g, '\n  ')}` : '';
-    return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
+    // "— evidence for: Member of the "Backend · Workers" cluster". Without it
+    // a component subsection has no way to tell which of forty file paths
+    // belongs to it, which is why cluster-level claims went uncited.
+    const label = receiptLabels?.get(r.receiptId);
+    const evidenceFor = label ? ` — evidence for: ${label.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+    return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${evidenceFor}${snippet}`;
   });
   // Everything below this line is repo-derived and therefore attacker-chosen
   // on an imported repo: snippets, file and symbol names, record summaries
@@ -744,6 +791,13 @@ async function persistSection(
     inline_citations: {
       resolved: inline.resolved.length,
       dropped: inline.dropped,
+      // Aliases the model invented — `(r_evidence)` and friends. A well-formed
+      // `rN` in `dropped` is bookkeeping (the receipt existed, it just was not
+      // used); a label in here never existed, so a non-zero count is the
+      // section asserting support it does not have. Counted, and the distinct
+      // labels kept, so "which sections fabricate citations" is a query.
+      unknown_aliases: inline.unknownAliases.length,
+      unknown_alias_labels: [...new Set(inline.unknownAliases)].slice(0, 10),
       unverified_marked: unverified.marked,
       unverified_unmatched: unverified.unmatched,
     },
