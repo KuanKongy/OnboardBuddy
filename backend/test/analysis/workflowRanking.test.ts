@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { rankWorkflow, type WorkflowStep, type WorkflowStepKind } from '../../src/worker/engine/workflowExtractor';
+import { rankWorkflow, type HandoffContext, type WorkflowStep, type WorkflowStepKind } from '../../src/worker/engine/workflowExtractor';
 import type { DetectedEntrypoint } from '../../src/worker/engine/entrypointDetector';
 
 /**
@@ -25,8 +25,13 @@ const steps = (...kinds: WorkflowStepKind[]): WorkflowStep[] =>
     deterministicDescription: stepKind,
   }));
 
-const rank = (e: DetectedEntrypoint, s: WorkflowStep[], surface = false, unknownOnly = false) =>
-  rankWorkflow(e, s, surface, unknownOnly);
+const rank = (
+  e: DetectedEntrypoint,
+  s: WorkflowStep[],
+  surface = false,
+  unknownOnly = false,
+  handoff: HandoffContext = {},
+) => rankWorkflow(e, s, surface, unknownOnly, handoff);
 
 describe('workflow ranking', () => {
   it('puts a short user-triggered write above a long trace with no effects', () => {
@@ -62,6 +67,41 @@ describe('workflow ranking', () => {
     );
     expect(sprawling.score).to.be.lessThan(tight.score);
     expect(sprawling.reasons.join(' ')).to.contain('long traces drift');
+  });
+
+  /**
+   * A consumer is never triggered by a person, so `userTriggered && persists`
+   * could never make one `core` — NO async worker could reach that tier, no
+   * matter how much of the system it owned. Measured on this tool's own
+   * repository: the analysis and generation pipelines both tiered `supporting`
+   * while a settings DELETE was the #1 core flow.
+   *
+   * The fix is eligibility only. Nothing here changes a weight: a reached
+   * consumer becomes eligible for the `userTriggered` term that already
+   * existed, and its position then falls out of the same arithmetic as
+   * everything else.
+   */
+  describe('async hand-offs', () => {
+    const consumer = () => steps('trigger', 'data_read', 'data_write');
+
+    it('tiers a consumer a user path feeds as core, and says why', () => {
+      const fed = rank(ep('message_consumer', 'analysis'), consumer(), false, false, { reachedFromUser: true });
+      expect(fed.tier).to.equal('core');
+      expect(fed.reasons.join(' ')).to.contain('across an async hand-off');
+    });
+
+    it('leaves a consumer nobody publishes to as supporting', () => {
+      // A cron janitor or a queue fed by an external system is genuinely
+      // supporting; the fix must be reachability, not a blanket promotion.
+      expect(rank(ep('message_consumer', 'nightly'), consumer()).tier).to.equal('supporting');
+    });
+
+    it('scores a reached consumer exactly as the same shape with a user trigger', () => {
+      // The guard against reweighting: eligibility must be the ONLY difference.
+      const reached = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true });
+      const direct = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true, inboundHandoffs: 4 });
+      expect(direct.score).to.equal(reached.score);
+    });
   });
 
   it('tiers a background job as supporting, not core', () => {

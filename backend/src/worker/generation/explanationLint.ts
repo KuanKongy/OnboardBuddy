@@ -463,6 +463,57 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     detail: 'receipts render as inline chips; naming them in prose duplicates the UI',
     severity: 'warn',
   },
+  // ── the PROMPT's own voice, shipped as prose ──────────────────────────────
+  //
+  // Measured live: FloowForge's `big_picture` ended with, verbatim,
+  //   "You MUST say so plainly in your own words — a reader who is not told
+  //    will assume this part of the system does not exist."
+  // That is `sectionSpecs.snapshotCounts().unreadStacks.sentence`, a directive
+  // that had been written into a DETERMINISTIC FACT. The facts blob is
+  // presented to the model as authoritative content to narrate, so a model with
+  // no other Python evidence to work from narrated the instruction. The field
+  // is a plain statement now, and this rule is the backstop: any prompt-voice
+  // sentence that reaches the markdown fails the section and forces a rewrite.
+  //
+  // NARROW ON PURPOSE, and the discriminator is the VERB, not the pronoun.
+  // `howto` and `tutorial` sections address the reader in second person as
+  // their normal register — StudyFlow's `setup_run` correctly says "you must
+  // configure environment variables for the api and worker services", and a
+  // blanket "you must" ban would rewrite that. What no section may do is issue
+  // directives about the WRITING: `say`, `state`, `mention`, `disclose`,
+  // `describe` are speech acts performed by the author, never tasks a reader
+  // performs on the system.
+  {
+    code: 'prompt_voice',
+    re: new RegExp(
+      String.raw`\byou\s+(?:must|should|shall|need\s+to|have\s+to|are\s+(?:required|expected)\s+to)\s+(?:\w+\s+){0,3}?` +
+        String.raw`(?:say|state|write|mention|describe|explain|disclose|note|report|name|cite|admit|acknowledge|call\s+(?:it\s+)?out)\b`,
+      'i',
+    ),
+    detail:
+      'an instruction to the writer reached the reader ("You MUST say so plainly…"). This is prompt text, not a fact ' +
+      'about the system — state the fact itself and drop the directive',
+    severity: 'error',
+  },
+  {
+    code: 'prompt_voice',
+    re: /\bin\s+your\s+own\s+words\b|\b(?:say\s+so|state\s+(?:it|this|that))\s+plainly\b|\bdo\s+not\s+(?:invent|guess|fabricate|speculate)\b|\bnever\s+(?:write|say|claim|invent|describe\s+the\s+codebase)\b/i,
+    detail:
+      'phrasing that only makes sense as an instruction to the model ("in your own words", "do not invent") — ' +
+      'the reader is being handed the prompt',
+    severity: 'error',
+  },
+  {
+    code: 'prompt_voice',
+    // The reader discussed in the third person, as an audience to be managed.
+    // Zero legitimate occurrences across the 143 stored sections; the only hit
+    // was the leaked directive itself.
+    re: /\b(?:a|the|any)\s+readers?\s+(?:who|that)\b|\b(?:tell|telling|inform)\s+the\s+reader\b|\bthe\s+readers?\s+(?:must|should|needs?\s+to|will\s+assume|would\s+assume)\b/i,
+    detail:
+      'talks ABOUT the reader instead of to them — that framing belongs in the spec, not in the section. ' +
+      'Say the thing the reader is supposed to learn',
+    severity: 'error',
+  },
 ];
 
 /**
@@ -978,7 +1029,7 @@ function checkGrounding(
 // ── entry point ─────────────────────────────────────────────────────────────
 
 const RULE_HEADLINE: Record<ExplanationRule, string> = {
-  narration: 'SCREEN NARRATION: the text describes the artifact instead of explaining the system',
+  narration: 'SCREEN NARRATION: the text describes the artifact, or repeats the instructions it was given, instead of explaining the system',
   level: 'WRONG ALTITUDE: the explanation is not about the thing it is filed under',
   grounding: 'UNGROUNDED CLAIMS: assertions with no receipt behind them',
   gaps: 'UNDISCLOSED GAPS: the text does not say what it could not determine',

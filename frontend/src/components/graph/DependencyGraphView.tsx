@@ -79,8 +79,8 @@ interface DependencyGraphViewProps {
    * nowhere. A floor makes the level overflow and scroll instead.
    */
   minZoom?: number;
-  /** Top-left overlaps the first column on grid-shaped levels. */
-  legendPosition?: "top-left" | "top-right";
+  /** See `MINIMAP_MIN_NODES` — under it the minimap only covers the canvas. */
+  showMiniMap?: boolean;
 }
 
 export function DependencyGraphView({
@@ -99,7 +99,7 @@ export function DependencyGraphView({
   restoreViewport,
   viewportRef,
   minZoom,
-  legendPosition = "top-left",
+  showMiniMap,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
@@ -202,28 +202,35 @@ export function DependencyGraphView({
     [edges, neighborIds, selectedNodeId, isDark, nodeKindById, hiddenKinds],
   );
 
+  // The legend is a sibling of the canvas, not a `<Panel>` inside it: a panel
+  // lives in the same rectangle `fitView` fills with nodes, so at default zoom
+  // it covered graph content on every project measured (VISUAL QA M4 #9).
+  // Outside the node area it cannot occlude the node area at any zoom.
   return (
-    <GraphCanvas
-      nodes={flowNodes}
-      edges={flowEdges}
-      nodeTypes={nodeTypes}
-      selectedNodeId={selectedNodeId}
-      onSelectNode={onSelectNode}
-      onDrillInto={onDrillInto}
-      drill={drill}
-      focusMode={focusMode}
-      suppressInitialFit={suppressInitialFit}
-      refitSignal={refitSignal}
-      restoreViewport={restoreViewport}
-      viewportRef={viewportRef}
-      {...(minZoom !== undefined ? { minZoom, fitMinZoom: minZoom } : {})}
-    >
-      <Panel position={legendPosition}>
-        <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
-      </Panel>
-      <Panel position="bottom-center">
-        <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
-      </Panel>
-    </GraphCanvas>
+    <div className="flex h-full w-full flex-col">
+      <div className="min-h-0 flex-1">
+        <GraphCanvas
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={onSelectNode}
+          onDrillInto={onDrillInto}
+          drill={drill}
+          focusMode={focusMode}
+          suppressInitialFit={suppressInitialFit}
+          refitSignal={refitSignal}
+          restoreViewport={restoreViewport}
+          viewportRef={viewportRef}
+          {...(showMiniMap !== undefined ? { showMiniMap } : {})}
+          {...(minZoom !== undefined ? { minZoom, fitMinZoom: minZoom } : {})}
+        >
+          <Panel position="bottom-center">
+            <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
+          </Panel>
+        </GraphCanvas>
+      </div>
+      <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
+    </div>
   );
 }

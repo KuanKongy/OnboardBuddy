@@ -266,6 +266,11 @@ export function NodeInfoPanel({
             data={detail.ranking_provenance}
             sectionLabel="Importance"
             buttonLabel="Explain how this importance score was derived"
+            // VISUAL QA M4 #7: the payload's caveat is an internal
+            // reconciliation note about the snapshot's top-500 score cap, not
+            // something a reader of a file panel needs; the headline below
+            // already says when a file is unranked and why.
+            showCaveat={false}
             extra={
               projectId && canAdjustWeights ? (
                 <Link

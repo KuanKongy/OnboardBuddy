@@ -73,6 +73,8 @@ interface TutorialSummary {
   step_count: number;
   procedure_kind?: ProcedureKind | string | null;
   mode?: TutorialMode | string | null;
+  /** `deterministic` when the package was generated with AI switched off. */
+  annotation?: string | null;
   /** Journey member titles, when this walkthrough spans several flows. */
   journey_members?: string[] | null;
 }
@@ -603,11 +605,13 @@ export function WalkthroughTab() {
                         <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
                       )}
                       <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
-                        {isWalkthrough
-                          ? "Code and line ranges from repo evidence · narration written by AI"
-                          : isProcedural
-                            ? "Steps built from repo evidence · notes written by AI"
-                            : "AI explanations"} · {detail.tutorial.confidence} confidence
+                        {detail.tutorial.annotation === "deterministic"
+                          ? "Built from repo evidence · no prose written — AI generation is off for this project"
+                          : isWalkthrough
+                            ? "Code and line ranges from repo evidence · narration written by AI"
+                            : isProcedural
+                              ? "Steps built from repo evidence · notes written by AI"
+                              : "AI explanations"} · {detail.tutorial.confidence} confidence
                       </span>
                     </div>
                     {detail.tutorial.goal && (

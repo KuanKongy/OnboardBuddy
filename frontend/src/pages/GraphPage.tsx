@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import type { Viewport } from "reactflow";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
+import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { PageHeader } from "@/components/PageHeader";
@@ -485,7 +486,7 @@ export function GraphPage() {
                       {badgeText}
                     </Badge>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs text-left">
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none max-w-xs text-left">
                     {truncation
                       ? `${badgeDerivation} ${truncation.hidden} ${truncation.unit} were left out by the ${truncation.limit}-node cap, which kept ${truncation.keptBy}.`
                       : badgeDerivation}
@@ -503,7 +504,9 @@ export function GraphPage() {
                       {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}</TooltipContent>
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none">
+                    {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                  </TooltipContent>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -516,7 +519,7 @@ export function GraphPage() {
                       {allEdges ? "Strongest edges only" : "Show all edges"}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom" className="max-w-xs text-left">
+                  <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none max-w-xs text-left">
                     By default only each file's 3 strongest edges per direction are drawn to keep the
                     layout readable
                   </TooltipContent>
@@ -536,7 +539,7 @@ export function GraphPage() {
                           {d}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">
+                      <TooltipContent side="bottom" sideOffset={6} className="pointer-events-none">
                         {d === "LR" ? "Left-to-right layout" : "Top-to-bottom layout"}
                       </TooltipContent>
                     </Tooltip>
@@ -545,8 +548,26 @@ export function GraphPage() {
               </>
             )}
             {/* The view toggle stays rightmost so it never shifts when the
-                files-only controls above unmount. */}
-            <div className="flex items-center rounded-lg border border-border bg-card p-0.5">
+                files-only controls above unmount.
+
+                VISUAL QA M4 #5 reproduced "the toggle needs two clicks" twice.
+                Nothing here is asynchronous — `setView` is one state write, and
+                a jsdom click switches the view on the first try — so the click
+                was not reaching the button. The header actions row is
+                `flex-wrap`, and this control sits immediately after four
+                tooltip triggers whose content is a portalled `z-50` box opened
+                with `delayDuration={0}` and, until now, `sideOffset={0}`: on
+                the way to this toggle the pointer opens one of them, and when
+                the row wraps (which the Files view's long count badge makes
+                likely) that box lands on the row below — over this toggle. The
+                first press then landed on the tooltip and only dismissed it.
+                The tooltips above now carry an offset and, more importantly,
+                `pointer-events-none`, so a tooltip can never take a click:
+                none of them contains anything to click.
+
+                `flex-nowrap` on this group keeps the two buttons on one line
+                even when the actions row itself wraps. */}
+            <div className="flex flex-nowrap items-center rounded-lg border border-border bg-card p-0.5">
               {VIEWS.map((v) => (
                 <button
                   key={v.key}
@@ -558,7 +579,7 @@ export function GraphPage() {
                     setView(v.key);
                   }}
                   aria-pressed={view === v.key}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  className={`whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     view === v.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
                   }`}
                 >
@@ -706,6 +727,7 @@ export function GraphPage() {
                 hiddenKinds={hiddenKinds}
                 onToggleKind={toggleKind}
                 refitSignal={`${direction}:${fullscreen}`}
+                showMiniMap={positionedNodes.length >= MINIMAP_MIN_NODES}
                 drill={drill}
                 focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}
                 restoreViewport={stack.savedViewport(stack.depth)}

@@ -63,6 +63,7 @@ import {
   type TestGuard,
   type TraceStep,
   type WalkthroughDraft,
+  type WalkthroughEmitSite,
   type WalkthroughJourney,
   type WalkthroughStep,
 } from './tutorialProcedure.js';
@@ -84,7 +85,12 @@ const DEFAULT_MAX_TUTORIALS = 6;
 const SNIPPET_CAP = 2_400;
 
 export interface GenerateTutorialsParams {
-  ai: AiClient;
+  /**
+   * `null` under `ai_disabled`: the skeleton is complete without a model, so
+   * the tab ships structural walkthroughs instead of going empty. See
+   * `generateDeterministicTutorials`.
+   */
+  ai: AiClient | null;
   snapshotId: string;
   projectId: string;
   packageId: string;
@@ -94,7 +100,7 @@ export interface GenerateTutorialsParams {
   /** Mechanical privacy enforcement (doc/Pipeline.md "Privacy modes"): every
    * prompt builder takes the mode as an input. Steps keep their snippets in
    * the DB for the reader either way; only the PROMPT withholds them. */
-  privacyMode: 'full_ai' | 'facts_only_ai';
+  privacyMode: 'full_ai' | 'facts_only_ai' | 'ai_disabled';
   maxTutorials?: number;
 }
 
@@ -481,6 +487,12 @@ export async function selectProcedures(
   );
   const idByStableKey = new Map(rows.map((r) => [r.stable_key, r.id]));
   const effectsByNode = await loadSideEffects(params.snapshotId);
+  // Only registration-shaped entries need publishers looked up: an HTTP route
+  // states its own trigger, a handler on `socket:draw-ops` cannot.
+  const emitSitesByToken = await loadEmitSites(
+    params.snapshotId,
+    rows.map((r) => REGISTRATION_TOKEN.exec(r.route_path ?? '')?.[1]).filter((t): t is string => Boolean(t)),
+  );
   // A journey and its members are loaded twice by definition (once as rows in
   // their own right, once as phases); one cache keeps that from being N+1.
   const stepCache = new Map<string, StepRow[]>();
@@ -551,6 +563,7 @@ export async function selectProcedures(
         coveringTests: guards.filter((g) => steps.some((s) => g.covers === s.symbol_name)).map((g) => g.testFile),
         journey: row.journey,
         memberSteps,
+        emitSites: emitSitesByToken.get(REGISTRATION_TOKEN.exec(row.route_path ?? '')?.[1] ?? '') ?? [],
       },
       env,
     );
@@ -583,6 +596,25 @@ export async function selectProcedures(
     .map((c) => ({ title: c.workflow.title, kind: c.draft.kind }));
 
   return { candidates, report };
+}
+
+/**
+ * The no-AI answer: the same tutorials, unannotated (doc/TUTORIAL_REDESIGN.md
+ * §2.5, §7).
+ *
+ * Everything a walkthrough is made of — order, files, line spans, snippets,
+ * highlights, phases, hand-off targets, the entry statement and the landing
+ * facts — is computed from evidence, so a model is the last 20% of the card and
+ * not the card. Before this, `ai_disabled` deleted the package's tutorials and
+ * wrote none back, and the tab went blank: a privacy setting silently removed a
+ * feature that never needed a provider in the first place. Every step ships
+ * `narration_source: 'deterministic'`, which the reader already renders as a
+ * label, so nothing here can be mistaken for written prose.
+ */
+export function generateDeterministicTutorials(
+  params: Omit<GenerateTutorialsParams, 'ai' | 'privacyMode'>,
+): Promise<TutorialResult> {
+  return generateTutorials({ ...params, ai: null, privacyMode: 'ai_disabled' });
 }
 
 async function loadWorkflowSteps(snapshotId: string, workflowId: string): Promise<StepRow[]> {
@@ -676,6 +708,46 @@ async function loadSideEffects(snapshotId: string): Promise<Map<string, StepEffe
   return byNode;
 }
 
+/** `prefix:name` registrations carry the token; a bare route does not. */
+const REGISTRATION_TOKEN = /^[a-z]+:(.+)$/;
+/** Publish-shaped calls, matched against the verified bytes of every symbol. */
+const PUBLISH_CALL = String.raw`(?:emit|publish|send|dispatch)\s*\(\s*['"\x60]`;
+
+/**
+ * Where each event token is published inside this repository.
+ *
+ * A handler registered on `socket:create-room` has no route a reader can send
+ * anything to; the honest answer to "how do I set this off" is the call that
+ * writes that name. `side_effects.evidence` cannot supply it — the detector
+ * records `.emit(` with the literal already stripped — so this scans the same
+ * verified snippet bytes the receipts prove, which is the identical technique
+ * the highlight locator uses.
+ *
+ * One statement for every token: a `LATERAL regexp_matches` attributes each hit
+ * to the token it matched, so a file that publishes four events is found once.
+ */
+async function loadEmitSites(snapshotId: string, tokens: string[]): Promise<Map<string, WalkthroughEmitSite[]>> {
+  const byToken = new Map<string, WalkthroughEmitSite[]>();
+  const wanted = [...new Set(tokens)].filter((t) => t.length >= 3);
+  if (wanted.length === 0) return byToken;
+  const pattern = `${PUBLISH_CALL}(${wanted.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})['"\`]`;
+  const rows = (await query(
+    `SELECT DISTINCT n.file_path, n.name, n.line_start, n.line_end, m[1] AS token
+     FROM graph_nodes n, LATERAL regexp_matches(n.snippet, $2, 'g') AS m
+     WHERE n.snapshot_id = $1 AND n.snippet IS NOT NULL
+       AND n.type IN ('function', 'method', 'class', 'module', 'file')
+     LIMIT 400`,
+    [snapshotId, pattern],
+  )).rows as Array<{ file_path: string | null; name: string | null; line_start: number | null; line_end: number | null; token: string }>;
+  for (const r of rows) {
+    if (!r.file_path) continue;
+    const list = byToken.get(r.token) ?? [];
+    list.push({ filePath: r.file_path, symbolName: r.name, lineStart: r.line_start, lineEnd: r.line_end });
+    byToken.set(r.token, list);
+  }
+  return byToken;
+}
+
 /** Lockfile → package manager, so a printed command is the one that works here. */
 async function detectRepoPackageManager(snapshotId: string): Promise<ReturnType<typeof detectPackageManager>> {
   const rows = (await query(
@@ -733,8 +805,11 @@ async function generateOneTutorial(
     steps: candidate.mode === 'walkthrough'
       // Highlights and phases are part of the skeleton, so they belong in the
       // key: a re-analysis that moves a highlight must not clone the old card.
+      // `entry` rides the key too: a reading whose stated trigger changed is a
+      // different reading, and cloning the old card would keep shipping the
+      // door the detector no longer believes in.
       ? candidate.draft.steps.map((s) => [s.order, s.role, s.filePath, s.lineStart,
-        s.phase?.member ?? '', s.boundary?.kind ?? '', s.collapsed,
+        s.phase?.member ?? '', s.boundary?.kind ?? '', s.collapsed, s.entry?.text ?? '',
         s.highlights.map((h) => `${h.start}-${h.end}:${h.source}`).join(','),
         (s.snippet ?? '').slice(0, SNIPPET_CAP)])
       : candidate.draft.steps.map((s) => [s.order, s.kind, s.action, s.command ?? '', s.filePath,
@@ -772,7 +847,11 @@ async function generateOneTutorial(
   // applying them is where a hand-off that names nothing gets replaced by the
   // deterministic template rather than shipped broken.
   if (candidate.mode === 'walkthrough') applyWalkthroughAnnotation(candidate.draft, output);
-  const lint = lintAnnotation(candidate, output, workflow.title);
+  // Nothing to lint when nothing was written: `explanationLint` asks whether
+  // prose explains, and the deterministic templates are not prose.
+  const lint = params.ai === null
+    ? { issues: [] as string[], hits: [] as string[] }
+    : lintAnnotation(candidate, output, workflow.title);
   const structural = candidate.mode === 'walkthrough'
     ? lintWalkthrough(candidate.draft, workflow.journey).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }))
     : lintProcedure(candidate.draft).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }));
@@ -835,6 +914,9 @@ async function generateOneTutorial(
        // "Run & verify" (doc/TUTORIAL_REDESIGN.md §5). `procedure_kind` stays
        // for the icons and for rows written before v4.
        mode: candidate.mode,
+       // Who wrote the prose. The tab says so out loud, because a package
+       // generated with AI off must not read as though a model saw the code.
+       annotation: params.ai === null ? 'deterministic' : 'ai',
        procedure_kind: draft.kind,
        rank,
        selection: report,
@@ -916,6 +998,7 @@ const walkthroughRow = (step: WalkthroughStep): PersistableStep => ({
     handoff: step.handoff,
     landing: step.landing,
     boundary: step.boundary,
+    ...(step.entry ? { entry: step.entry } : {}),
     narration_source: step.narrationSource,
     collapsed: step.collapsed,
     evidence: step.evidence,
@@ -1021,9 +1104,61 @@ const PROCEDURE_INTENT: Record<string, string> = {
 };
 
 const annotate = (params: GenerateTutorialsParams, candidate: Candidate): Promise<Annotation> =>
-  candidate.mode === 'walkthrough'
-    ? annotateWalkthrough(params, candidate.workflow, candidate.draft)
-    : annotateProcedure(params, candidate.workflow, candidate.draft);
+  params.ai === null
+    ? Promise.resolve(deterministicAnnotation(candidate))
+    : candidate.mode === 'walkthrough'
+      ? annotateWalkthrough(params, candidate.workflow, candidate.draft)
+      : annotateProcedure(params, candidate.workflow, candidate.draft);
+
+/** A file list, deduped and ordered as the reader meets them. */
+function filesOf(candidate: Candidate): string[] {
+  return [...new Set(candidate.draft.steps.map((s) => s.filePath))];
+}
+
+/**
+ * The tutorial-level prose, written from the same facts the steps are.
+ *
+ * Deliberately flat and countable — files, cards, phases, the stated entry, the
+ * stated landing. It reads as a manifest rather than as an essay, and that is
+ * the point: an unannotated package should look unannotated, not like a worse
+ * version of the annotated one.
+ */
+function deterministicAnnotation(candidate: Candidate): Annotation {
+  const files = filesOf(candidate);
+  const where = files.length === 1 ? `\`${files[0]}\`` : `${files.length} files, starting in \`${files[0]}\``;
+  if (candidate.mode === 'howto') {
+    const draft = candidate.draft;
+    return {
+      title: draft.title,
+      goal: `Run this repository's own commands and see what they report.`,
+      summary: `${draft.steps.length} step${draft.steps.length === 1 ? '' : 's'}, each a command or file this repository declares, with the result to compare against. `
+        + `Built from ${where} with no model involved, so nothing here is phrased beyond what the configuration states.`,
+      confidence: 'medium',
+      whyByOrder: new Map(),
+      handoffByOrder: new Map(),
+      runId: null,
+    };
+  }
+  const draft = candidate.draft;
+  const visible = draft.steps.filter((s) => !s.collapsed && !s.appendix);
+  const phases = new Set(visible.map((s) => s.phase?.member).filter(Boolean)).size;
+  const entry = draft.steps.find((s) => s.entry)?.entry ?? null;
+  const landing = visible[visible.length - 1]?.landing ?? null;
+  return {
+    title: draft.title,
+    goal: `Follow this path through ${where} and see where each leg hands over to the next.`,
+    summary: [
+      `${visible.length} card${visible.length === 1 ? '' : 's'}${phases > 1 ? ` across ${phases} legs` : ''} over ${where}.`,
+      entry?.text ?? null,
+      landing,
+      `Written from the structure alone — this project has AI generation switched off, so every line below is the trace and the code, with no prose added.`,
+    ].filter(Boolean).join(' '),
+    confidence: 'medium',
+    whyByOrder: new Map(),
+    handoffByOrder: new Map(),
+    runId: null,
+  };
+}
 
 /**
  * Narration and hand-offs, over a skeleton the model cannot alter.
@@ -1067,9 +1202,16 @@ async function annotateWalkthrough(
     ].filter(Boolean).join('\n');
   });
 
+  // The entry fact goes in the prompt, not just the card: without it the model
+  // reliably wrote "send a request to this handler" over a socket registration
+  // no request can reach, and the reader had no way to know it was false.
+  const entry = draft.steps.find((s) => s.entry)?.entry ?? null;
   const prompt = [
     `A new contributor is reading the path below in this repository: "${workflow.title}" (${workflow.trigger_type}; ${workflow.purpose}). They have the code on screen with the listed lines highlighted. Your job is the prose between the snippets.`,
     'Every file, line, snippet, highlight and hand-off target below was read out of this repository. You are NOT choosing them and must not restate them.',
+    entry
+      ? `How this path is entered — this is a fact, already shown to the reader: ${entry.text}${entry.kind === 'http' ? '' : ' Nothing here is reached by an HTTP request; never write that the reader can send, curl or POST anything to set it off.'}`
+      : null,
     [
       'Produce:',
       '- title: at most 8 words, naming the path the reader follows.',
@@ -1095,9 +1237,9 @@ async function annotateWalkthrough(
       ? `Known limits of this reading (the reader is shown these; do not repeat them verbatim, but do not contradict them):\n${draft.gaps.map((g) => `- ${g.detail}`).join('\n')}`
       : 'This reading has no recorded evidence gaps.',
     stepBlocks.join('\n\n'),
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
 
-  const response = await params.ai.call<{
+  const response = await params.ai!.call<{
     goal: string; title: string; summary: string;
     confidence: 'high' | 'medium' | 'low';
     steps: Array<{ step_order: number; narration?: string; handoff?: string }>;
@@ -1217,7 +1359,7 @@ async function annotateProcedure(
     stepBlocks.join('\n\n'),
   ].join('\n\n');
 
-  const response = await params.ai.call<{
+  const response = await params.ai!.call<{
     goal: string; title: string; summary: string;
     confidence: 'high' | 'medium' | 'low';
     steps: Array<{ step_order: number; why: string }>;

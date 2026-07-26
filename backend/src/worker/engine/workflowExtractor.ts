@@ -1,6 +1,6 @@
 import type { EvidenceGraph, EvidenceNode, EvidenceEdgeType } from '../types/analysis.js';
 import type { DetectedEntrypoint } from './entrypointDetector.js';
-import type { DetectedSideEffect } from './sideEffectDetector.js';
+import { normalizeQueueToken, type DetectedSideEffect } from './sideEffectDetector.js';
 import { query } from '../../lib/db.js';
 
 /**
@@ -167,6 +167,12 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     }
   }
 
+  // A flow on the far side of an async hand-off from something a person
+  // triggers is part of a user-initiated path. Done here, after every trace
+  // exists, because the link is between two workflows and neither can see the
+  // other while it is being built.
+  for (const [wf, handoff] of handoffContext(workflows, ctx)) applyHandoffContext(wf, handoff);
+
   // Tier first, then score. Score ties break toward an AST-detected route
   // (`PUT /dataset/:id/:kind`) over a convention-guessed seed across the same
   // steps — it carries the real method and pattern, so it is the one that
@@ -176,6 +182,177 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     || b.importanceScore - a.importanceScore
     || Number(Boolean(b.entrypoint.routePattern)) - Number(Boolean(a.entrypoint.routePattern))));
   return { workflows: kept, deadEnds };
+}
+
+// ─── Async hand-off reachability ─────────────────────────────────────────────
+//
+// A queue consumer is, by construction, not triggered by a user — so under the
+// old rule `userTriggered && persists -> core`, NO background worker could ever
+// be a core flow no matter how much of the system it owned. Measured on this
+// tool's own repository: `Queue consumer: ANALYSIS_QUEUE` and
+// `Queue consumer: SUMMARY_QUEUE` — clone, parse, every analysis phase, persist,
+// then the whole generation run — both tiered `supporting`, while a settings
+// `DELETE /…/ranking-weights/:role` was the top-ranked core flow. The same shape
+// holds wherever the product happens on the async side.
+//
+// The fix is reachability, not a special case: a consumer whose registration
+// token something user-triggered publishes is ON a user-initiated path, and it
+// is tier-eligible for that reason alone. A consumer nobody publishes to — a
+// cron janitor, a queue fed only by an external system — stays `supporting`,
+// which is the correct answer for it.
+//
+// The token contract is the one `journeyComposer` already established for its
+// `async_token` boundaries (BullMQ queue names, job names, socket events and
+// pub/sub channels all normalize the same way), so the two agree on what a
+// hand-off is.
+
+/** Tokens that identify nothing — every repo publishes some of them. */
+const HANDOFF_TOKEN_STOPLIST = new Set([
+  'main', 'default', 'message', 'data', 'error', 'connect', 'disconnect',
+]);
+const MIN_HANDOFF_TOKEN_LENGTH = 3;
+
+function admissibleHandoffToken(token: string): boolean {
+  return token.length >= MIN_HANDOFF_TOKEN_LENGTH && !HANDOFF_TOKEN_STOPLIST.has(token);
+}
+
+/**
+ * `<receiver>.add('<job>'` / `socket.emit('<event>'` — both captures are token
+ * candidates. The receiver matters most: a BullMQ producer writes
+ * `getAnalysisQueue().add('analyze_repository', …)`, where the literal is the
+ * JOB name and only the receiver carries the QUEUE the consumer registered on.
+ */
+const HANDOFF_PUBLISH_RE =
+  /([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?\s*\.\s*(?:add|emit|publish|send|xAdd|xadd|lPush|rPush|lpush|rpush)\s*\(\s*(?:['"`]([\w:.\-/]{2,64})['"`])?/g;
+
+/**
+ * Tokens a consumer registration answers to. A registration may namespace
+ * itself (`socket:draw-ops`); the producing side writes the bare name, so both
+ * forms are admitted.
+ */
+function registrationTokens(routePattern: string): string[] {
+  if (!routePattern) return [];
+  const forms = [routePattern];
+  const colon = routePattern.indexOf(':');
+  if (colon > 0) forms.push(routePattern.slice(colon + 1));
+  return [...new Set(forms.map(normalizeQueueToken).filter(admissibleHandoffToken))];
+}
+
+/** Hand-off tokens a flow publishes, from its own steps' effects and bytes. */
+function publishedHandoffTokens(wf: ExtractedWorkflow, ctx: TraversalContext): string[] {
+  const tokens = new Set<string>();
+  const add = (raw: string | undefined): void => {
+    if (!raw) return;
+    const token = normalizeQueueToken(raw);
+    if (admissibleHandoffToken(token)) tokens.add(token);
+  };
+  for (const step of wf.steps) {
+    for (const effect of ctx.effectsByKey.get(step.nodeStableKey) ?? []) {
+      if (effect.kind !== 'message_publish') continue;
+      add(effect.queueHint);
+      add(effect.target);
+    }
+    // The enqueue may carry no `message_publish` row at all — a `queue_enqueue`
+    // behaviour signal is enough to make the step `async_work` — so the bytes
+    // are read directly rather than only through the effect table.
+    const snippet = ctx.nodesByKey.get(step.nodeStableKey)?.snippet;
+    if (!snippet) continue;
+    for (const m of snippet.matchAll(HANDOFF_PUBLISH_RE)) { add(m[1]); add(m[2]); }
+  }
+  return [...tokens];
+}
+
+/**
+ * The hand-off graph, as a `HandoffContext` per affected workflow.
+ *
+ * `reachedFromUser` is closed transitively, so a pipeline whose second stage is
+ * fed by its first (`analyze` enqueues `summary`) carries the whole chain.
+ * Flows a person already triggers directly are not marked — they were
+ * user-triggered before any of this — but they still receive their inbound
+ * count, which is how a socket handler several pages call is distinguished from
+ * one that only one page calls.
+ */
+function handoffContext(
+  workflows: ExtractedWorkflow[],
+  ctx: TraversalContext,
+): Array<[ExtractedWorkflow, HandoffContext]> {
+  const byToken = new Map<string, Set<string>>();
+  for (const wf of workflows) {
+    const kind = wf.entrypoint.kind;
+    if (kind !== 'message_consumer' && kind !== 'event_handler') continue;
+    for (const token of registrationTokens(wf.entrypoint.routePattern ?? '')) {
+      const list = byToken.get(token);
+      if (list) list.add(wf.stableKey);
+      else byToken.set(token, new Set([wf.stableKey]));
+    }
+  }
+  // A token two consumers answer to cannot say which one continues the flow.
+  // No edge is formed rather than the wrong one — same guard the composer uses.
+  const consumerByToken = new Map<string, string>();
+  for (const [token, keys] of byToken) {
+    if (keys.size === 1) consumerByToken.set(token, [...keys][0]!);
+  }
+  if (consumerByToken.size === 0) return [];
+
+  const seeds: string[] = [];
+  const publishesTo = new Map<string, string[]>();
+  const inboundFrom = new Map<string, Set<string>>();
+  for (const wf of workflows) {
+    if (USER_TRIGGERED.has(wf.entrypoint.kind)) seeds.push(wf.stableKey);
+    const targets = [...new Set(publishedHandoffTokens(wf, ctx)
+      .map((t) => consumerByToken.get(t))
+      .filter((k): k is string => k !== undefined && k !== wf.stableKey))];
+    if (targets.length === 0) continue;
+    publishesTo.set(wf.stableKey, targets);
+    for (const target of targets) {
+      const from = inboundFrom.get(target);
+      if (from) from.add(wf.stableKey);
+      else inboundFrom.set(target, new Set([wf.stableKey]));
+    }
+  }
+  if (publishesTo.size === 0) return [];
+
+  const visited = new Set(seeds);
+  const reached = new Set<string>();
+  const frontier = [...seeds];
+  for (let i = 0; i < frontier.length; i++) {
+    for (const next of publishesTo.get(frontier[i]!) ?? []) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      reached.add(next);
+      frontier.push(next);
+    }
+  }
+
+  const out: Array<[ExtractedWorkflow, HandoffContext]> = [];
+  for (const wf of workflows) {
+    const inbound = inboundFrom.get(wf.stableKey)?.size ?? 0;
+    const reachedFromUser = reached.has(wf.stableKey);
+    if (inbound === 0 && !reachedFromUser) continue;
+    out.push([wf, { reachedFromUser, inboundHandoffs: inbound }]);
+  }
+  return out;
+}
+
+/** Re-tier and re-score a flow in light of what the system hands to it. */
+function applyHandoffContext(wf: ExtractedWorkflow, handoff: HandoffContext): void {
+  const ranked = rankWorkflow(
+    wf.entrypoint,
+    wf.steps,
+    wf.tier === 'surface',
+    wf.metadata?.unknown_effects_only === true,
+    handoff,
+  );
+  wf.tier = ranked.tier;
+  wf.importanceScore = ranked.score;
+  wf.rankingReasons = ranked.reasons;
+  wf.metadata = {
+    ...(wf.metadata ?? {}),
+    tier: ranked.tier,
+    ranking_reasons: ranked.reasons,
+    ...(handoff.reachedFromUser ? { reached_from_user_trigger: true } : {}),
+    ...(handoff.inboundHandoffs ? { inbound_handoffs: handoff.inboundHandoffs } : {}),
+  };
 }
 
 /**
@@ -528,6 +705,28 @@ const PERSISTENT_STEP_KINDS = new Set(['data_write', 'async_work', 'side_effect'
 const STATE_CHANGING_STEP_KINDS = new Set([...PERSISTENT_STEP_KINDS, 'auth_guard']);
 /** Entry points a person triggers, as opposed to the system triggering itself. */
 const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_handler']);
+/**
+ * What the rest of the system hands to a flow. Both facts are about the flow's
+ * PLACE in the system rather than its own body, so neither can be known while
+ * it is being traced; they are supplied by `extractWorkflowsDetailed` once
+ * every trace exists.
+ *
+ * Only `reachedFromUser` participates in scoring, and only through the
+ * `userTriggered` term that already existed. `inboundHandoffs` is recorded for
+ * the reader and deliberately carries NO weight: a scoring reweight was written
+ * and then reverted, because ranking across the calibration fleet is verified
+ * work and a mis-tiered consumer does not justify re-measuring all of it.
+ */
+export interface HandoffContext {
+  /**
+   * This flow sits on the far side of an async hand-off from something a person
+   * triggers. It counts as user-triggered because a user did start it — the
+   * path simply crosses a queue on the way.
+   */
+  reachedFromUser?: boolean;
+  /** How many distinct flows publish the token this flow is registered on. */
+  inboundHandoffs?: number;
+}
 
 /**
  * Where a flow belongs in the list, and how high within its tier.
@@ -551,7 +750,10 @@ export function rankWorkflow(
   steps: WorkflowStep[],
   isSurface: boolean,
   unknownOnly: boolean,
+  /** What the rest of the system hands to this flow — see `handoffContext`. */
+  handoff: HandoffContext = {},
 ): { tier: WorkflowTier; score: number; reasons: string[] } {
+  const reachedFromUser = handoff.reachedFromUser === true;
   const reasons: string[] = [];
   const kinds = new Set(steps.map((s) => s.stepKind));
   const distinctEffects = [...kinds].filter((k) => STATE_CHANGING_STEP_KINDS.has(k) || k === 'data_read').length;
@@ -563,7 +765,8 @@ export function rankWorkflow(
   const authSteps = steps.filter((s) => s.stepKind === 'auth_guard');
   const changesAuthState = authSteps.some((s) => s.metadata?.syntheticSeedEffect === true);
   const guarded = authSteps.length > 0;
-  const userTriggered = USER_TRIGGERED.has(ep.kind);
+  const directlyTriggered = USER_TRIGGERED.has(ep.kind);
+  const userTriggered = directlyTriggered || reachedFromUser;
 
   if (isSurface) {
     // Ordered among themselves so a real declared route sorts above a
@@ -573,7 +776,10 @@ export function rankWorkflow(
   }
 
   let score = 0;
-  if (userTriggered) { score += 0.25; reasons.push('triggered by a user'); }
+  if (userTriggered) {
+    score += 0.25;
+    reasons.push(directlyTriggered ? 'triggered by a user' : 'runs on a path a user starts, across an async hand-off');
+  }
   if (persists) { score += 0.25; reasons.push('changes stored state'); }
   if (changesAuthState) { score += 0.25; reasons.push('changes who is signed in'); }
   else if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
@@ -758,22 +964,68 @@ function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {
   return `${ep.kind.replace(/_/g, ' ')}: ${seed.name}`;
 }
 
-/** Deterministic purpose from trigger + purpose signals + effect summary. */
+/**
+ * Effect kinds whose `target` names a stored resource rather than a remote one.
+ * Kept apart from the service kinds below so the sentence can say "on X" for a
+ * table and "against Y" for a service without guessing which it is looking at.
+ */
+const RESOURCE_EFFECT_KINDS = new Set<DetectedSideEffect['kind']>([
+  'database_read', 'database_write', 'cache_write', 'file_write',
+]);
+/** Effect kinds whose `target` names something outside this process. */
+const SERVICE_EFFECT_KINDS = new Set<DetectedSideEffect['kind']>([
+  'http_call', 'external_service', 'message_publish', 'email_send', 'auth_call', 'process_exec',
+]);
+/** Two nouns is a subject; five is a dump. */
+const MAX_PURPOSE_SUBJECTS = 2;
+
+/**
+ * What this flow acts ON, in the analysed repo's own words.
+ *
+ * Only three sources, all of them evidence recorded against THIS flow's own
+ * steps: a schema node the trace ended on, the `target` of a data effect
+ * detected on one of its steps, and the `target` of an outbound-call effect.
+ * Nothing is inferred from a file path or a symbol name.
+ *
+ * This replaces a domain phrase table that keyed `sections/`, `packages/`,
+ * `team` and the letters `ast` onto sentences describing THIS product, and so
+ * told a student club's marketing site that its About page existed for
+ * "onboarding generation" (see `behaviorSignals.ts`). A repo with no such
+ * evidence now gets no subject clause at all, which is the honest answer: the
+ * flow was traced, and nothing it reaches has a name we read from the code.
+ */
+function purposeSubject(steps: WorkflowStep[], ctx: TraversalContext): { on: string[]; against: string[] } {
+  const on: string[] = [];
+  const against: string[] = [];
+  const push = (list: string[], value: string | undefined | null): void => {
+    const name = (value ?? '').trim();
+    if (!name || name.length > 40 || list.includes(name) || list.length >= MAX_PURPOSE_SUBJECTS) return;
+    list.push(name);
+  };
+  // Written resources first: a table a flow writes identifies it far better
+  // than one of the four it reads on the way there.
+  for (const wantWrite of [true, false]) {
+    for (const step of steps) {
+      if (wantWrite !== (step.stepKind === 'data_write')) continue;
+      const node = ctx.nodesByKey.get(step.nodeStableKey);
+      if (node?.type === 'schema') push(on, node.name);
+      for (const effect of ctx.effectsByKey.get(step.nodeStableKey) ?? []) {
+        if (!effect.target) continue;
+        if (RESOURCE_EFFECT_KINDS.has(effect.kind)) push(on, effect.target);
+        else if (SERVICE_EFFECT_KINDS.has(effect.kind)) push(against, effect.target);
+      }
+    }
+  }
+  return { on, against: against.filter((s) => !on.includes(s)) };
+}
+
+/** Deterministic purpose: trigger + what the flow's own evidence names + outcomes. */
 function classifyPurpose(
   ep: DetectedEntrypoint,
   seed: EvidenceNode,
   steps: WorkflowStep[],
   ctx: TraversalContext,
 ): string {
-  const purposeCounts = new Map<string, number>();
-  for (const step of steps) {
-    const node = ctx.nodesByKey.get(step.nodeStableKey);
-    const purposes = node?.metadata.purposeSignals;
-    if (!Array.isArray(purposes)) continue;
-    for (const p of purposes as string[]) purposeCounts.set(p, (purposeCounts.get(p) ?? 0) + 1);
-  }
-  const domain = [...purposeCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-
   const outcomes: string[] = [];
   if (steps.some((s) => s.stepKind === 'data_write')) outcomes.push('writes data');
   else if (steps.some((s) => s.stepKind === 'data_read')) outcomes.push('reads data');
@@ -783,8 +1035,13 @@ function classifyPurpose(
   const trigger = ep.kind === 'http_route'
     ? `Handles ${ep.method ?? 'HTTP'} ${ep.routePattern ?? `requests via ${seed.name}`}`
     : `Handles ${ep.kind.replace(/_/g, ' ')} via ${seed.name}`;
-  const domainPart = domain ? ` (${domain.replace(/_/g, ' ')})` : '';
-  return outcomes.length > 0 ? `${trigger}${domainPart}: ${outcomes.join(', ')}` : `${trigger}${domainPart}`;
+
+  const { on, against } = purposeSubject(steps, ctx);
+  const subject = [
+    on.length > 0 ? ` on ${on.join(', ')}` : '',
+    against.length > 0 ? ` against ${against.join(', ')}` : '',
+  ].join('');
+  return outcomes.length > 0 ? `${trigger}${subject}: ${outcomes.join(', ')}` : `${trigger}${subject}`;
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────

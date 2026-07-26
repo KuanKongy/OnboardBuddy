@@ -27,15 +27,33 @@ const BEHAVIOR_RULES: Array<{ signal: string; pattern: RegExp }> = [
   { signal: 'ast_parse', pattern: /createProgram|parseSourceFile|SourceFile|SyntaxKind/ },
 ];
 
-const PURPOSE_RULES: Array<{ signal: string; pattern: RegExp }> = [
-  { signal: 'authentication', pattern: /auth|login|signup|token|session/i },
-  { signal: 'project_management', pattern: /project|invitation|member|team/i },
-  { signal: 'repository_analysis', pattern: /analysis|analyz|ast|symbol|graph|ingest|parser/i },
-  { signal: 'onboarding_generation', pattern: /onboarding|summary|section|package|walkthrough|tutorial/i },
-  { signal: 'github_integration', pattern: /github|octokit|installation|zipball/i },
-  { signal: 'ui', pattern: /component|page|view|render/i },
-  { signal: 'configuration', pattern: /config|setting|env/i },
-];
+/*
+ * There is deliberately no purpose/domain rule table here.
+ *
+ * There used to be one: seven regexes mapping a path or symbol substring onto a
+ * domain phrase — `onboarding_generation`, `project_management`,
+ * `repository_analysis`, `github_integration`. Those are THIS product's
+ * vocabulary, and `derivePurposeSignals` stamped them onto every repo we
+ * analyse. Measured consequences, all live:
+ *
+ *   - a student club's marketing site had `src/components/sections/About.tsx`
+ *     described as "Handles ui route via About (onboarding generation)", and
+ *     the package's opening paragraph then said the site exists "for onboarding
+ *     and project management purposes";
+ *   - `src/components/sections/Team.tsx` became "(project management)";
+ *   - `Toaster` became "(repository analysis)" on every repo in the fleet,
+ *     because `/ast/` has no word boundary and matches to·ast·er.
+ *
+ * The failure is not the missing `\b`. A phrase table keyed on path substrings
+ * can only ever describe the domain of whoever wrote the table, and every
+ * unseen repo pays for it. Purpose is now derived where the evidence is —
+ * `workflowExtractor.classifyPurpose` reads the tables, resources and services
+ * a flow's own steps reach, so a repo is described in its own nouns or in none.
+ *
+ * BEHAVIOR_RULES above stay: they name a MECHANISM ("this calls a query", "this
+ * registers a worker"), which is a property of the code in front of us and
+ * carries no claim about what the product is for.
+ */
 
 /** Accepts top-level symbols and class methods alike — both carry calls + snippet. */
 type SignalSource = Pick<SymbolInfo, 'callsSymbols' | 'initializer' | 'snippet' | 'methods'>;
@@ -55,9 +73,4 @@ export function deriveBehaviorSignals(symbol: SignalSource): string[] {
   const callCount = symbol.callsSymbols?.length ?? 0;
   if (callCount >= 8) signals.push('orchestration');
   return signals;
-}
-
-export function derivePurposeSignals(relativePath: string, symbol: Pick<SymbolInfo, 'name'>): string[] {
-  const haystack = `${relativePath} ${symbol.name}`;
-  return PURPOSE_RULES.filter((r) => r.pattern.test(haystack)).map((r) => r.signal);
 }

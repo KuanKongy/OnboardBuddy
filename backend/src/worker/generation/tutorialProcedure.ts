@@ -730,6 +730,24 @@ function selectProbe(effects: TraceStep[], entry: TraceStep): TraceStep | undefi
  * How a reader sets this flow off by hand — a route to curl, a page to open,
  * or a covering test to run — plus whatever the evidence could not pin down.
  */
+/**
+ * The port that serves THIS flow, not just the first one published.
+ *
+ * A repo with `db`, `api` and `web` publishes three; curling the Postgres port
+ * because it is listed first is the sort of confident-and-wrong instruction
+ * that made the old tutorials untrustworthy. Prefer the service whose build
+ * context contains the traced file; fall back to any HTTP port. Shared by the
+ * how-to trigger and the walkthrough's entry statement so the two can never
+ * print different hosts for the same flow.
+ */
+function servingPort(env: RunEnvironment, filePath: string): string | null {
+  const httpPorts = env.ports.filter((p) => p.kind === 'http');
+  return (
+    httpPorts.find((p) => p.buildContext && filePath.startsWith(p.buildContext.replace(/\/$/, '') + '/'))
+    ?? httpPorts[0]
+  )?.port ?? null;
+}
+
 function buildTrigger(
   input: TraceInput,
   env: RunEnvironment,
@@ -737,15 +755,7 @@ function buildTrigger(
   probe: TraceStep,
 ): { trigger: ManualTrigger | null; gaps: ProcedureGap[] } {
   const gaps: ProcedureGap[] = [];
-  // The port that serves THIS flow, not just the first one published. A repo
-  // with `db`, `api` and `web` publishes three; curling the Postgres port
-  // because it is listed first is the sort of confident-and-wrong instruction
-  // that made the old tutorials untrustworthy. Prefer the service whose build
-  // context contains the traced file; fall back to any HTTP port.
-  const httpPorts = env.ports.filter((p) => p.kind === 'http');
-  const port =
-    (httpPorts.find((p) => p.buildContext && entry.filePath.startsWith(p.buildContext.replace(/\/$/, '') + '/'))
-      ?? httpPorts[0])?.port ?? null;
+  const port = servingPort(env, entry.filePath);
   // A journey is set off by its first member, not by the word "journey".
   const triggerType = input.entryTriggerType ?? input.triggerType;
   const isHttp = Boolean(input.routePath) && /^HTTP/i.test(triggerType);
@@ -1123,6 +1133,37 @@ export interface WalkthroughPhase {
   member: string;
 }
 
+/** A call site in this repository that publishes the token a handler answers to. */
+export interface WalkthroughEmitSite {
+  filePath: string;
+  symbolName: string | null;
+  lineStart: number | null;
+  /** Node span, for preferring the innermost enclosing symbol. */
+  lineEnd: number | null;
+}
+
+/**
+ * How this path is entered — stated, never assumed.
+ *
+ * The failure this closes: a walkthrough of a socket handler reads exactly like
+ * a walkthrough of a route, so a reader assumes the same door. It is not the
+ * same door — no request reaches a `socket:` registration, and a curl printed
+ * beside one is a false instruction. `kind` comes from the entrypoint the
+ * detector recorded, and `command` exists ONLY where a hand-sendable request
+ * really is the trigger.
+ */
+export interface WalkthroughEntry {
+  kind: 'http' | 'page' | 'ui_event' | 'event' | 'job' | 'cli' | 'export' | 'unknown';
+  /** One or two sentences: what makes this code run. */
+  text: string;
+  /** `http` only. Anything else has no request to send, and prints none. */
+  command?: string;
+  /** The registration name a publisher has to write to reach this handler. */
+  token?: string;
+  /** Where that name is published inside this repository, innermost first. */
+  emitters?: WalkthroughEmitSite[];
+}
+
 export interface WalkthroughStep {
   order: number;
   role: WalkthroughRole;
@@ -1141,6 +1182,8 @@ export interface WalkthroughStep {
   landing: string | null;
   boundary: { kind: string; detail: string } | null;
   phase: WalkthroughPhase | null;
+  /** First card only: what has to happen for this code to run at all. */
+  entry?: WalkthroughEntry | null;
   /** Folded under its phase by default — nothing is cut, §3.2. */
   collapsed: boolean;
   evidence: string;
@@ -1180,6 +1223,12 @@ export interface WalkthroughInput extends TraceInput {
   journey?: WalkthroughJourney | null;
   /** Each journey member's OWN traced steps, keyed by member stable key. */
   memberSteps?: Map<string, TraceStep[]>;
+  /**
+   * Sites in this repository that publish the token this flow's entry point is
+   * registered under (`emit('…')`, `publish('…')`). For a handler that no
+   * request can reach, this is the only honest answer to "how do I set it off".
+   */
+  emitSites?: WalkthroughEmitSite[];
 }
 
 /**
@@ -1250,6 +1299,26 @@ const EFFECT_RESULT: Record<string, string> = {
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** The verbs above end on a preposition that only reads with a target after it. */
+const DANGLING_PREPOSITION = /\s+(?:to|onto|on|at|from|with|through|by|out to|the file)$/;
+
+/**
+ * What a highlighted line does, in the detector's own vocabulary.
+ *
+ * `side_effects.target` is often null — the detector matched `.emit(` or
+ * `.create(` without resolving a name — and the label then read "enqueues
+ * onto", a sentence with its object missing. Falling back to the matched call
+ * text keeps the label honest and says strictly more: the reader sees the
+ * expression that put the highlight there.
+ */
+function effectLabel(effect: StepEffect): string {
+  const verb = EFFECT_VERB[effect.kind] ?? effect.kind.replace(/_/g, ' ');
+  if (effect.target) return `${verb} ${effect.target}`;
+  const call = effect.evidence.trim().replace(/\s+/g, ' ').slice(0, 40);
+  const base = verb.replace(DANGLING_PREPOSITION, '');
+  return call ? `${base} — \`${call}\`` : base;
+}
+
 /** Absolute line number of `index` in a snippet whose first line is `startLine`. */
 function lineAt(snippet: string, index: number, startLine: number): number {
   let line = startLine;
@@ -1309,9 +1378,7 @@ function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary
   // 1. side_effect — the recorded call expression, found in the snippet.
   for (const effect of step.effects ?? []) {
     if (!effect.evidence) continue;
-    const verb = EFFECT_VERB[effect.kind] ?? effect.kind.replace(/_/g, ' ');
-    push(locate(snippet, startLine, effect.evidence), 'side_effect',
-      effect.target ? `${verb} ${effect.target}` : verb);
+    push(locate(snippet, startLine, effect.evidence), 'side_effect', effectLabel(effect));
   }
 
   // 2. call_to_next — where this step hands control to the next one.
@@ -1414,6 +1481,182 @@ function landingStatement(step: TraceStep, phaseTitle: string | null): string {
   return `This is where the path ends${phaseTitle ? ` — in ${phaseTitle}` : ''}: ${step.description}`;
 }
 
+/** A test-shaped path: a real emitter, but not the one a product reader means. */
+const TEST_PATH = /(?:^|\/)(?:tests?|__tests__|spec|e2e)\/|\.(?:test|spec)\.[cm]?[jt]sx?$/i;
+
+/**
+ * The publishers a reader should look at, innermost first.
+ *
+ * Two exclusions, both structural: a site inside the handler's own file is the
+ * receiving side re-publishing (a broadcast), not the door in; and the widest
+ * node that contains a call also "contains" it (a class body matches every
+ * method's literal), so the narrowest span wins. Test harnesses are kept but
+ * ranked last — they really do send the event, and saying so is more honest
+ * than hiding the only emitter a repo has.
+ */
+function rankEmitters(sites: WalkthroughEmitSite[], handlerFile: string): WalkthroughEmitSite[] {
+  const span = (s: WalkthroughEmitSite): number =>
+    s.lineStart != null && s.lineEnd != null ? s.lineEnd - s.lineStart : Number.MAX_SAFE_INTEGER;
+  const isTest = (s: WalkthroughEmitSite): boolean => TEST_PATH.test(s.filePath);
+  const ranked = sites
+    .filter((s) => s.filePath !== handlerFile)
+    .sort((a, b) => (Number(isTest(a)) - Number(isTest(b))) || (span(a) - span(b)) || a.filePath.localeCompare(b.filePath));
+  // A class body matches every literal its methods contain, so the enclosing
+  // node is the SAME call seen from further out. Counting it twice would let
+  // the entry statement claim two publishers where the repo has one.
+  const kept: WalkthroughEmitSite[] = [];
+  for (const site of ranked) {
+    const contained = kept.some((k) =>
+      k.filePath === site.filePath && site.lineStart != null && site.lineEnd != null
+      && k.lineStart != null && k.lineStart >= site.lineStart && k.lineStart <= site.lineEnd);
+    if (!contained) kept.push(site);
+  }
+  return kept.slice(0, 3);
+}
+
+/** `file:line (\`symbol\`)`, the one form every entry statement cites sites in. */
+const siteRef = (s: WalkthroughEmitSite): string =>
+  `\`${s.filePath}${s.lineStart != null ? `:${s.lineStart}` : ''}\`${s.symbolName ? ` (\`${s.symbolName}\`)` : ''}`;
+
+function emitterClause(token: string, sites: WalkthroughEmitSite[]): string {
+  if (sites.length === 0) {
+    return ` No call publishing \`${token}\` was found in the analysed files, so whatever sends it lives outside this repository or was not parsed.`;
+  }
+  if (sites.length === 1) return ` In this repository that call is made at ${siteRef(sites[0]!)}.`;
+  return ` In this repository ${sites.length} call sites publish it: ${sites.map(siteRef).join(', ')}.`;
+}
+
+/**
+ * What has to happen for this code to run — the fact a reading cannot omit.
+ *
+ * Everything here is read off the entrypoint the detector recorded, so a
+ * handler that no request can reach says so in those words and prints no
+ * command. A curl appears in exactly one branch: an HTTP route.
+ */
+function deriveEntry(input: WalkthroughInput, entryStep: TraceStep, env?: RunEnvironment): WalkthroughEntry {
+  // A journey is entered by its first member, not by the word "journey".
+  const trigger = input.entryTriggerType ?? input.triggerType;
+  const route = input.routePath;
+  const emitters = rankEmitters(input.emitSites ?? [], entryStep.filePath);
+
+  if (route && /^HTTP/i.test(trigger)) {
+    const method = (input.httpMethod ?? 'GET').toUpperCase();
+    const port = env ? servingPort(env, entryStep.filePath) : null;
+    const parameterised = /[:{*]/.test(route);
+    return {
+      kind: 'http',
+      text: `This path runs when a client sends \`${method} ${route}\` to the running app.`
+        + (parameterised ? ` \`${route}\` carries path parameters — substitute real values from your own instance.` : '')
+        + (port ? '' : ' No compose file publishes a host port, so use whichever port the start command printed.'),
+      ...(port ? { command: `curl -i -X ${method} http://localhost:${port}${route}` } : {}),
+    };
+  }
+  if (trigger === 'UI page' && route) {
+    return { kind: 'page', text: `This path runs when someone opens \`${route}\` in the browser.` };
+  }
+  if (trigger === 'UI action') {
+    const what = entryStep.symbolName ? `\`${entryStep.symbolName}\`` : baseOf(entryStep.filePath);
+    return {
+      kind: 'ui_event',
+      text: `This path runs when a person interacts with ${what} on whichever page renders it. There is no URL of its own to open and nothing to send by hand.`,
+    };
+  }
+  if (trigger === 'event_handler' || trigger === 'message_consumer') {
+    // `prefix:name` is how the detector distinguishes registration surfaces
+    // (`socket:`, `dom:`) without a new enum value; the bare name is the token
+    // a publisher writes.
+    const colon = route ? route.indexOf(':') : -1;
+    const surface = colon > 0 ? route!.slice(0, colon) : null;
+    const token = colon > 0 ? route!.slice(colon + 1) : route ?? null;
+    if (surface === 'dom') {
+      return {
+        kind: 'ui_event',
+        text: `This path runs when the browser fires \`${token}\` on the element this handler is bound to. No request reaches it — the event comes from the page itself.`,
+        ...(token ? { token } : {}),
+      };
+    }
+    if (token) {
+      const registration = surface
+        ? `the \`${surface}\` connection this handler is registered on`
+        : 'the channel this handler is registered on';
+      return {
+        kind: surface === 'socket' ? 'event' : 'job',
+        token,
+        emitters,
+        text: `Nothing you can curl reaches this code. It runs when something publishes \`${token}\` on ${registration}, and that publishing call is the real trigger.`
+          + emitterClause(token, emitters),
+      };
+    }
+    return { kind: 'event', text: 'This path runs when the event it is registered for is published; the graph did not record the event name.' };
+  }
+  if (trigger === 'cli_command') {
+    return {
+      kind: 'cli',
+      text: `This path runs when the command in ${baseOf(entryStep.filePath)} is executed from a shell — not from the running app.`,
+    };
+  }
+  if (trigger === 'export') {
+    const what = entryStep.symbolName ? `\`${entryStep.symbolName}\`` : baseOf(entryStep.filePath);
+    return { kind: 'export', text: `This path runs when another module imports ${what} and calls it. It has no trigger of its own.` };
+  }
+  return {
+    kind: 'unknown',
+    text: `The graph recorded no trigger for this path — open ${baseOf(entryStep.filePath)} to see how it is registered.`,
+  };
+}
+
+/**
+ * One card per PLACE IN THE CODE, not one per traced step.
+ *
+ * The extractor records a trigger step and then one step per effect kind
+ * against the same symbol, so a handler that writes and enqueues produced three
+ * cards showing byte-identical lines with three different sentences under them.
+ * Nothing is lost by merging them: the effects union, the descriptions join,
+ * and the freed budget goes to the next distinct location — which is the only
+ * kind of card that teaches a reader where anything happens.
+ */
+const MAX_MERGED_DESCRIPTIONS = 3;
+
+function coalesceByLocation(steps: TraceStep[]): TraceStep[] {
+  const out: TraceStep[] = [];
+  const byKey = new Map<string, TraceStep>();
+  const descriptions = new Map<string, string[]>();
+  for (const step of steps) {
+    const key = step.nodeId ?? `${step.filePath}:${step.lineStart ?? '?'}:${step.symbolName ?? ''}`;
+    const held = byKey.get(key);
+    if (!held) {
+      const copy: TraceStep = { ...step, effects: [...(step.effects ?? [])] };
+      byKey.set(key, copy);
+      descriptions.set(key, [copy.description]);
+      out.push(copy);
+      continue;
+    }
+    const seen = new Set((held.effects ?? []).map((e) => `${e.kind}|${e.target ?? ''}|${e.evidence}`));
+    for (const effect of step.effects ?? []) {
+      const id = `${effect.kind}|${effect.target ?? ''}|${effect.evidence}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      held.effects!.push(effect);
+    }
+    const list = descriptions.get(key)!;
+    if (!list.includes(step.description)) list.push(step.description);
+    // A crossing recorded on a later duplicate still belongs to the merged card.
+    if (step.metadata?.journeyBoundary && !held.metadata?.journeyBoundary) {
+      held.metadata = { ...held.metadata, journeyBoundary: step.metadata.journeyBoundary };
+    }
+    // An effect kind outranks `trigger` for phase selection: the merged card
+    // really does perform the write the duplicate recorded.
+    if (held.stepKind === 'trigger' && step.stepKind != null && EFFECT_KINDS.has(step.stepKind)) {
+      held.stepKind = step.stepKind;
+    }
+  }
+  for (const step of out) {
+    const list = descriptions.get(step.nodeId ?? `${step.filePath}:${step.lineStart ?? '?'}:${step.symbolName ?? ''}`) ?? [];
+    step.description = list.slice(0, MAX_MERGED_DESCRIPTIONS).join('; ');
+  }
+  return out;
+}
+
 /** `Next: \`sym\` in file — clause`. Always available, never shipped broken. */
 function handoffTemplate(next: TraceStep, boundary: { kind: string; detail?: string } | null): string {
   const where = next.symbolName ? `\`${next.symbolName}\` in ${baseOf(next.filePath)}` : baseOf(next.filePath);
@@ -1434,7 +1677,7 @@ function handoffTemplate(next: TraceStep, boundary: { kind: string; detail?: str
  * path.
  */
 export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment): WalkthroughAttempt {
-  const ordered = [...input.steps].sort((a, b) => a.order - b.order);
+  const ordered = coalesceByLocation([...input.steps].sort((a, b) => a.order - b.order));
   if (ordered.length === 0) {
     return { ok: false, skip: { reason: 'too_few_steps', detail: `"${input.title}" has no persisted steps to read.` } };
   }
@@ -1453,7 +1696,7 @@ export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment
       phaseSources.push({
         member,
         title: journey.memberTitles[i] ?? member,
-        steps: [...source].sort((a, b) => a.order - b.order),
+        steps: coalesceByLocation([...source].sort((a, b) => a.order - b.order)),
       });
     });
     const untraced = phaseSources.filter((p) => p.steps.length === 0);
@@ -1578,6 +1821,10 @@ export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment
       phase: journey
         ? { index: slot.phaseIdx + 1, count: phases.length, title: phase.title, member: phase.member }
         : null,
+      // Only the first card: a reading that does not say what makes the code
+      // run leaves the reader to assume the door, and for a handler no request
+      // can reach, the assumption is always wrong.
+      entry: order === 1 ? deriveEntry(input, t, env) : null,
       collapsed: slot.collapsed,
       evidence: t.lineStart ? `${t.filePath}:${t.lineStart}` : t.filePath,
       nodeId: t.nodeId,
@@ -1643,9 +1890,16 @@ export interface WalkthroughFinding {
   code:
     | 'handoff_missing' | 'handoff_does_not_name_next' | 'landing_missing'
     | 'highlight_out_of_range' | 'narration_cites_absent_highlight'
-    | 'member_not_covered' | 'boundary_not_covered';
+    | 'member_not_covered' | 'boundary_not_covered' | 'narration_invents_a_request';
   detail: string;
 }
+
+/**
+ * Prose that tells the reader to send something. Harmless on an HTTP route,
+ * false on every other entry kind — a socket handler is not reached by a
+ * request, and a walkthrough that implies it is has invented the door.
+ */
+const CLAIMS_A_REQUEST = /\bcurl\b|\bsend(?:s|ing)? (?:a|an|the) (?:HTTP )?request\b|\bPOST(?:ing)? to\b|\bGET(?:ting)? from\b|\bhit(?:s|ting)? (?:the )?endpoint\b/i;
 
 /** True when `text` names the next step's symbol or its file basename. */
 export function handoffNamesNext(text: string, handoff: WalkthroughHandoff): boolean {
@@ -1675,6 +1929,18 @@ export function lintWalkthrough(draft: WalkthroughDraft, journey?: WalkthroughJo
       findings.push({ stepOrder: step.order, code: 'narration_cites_absent_highlight', detail: 'the narration points at a highlight this step does not have' });
     }
   });
+  const entry = draft.steps.find((s) => s.entry)?.entry ?? null;
+  if (entry && entry.kind !== 'http') {
+    for (const step of visible) {
+      if (CLAIMS_A_REQUEST.test(step.narration) || (step.handoff && CLAIMS_A_REQUEST.test(step.handoff.text))) {
+        findings.push({
+          stepOrder: step.order,
+          code: 'narration_invents_a_request',
+          detail: `this path is entered by a ${entry.kind.replace(/_/g, ' ')}, not by a request, but the prose here tells the reader to send one`,
+        });
+      }
+    }
+  }
   for (const step of draft.steps) {
     for (const h of step.highlights) {
       if (step.lineStart != null && (h.start < step.lineStart || (step.lineEnd != null && h.end > step.lineEnd))) {

@@ -47,7 +47,7 @@ export const CAPABILITY_BINDING_RULE = {
   summary:
     'A capability is derived from evidence and then named. It is emitted only when a group of flows binds to all three legs below; nothing else is emitted.',
   legs: [
-    'At least one entry point — an HTTP route, page, event handler, job or command that something outside the code can trigger.',
+    'At least one addressable entry point — an HTTP route, page, UI action, named protocol or queue message, schedule or command that a caller outside the code can invoke on purpose. A raw input event (a mouse, key, scroll or context-loss listener) does not count on its own: it is a component\'s interaction surface, not something the product does.',
     'At least one traced flow that reaches past its own trigger, so there is a path to follow.',
     'At least one persistence or external surface those flows actually reach — a schema table, a named data resource or service, the filesystem, a queue, or the network.',
   ],
@@ -55,6 +55,31 @@ export const CAPABILITY_BINDING_RULE = {
 
 /** Entry points a person triggers — the same set `rankWorkflow` uses. */
 const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_handler']);
+
+/**
+ * A raw platform input event, as stamped by `entrypointDetector`'s `dom:`
+ * prefix on `addEventListener` registrations.
+ *
+ * This is NOT the same thing as a named protocol event. `socket:create-room`
+ * and a queue name are messages the product defines and a caller sends on
+ * purpose; `dom:mousedown` is the browser reporting that a mouse exists. The
+ * detector already draws exactly this line twice — a DOM listener does not
+ * count as an application entry surface (`APPLICATION_KINDS`), because "a
+ * listener is an interaction inside something, never a published entry".
+ *
+ * It was not drawn here, and the consequence was measured: a static portfolio
+ * site's capability list became `Keyboard Input`, `Mouse Button Press`,
+ * `Mouse Button Release`, `Mouse Movement`, `Mouse Wheel Scroll` and
+ * `WebGL Context Loss`. Each `dom:*` pattern was read as if it were a URL, so
+ * `routeResource('dom:mousedown')` handed back `dom-mousedown` as a domain
+ * noun and every input event grouped itself into its own capability.
+ */
+const RAW_INPUT_PREFIX = 'dom:';
+
+function isRawInputTrigger(entrypoint: { kind: string; routePattern?: string | null }): boolean {
+  return entrypoint.kind === 'event_handler'
+    && (entrypoint.routePattern ?? '').startsWith(RAW_INPUT_PREFIX);
+}
 
 /** Steps that mean the flow changed something outside itself. */
 const EFFECT_STEP_KINDS = new Set<WorkflowStep['stepKind']>(['data_write', 'async_work', 'side_effect']);
@@ -223,9 +248,15 @@ function kebab(raw: string): string {
     .toLowerCase();
 }
 
-/** First path segment that names something, ignoring params and scaffolding. */
+/**
+ * First path segment that names something, ignoring params and scaffolding.
+ *
+ * A raw input event is not a route and cannot supply a noun: `dom:wheel` split
+ * on `/` is one segment, so the old code kebab-cased the whole pattern and
+ * returned `dom-wheel` as if it were a domain entity.
+ */
 export function routeResource(route: string | null | undefined): string | null {
-  if (!route) return null;
+  if (!route || route.startsWith(RAW_INPUT_PREFIX)) return null;
   for (const segment of route.split('/')) {
     if (!segment || segment.startsWith(':') || segment.includes('*') || segment.includes('{')) continue;
     const lowered = segment.toLowerCase();
@@ -454,6 +485,30 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
           stableKey: m.workflow.stableKey,
           title: m.workflow.title,
           missing: 'no persistence or external surface reached',
+        });
+      }
+      continue;
+    }
+
+    // The first leg, read strictly. A capability is something the product does
+    // for someone; a group reachable only by raw input events is the input
+    // surface of a component, and naming it is how a WebGL portfolio site
+    // reported `Mouse Wheel Scroll` as a business capability.
+    //
+    // This is a rule about what may CONSTITUTE a group, not about which flows
+    // may belong to one: a `dom:*` flow that shares a key with an addressable
+    // flow — because both write the same resource — still rides along, which is
+    // how the same site keeps its one real storage capability with its scroll
+    // handler inside it. Named protocol events (`socket:*`), queue messages,
+    // routes, pages, UI actions, commands and schedules are all addressable and
+    // unaffected: Skribbl's twelve socket handlers each still form a group.
+    if (members.every((m) => isRawInputTrigger(m.workflow.entrypoint))) {
+      const events = [...new Set(members.map((m) => m.workflow.entrypoint.routePattern ?? RAW_INPUT_PREFIX))];
+      for (const m of members) {
+        unbound.push({
+          stableKey: m.workflow.stableKey,
+          title: m.workflow.title,
+          missing: `only raw input events reach it (${events.slice(0, 3).join(', ')}) — an input event is a component's interaction surface, not something the product does`,
         });
       }
       continue;

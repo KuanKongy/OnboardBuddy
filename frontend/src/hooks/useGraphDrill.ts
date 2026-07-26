@@ -68,6 +68,29 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
   const [anchorNodeId, setAnchorNodeId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * The phase as of *now*, not as of the last render.
+   *
+   * The re-entry guards below used to read the `phase` state variable out of
+   * their own render closure, which is one render behind any transition
+   * started in the current tick. One user gesture on a graph node fires BOTH
+   * `onNodeClick` and `onSelectionChange` (see GraphCanvas.activate), so both
+   * calls saw `phase === "idle"` and each started a `run()`. The first run is
+   * then superseded and bails at `if (!live()) return` *without restoring the
+   * phase* — correct only while the newer run finishes. Three overlapping
+   * starts (a click landing while a remount re-applies the selection) could
+   * leave the phase permanently non-idle, and a stuck phase means
+   * `busy === true` forever: GraphCanvas then sets `elementsSelectable` and
+   * `nodesFocusable` to false, React Flow drops `role="button"`/`tabindex`
+   * from every node, and `activate()` early-returns. That is the observed
+   * "folder nodes are completely inert, 0 interactive controls" dead end.
+   */
+  const phaseRef = useRef<DrillPhase>("idle");
+  const setPhaseNow = useCallback((next: DrillPhase) => {
+    phaseRef.current = next;
+    setPhase(next);
+  }, []);
+
   // Every async continuation checks this: a transition superseded by another
   // (or by unmount) must not write state belonging to a run that is over.
   const runIdRef = useRef(0);
@@ -95,9 +118,9 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
   const cancel = useCallback(() => {
     runIdRef.current += 1;
     clearTimers();
-    setPhase("idle");
+    setPhaseNow("idle");
     setAnchorNodeId(null);
-  }, [clearTimers]);
+  }, [clearTimers, setPhaseNow]);
 
   /** Shared body for down/up/jump — they differ only in stack move and timing. */
   const run = useCallback(
@@ -116,7 +139,7 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
       try {
         // 1. Dive (or begin the pull-back). The camera work itself is done by
         //    DrillCamera, which reads `phase` and `anchorNodeId`.
-        setPhase(opts.down ? "zoom-in" : "zoom-out");
+        setPhaseNow(opts.down ? "zoom-in" : "zoom-out");
 
         // 2. Fetch and the animation overlap deliberately — on a warm cache
         //    the data is ready before the dive finishes and nothing waits.
@@ -125,7 +148,7 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
         if (!live()) return;
 
         let timedOut = false;
-        setPhase("waiting");
+        setPhaseNow("waiting");
         await Promise.race([
           load,
           wait(DRILL_TIMING.waitTimeout).then(() => { timedOut = true; }),
@@ -137,24 +160,24 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
         //    leaves the user where they were instead of on a blank level.
         opts.applyStack(readViewport?.() ?? undefined);
 
-        setPhase("settle");
+        setPhaseNow("settle");
         await wait(reduced ? 0 : DRILL_TIMING.settle);
         if (!live()) return;
-        setPhase("idle");
+        setPhaseNow("idle");
         setAnchorNodeId(null);
       } catch (err) {
         if (!live()) return;
         setError(err instanceof Error ? err.message : "Could not open that level");
-        setPhase("idle");
+        setPhaseNow("idle");
         setAnchorNodeId(null);
       }
     },
-    [loadLevel, readViewport, wait],
+    [loadLevel, readViewport, wait, setPhaseNow],
   );
 
   const drillInto = useCallback(
     (frame: DrillFrame, nodeId: string) => {
-      if (runIdRef.current > 0 && phase !== "idle") return;
+      if (phaseRef.current !== "idle") return;
       void run({
         nodeId,
         down: true,
@@ -162,11 +185,11 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
         applyStack: (vp) => stack.push(frame, vp),
       });
     },
-    [phase, run, stack],
+    [run, stack],
   );
 
   const drillUp = useCallback(() => {
-    if (phase !== "idle" || stack.depth === 0) return;
+    if (phaseRef.current !== "idle" || stack.depth === 0) return;
     const parent = stack.depth >= 2 ? stack.frames[stack.depth - 2]! : null;
     // Emerge from the node that was drilled into, so up is visibly the
     // reverse of down rather than an unrelated refit.
@@ -176,11 +199,11 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
       targetFrame: parent,
       applyStack: () => stack.pop(),
     });
-  }, [phase, run, stack]);
+  }, [run, stack]);
 
   const jumpTo = useCallback(
     (index: number) => {
-      if (phase !== "idle") return;
+      if (phaseRef.current !== "idle") return;
       const target = index >= 0 ? stack.frames[index] ?? null : null;
       void run({
         nodeId: stack.current?.id ?? null,
@@ -189,7 +212,7 @@ export function useGraphDrill({ stack, loadLevel, readViewport }: UseGraphDrillO
         applyStack: () => stack.jumpTo(index),
       });
     },
-    [phase, run, stack],
+    [run, stack],
   );
 
   return useMemo(

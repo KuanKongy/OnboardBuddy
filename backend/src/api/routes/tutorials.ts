@@ -26,6 +26,7 @@ const TUTORIAL_LIST_SELECT = `
          t.unknowns, t.created_at, t.workflow_id,
          t.generation_context->>'goal' AS goal,
          t.generation_context->>'procedure_kind' AS procedure_kind,
+         COALESCE(t.generation_context->>'annotation', 'ai') AS annotation,
          ${TUTORIAL_MODE} AS mode,
          COALESCE((t.generation_context->>'rank')::int, 99) AS rank,
          w.trigger_type, w.purpose,
@@ -252,6 +253,9 @@ function presentStep(row: Record<string, unknown>, receiptById: Map<string, unkn
     handoff: meta.handoff ?? null,
     landing: (meta.landing as string) ?? null,
     boundary: meta.boundary ?? null,
+    // First card only: how this path is entered. A handler no request can
+    // reach says so here, and prints no command to send.
+    entry: meta.entry ?? null,
     narration_source: (meta.narration_source as string) ?? null,
     collapsed: meta.collapsed === true,
     appendix: meta.appendix ?? null,
@@ -269,6 +273,7 @@ tutorialsRouter.get("/:tutorialId", requireProjectAccess(), async (req, res) => 
               t.unknowns, t.workflow_id,
               t.generation_context->>'goal' AS goal,
               t.generation_context->>'procedure_kind' AS procedure_kind,
+              COALESCE(t.generation_context->>'annotation', 'ai') AS annotation,
               ${TUTORIAL_MODE} AS mode,
               t.generation_context->'selection' AS selection,
               w.trigger_type, w.purpose,

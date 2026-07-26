@@ -13,7 +13,7 @@ import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
-import { collectSectionReceipts } from './deterministicReceipts.js';
+import { collectSectionReceiptsOrGap, type ReceiptGap } from './deterministicReceipts.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
 import {
   markUnverifiedClaims,
@@ -191,7 +191,10 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   // (journey step nodes, mapped files, config files) become citable — the
   // prose narrates deterministic facts, so the receipts must cover them or
   // every file mention validates as "cites no receipt from it".
-  const detReceipts = await collectSectionReceipts(params.sectionType, params.deps);
+  // A broken receipt query costs this section its CITATIONS, never its prose:
+  // see `collectSectionReceiptsOrGap`. `receiptGap` is recorded as an honest
+  // unknown below and bars the row from the cache.
+  const { rows: detReceipts, gap: receiptGap } = await collectSectionReceiptsOrGap(params.sectionType, params.deps);
   // What each deterministic receipt is evidence OF — "Member of the
   // \"Backend · Workers\" cluster", "Design rationale recorded in the code: …".
   //
@@ -288,6 +291,10 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
        AND ps.confidence IN ('high', 'medium')
        AND NOT (ps.unknowns @> '[{"kind": "incomplete_coverage"}]'::jsonb)
        AND NOT (ps.unknowns @> '[{"kind": "critique_contradiction"}]'::jsonb)
+       -- A section written while its receipt query was broken cites nothing it
+       -- should have cited. Reusing it would outlive the fix, which is exactly
+       -- how the empty-content row this filter already excludes kept coming back.
+       AND NOT (ps.unknowns @> '[{"kind": "receipts_unavailable"}]'::jsonb)
      ORDER BY ps.created_at DESC LIMIT 1`,
     [params.projectId, params.sectionType, params.role, evidenceHash],
   )).rows[0] as { id: string; content: string; diagrams: unknown; confidence: 'high' | 'medium' | 'low'; unknowns: unknown } | undefined;
@@ -464,9 +471,15 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
 
   const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
 
+  // The section shipped, but without the evidence it was supposed to cite —
+  // stated as a gap the reader sees rather than left to look complete.
+  if (receiptGap) {
+    validation = { ...validation, unknowns: [...validation.unknowns, receiptGap] };
+  }
+
   const sectionId = await persistSection(
     params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits, explain.hits,
-    evidenceHash, critique, sanitized,
+    evidenceHash, critique, sanitized, receiptGap, detReceipts.length,
   );
   return { sectionId, validation, retried, runId };
 }
@@ -762,6 +775,8 @@ async function persistSection(
   evidenceHash: string,
   critique: CritiqueOutcome | null,
   sanitized: MarkdownSanitizeCounts,
+  receiptGap: ReceiptGap | null,
+  deterministicReceiptCount: number,
 ): Promise<string> {
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
@@ -800,6 +815,15 @@ async function persistSection(
       unknown_alias_labels: [...new Set(inline.unknownAliases)].slice(0, 10),
       unverified_marked: unverified.marked,
       unverified_unmatched: unverified.unmatched,
+    },
+    // Did the section's own deterministic evidence actually arrive? `failed`
+    // means a receipt query did not execute — a deploy-time defect, not a data
+    // condition — and the reason lives HERE, where failures are queried,
+    // instead of in the content column where it was being read as prose.
+    deterministic_receipts: {
+      collected: deterministicReceiptCount,
+      failed: receiptGap !== null,
+      reason: receiptGap?.detail ?? null,
     },
     voice_lint: { remaining_hits: voiceHits },
     // Explanation-contract findings that survived the retry: kept so a section

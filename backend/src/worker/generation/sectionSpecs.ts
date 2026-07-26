@@ -129,9 +129,25 @@ const CITATION_CONTRACT = [
   'Where no receipt supports a sentence, write the locator yourself ("backend/src/lib/db.ts:14") or drop the sentence. Never a bare "r7" at the end of a line.',
 ].join(' ');
 
+/**
+ * Rules about the evidence blob, stated HERE rather than inside the blob.
+ *
+ * The `deterministic` facts are presented to the model as authoritative content
+ * to narrate, so a directive written into one of their string fields is
+ * indistinguishable from a sentence to reproduce. `snapshot.coverageNote` used
+ * to read "Never describe the codebase as N files" and `snapshot.unreadStacks
+ * .sentence` used to read "You MUST say so plainly in your own words" —
+ * FloowForge shipped the second one verbatim to a reader. Facts state; only
+ * instructions instruct, and instructions live in this channel.
+ */
+const EVIDENCE_CONTRACT = [
+  'The deterministic facts are DATA about the repository, not text to copy: never quote a facts field verbatim, and never repeat any sentence in them that addresses "you" — it was not written for the reader.',
+  '`snapshot.filesTheParserRead` is the only file total any claim may rest on. Never describe the codebase by `filesInScopeIncludingNonSource`: that number counts assets, docs and lockfiles nothing was extracted from. If the parsed count is unavailable, give no file total at all.',
+].join(' ');
+
 /** Prefix every spec's instructions with the shared contracts. */
 const withContracts = (instructions: string[]): string =>
-  [NO_PREAMBLE, NO_REPETITION, SPECIFICITY_FLOOR, CITATION_CONTRACT, ...instructions].join(' ');
+  [NO_PREAMBLE, NO_REPETITION, SPECIFICITY_FLOOR, CITATION_CONTRACT, EVIDENCE_CONTRACT, ...instructions].join(' ');
 
 /**
  * Anything the READER can follow back to the code, in either of the two forms
@@ -484,14 +500,38 @@ const snapshotCounts = async (snapshotId: string) => {
      * it what it MUST disclose.
      */
     unreadStacks: unreadStackSummary(inv.unsupported ?? {}, row.file_count),
+    // A STATEMENT, not a directive — see `unreadStackSummary` for why the
+    // difference is load-bearing. The prohibition this used to carry ("Never
+    // describe the codebase as N files") now lives in `COUNTS_CONTRACT`.
     coverageNote:
       row.parsed_file_count === null
-        ? 'Parsed-file count unavailable for this snapshot. Do not state a file total.'
-        : `Only ${row.parsed_file_count} files were parsed. Never describe the codebase as ${row.file_count} files — that count includes assets, docs and lockfiles nothing was extracted from.`,
+        ? 'The number of files the parser actually read is unavailable for this snapshot.'
+        : `The parser read ${row.parsed_file_count} files. The ${row.file_count}-file total for this repository also counts assets, docs and lockfiles that nothing was extracted from.`,
   };
 };
 
-/** Prose for the languages nothing was extracted from, or null when trivial. */
+/**
+ * Prose for the languages nothing was extracted from, or null when trivial.
+ *
+ * EVERY STRING RETURNED HERE IS A STATEMENT OF FACT ABOUT THE REPOSITORY, never
+ * an instruction to the model. That distinction is not style — it is the whole
+ * mechanism, and getting it wrong shipped to readers.
+ *
+ * This field is serialised into the deterministic-facts fence, which the prompt
+ * presents as authoritative content to narrate. It used to end with
+ * "You MUST say so plainly in your own words — a reader who is not told will
+ * assume this part of the system does not exist." A model handed a sentence it
+ * is told to reproduce, with no other Python evidence to write about, does the
+ * obvious thing: FloowForge's `big_picture` shipped that sentence VERBATIM,
+ * second person and all, to a reader who had asked what the system does.
+ *
+ * An instruction phrased as "you MUST say X in your own words" is
+ * indistinguishable from content once it sits inside a data blob, so the fix is
+ * channel separation rather than wording: the FACT is here, the OBLIGATION is
+ * in the section's `instructions` (`big_picture` and `architecture_deep` both
+ * already carry it), and `explanationLint`'s `prompt_voice` rule fails any
+ * section that ships the instruction voice anyway.
+ */
 function unreadStackSummary(unsupported: Record<string, number>, filesInScope: number): {
   mustDisclose: boolean;
   sentence: string;
@@ -517,8 +557,8 @@ function unreadStackSummary(unsupported: Record<string, number>, filesInScope: n
     mustDisclose,
     languages: langs,
     sentence: mustDisclose
-      ? `${total} files (${share}% of this repository) are written in ${list}, which OnboardBuddy does not parse. NOTHING in this package describes them. You MUST say so plainly in your own words — a reader who is not told will assume this part of the system does not exist.`
-      : `${total} files in ${list} were not parsed; mention it only if it is relevant to what you are explaining.`,
+      ? `${total} files (${share}% of this repository) are written in ${list}, which OnboardBuddy does not parse. No section of this package describes that code.`
+      : `${total} files in ${list} were not parsed.`,
   };
 }
 

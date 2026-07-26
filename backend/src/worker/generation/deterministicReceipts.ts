@@ -9,6 +9,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { isRunControlError } from '../runStatus.js';
 import { loadDecisionNotes } from './decisionComments.js';
 import type { SectionDeps, SectionType } from './sectionSpecs.js';
 
@@ -38,7 +39,28 @@ interface NodeRow {
   trust_level: 'code' | 'config' | 'tests' | 'docs' | 'llm_inference';
 }
 
-const NODE_FIELDS = `n.id, n.stable_key, n.name, n.file_path, n.line_start, n.line_end, n.snippet, n.trust_level`;
+/** The `graph_nodes` columns every receipt row is built from, in `NodeRow` order. */
+const NODE_COLUMNS = [
+  'id', 'stable_key', 'name', 'file_path', 'line_start', 'line_end', 'snippet', 'trust_level',
+] as const;
+
+/**
+ * The node projection, qualified by the alias it is being read THROUGH.
+ *
+ * This used to be a bare `n.`-prefixed constant, which is correct only while
+ * every query reads `graph_nodes` directly. `architecture_deep` stopped doing
+ * that when it grew a ranking subquery: the outer SELECT reads the derived
+ * table `ranked`, where no `n` exists, so the constant expanded to
+ * `SELECT n.id, … FROM (…) ranked` and Postgres rejected the whole statement
+ * with `missing FROM-clause entry for table "n"` (SQLSTATE 42P01). The section
+ * failed on every project for hours. Taking the alias as an argument is what
+ * makes the qualification a decision at each call site instead of an
+ * assumption baked into a string.
+ */
+const nodeFields = (alias: string): string => NODE_COLUMNS.map((c) => `${alias}.${c}`).join(', ');
+
+/** Reading `graph_nodes` directly, as `n`. */
+const NODE_FIELDS = nodeFields('n');
 
 function kindForTrust(trust: NodeRow['trust_level']): DeterministicReceiptRow['receiptKind'] {
   if (trust === 'config') return 'config_snippet';
@@ -149,8 +171,12 @@ export async function collectSectionReceipts(
       // makes "cite this component's receipt" an instruction the model can
       // follow; preferring a member that carries a snippet is what makes the
       // receipt worth citing.
+      //
+      // The outer SELECT reads the derived table, so every column here is
+      // qualified with `ranked` — `n` exists only inside the subquery. Getting
+      // that wrong is what took the section down on 11 of 11 projects.
       const rows = (await query(
-        `SELECT ${NODE_FIELDS}, cluster_label, membership_reason FROM (
+        `SELECT ${nodeFields('ranked')}, ranked.cluster_label, ranked.membership_reason FROM (
            SELECT ${NODE_FIELDS}, c.label AS cluster_label, m.membership_reason,
                   c.critical_score,
                   ROW_NUMBER() OVER (
@@ -162,8 +188,8 @@ export async function collectSectionReceipts(
            JOIN graph_nodes n ON n.id = m.node_id
            WHERE c.snapshot_id = $1
          ) ranked
-         WHERE rn <= 2
-         ORDER BY critical_score DESC, cluster_label, rn`,
+         WHERE ranked.rn <= 2
+         ORDER BY ranked.critical_score DESC, ranked.cluster_label, ranked.rn`,
         [deps.snapshotId],
       )).rows as Array<NodeRow & { cluster_label: string; membership_reason: string }>;
       // Cluster members give the section its STRUCTURE; the decision comments
@@ -306,6 +332,78 @@ export async function collectSectionReceipts(
 
     default:
       return [];
+  }
+}
+
+/**
+ * A receipt-collection attempt that is allowed to have failed.
+ *
+ * `gap` is non-null when the evidence queries could not RUN — a malformed
+ * statement, a dropped column, a dead connection. It is the section's honest
+ * unknown (`package_sections.unknowns`, same shape as every other gap the
+ * reader is shown) and the machine-readable reason in `generation_context`.
+ */
+export interface ReceiptGap {
+  kind: 'receipts_unavailable';
+  detail: string;
+}
+
+export interface ReceiptCollection {
+  rows: DeterministicReceiptRow[];
+  gap: ReceiptGap | null;
+}
+
+/**
+ * `collectSectionReceipts`, but a broken query degrades the EVIDENCE instead of
+ * destroying the SECTION.
+ *
+ * The failure this exists for: `architecture_deep`'s ranking query referenced
+ * an alias that its outer FROM did not declare, every call threw
+ * `missing FROM-clause entry for table "n"`, `summaryWorker`'s per-section
+ * catch turned that into `recordMissingSection`, and the driver's message was
+ * interpolated straight into reader-facing markdown —
+ * `> **This section could not be generated.** missing FROM-clause entry for
+ * table "n"` — on 11 of 11 audited projects, for hours, with nothing else
+ * distinguishing it from an ordinary model failure.
+ *
+ * Degrade rather than fail, for three reasons:
+ *
+ *  1. BLAST RADIUS. Receipts are supplementary evidence. A section's prose
+ *     comes from `spec.deterministic()`, a different query set entirely, and
+ *     the AI path additionally carries semantic receipts from retrieval. Losing
+ *     the deterministic receipts should cost the citations, not the component
+ *     map, the diagram and the decision narrative — all of which were destroyed
+ *     here by evidence the reader never even sees directly.
+ *  2. A DRIVER MESSAGE IS NOT PROSE. Failing loudly, as implemented, meant
+ *     failing INTO the content column. The reason has to land where failures
+ *     are queried (`generation_context`, `unknowns`), not where sentences are
+ *     read.
+ *  3. SILENCE WAS THE ACTUAL DEFECT. So the degrade is loud in every place that
+ *     can be grepped or asserted: a `receipts_unavailable` unknown renders on
+ *     the section as a named gap, `generation_context.deterministic_receipts`
+ *     records the reason and SQLSTATE, the row is BARRED from the section cache
+ *     so a degraded run can never be immortalized, and it goes to stderr. What
+ *     it must never again be is a paragraph.
+ *
+ * Run-control signals (pause/kill/budget/AI-disabled) still propagate untouched
+ * — nothing here calls a model, but absorbing one would be a spending bug.
+ */
+export async function collectSectionReceiptsOrGap(
+  sectionType: SectionType,
+  deps: SectionDeps,
+): Promise<ReceiptCollection> {
+  try {
+    return { rows: await collectSectionReceipts(sectionType, deps), gap: null };
+  } catch (err) {
+    if (isRunControlError(err)) throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    // SQLSTATE, when pg gave us one: `42P01` (undefined table/alias) and
+    // `42703` (undefined column) are the two that mean "this statement was
+    // never going to run", i.e. a deploy-time defect rather than bad data.
+    const code = typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : null;
+    const detail = `Evidence receipts for this section could not be collected${code ? ` (SQLSTATE ${code})` : ''}: ${message.slice(0, 200)}`;
+    console.error(`[receipts] ${sectionType}: deterministic receipt query failed — section ships without citations:`, message);
+    return { rows: [], gap: { kind: 'receipts_unavailable', detail } };
   }
 }
 

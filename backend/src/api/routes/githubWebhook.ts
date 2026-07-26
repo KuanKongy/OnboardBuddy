@@ -6,6 +6,16 @@
  * docs for are ignored, and incremental runs stale-flag sections without
  * rebuilding packages (existing semantics).
  *
+ * A push whose commit is no longer the branch's HEAD is dropped before any run
+ * is prepared — see "Superseded-push guard" below. Ref shapes are settled
+ * before the guard is ever consulted, so it cannot misfire on them: tag and
+ * other non-`refs/heads/` refs exit at `not_a_branch`, branch deletions at
+ * `branch_deleted`, and the all-zero SHA at `no_head_commit` (a deleted
+ * branch's HEAD lookup would 404, and a tag's would resolve the wrong ref).
+ * A force-push is deliberately NOT skipped: `after` is where the branch now
+ * points, so it equals HEAD and the guard passes it through — the rewritten
+ * history is the branch's truth and must be analyzed.
+ *
  * Mounted with express.raw BEFORE the global JSON parser (app.ts) so the
  * HMAC signature is verified against the exact raw bytes. Unauthenticated by
  * design; the signature is the auth. Runs are attributed to the project
@@ -15,6 +25,8 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
+import { envInt } from "../../lib/env.js";
+import { getCommitSha, getInstallationToken } from "../../lib/github.js";
 import type { AnalysisJobData } from "../../lib/queue.js";
 import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
 
@@ -41,6 +53,107 @@ interface PushPayload {
   deleted?: boolean;
   repository?: { name?: string; owner?: { login?: string; name?: string } };
   installation?: { id?: number | string };
+}
+
+/* ── Superseded-push guard ──────────────────────────────────────────────────
+ *
+ * A webhook delivery can arrive AFTER the commit it describes has already been
+ * replaced on the branch: GitHub retries a delivery that timed out, an operator
+ * hits "Redeliver", or two pushes land seconds apart and their deliveries are
+ * processed out of order. Analyzing that push writes a snapshot for a commit
+ * nobody will ever look at, and — because every stored column (both
+ * analysis_jobs.created_at and analysis_snapshots.created_at) records when the
+ * run was SEEN, not when the commit was authored — that snapshot outranks the
+ * newer one and the whole project starts serving stale docs.
+ *
+ * Observed live on project 4b0c28ca-73dd-433a-a2e8-e9fc664df3ec
+ * (ng-eugene/onboardbuddy-webhook-mock): `92d55be1` is the PARENT of `fb5a2146`
+ * yet its job row was inserted five minutes later, so lib/snapshotOrdering.ts
+ * — which is right about everything it can see — ranks the parent as latest.
+ * No ordering over stored rows can detect this; the discriminator is git
+ * ancestry, which we never persist (the worker ingests a zipball, not history).
+ *
+ * So we ask GitHub instead, at webhook time, while the answer still exists:
+ * is the pushed commit still the branch's HEAD? If it is not, this push has
+ * been superseded and running it is pure waste (LLM spend included).
+ *
+ * Deliberately NOT a general "is this commit old" check. Only push-triggered
+ * runs are guarded — POST /projects/:id/analyze (projects.ts) is untouched, so
+ * a human deliberately re-analyzing an old commit still gets exactly that.
+ *
+ * Residual risk, accepted: the skipped push relies on the newer commit's own
+ * delivery to cover the branch. If GitHub never delivers that one at all (not
+ * merely late — never), the branch stays un-analyzed until the next push or a
+ * manual run. That is the same exposure as any single dropped delivery today,
+ * and GitHub retries failed deliveries.
+ */
+
+/** Bound the two GitHub calls so a slow API can never push a delivery toward
+ *  GitHub's ~10s timeout — a timed-out delivery gets REDELIVERED later, which
+ *  is the very bug class this guard exists to fix. Expiry = analyze anyway. */
+const HEAD_CHECK_TIMEOUT_MS = envInt("WEBHOOK_HEAD_CHECK_TIMEOUT_MS", 3000);
+
+export type PushHeadVerdict =
+  /** The branch has moved past this commit — skip the run. */
+  | { superseded: true; head: string }
+  /** Analyze. `at_head` = confirmed current; `lookup_failed` = we could not tell. */
+  | { superseded: false; reason: "at_head" | "lookup_failed"; detail?: string };
+
+/** Rejects with a timeout error instead of waiting forever; the losing promise
+ *  keeps its handlers attached so a late rejection can't go unhandled. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err as Error); },
+    );
+  });
+}
+
+/**
+ * Is the pushed commit still `branch`'s HEAD on GitHub?
+ *
+ * FAIL-OPEN BY CONSTRUCTION: every failure mode — missing installation id,
+ * token error, rate limit, network blip, timeout, unparseable response —
+ * returns `superseded: false` so the push is analyzed. Dropping a legitimate
+ * push because an auxiliary check errored is strictly worse than the staleness
+ * this guards against, and the caller has no way to retry it later.
+ */
+export async function checkPushSuperseded(opts: {
+  installationId: string;
+  owner: string;
+  repo: string;
+  branch: string;
+  commit: string;
+}): Promise<PushHeadVerdict> {
+  const { installationId, owner, repo, branch, commit } = opts;
+  const failOpen = (detail: string): PushHeadVerdict => {
+    console.warn(`[webhook] HEAD check unavailable for ${owner}/${repo}@${branch} — analyzing anyway: ${detail}`);
+    return { superseded: false, reason: "lookup_failed", detail };
+  };
+
+  if (!/^\d+$/.test(installationId)) return failOpen("no GitHub App installation id");
+
+  let head: string;
+  try {
+    head = (await withTimeout(
+      (async () => {
+        const token = await getInstallationToken(Number(installationId));
+        return getCommitSha(token, owner, repo, branch);
+      })(),
+      HEAD_CHECK_TIMEOUT_MS,
+      "HEAD lookup",
+    )).trim().toLowerCase();
+  } catch (err) {
+    return failOpen(err instanceof Error ? err.message : String(err));
+  }
+
+  // A 40-hex SHA is the only answer we can act on. Anything else (HTML error
+  // page, empty body, short SHA) means we did not really learn the HEAD.
+  if (!/^[0-9a-f]{40}$/.test(head)) return failOpen(`unexpected HEAD response ${JSON.stringify(head.slice(0, 60))}`);
+  if (head === commit.toLowerCase()) return { superseded: false, reason: "at_head" };
+  return { superseded: true, head };
 }
 
 export const githubWebhookRouter = Router();
@@ -104,19 +217,32 @@ githubWebhookRouter.post("/", async (req, res) => {
     // Every project importing this repo with the setting ON (a repo can be
     // imported by several users — each is its own onboarding context).
     const projects = (await query(
-      `SELECT p.id, p.user_id, p.branch AS default_branch
+      `SELECT p.id, p.user_id, p.branch AS default_branch, p.github_installation_id
        FROM projects p
        JOIN project_settings ps ON ps.project_id = p.id
        WHERE p.repo_owner = $1 AND p.repo_name = $2
          AND ($3 = '' OR p.github_installation_id = $3)
          AND ps.auto_reanalyze_on_push = true`,
       [owner, repo, installationId],
-    )).rows as Array<{ id: string; user_id: string; default_branch: string }>;
+    )).rows as Array<{ id: string; user_id: string; default_branch: string; github_installation_id: string | null }>;
 
     if (projects.length === 0) {
       res.json({ ok: true, skipped: "no_matching_projects" });
       return;
     }
+
+    // One HEAD lookup per delivery at most, and only once we know there is real
+    // work to enqueue: the verdict depends on (repo, branch) alone, so it is
+    // shared by every matching project, and the cheap "nobody opted in" /
+    // "no packages on this branch" exits stay free of GitHub latency.
+    let headVerdict: Promise<PushHeadVerdict> | undefined;
+    const isSuperseded = (fallbackInstallationId: string | null) =>
+      (headVerdict ??= checkPushSuperseded({
+        // The payload carries the installation for App deliveries; the project
+        // row is the fallback for a delivery that omits it.
+        installationId: installationId || String(fallbackInstallationId ?? ""),
+        owner, repo, branch, commit,
+      }));
 
     const enqueued: Array<{ jobId: string; data: AnalysisJobData }> = [];
     let matchedProjects = 0;
@@ -130,6 +256,26 @@ githubWebhookRouter.post("/", async (req, res) => {
       )).rows as Array<{ scope_id: string }>;
       if (scopes.length === 0) continue;
       matchedProjects += 1;
+
+      // Checked BEFORE the first transaction, so a superseded delivery inserts
+      // no analysis_jobs row for any project and leaves nothing to clean up.
+      const verdict = await isSuperseded(project.github_installation_id);
+      if (verdict.superseded) {
+        // Structured console line, not an analysis_jobs row: `status` is
+        // CHECK-constrained to queued/running/paused/complete/failed
+        // (001_initial_schema.sql), so a "skipped" row would need a production
+        // migration — the option explicitly ruled out — and any of the allowed
+        // states would lie to the run history and to snapshotOrdering's
+        // MIN(analysis_jobs.created_at) push clock. Logs are how the rest of
+        // this handler records its decisions.
+        console.log(
+          `[webhook] skipped superseded push ${owner}/${repo}@${branch} ` +
+          `commit=${commit} head=${verdict.head} ` +
+          `— branch HEAD moved on before this delivery was processed, no run enqueued`,
+        );
+        res.json({ ok: true, skipped: "superseded_commit", commit, head: verdict.head });
+        return;
+      }
 
       const client = await pool.connect();
       const prepared: Array<{ jobId: string; scopeId: string }> = [];
