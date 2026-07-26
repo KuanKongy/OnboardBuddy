@@ -370,6 +370,20 @@ function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
  * Drops workflows whose step nodes are ≥80% shared with a higher-ranked
  * workflow — UI-route seeds especially produce many traces over the same
  * few components, which crowds real flows out of the list.
+ *
+ * Overlap is measured against the LARGER of the two step sets, which makes the
+ * test symmetric: two flows are duplicates only if each is nearly all of the
+ * other. Dividing by the candidate's own size (the earlier form) instead asked
+ * "is this flow contained in one above it", and containment is not duplication
+ * — a four-step chart component whose steps all appear inside a twenty-step
+ * page trace is a distinct flow that the page happens to reach. That form also
+ * made the survivor depend on score order, so a ranking change silently deleted
+ * flows: reweighting effect breadth lifted large traces above the small ones
+ * they contain and took eight CourseInsights chart flows, OnboardBuddy's
+ * `GET /installations`, StudyFlow's `Notes` and fourteen others off the list.
+ * Measuring against the larger set removes that coupling — the pairs that
+ * suppression is meant to catch (the same trace reached from two seeds) are
+ * near-identical in size and still collapse.
  */
 function suppressNearDuplicates(sorted: ExtractedWorkflow[]): ExtractedWorkflow[] {
   const kept: Array<{ wf: ExtractedWorkflow; keys: Set<string> }> = [];
@@ -383,7 +397,7 @@ function suppressNearDuplicates(sorted: ExtractedWorkflow[]): ExtractedWorkflow[
     const isDuplicate = kept.some(({ keys: otherKeys }) => {
       let shared = 0;
       for (const k of keys) if (otherKeys.has(k)) shared++;
-      return shared / keys.size >= 0.8;
+      return shared / Math.max(keys.size, otherKeys.size) >= 0.8;
     });
     if (!isDuplicate) kept.push({ wf, keys });
   }
@@ -729,6 +743,35 @@ export interface HandoffContext {
   inboundHandoffs?: number;
 }
 
+// ─── Scoring weights ─────────────────────────────────────────────────────────
+//
+// Every term below rewards a different axis of "this flow is a big part of the
+// system": how many kinds of effect it has, how many files those effects are
+// spread over, and how much of the rest of the system hands it work. All three
+// are capped, so no single axis can carry a flow to the top on its own — a flow
+// has to be broad on more than one to outrank a narrow one.
+
+/** Per distinct kind of side effect (write / enqueue / read / auth / external). */
+const EFFECT_KIND_WEIGHT = 0.09;
+/** There are only five kinds; four already means "does a bit of everything". */
+const MAX_SCORED_EFFECT_KINDS = 4;
+/** Per file containing an effect-bearing step. */
+const EFFECT_FILE_WEIGHT = 0.06;
+/** One file is the floor for any flow at all, so it is not evidence of reach. */
+const MIN_SCORED_EFFECT_FILES = 2;
+/** Past this, more files say "large" but no longer discriminate. */
+const MAX_SCORED_EFFECT_FILES = 8;
+/** Per distinct flow that hands work to this one across an async boundary. */
+const INBOUND_HANDOFF_WEIGHT = 0.06;
+/** Capped level with kind-breadth, so fan-in cannot dominate the ranking. */
+const MAX_SCORED_INBOUND_HANDOFFS = 4;
+/**
+ * Transform steps below this count are ordinary plumbing in any trace; the
+ * drift penalty only engages once there are enough of them to be the trace's
+ * character rather than its connective tissue.
+ */
+const MIN_DRIFT_STEPS = 5;
+
 /**
  * Where a flow belongs in the list, and how high within its tier.
  *
@@ -738,9 +781,11 @@ export interface HandoffContext {
  * whatever happened to trace deepest rather than whatever mattered.
  *
  * What actually distinguishes an important flow is BREADTH — how many
- * different kinds of thing it does — plus whether a person triggers it and
- * whether it changes state. Length past a point is evidence of a trace that
- * wandered, so it is penalised rather than rewarded.
+ * different kinds of thing it does, across how many files, and how much of the
+ * rest of the system routes work through it — plus whether a person triggers
+ * it and whether it changes state. A trace made mostly of data-shaping steps
+ * has wandered, so that SHARE is penalised; raw length is not, because a long
+ * flow doing real work in many modules is the opposite of a wandering one.
  *
  * Capability membership and git churn are deliberately absent: neither exists
  * yet at extraction time. They are applied as ordering signals in the API
@@ -759,6 +804,17 @@ export function rankWorkflow(
   const kinds = new Set(steps.map((s) => s.stepKind));
   const distinctEffects = [...kinds].filter((k) => STATE_CHANGING_STEP_KINDS.has(k) || k === 'data_read').length;
   const persists = [...kinds].some((k) => PERSISTENT_STEP_KINDS.has(k));
+  // How much of the codebase the flow's EFFECTS are spread across — counted
+  // over effect-bearing steps only, so a trace that wanders through ten
+  // presentational components scores nothing for the wandering.
+  const effectFiles = new Set(
+    steps.filter((s) => STATE_CHANGING_STEP_KINDS.has(s.stepKind) || s.stepKind === 'data_read')
+      .map((s) => s.filePath),
+  ).size;
+  // Steps that only reshape data in flight. A handful is normal plumbing; a
+  // trace made mostly of them has drifted into shared code — see below.
+  const driftSteps = steps.filter((s) => s.stepKind === 'transform').length;
+  const inboundHandoffs = handoff.inboundHandoffs ?? 0;
   // Passing through somebody else's guard and BEING the thing that signs the
   // caller in are different facts. The second is this flow's own effect —
   // an `auth_call` detected in the handler's own body, surfaced as a
@@ -785,8 +841,30 @@ export function rankWorkflow(
   if (changesAuthState) { score += 0.25; reasons.push('changes who is signed in'); }
   else if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
   if (distinctEffects > 0) {
-    score += Math.min(distinctEffects, 4) * 0.08;
+    score += Math.min(distinctEffects, MAX_SCORED_EFFECT_KINDS) * EFFECT_KIND_WEIGHT;
     reasons.push(`${distinctEffects} kind${distinctEffects === 1 ? '' : 's'} of side effect`);
+  }
+  // Breadth, the second axis. Kind-breadth says how many DIFFERENT things a
+  // flow does; file-breadth says how much of the system it reaches while doing
+  // them. A pipeline that writes rows in eight modules is a bigger part of the
+  // codebase than a settings delete that touches one, and only this term can
+  // tell them apart — they can have identical kind-breadth. Single-file flows
+  // score nothing here: one file is the floor, not evidence of reach.
+  if (effectFiles >= MIN_SCORED_EFFECT_FILES) {
+    score += Math.min(effectFiles, MAX_SCORED_EFFECT_FILES) * EFFECT_FILE_WEIGHT;
+    reasons.push(`does work in ${effectFiles} files`);
+  }
+  // Depth: how much of the rest of the system routes work through this flow.
+  // A consumer four different producers enqueue to is load-bearing in a way a
+  // consumer with one producer is not, and the same reading distinguishes a
+  // socket handler several pages emit to from one only its own page uses.
+  // Bounded like the other breadth terms so a fan-in hub cannot run away with
+  // the list.
+  if (inboundHandoffs > 0) {
+    score += Math.min(inboundHandoffs, MAX_SCORED_INBOUND_HANDOFFS) * INBOUND_HANDOFF_WEIGHT;
+    reasons.push(inboundHandoffs === 1
+      ? '1 other flow hands work to it'
+      : `${inboundHandoffs} other flows hand work to it`);
   }
   if (ep.routePattern) score += 0.05;
   // A tie-break, NOT the old blanket `uiPenalty = 0.5`. That halved every UI
@@ -800,15 +878,24 @@ export function rankWorkflow(
   // Same tie-break, same reason: prefer the side that implements the effect
   // over the side that merely contains it. A handler wired to an interaction is
   // where the action happens; the page it sits on only hosts it.
-  if (ep.kind === 'http_route' || ep.kind === 'ui_action') score += 0.03;
+  // A `message_consumer` earns the same tie-break for the same reason: the
+  // registration IS the implementation, not a wrapper that delegates to one.
+  if (ep.kind === 'http_route' || ep.kind === 'ui_action' || ep.kind === 'message_consumer') score += 0.03;
 
-  // A trace that keeps going has usually wandered into shared utilities
-  // rather than found more meaning. Bounded so a genuinely long flow is
-  // demoted, not erased.
-  const overLength = Math.max(0, steps.length - 8);
-  if (overLength > 0) {
-    score -= Math.min(0.2, overLength * 0.02);
-    reasons.push(`${steps.length} steps — long traces drift into shared code`);
+  // A trace that keeps going has usually wandered into shared utilities rather
+  // than found more meaning. The old form penalised LENGTH — `steps - 8`, up to
+  // a flat −0.2 — which charged a 20-step pipeline that writes rows in eight
+  // modules exactly what it charged a 20-step trace through formatting helpers.
+  // Length is not the tell; the RATIO is. Penalise the share of the trace that
+  // only reshapes data, so a long flow that keeps doing real work keeps its
+  // score and a long flow made of plumbing loses one proportionally.
+  //
+  // Gated on an absolute count as well as a share, because in a short trace a
+  // couple of transform steps is ordinary and the share reads alarmingly high
+  // (4 of 7 steps) without meaning the trace drifted anywhere.
+  if (driftSteps >= MIN_DRIFT_STEPS) {
+    score *= 1 - driftSteps / steps.length;
+    reasons.push(`${driftSteps} of ${steps.length} steps only shape data — the trace drifts into shared code`);
   }
   if (unknownOnly) {
     score *= 0.6;
