@@ -15,6 +15,7 @@ import { expect } from 'chai';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { deflateRawSync, crc32 } from 'node:zlib';
 import { assertEntryPathsSafe, assertZipEntriesStayInside, listZipEntryNames, UnsafeArchiveError } from '../zipSafety.js';
 
@@ -258,7 +259,7 @@ describe('zip-slip guard against real crafted archives', () => {
     // build and would have thrown on every real import. The parser must stay
     // self-contained. Asserted on the import (not on any mention of the flag —
     // the module's own comment explains this history and would trip that).
-    const source = readFileSync(new URL('../zipSafety.ts', import.meta.url).pathname, 'utf8');
+    const source = readFileSync(fileURLToPath(new URL('../zipSafety.ts', import.meta.url)), 'utf8');
     expect(source, 'zipSafety must not spawn a subprocess').to.not.match(/from 'node:child_process'/);
   });
 });

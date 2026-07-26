@@ -316,6 +316,16 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
         auto_reanalyze_on_push?: boolean;
       };
 
+    if (
+      ignored_paths !== undefined &&
+      (!Array.isArray(ignored_paths) ||
+        ignored_paths.length > 200 ||
+        ignored_paths.some((p) => typeof p !== 'string' || p.length > 400))
+    ) {
+      res.status(400).json({ error: "invalid ignored_paths" });
+      return;
+    }
+
     if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
       res.status(400).json({ error: "Invalid privacy_mode" });
       return;
