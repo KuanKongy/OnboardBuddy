@@ -14,6 +14,9 @@
     "test": "node --import tsx ../node_modules/mocha/bin/mocha.js",
     "test:watch": "node --import tsx ../node_modules/mocha/bin/mocha.js --watch",
     "security:report": "node --import tsx scripts/security-report.ts",
+    "security:probe": "node --import tsx scripts/security-probe.ts",
+    "security:probe:seed": "node --import tsx scripts/security-probe-seed.ts",
+    "security:probe:teardown": "node --import tsx scripts/security-probe-teardown.ts",
     "lint": "eslint ."
   },
   "dependencies": {

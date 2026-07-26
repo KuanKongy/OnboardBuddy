@@ -1,0 +1,15 @@
+{
+  "xss": [
+    { "xid": "X-01", "label": "raw script tag",            "payload": "<script>window.__xss='X-01'</script>XSSMARK01" },
+    { "xid": "X-02", "label": "img onerror",               "payload": "<img src=x onerror=\"window.__xss='X-02'\">XSSMARK02" },
+    { "xid": "X-03", "label": "svg onload",                "payload": "<svg onload=\"window.__xss='X-03'\"></svg>XSSMARK03" },
+    { "xid": "X-04", "label": "attribute breakout",        "payload": "\"><script>window.__xss='X-04'</script>XSSMARK04" },
+    { "xid": "X-05", "label": "javascript: URL",           "payload": "javascript:window.__xss='X-05'//XSSMARK05" },
+    { "xid": "X-06", "label": "markdown javascript: link", "payload": "[click](javascript:window.__xss='X-06')XSSMARK06" }
+  ],
+  "sqli": [
+    { "sid": "S-01", "label": "boolean tautology",   "payload": "' OR '1'='1" },
+    { "sid": "S-02", "label": "statement terminator","payload": "'; DROP TABLE project_members;--" },
+    { "sid": "S-03", "label": "union probe",         "payload": "1' UNION SELECT NULL--" }
+  ]
+}
