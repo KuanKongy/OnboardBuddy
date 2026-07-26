@@ -70,11 +70,17 @@ describe("GET /api/projects/:id/onboarding", () => {
         };
       }
       if (text.includes("file_count") && text.includes("FROM analysis_snapshots")) {
+        // Deliberately three different numbers, in the ratio real snapshots
+        // show: 240 files in scope, 191 of them source in a supported
+        // language, 194 actually parsed (the extra 3 are config .ts files,
+        // parsed but not categorised as source). The old fixture set
+        // in-scope == supported, which hid the distinction the endpoint now
+        // has to keep straight.
         return {
           rows: [{
-            created_at: "2026-07-16T15:40:00Z", file_count: 240, symbol_count: 1305,
-            workflow_count: 66,
-            language_inventory: { supportedFileCount: 240, unsupportedFileCount: 49 },
+            created_at: "2026-07-16T15:40:00Z", file_count: 240, parsed_file_count: 194,
+            symbol_count: 1305, workflow_count: 66,
+            language_inventory: { supportedFileCount: 191, unsupportedFileCount: 49 },
           }],
         };
       }
@@ -185,8 +191,11 @@ describe("GET /api/projects/:id/onboarding", () => {
       snapshotCreatedAt: "2026-07-16T15:40:00Z",
       tutorialCount: 4,
     });
+    // `parsed` is the honest coverage figure and must NOT be `inScope`: the
+    // old response reported in-scope files as "analyzed", overstating real
+    // coverage by up to 9x on audited projects.
     expect(res.body.package.coverage.files).to.deep.equal({
-      analyzed: 240, unsupported: 49, cited: 31,
+      parsed: 194, supported: 191, inScope: 240, unsupported: 49, cited: 31,
     });
     expect(res.body.package.coverage.symbols).to.deep.equal({ total: 1305, cited: 47 });
     expect(res.body.package.coverage.workflows).to.deep.equal({ total: 66, covered: 16 });

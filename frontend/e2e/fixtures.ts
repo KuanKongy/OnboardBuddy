@@ -10,7 +10,7 @@ export const P = "11111111-1111-1111-1111-111111111111";
 
 // ── fixture data (mirrors the simple auth-demo fixture repo) ─────────────────
 
-const project = {
+export const project = {
   id: P,
   repo_owner: "acme",
   repo_name: "auth-demo",
@@ -213,7 +213,14 @@ const nodeDetail = {
 
 // ── route mocking ─────────────────────────────────────────────────────────────
 
-export async function mockApi(page: Page) {
+/**
+ * `tier` rewrites `permission_tier` on the project payload. The live DB has no
+ * admin rows at all, so this is the only way to audit the admin view — the five
+ * files that branch on tier (ProjectCard, ProjectOverviewPage, OnboardingPage,
+ * TeamPage, ProjectSettingsPage) all read it from here.
+ */
+export async function mockApi(page: Page, opts: { tier?: "owner" | "admin" | "developer" } = {}) {
+  const proj = opts.tier ? { ...project, permission_tier: opts.tier } : project;
   const routes: Array<[RegExp, unknown]> = [
     [/\/api\/projects\/[^/]+\/analysis-status/, { jobs: [{ id: "job-1", job_type: "analyze_scope", status: "complete", progress_pct: 100, current_step: "Complete", checkpoint: {}, step_log: [], error_message: null, created_at: "2026-07-08T10:00:00Z", started_at: null, finished_at: "2026-07-08T10:20:00Z", file_count: 8, symbol_count: 42, workflow_count: 2, commit_hash: "abc1234def" }], latestSnapshot: { id: "snap-1", file_count: 8, symbol_count: 42, workflow_count: 2, commit_hash: "abc1234def", created_at: "2026-07-08T10:20:00Z" } }],
     [/\/api\/projects\/[^/]+\/snapshots\/[^/]+\/metrics/, { snapshot: { id: "snap-1", status: "complete", budget_usage: { llm_calls: 63, input_tokens: 91240, estimated_cost_usd: 0.0214 } }, phases: [
@@ -244,9 +251,9 @@ export async function mockApi(page: Page) {
     [/\/api\/projects\/[^/]+\/ranking-weights/, { views: ["critical_for_runtime", "critical_for_business", "critical_for_onboarding", "critical_for_role", "critical_for_change_risk", "critical_for_architecture", "critical_for_workflow"], roles: ["backend", "frontend", "devops", "qa", "general"].map((role) => ({ role, defaults: { critical_for_runtime: 0.2, critical_for_business: 0.1, critical_for_onboarding: 0.15, critical_for_role: 0.25, critical_for_change_risk: 0.1, critical_for_architecture: 0.1, critical_for_workflow: 0.1 }, weights: { critical_for_runtime: 0.2, critical_for_business: 0.1, critical_for_onboarding: 0.15, critical_for_role: 0.25, critical_for_change_risk: 0.1, critical_for_architecture: 0.1, critical_for_workflow: 0.1 }, customized: false })) }],
     [/\/api\/projects\/[^/]+\/scopes/, { scopes: [{ id: "scope-1", path_prefix: "", display_name: "Whole repository", kind: "whole_repo", detected_from: "default", created_at: "2026-07-01" }] }],
     [/\/api\/projects\/[^/]+\/members/, { members: [] }],
-    [/\/api\/projects\/[^/]+$/, { project }],
+    [/\/api\/projects\/[^/]+$/, { project: proj }],
     [/\/api\/invitations/, { invitations: [] }],
-    [/\/api\/projects$/, { projects: [project] }],
+    [/\/api\/projects$/, { projects: [proj] }],
   ];
 
   await page.route("**/api/**", async (route) => {
@@ -276,8 +283,19 @@ export async function mockApi(page: Page) {
       };
       window.localStorage.setItem("sb-mdexrahwgznmhdicgtql-auth-token", JSON.stringify(session));
       // The project tour is verified by its own test; keep it out of tab shots.
-      window.localStorage.setItem("onboardbuddy:project-tour-dismissed", "1");
-      window.localStorage.setItem("onboardbuddy:tour-dismissed", "1");
+      // Keys are USER-SUFFIXED (`lib/tourState.ts` -> `${prefix}:${userId}`);
+      // the bare prefixes never match, so tours used to run in every spec and
+      // their `fixed inset-0 z-[60]` overlay silently swallowed clicks.
+      for (const prefix of [
+        "onboardbuddy:tour-dismissed",
+        "onboardbuddy:project-tour-dismissed",
+        "onboardbuddy:onboarding-tour-dismissed",
+        "onboardbuddy:reader-tour-dismissed",
+        "onboardbuddy:import-tour-dismissed",
+      ]) {
+        window.localStorage.setItem(prefix, "1");
+        window.localStorage.setItem(`${prefix}:user-1`, "1");
+      }
     },
     [fakeToken],
   );

@@ -1,6 +1,7 @@
 import { AlertTriangle, CornerLeftUp, Loader2, Maximize2, Minimize2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import type { Viewport } from "reactflow";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
@@ -17,6 +18,8 @@ import {
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDrillStack } from "@/hooks/useDrillStack";
+import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge } from "@/types/graph";
@@ -55,95 +58,114 @@ export function GraphPage() {
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
-  const [searchParams, setSearchParams] = useSearchParams();
-  const activeCluster = searchParams.get("cluster");
+  const [searchParams] = useSearchParams();
+  const stack = useDrillStack();
+  const activeCluster = stack.current?.kind === "cluster" ? stack.current.id : null;
   // Suppresses React Flow's own declarative initial fitView on this mount
   // so ViewportFocus is the sole viewport writer while resolving a
   // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
   const hasFocusTarget = !!searchParams.get("focus");
+  // A deep link has no viewport the user chose, so its target must be framed
+  // for them. Every other selection only nudges the camera.
+  const [focusIntent, setFocusIntent] = useState<"deeplink" | "user">(
+    hasFocusTarget ? "deeplink" : "user",
+  );
 
-  /** Drills in/out of a directory cluster — the URL is the source of truth
-   * (?cluster=<path>) so browser Back/Forward walks the drill path instead
-   * of leaving the page; the effect below reacts to the resulting change. */
-  function goToCluster(cluster: string | null, opts?: { replace?: boolean }) {
-    // A single click fires both onNodeClick and onSelectionChange (item 1);
-    // no-op when nothing actually changes so one click doesn't push two
-    // history entries (which would need two Back presses to undo).
-    if (cluster === searchParams.get("cluster")) return;
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (cluster) next.set("cluster", cluster);
-      else next.delete("cluster");
-      return next;
-    }, opts);
-  }
+  /**
+   * Fetches one level and commits it. Returns a promise so the drill
+   * transition can overlap the fetch with its animation and only move the
+   * stack once the data is actually in hand — a failed load then leaves the
+   * user on the level they were already on instead of on a blank one.
+   */
+  const levelKey = (cluster: string | null) => `${id ?? ""}::${selectedPackageId ?? ""}::${cluster ?? ""}`;
+  const loadedKeyRef = useRef<string | null>(null);
+  const pendingFocusDrillRef = useRef<string | null>(null);
 
-  function loadGraph(cluster?: string) {
-    if (!id) return;
-    setLoading(true);
-    setError("");
-    setSelectedNodeId(null);
-    const focus = searchParams.get("focus");
-    fetchDependencyGraph(id, cluster, selectedPackageId)
-      .then((d) => {
+  const loadLevel = useCallback(
+    async (cluster: string | null): Promise<void> => {
+      if (!id) return;
+      setLoading(true);
+      setError("");
+      setSelectedNodeId(null);
+      try {
+        const d = await fetchDependencyGraph(id, cluster ?? undefined, selectedPackageId);
         setData(d);
-        // Resolve a pending `?focus=<file>` deep link in the SAME state
-        // update as the data that makes it resolvable, instead of a
-        // separate effect a tick later — DependencyGraphView would
-        // otherwise mount with nothing selected (racing React Flow's own
-        // initial `fitView` before the real selection ever arrived),
-        // which is exactly why a redirect into this graph used to
-        // center/zoom inconsistently while a manual node click (on an
-        // already-settled graph) always worked.
+        loadedKeyRef.current = levelKey(cluster);
+
+        // Resolve a pending `?focus=<file>` in the SAME commit as the data
+        // that makes it resolvable, rather than in a later effect: mounting
+        // with nothing selected races React Flow's own initial fitView, which
+        // is why arriving by redirect used to frame inconsistently while a
+        // manual click on a settled graph always worked.
+        const focus = searchParams.get("focus");
         if (!focus) return;
         if (d.graph.nodes.some((n) => n.id === focus)) {
           setSelectedNodeId(focus);
           setFocusNotFoundId(null);
           return;
         }
-        // Large repos render as directory clusters at the root — the
-        // target file is never a root-level node there, it lives inside
-        // one of the groups. Drill into its 2-level directory prefix
-        // (mirrors the backend's own clustering rule in graph.ts) before
-        // concluding it's genuinely missing; the resulting ?cluster=
-        // change re-triggers this same function against that cluster's
-        // nodes.
+        // Large repos render as directory groups at the root, so the target
+        // file is never a root-level node — it lives inside a group. Drill to
+        // its 2-level prefix (mirroring the backend rule in graph.ts) before
+        // calling it missing.
         if (d.clustered && !cluster) {
           const parts = focus.split("/");
-          const dir = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : ".";
-          goToCluster(dir);
+          pendingFocusDrillRef.current =
+            parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : ".";
           return;
         }
         setFocusNotFoundId(focus);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load graph");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [id, selectedPackageId, searchParams],
+  );
 
-  // The drilled-in cluster is read straight from the URL (?cluster=) so
-  // even the very first render already reflects it — including a fresh
-  // page load from a deep link. A real project/package switch invalidates
-  // any drill path from another snapshot's directory layout, so it resets
-  // to the root and drops a stale ?cluster= instead of trying to keep it.
+  // Filled by GraphCanvas from inside the React Flow provider, so the camera
+  // can be captured before navigating away and restored on the way back.
+  const viewportRef = useRef<(() => Viewport) | null>(null);
+
+  const drill = useGraphDrill({
+    stack,
+    loadLevel: (frame) => loadLevel(frame?.kind === "cluster" ? frame.id : null),
+    readViewport: () => viewportRef.current?.() ?? null,
+  });
+
+  // The level comes straight from the URL, so the first render already
+  // reflects it — including a cold load on a shared link. A real
+  // project/package switch invalidates a drill path built from another
+  // snapshot's directory layout, so it resets to the root rather than
+  // carrying a stale one across.
   const prevGraphKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const key = `${id ?? ""}::${selectedPackageId ?? ""}`;
     const projectOrPackageChanged = prevGraphKeyRef.current !== null && prevGraphKeyRef.current !== key;
     prevGraphKeyRef.current = key;
-    const cluster = activeCluster;
-    if (projectOrPackageChanged && cluster) {
-      goToCluster(null, { replace: true });
+    if (projectOrPackageChanged && stack.depth > 0) {
+      stack.reset();
       return;
     }
-    loadGraph(cluster ?? undefined);
+    // A drill already fetched this level before moving the stack; refetching
+    // here would double-request and clobber the transition mid-flight.
+    if (loadedKeyRef.current === levelKey(activeCluster)) return;
+    void loadLevel(activeCluster).catch(() => {});
   }, [id, selectedPackageId, searchParams]);
 
-  /** One level up the cluster path; root (null) when at the first level. */
-  function drillUp() {
-    const segments = (activeCluster ?? "").split("/").filter(Boolean);
-    const parent = segments.slice(0, -1).join("/") || null;
-    goToCluster(parent);
-  }
+  // A `?focus=` target that lives inside a directory group needs one drill to
+  // become reachable. Done as an effect so it runs after the load that
+  // discovered it, and `replace` keeps it out of the Back history — the user
+  // never chose this hop.
+  useEffect(() => {
+    const target = pendingFocusDrillRef.current;
+    if (!target) return;
+    pendingFocusDrillRef.current = null;
+    setFocusIntent("deeplink");
+    stack.push({ kind: "cluster", id: target, label: target.split("/").filter(Boolean).pop() ?? target });
+  }, [data]);
 
   // ← / → cycle the selectable (non-cluster) nodes; Esc deselects — paired
   // with ViewportFocus, cycling glides the camera node to node.
@@ -267,33 +289,39 @@ export function GraphPage() {
     <div style={{ "--graph-chrome": fullscreen ? "90px" : "230px" } as React.CSSProperties}>
       <PageHeader
         title={
-          // Stable breadcrumb: "Dependencies" never moves — drilling into a
-          // cluster appends its path segments, each clickable to drill back
-          // up to that level; the root text goes back to all groups.
-          activeCluster ? (
+          // Breadcrumb over the real drill stack. It used to be built by
+          // splitting the current cluster path, which meant each crumb was a
+          // path prefix rather than a level the user had visited — so a deep
+          // link that auto-drilled two levels showed crumbs for somewhere the
+          // user had never been. "Dependencies" never moves.
+          stack.depth > 0 ? (
             <span className="flex flex-wrap items-baseline gap-1.5">
               <button
-                className="transition-colors hover:text-primary"
-                onClick={() => goToCluster(null)}
+                className="transition-colors hover:text-primary disabled:opacity-50"
+                onClick={() => drill.jumpTo(-1)}
+                disabled={drill.busy}
                 title="Back to all groups"
               >
                 Dependencies
               </button>
-              {activeCluster.split("/").map((segment, i, segments) => {
-                const prefix = segments.slice(0, i + 1).join("/");
-                const isLast = i === segments.length - 1;
+              {stack.frames.map((frame, i) => {
+                const isLast = i === stack.depth - 1;
                 return (
-                  <span key={prefix} className="flex items-baseline gap-1.5 text-sm font-normal text-muted-foreground">
+                  <span
+                    key={`${frame.kind}:${frame.id}`}
+                    className="flex items-baseline gap-1.5 text-sm font-normal text-muted-foreground"
+                  >
                     <span>/</span>
                     {isLast ? (
-                      <span className="text-foreground">{segment}</span>
+                      <span className="text-foreground">{frame.label}</span>
                     ) : (
                       <button
-                        className="transition-colors hover:text-primary"
-                        onClick={() => goToCluster(prefix)}
-                        title={`Drill up to ${prefix}`}
+                        className="transition-colors hover:text-primary disabled:opacity-50"
+                        onClick={() => drill.jumpTo(i)}
+                        disabled={drill.busy}
+                        title={`Back to ${frame.label}`}
                       >
-                        {segment}
+                        {frame.label}
                       </button>
                     )}
                   </span>
@@ -307,10 +335,16 @@ export function GraphPage() {
         subtitle="Which files depend on which — follow the arrows to see how changes ripple."
         actions={
           <>
-            {view === "files" && activeCluster && (
-              <Button variant="outline" size="xs" onClick={drillUp} title="Drill up one level">
+            {view === "files" && stack.depth > 0 && (
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={drill.drillUp}
+                disabled={drill.busy}
+                title="Back to the level you came from"
+              >
                 <CornerLeftUp className="mr-1 h-3 w-3" />
-                Up one level
+                Back
               </Button>
             )}
             {view === "files" && data && (
@@ -391,7 +425,16 @@ export function GraphPage() {
               Run an analysis first to generate the dependency graph, or retry if analysis has completed.
             </p>
           </div>
-          <Button variant="outline" size="xs" onClick={() => loadGraph(activeCluster ?? undefined)}>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => {
+              // Clear the guard first, or the retry is skipped as
+              // already-loaded and the button silently does nothing.
+              loadedKeyRef.current = null;
+              void loadLevel(activeCluster).catch(() => {});
+            }}
+          >
             <RefreshCw className="mr-1 h-3 w-3" />
             Retry
           </Button>
@@ -437,12 +480,25 @@ export function GraphPage() {
                 hiddenKinds={hiddenKinds}
                 onToggleKind={toggleKind}
                 refitSignal={`${direction}:${fullscreen}`}
+                drill={drill}
+                focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}
+                restoreViewport={stack.savedViewport(stack.depth)}
+                viewportRef={viewportRef}
+                // A group opens a level below it — that is navigation, and it
+                // gets the zoom transition. A file is a leaf: clicking it
+                // opens the detail panel and leaves the camera alone.
+                onDrillInto={(nodeId) => {
+                  if (!nodeId.startsWith("cluster:")) return false;
+                  const path = nodeId.replace("cluster:", "");
+                  drill.drillInto(
+                    { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+                    nodeId,
+                  );
+                  return true;
+                }}
                 onSelectNode={(nodeId) => {
-                  if (data.clustered && nodeId?.startsWith("cluster:")) {
-                    goToCluster(nodeId.replace("cluster:", ""));
-                  } else {
-                    setSelectedNodeId(nodeId);
-                  }
+                  if (nodeId) setFocusIntent("user");
+                  setSelectedNodeId(nodeId);
                 }}
               />
             </div>

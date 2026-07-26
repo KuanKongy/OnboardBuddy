@@ -9,7 +9,38 @@ export interface ArchitectureCluster {
   summarySource: "semantic" | "deterministic";
   confidence: string | null;
   members: Array<{ key: string; name: string; filePath: string | null }>;
-  metadata: Record<string, unknown>;
+  metadata: ClusterMetadata;
+}
+
+/**
+ * Counts computed once by the clusterer. `members` includes symbol, config and
+ * schema nodes, so `members.length` is NOT a file count — rendering it as one
+ * reported a cluster as several times bigger than it is, and printed
+ * "0 files" over a Database Schema cluster holding 48 tables.
+ */
+export interface ClusterMetadata {
+  /** File/module members only. The single definition of a cluster's size. */
+  fileCount?: number;
+  memberCount?: number;
+  memberCountsByType?: Record<string, number>;
+  /** Noun to count with — "table" and "config file" clusters have no files. */
+  primaryMemberNoun?: "file" | "table" | "config file";
+}
+
+/** The count and noun to display for a cluster, honest about what it holds. */
+export function clusterSize(c: {
+  members: unknown[];
+  metadata: ClusterMetadata;
+}): { count: number; noun: string } {
+  const noun = c.metadata.primaryMemberNoun ?? "file";
+  const byType = c.metadata.memberCountsByType ?? {};
+  const count =
+    noun === "table" ? (byType.schema ?? 0)
+    : noun === "config file" ? (byType.config ?? 0)
+    // Pre-rework snapshots have no fileCount; members.length is the only thing
+    // available and is at least an upper bound rather than a wrong noun.
+    : (c.metadata.fileCount ?? c.members.length);
+  return { count, noun };
 }
 
 export interface ArchitectureEdge {

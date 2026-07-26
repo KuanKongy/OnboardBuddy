@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import {
   CLUSTER_KIND_LABELS,
   CLUSTER_KIND_PALETTE,
+  clusterSize,
   fetchArchitecture,
   type ArchitectureResponse,
 } from "@/lib/architectureData";
@@ -125,7 +126,8 @@ export function ArchitecturePage() {
         data: {
           label: c.label,
           kind: c.kind,
-          memberCount: c.members.length,
+          // `members` counts symbols and config nodes too — see clusterSize.
+          ...clusterSize(c),
           criticalScore: c.criticalScore,
           summary: c.summary,
           selected: p.id === selectedId,
@@ -332,7 +334,16 @@ export function ArchitecturePage() {
                   </span>
                 </div>
 
-                <p className="section-label mb-1.5">Files ({selected.members.length})</p>
+                {/* "Files" was wrong here too: `members` holds symbol, config
+                    and schema nodes, so a Database Schema cluster listed 48
+                    tables under a heading that called them files. */}
+                <p className="section-label mb-1.5">
+                  {(() => {
+                    const { count, noun } = clusterSize(selected);
+                    const label = noun === "file" ? "Files" : noun === "table" ? "Tables" : "Config files";
+                    return `${label} (${count})`;
+                  })()}
+                </p>
                 <ul className="space-y-0.5">
                   {selected.members.slice(0, 30).map((m) => (
                     <li key={m.key} className="truncate font-mono text-[0.71875rem]" title={m.filePath ?? m.key}>

@@ -41,6 +41,11 @@ export interface WorkflowStep {
   };
 }
 
+export type WorkflowTier = 'core' | 'supporting' | 'surface';
+
+/** Sort order for tiers; lower comes first. */
+export const TIER_RANK: Record<WorkflowTier, number> = { core: 0, supporting: 1, surface: 2 };
+
 export interface ExtractedWorkflow {
   title: string;
   triggerType: string;
@@ -49,8 +54,17 @@ export interface ExtractedWorkflow {
   confidence: 'high' | 'medium' | 'low';
   entrypoint: DetectedEntrypoint;
   steps: WorkflowStep[];
-  /** Raw ordering hint only — real ranking is criticality_scores rows. */
+  /**
+   * Where this sits in the list. `core` is a flow a person triggers that
+   * changes state; `supporting` is everything else that reaches an effect;
+   * `surface` is an entry point with no traced effects — an endpoint or page
+   * that is real but whose flow could not be followed.
+   */
+  tier: WorkflowTier;
+  /** Ordering within a tier — see `rankWorkflow`. */
   importanceScore: number;
+  /** Plain-language reasons behind the score, shown in the UI. */
+  rankingReasons: string[];
   externalDependencies: string[];
   /** Extra persisted metadata (journey membership, unknown-only flags, …). */
   metadata?: Record<string, unknown>;
@@ -116,14 +130,18 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     for (const seed of seedsForEntrypoint(ep, ctx)) {
       const result = trace(ep, seed, ctx);
       if (!result) continue;
-      if ('deadEnd' in result) {
+      // A surface-tier trace now yields BOTH a workflow (so the endpoint is
+      // listed) and a dead-end record (so the trust panel still reports that
+      // nothing could be followed from it). Record the dead-end first, then
+      // fall through — the two are no longer mutually exclusive.
+      if (result.deadEnd) {
         const key = `${result.deadEnd.entrypoint}:${result.deadEnd.seedName}`;
         if (recordableDeadEnd(ep) && !seenDeadEnds.has(key)) {
           seenDeadEnds.add(key);
           deadEnds.push(result.deadEnd);
         }
-        continue;
       }
+      if (!('workflow' in result)) continue;
       const wf = result.workflow;
       if (seenKeys.has(wf.stableKey)) continue;
       seenKeys.add(wf.stableKey);
@@ -131,11 +149,13 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     }
   }
 
-  // Score ties: an AST-detected route (`PUT /dataset/:id/:kind`) beats a
-  // convention-guessed seed over the same steps — it carries the real
-  // method + route pattern, so it survives duplicate suppression.
+  // Tier first, then score. Score ties break toward an AST-detected route
+  // (`PUT /dataset/:id/:kind`) over a convention-guessed seed across the same
+  // steps — it carries the real method and pattern, so it is the one that
+  // should survive duplicate suppression.
   const kept = suppressNearDuplicates(workflows.sort((a, b) =>
-    b.importanceScore - a.importanceScore
+    TIER_RANK[a.tier] - TIER_RANK[b.tier]
+    || b.importanceScore - a.importanceScore
     || Number(Boolean(b.entrypoint.routePattern)) - Number(Boolean(a.entrypoint.routePattern))));
   return { workflows: kept, deadEnds };
 }
@@ -159,6 +179,11 @@ function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
 function suppressNearDuplicates(sorted: ExtractedWorkflow[]): ExtractedWorkflow[] {
   const kept: Array<{ wf: ExtractedWorkflow; keys: Set<string> }> = [];
   for (const wf of sorted) {
+    // Surface entries are an inventory of entry points, not traces. Two routes
+    // can legitimately share a handler, and a one-step entry overlaps
+    // everything by definition — suppressing them would delete real endpoints
+    // from the list this tier exists to provide.
+    if (wf.tier === 'surface') { kept.push({ wf, keys: new Set() }); continue; }
     const keys = new Set(wf.steps.map((s) => s.nodeStableKey));
     const isDuplicate = kept.some(({ keys: otherKeys }) => {
       let shared = 0;
@@ -263,7 +288,7 @@ function trace(
   ep: DetectedEntrypoint,
   seed: EvidenceNode,
   ctx: TraversalContext,
-): { workflow: ExtractedWorkflow } | { deadEnd: TraceDeadEnd } | null {
+): { workflow: ExtractedWorkflow; deadEnd?: TraceDeadEnd } | { deadEnd: TraceDeadEnd } | null {
   const steps: WorkflowStep[] = [];
   const visited = new Set<string>();
   const externals: string[] = [];
@@ -360,20 +385,21 @@ function trace(
 
   visit(seed.stableKey, 0);
 
-  // A trigger with a response but nothing else is honest; a trigger alone,
-  // or a trace that never reaches an effect/output, is not a workflow — but
-  // under the honesty rule its death is recorded, never silent.
-  if (steps.length < 2 || effectCount === 0) {
-    return {
-      deadEnd: {
+  // A trigger that never reaches an effect is not a *flow*, but it is still a
+  // real entry point into the system: an endpoint you can call, a page you can
+  // open. Dropping those made the Workflows tab claim a repo had one workflow
+  // when it had forty routes, so they are kept and tiered as `surface`
+  // instead. The dead-end record rides along unchanged for the trust panel.
+  const isSurface = steps.length < 2 || effectCount === 0;
+  const deadEnd: TraceDeadEnd | undefined = isSurface
+    ? {
         entrypoint: `${ep.kind}${ep.method ? ` ${ep.method}` : ''}${ep.routePattern ? ` ${ep.routePattern}` : ''}`,
         seedName: seed.name,
         filePath: seed.filePath ?? ep.filePath,
         stepCount: steps.length,
         reason: steps.length < 2 ? 'no_calls_traced' : 'no_effects_reached',
-      },
-    };
-  }
+      }
+    : undefined;
 
   // Express handlers respond after their callees run; make that explicit.
   // Tagged syntheticReturn: it re-references the seed node, and rendering it
@@ -386,13 +412,10 @@ function trace(
   const sideEffectSteps = steps.filter((s) =>
     s.stepKind === 'data_read' || s.stepKind === 'data_write' || s.stepKind === 'async_work' || s.stepKind === 'side_effect').length;
 
-  // UI-route traces rarely reach real effects and mostly re-walk shared
-  // components — rank them below server flows of the same size.
-  const uiPenalty = ep.kind === 'ui_route' ? 0.5 : 1;
-
   // Kept alive only by unknown_external fallbacks: honest, but low-trust —
   // confidence is capped and the flag rides along for the trust panel.
   const unknownOnly = knownEffectCount === 0;
+  const { tier, score, reasons } = rankWorkflow(ep, steps, isSurface, unknownOnly);
 
   return {
     workflow: {
@@ -405,11 +428,96 @@ function trace(
         : steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
       entrypoint: ep,
       steps,
-      importanceScore: (steps.length * 0.1 + sideEffectSteps * 0.2) * uiPenalty * (unknownOnly ? 0.5 : 1),
+      tier,
+      importanceScore: score,
+      rankingReasons: reasons,
       externalDependencies: externals,
-      ...(unknownOnly ? { metadata: { unknown_effects_only: true } } : {}),
+      metadata: {
+        ...(unknownOnly ? { unknown_effects_only: true } : {}),
+        tier,
+        ranking_reasons: reasons,
+      },
     },
+    ...(deadEnd ? { deadEnd } : {}),
   };
+}
+
+/** Effects that mean the flow changed something outside itself. */
+const PERSISTENT_STEP_KINDS = new Set(['data_write', 'async_work', 'side_effect']);
+/** Entry points a person triggers, as opposed to the system triggering itself. */
+const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'event_handler']);
+
+/**
+ * Where a flow belongs in the list, and how high within its tier.
+ *
+ * The old score was `(steps * 0.1 + effectSteps * 0.2)`, which is a length
+ * measurement wearing an importance label: a 20-step trace through shared
+ * helpers outranked a 4-step login every time, so the top of the list was
+ * whatever happened to trace deepest rather than whatever mattered.
+ *
+ * What actually distinguishes an important flow is BREADTH — how many
+ * different kinds of thing it does — plus whether a person triggers it and
+ * whether it changes state. Length past a point is evidence of a trace that
+ * wandered, so it is penalised rather than rewarded.
+ *
+ * Capability membership and git churn are deliberately absent: neither exists
+ * yet at extraction time. They are applied as ordering signals in the API
+ * layer, where they do.
+ */
+export function rankWorkflow(
+  ep: DetectedEntrypoint,
+  steps: WorkflowStep[],
+  isSurface: boolean,
+  unknownOnly: boolean,
+): { tier: WorkflowTier; score: number; reasons: string[] } {
+  const reasons: string[] = [];
+  const kinds = new Set(steps.map((s) => s.stepKind));
+  const distinctEffects = [...kinds].filter((k) => PERSISTENT_STEP_KINDS.has(k) || k === 'data_read').length;
+  const persists = [...kinds].some((k) => PERSISTENT_STEP_KINDS.has(k));
+  const guarded = kinds.has('auth_guard');
+  const userTriggered = USER_TRIGGERED.has(ep.kind);
+
+  if (isSurface) {
+    // Ordered among themselves so a real declared route sorts above a
+    // convention-guessed file seed.
+    const score = (ep.routePattern ? 0.2 : 0) + (userTriggered ? 0.1 : 0);
+    return { tier: 'surface', score, reasons: ['no side effects traced from this entry point'] };
+  }
+
+  let score = 0;
+  if (userTriggered) { score += 0.25; reasons.push('triggered by a user'); }
+  if (persists) { score += 0.25; reasons.push('changes stored state'); }
+  if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
+  if (distinctEffects > 0) {
+    score += Math.min(distinctEffects, 4) * 0.08;
+    reasons.push(`${distinctEffects} kind${distinctEffects === 1 ? '' : 's'} of side effect`);
+  }
+  if (ep.routePattern) score += 0.05;
+  // A tie-break, NOT the old blanket `uiPenalty = 0.5`. That halved every UI
+  // flow, so a page that writes to the database ranked below a server route
+  // that did the same thing — a server-centric bias in a list that is supposed
+  // to be ordered by importance to a user. The concern behind it (UI traces
+  // wander through shared components) is now handled where it belongs: such a
+  // trace reaches no effect, so it lands in `surface`. This small prior only
+  // decides otherwise-identical flows, preferring the side that implements the
+  // effect over the side that delegates to it.
+  if (ep.kind === 'http_route') score += 0.03;
+
+  // A trace that keeps going has usually wandered into shared utilities
+  // rather than found more meaning. Bounded so a genuinely long flow is
+  // demoted, not erased.
+  const overLength = Math.max(0, steps.length - 8);
+  if (overLength > 0) {
+    score -= Math.min(0.2, overLength * 0.02);
+    reasons.push(`${steps.length} steps — long traces drift into shared code`);
+  }
+  if (unknownOnly) {
+    score *= 0.6;
+    reasons.push('effects inferred, not resolved');
+  }
+
+  const tier: WorkflowTier = userTriggered && persists ? 'core' : 'supporting';
+  return { tier, score: Math.max(0, Math.round(score * 10000) / 10000), reasons };
 }
 
 // ─── Step classification ─────────────────────────────────────────────────────
@@ -557,10 +665,15 @@ export async function persistWorkflows(
        RETURNING id`,
       [snapshotId, wf.title, wf.triggerType, wf.purpose, wf.confidence, wf.stableKey,
        entrypointIdMap?.get(wf.entrypoint) ?? null,
+       // tier/reasons written from the top-level fields rather than trusting
+       // each producer's metadata bag — journeys and config flows set the
+       // fields but build their own metadata.
        JSON.stringify({
          importance_score: wf.importanceScore,
          external_dependencies: wf.externalDependencies,
          ...(wf.metadata ?? {}),
+         tier: wf.tier,
+         ranking_reasons: wf.rankingReasons,
        })],
     );
 

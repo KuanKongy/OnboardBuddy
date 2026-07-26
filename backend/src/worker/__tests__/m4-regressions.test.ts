@@ -147,9 +147,19 @@ describe('m4 — workflow extraction fixes', () => {
       ],
     });
     expect(workflows).to.have.length(2);
+    // The server route still sorts first, but only as a tie-break: it is the
+    // side that implements the write, while the page delegates to it.
     expect(workflows[0]!.triggerType).to.contain('HTTP');
     expect(workflows[0]!.importanceScore).to.be.greaterThan(workflows[1]!.importanceScore);
-    expect(workflows[1]!.importanceScore * 2).to.be.closeTo(workflows[0]!.importanceScore, 1e-9);
+
+    // The old rule halved every UI flow, so a page that writes to the database
+    // scored below a route doing the same thing. Both of these reach a real
+    // write from a user action, so both are core and their scores are close —
+    // ranking a page far down a list of "most important user flows" was the
+    // bias being removed, not a property to preserve.
+    expect(workflows[0]!.tier).to.equal('core');
+    expect(workflows[1]!.tier).to.equal('core');
+    expect(workflows[1]!.importanceScore).to.be.greaterThan(workflows[0]!.importanceScore * 0.8);
   });
 });
 

@@ -15,20 +15,43 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
     }
     const snapshotId = ctx.snapshotId;
 
+    // Ordered by tier first, then by score within the tier. `composite_score`
+    // alone put whatever traced deepest on top, because the old
+    // importance_score was a step count in disguise.
+    //
+    // `realizes_capability` is the one ranking signal that does not exist at
+    // extraction time — capabilities are produced later by the semantic pass —
+    // so it is applied here, where it does: a flow that delivers a named
+    // business capability outranks one that delivers nothing nameable.
     const wfResult = await query(
       `SELECT w.id, w.title, w.trigger_type, w.purpose,
               COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
               w.confidence,
+              COALESCE(w.metadata->>'tier', 'supporting') AS tier,
               COALESCE(cs.score, (w.metadata->>'importance_score')::numeric, 0) AS composite_score,
               (SELECT COUNT(*)::int FROM workflow_steps s WHERE s.workflow_id = w.id) AS step_count,
-              COALESCE(cs.reasons, '{}') AS reasons,
-              COALESCE(cs.score_breakdown, '{}') AS score_breakdown
+              COALESCE(
+                CASE WHEN jsonb_typeof(w.metadata->'ranking_reasons') = 'array'
+                     THEN ARRAY(SELECT jsonb_array_elements_text(w.metadata->'ranking_reasons'))
+                END,
+                cs.reasons, '{}') AS reasons,
+              COALESCE(cs.score_breakdown, '{}') AS score_breakdown,
+              EXISTS (
+                SELECT 1 FROM workflow_steps ws
+                JOIN capability_members cm ON cm.node_id = ws.node_id
+                WHERE ws.workflow_id = w.id
+              ) AS realizes_capability
        FROM workflows w
        LEFT JOIN criticality_scores cs
          ON cs.snapshot_id = w.snapshot_id AND cs.phase = 'candidate' AND cs.view = 'candidate'
         AND cs.target_type = 'workflow' AND cs.stable_key = w.stable_key AND cs.role = 'general'
        WHERE w.snapshot_id = $1
-       ORDER BY composite_score DESC`,
+       ORDER BY
+         CASE COALESCE(w.metadata->>'tier', 'supporting')
+           WHEN 'core' THEN 0 WHEN 'supporting' THEN 1 ELSE 2 END,
+         realizes_capability DESC,
+         COALESCE((w.metadata->>'importance_score')::numeric, 0) DESC,
+         w.title ASC`,
       [snapshotId],
     );
 

@@ -1,0 +1,46 @@
+{
+  "repo": "KuanKongy/FloowForge",
+  "clone": "https://github.com/KuanKongy/FloowForge.git",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Enumerated web/app/**/page.tsx, confirmed api/ is FastAPI (Python).",
+  "shape": "Monorepo: Next.js App Router frontend under web/, FastAPI backend under api/ (Python), Supabase migrations under supabase/.",
+  "whyThisRepo": "A different failure from Skribbl's. Its exports were already detected correctly (99 -> 103 barely moves); what was missing was the App Router directory convention, so all 14 pages were invisible. It is also the honest-coverage case: the entire backend is Python and cannot be parsed at all.",
+  "expect": {
+    "uiRoutes": {
+      "exact": [
+        "web/app/app/custom-nodes/page.tsx",
+        "web/app/app/flows/[flowId]/page.tsx",
+        "web/app/app/flows/page.tsx",
+        "web/app/app/integrations/page.tsx",
+        "web/app/app/page.tsx",
+        "web/app/app/profile/page.tsx",
+        "web/app/app/runs/[runId]/page.tsx",
+        "web/app/app/runs/page.tsx",
+        "web/app/app/triggers/page.tsx",
+        "web/app/auth/sign-in/page.tsx",
+        "web/app/auth/sign-up/page.tsx",
+        "web/app/p/[token]/page.tsx",
+        "web/app/p/[token]/result/[runId]/page.tsx",
+        "web/app/page.tsx"
+      ],
+      "note": "Every page.tsx under web/app. layout.tsx files are deliberately excluded: a layout wraps a route without being navigable."
+    },
+    "declaredPaths": {
+      "web/app/page.tsx": "/",
+      "web/app/app/page.tsx": "/app",
+      "web/app/app/flows/page.tsx": "/app/flows",
+      "web/app/app/flows/[flowId]/page.tsx": "/app/flows/:flowId",
+      "web/app/app/runs/[runId]/page.tsx": "/app/runs/:runId",
+      "web/app/p/[token]/result/[runId]/page.tsx": "/p/:token/result/:runId",
+      "web/app/auth/sign-in/page.tsx": "/auth/sign-in",
+      "note": "Derived from the directory tree — App Router has no config file, so this is the only place the URL exists."
+    },
+    "httpRoutes": {
+      "exact": [],
+      "note": "Not a miss. The API is FastAPI in Python (api/routers/*.py) and no parser reads Python. The coverage line must say so rather than implying the repo has no backend."
+    }
+  },
+  "knownGaps": [
+    "api/ is Python: ~40 route handlers across api/routers/ are entirely outside the analysis. This is the case that makes the parsed-vs-in-scope distinction load-bearing — reporting 167 files 'analyzed' implied the backend had been read."
+  ]
+}

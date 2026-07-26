@@ -1,0 +1,34 @@
+{
+  "repo": "KuanKongy/Skribbl",
+  "clone": "https://github.com/KuanKongy/Skribbl.git",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Read src/App.tsx (router config), listed src/pages/, read server/index.js.",
+  "shape": "Vite + React SPA with react-router, plus a small Express + Socket.IO server under server/ written in plain JS.",
+  "whyThisRepo": "Writes pages as `const Index = () => {}; export default Index;`. Under modifier-only export detection every page was `exported: false`, so the repo reported zero UI routes.",
+  "expect": {
+    "uiRoutes": {
+      "exact": ["src/pages/Index.tsx", "src/pages/NotFound.tsx"],
+      "note": "src/pages/ holds exactly these two files and App.tsx declares exactly two <Route> elements."
+    },
+    "declaredPaths": {
+      "src/pages/Index.tsx": "/",
+      "src/pages/NotFound.tsx": "/*",
+      "note": "App.tsx:14-15. The catch-all is written `path=\"*\"`; we normalise it to a root-relative `/*`."
+    },
+    "httpRoutes": {
+      "atLeast": 1,
+      "mustInclude": ["server/index.js"],
+      "note": "server/index.js:22 `app.get('/health', ...)`. This is a .js file — it is only reachable because the parser accepts .js, which `filterByLanguage(index,'typescript')` does not."
+    },
+    "socketEvents": {
+      "exact": [
+        "chat-message", "clear-canvas", "connection", "create-room", "disconnect",
+        "draw-ops", "join-room", "leave-room", "start-game", "sync", "undo", "word-selected"
+      ],
+      "note": "server/src/handlers.js registers eleven socket.on events inside io.on('connection'). These are the app's real interaction surface — the only HTTP route is a health check, so before socket detection this repo produced a single workflow and looked inert."
+    }
+  },
+  "knownGaps": [
+    "Server-to-client emits (`io.to(room).emit('turn-started', …)`, 34 of them in GameRoom.js) are the other half of the realtime protocol and are not modeled. They are outputs rather than entrypoints, so they belong with side-effect/response classification rather than with entrypoint detection."
+  ]
+}

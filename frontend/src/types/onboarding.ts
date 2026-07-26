@@ -103,14 +103,38 @@ export interface OnboardingSection {
   analyzedCommit?: string;
 }
 
+/** Per-language file counts from the analysis guardrail. */
+export interface LanguageInventory {
+  supported?: Record<string, number>;
+  /** Languages present in the repo that no parser reads — named, not hidden. */
+  unsupported?: Record<string, number>;
+  evidenceOnly?: Record<string, number>;
+  supportedFileCount?: number;
+  unsupportedFileCount?: number;
+}
+
 /** Honest denominators for the "critical 25%" story — counts over stored rows. */
 export interface PackageCoverage {
   snapshotCreatedAt: string;
-  files: { analyzed: number; unsupported: number | null; cited: number };
+  /**
+   * Four different denominators, none interchangeable. `parsed` is what the
+   * AST parser actually read and is the only honest coverage figure; `inScope`
+   * counts every file including assets and lockfiles. The UI showed `inScope`
+   * labelled "Analyzed", overstating coverage by up to 9x. `parsed` is null
+   * only for snapshots taken before the backing column existed — render that
+   * as unknown, never fall back to `inScope`.
+   */
+  files: {
+    parsed: number | null;
+    supported: number | null;
+    inScope: number;
+    unsupported: number | null;
+    cited: number;
+  };
   symbols: { total: number; cited: number };
   workflows: { total: number; covered: number };
   tutorialCount: number;
-  languages: Record<string, unknown> | null;
+  languages: LanguageInventory | null;
   /** Honesty rule: snapshot-level unknowns (trace dead-ends, unmodeled packages, journey gaps). */
   detectionUnknowns?: Array<{ kind: string; count?: number; packages?: string[]; expected?: string; queue?: string }>;
   rankingSignals: Array<{ signal: string; weight: number }>;

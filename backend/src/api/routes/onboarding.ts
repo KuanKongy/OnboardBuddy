@@ -546,12 +546,14 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     // and which signals ranked it. Every number is a count over stored
     // rows; nothing here passes through a model.
     const snapMeta = (await query(
-      `SELECT created_at, file_count, symbol_count, workflow_count, language_inventory, unknowns
+      `SELECT created_at, file_count, parsed_file_count, symbol_count, workflow_count,
+              language_inventory, unknowns
        FROM analysis_snapshots WHERE id = $1`,
       [pkg.snapshot_id],
     )).rows[0] as {
       created_at: string;
       file_count: number;
+      parsed_file_count: number | null;
       symbol_count: number;
       workflow_count: number;
       language_inventory: Record<string, unknown>;
@@ -657,8 +659,18 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
         coverage: snapMeta
           ? {
               snapshotCreatedAt: snapMeta.created_at,
+              // Three different denominators, all of them true, none of them
+              // interchangeable. `analyzed` used to be `file_count` — every
+              // file in scope, images and markdown included — which overstated
+              // real coverage by up to 9x on audited projects. `parsed` is
+              // null only for snapshots taken before the column existed; the
+              // UI must render that as unknown rather than fall back to
+              // `inScope`, since that fallback IS the bug.
               files: {
-                analyzed: snapMeta.file_count,
+                parsed: snapMeta.parsed_file_count,
+                supported:
+                  (snapMeta.language_inventory?.supportedFileCount as number | undefined) ?? null,
+                inScope: snapMeta.file_count,
                 unsupported:
                   (snapMeta.language_inventory?.unsupportedFileCount as number | undefined) ?? null,
                 cited: citedAgg?.files_cited ?? 0,
