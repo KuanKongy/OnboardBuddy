@@ -533,7 +533,7 @@ Add explicit cleanup or migration audit before production.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P2 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/pages/TeamPage.tsx |
 
 ## Expected behavior
@@ -3277,16 +3277,30 @@ and [§19.4](./UX_AUDIT_FINDINGS.md#194-known-gaps-34-copies-of-one-sentence-63-
 
 ## Filing these on GitHub
 
-`gh` is configured for `github.students.cs.ubc.ca` but the stored token is invalid
-(`gh auth status` → "The token in keyring is invalid"), so the M4 issues could not be filed
-programmatically while writing this. To sync:
+**Done — all 83 bugs (#1–#83) are filed on `github.students.cs.ubc.ca/CPSC455-2026S/team15`.**
+#1–#52 were filed manually in an earlier session. #53–#83 were filed on 2026-07-25 (GitHub issues
+#76–#106; issue numbers don't equal Bug N — see note below); #53–#64 were closed with a fix-note
+comment, #65–#83 left Open per this document's State column. Labels: `P0`–`P5` on every issue,
+`milestone-4` on #53–#74 only (#75–#83 are the 2026-07-25 audit findings, not M4 sprint work),
+`security` on #63–#66.
+
+To re-sync after future edits to this document:
 
 ```sh
-gh auth login -h github.students.cs.ubc.ca     # re-authenticate first
-scripts/sync-github-issues.sh --dry-run         # prints every gh command it would run
-scripts/sync-github-issues.sh                   # files #53–#74, closes #53–#64
+gh auth login -h github.students.cs.ubc.ca                  # re-authenticate first
+scripts/sync-github-issues.sh --dry-run --from 53 --to 83   # prints every gh command it would run
+scripts/sync-github-issues.sh --from <N> --to <M>           # files/closes only the new or changed range
 ```
 
+**Never run `--from 1`.** #1–#52 were filed manually (not via this script) before this document
+existed in its current form, and 9 of those titles carry a stray leading space — `" Bug 1: …"`,
+`" Bug 3: …"`, `" Bug 8: …"`, `" Bug 11: …"`, `" Bug 16: …"`, `" Bug 19: …"`, `" Bug 23: …"`,
+`" Bug 26: …"`, `" Bug 37: …"` — that the script's exact-string title dedup will not match against
+the clean `"Bug N: …"` it constructs from this doc. A `--from 1` run reports those 9 as new and
+files duplicates. If #1–#52 ever need re-syncing, fix the 9 titles on GitHub first (strip the
+leading space) or dedup by number instead of exact title before running below #53.
+
 The script reads the `## [P…][State] Bug N: …` blocks straight out of this file, so this document
-stays the single source of truth and the tracker cannot drift from it. Labels applied: `P0`–`P5`,
-`milestone-4`, and `security` on #63, #64, #65 and #66.
+stays the single source of truth and the tracker cannot drift from it. Its title-based dedup does a
+byte-exact match against existing issue titles — if a bug's title here is ever edited after filing,
+re-running the script will create a duplicate rather than updating the existing issue.
