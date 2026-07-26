@@ -541,10 +541,10 @@ and fix notes.
 
 | | Count |
 |---|---|
-| **Filed in M4 sprint (#53–#74)** | **22 issues** |
+| **Filed in M4** | **22 issues** |
 | **Fixed inside the sprint** | **12** |
 | **Open going into M5** | **10**, all P2 or below |
-| Total tracked across M2–M4 | 83 issues, **26 open** — no P0, two P1 |
+| Total tracked across M2–M4 | 74 issues, **26 open** — no P0, two P1 |
 
 One issue per root cause: where several defects shared a cause or a fix location they are batched into
 one issue and listed inside it. 51 individual defects became these 22 issues — fixing them one at a
@@ -559,15 +559,6 @@ of M5.
 The two remaining P1s are both carry-over and both narrow: GitHub routes throw instead of returning a
 clear error when the App key is missing (#3), and a known auth-provider limitation on GitHub sign-up
 whose user-facing half we already fixed (#37).
-
-**A third, later audit found 9 more the same day (#75–#83, eight P1)** — a failed analysis presenting
-as complete with an empty package, a statement timeout silently killing ~22% of fresh analyses, one
-bad LLM section pausing a whole package at 0%, the entrypoint detector missing anything that isn't an
-HTTP route, unparsed languages never disclosed after import, a paused generation blanking
-already-completed data, the fullscreen graph having no visible way out, and selecting a graph node
-resetting the viewport. **Unlike the #65–#74 backlog, all nine were fixed the same sprint** rather than
-deferred to M5 — detail and the exact fix for each is in
-[doc/BUGS_AND_FIXES.md](doc/BUGS_AND_FIXES.md#roll-up-as-of-2026-07-26-end-of-m4-after-the-audit-fix-commits).
 
 **[The M5 plan](doc/BUGS_AND_FIXES.md#m5-bug-plan--every-open-bug-resolved-or-closed)** commits all 26
 open items to a resolution: eight ordered batches with owners, plus five declared Won't-Fix **now**
