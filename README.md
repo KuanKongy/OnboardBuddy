@@ -82,7 +82,7 @@ area passed. Every number is parsed from the runners' own machine-readable outpu
 - [Proposal document](doc/Team-15-proposal.pdf)
 - [Design document](doc/Team-15-design.pdf)
 
-**For Milestone 4, start here:** [Milestone 4](#milestone-4) · [What we delivered](#1-what-we-delivered) · [Progress against the design document](#2-progress-against-the-design-document) · [Scope changes](#3-scope-changes-going-into-m5) · [XSS Security Assessment](#xss-security-assessment) · [Testing](#milestone-4-testing) · [Bug list](#milestone-4-bug-list)
+**For Milestone 4, start here:** [Milestone 4](#milestone-4) · [What we delivered](#1-what-we-delivered) · [Progress against the design document](#2-progress-against-the-design-document) · [Known gaps](#3-known-gaps) · [Scope changes](#4-scope-changes-going-into-m5) · [XSS Security Assessment](#xss-security-assessment) · [Testing](#milestone-4-testing) · [Bug list](#milestone-4-bug-list)
 
 Earlier milestones, kept as a record: [Milestone 2](#milestone-2) · [Milestone 3](#milestone-3)
 
@@ -295,7 +295,7 @@ polish, because closing that gap meant rebuilding the product's core output rath
 
 **Direction for M5.** Close the 10 open issues, finish the four team-lifecycle gaps, cut three things
 we have decided not to build, and — as the one piece of new work — get the app **deployed to a public
-URL**. Detail in [Scope changes](#3-scope-changes-going-into-m5).
+URL**. Detail in [Known gaps](#3-known-gaps) · [Scope changes](#4-scope-changes-going-into-m5).
 
 ### Milestone 4 Functionality
 
