@@ -12,27 +12,44 @@ import type { GraphEdge, GraphNode } from "@/types/graph";
 
 interface ClassGraphSectionProps {
   projectId: string;
+  /**
+   * Stable key of a class/interface to open focused, handed over from the
+   * Files view's "See inheritance". This graph is project-wide, so the
+   * hand-off is a view switch, not a drill — but the reader still has to land
+   * on the symbol they clicked rather than on the whole graph.
+   */
+  focusNodeId?: string | null;
 }
 
-export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
+export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphSectionProps) {
   const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  /** True when the handed-over symbol is not in this graph — say so rather
+   * than silently showing the unfocused graph as if nothing was asked. */
+  const [focusMissing, setFocusMissing] = useState(false);
 
   function loadClasses() {
     setLoading(true);
     setError("");
     setSelectedNodeId(null);
+    setFocusMissing(false);
     fetchClassGraph(projectId, selectedPackageId)
-      .then(setData)
+      .then((d) => {
+        setData(d);
+        if (!focusNodeId) return;
+        const found = d.graph.nodes.some((n) => n.id === focusNodeId);
+        setSelectedNodeId(found ? focusNodeId : null);
+        setFocusMissing(!found);
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadClasses(); }, [projectId, selectedPackageId]);
+  useEffect(() => { loadClasses(); }, [projectId, selectedPackageId, focusNodeId]);
 
   // ← / → cycle class/interface nodes, Esc deselects (mirrors the files view).
   const cycleIds = useMemo(() => (data?.graph.nodes ?? []).map((n) => n.id), [data]);
@@ -126,6 +143,23 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
 
   return (
     <>
+      {focusNodeId && !focusMissing && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          Focused on <code className="font-mono">{focusNodeId.split("#").pop()}</code>. This graph is
+          project-wide: extends/implements relationships cross files, so it is a separate view rather than a
+          level inside the file you came from.
+        </p>
+      )}
+      {focusMissing && (
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+          <span className="flex-1 text-foreground">
+            <code className="font-mono">{focusNodeId}</code> is not in the class graph for this snapshot —
+            showing the whole graph instead.
+          </span>
+        </div>
+      )}
+
       <GraphToolbar
         search={search}
         onSearchChange={setSearch}
@@ -143,6 +177,10 @@ export function ClassGraphSection({ projectId }: ClassGraphSectionProps) {
             entryPoints={[]}
             selectedNodeId={selectedNodeId}
             onSelectNode={setSelectedNodeId}
+            // Arriving from "See inheritance" is like a deep link: the reader
+            // chose no viewport here, so the handed-over symbol is framed.
+            suppressInitialFit={!!focusNodeId}
+            focusMode={focusNodeId ? "frame" : "pan-into-view"}
           />
         </div>
 

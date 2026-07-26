@@ -167,6 +167,18 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         await recomputeProjectStatus(projectId);
         return;
       }
+      // A package row is reused across regenerations (ON CONFLICT above), so a
+      // package first built under full_ai keeps whatever this branch does not
+      // replace. Sections are replaced type-by-type below, but tutorials and
+      // legacy-layout sections are not written at all here — without these
+      // deletes the reader still showed the PREVIOUS run's AI-written
+      // tutorials after the owner switched to ai_disabled, which is precisely
+      // "changing to no-AI made no difference to my package".
+      await query(
+        `DELETE FROM package_sections WHERE package_id = $1 AND NOT (type = ANY($2))`,
+        [packageId, [...SECTION_TYPES]],
+      );
+      await query(`DELETE FROM tutorials WHERE package_id = $1`, [packageId]);
       let done = 0;
       for (const sectionType of SECTION_TYPES) {
         await generateDeterministicSection({
@@ -269,18 +281,24 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       : (async () => {
           await updateJob('running', 'Generating request-flow tutorials', 12);
           const tutorialResult = await generateTutorials({
-            ai, snapshotId, projectId, packageId, role,
+            ai, snapshotId, projectId, packageId, role, privacyMode,
             commitHash: snap.commit_hash, projections: deps.projections,
           });
           sectionMetrics.tutorials = tutorialResult;
-          // Walkthrough UI enrichment: tutorial step explanations map 1:1 onto
-          // workflow steps — copy them over instead of paying for a second pass.
+          // Walkthrough UI enrichment: copy a tutorial step's note onto the
+          // workflow step it came from, instead of paying for a second pass.
+          // Joined on `metadata->>'workflow_step_order'`, NOT on step_order:
+          // a tutorial is now a procedure (start the app, plant a marker,
+          // trigger it, revert), so its step 4 is not the flow's step 4 and
+          // position-matching would file notes against the wrong code. Only
+          // steps that really mirror a traced step carry the key.
           await query(
             `UPDATE workflow_steps ws SET explanation = ts.explanation
              FROM tutorial_steps ts
              JOIN tutorials t ON t.id = ts.tutorial_id
              JOIN workflows w ON w.id = t.workflow_id
-             WHERE t.package_id = $1 AND ws.workflow_id = w.id AND ws.step_order = ts.step_order
+             WHERE t.package_id = $1 AND ws.workflow_id = w.id
+               AND ws.step_order = (ts.metadata->>'workflow_step_order')::int
                AND ts.explanation <> ''`,
             [packageId],
           );

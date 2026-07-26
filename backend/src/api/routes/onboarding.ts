@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
-import { CANDIDATE_WEIGHTS } from "../../worker/engine/candidateRanker.js";
+import { buildWeightTableProvenance } from "../services/scoreProvenance.js";
 import { CHAPTERS, SECTION_SPECS, SECTION_TYPES, type SectionType } from "../../worker/generation/sectionSpecs.js";
 import {
   ageLabelFrom,
   claimForReceipt,
   confidenceReasonFor,
   inlineMarkersToText,
+  packageGenerationMode,
   receiptStaleness,
   receiptVerification,
 } from "../lib/receiptPresentation.js";
@@ -382,6 +383,12 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
       receipt_count: number;
     }>;
 
+    // "How this was made" must answer for the PACKAGE. The snapshot's
+    // privacy_mode answers for the analysis and is frozen at analysis time, so
+    // a package regenerated after switching to ai_disabled was still labelled
+    // "privacy: full ai" — the one panel a user checks to see whether their
+    // setting took effect was reporting the setting it replaced.
+    const generation = packageGenerationMode(sections.map((sec) => sec.generation_context));
     res.json({
       package: {
         id: pkg.id,
@@ -390,7 +397,11 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
         branch: pkg.branch,
         generatedAt: pkg.created_at,
         semanticDepth: pkg.semantic_depth,
-        privacyMode: pkg.privacy_mode,
+        privacyMode: generation.privacyMode ?? pkg.privacy_mode,
+        // The mode the ANALYSIS ran under — kept, but no longer conflated with
+        // the package's: it may predate the current setting by many runs.
+        analysisPrivacyMode: pkg.privacy_mode,
+        generation,
       },
       models: models.map((m) => ({
         provider: m.provider,
@@ -656,6 +667,11 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
         branch: pkg.branch,
         generatedAt: pkg.created_at,
         updatedAt: pkg.updated_at,
+        // Honesty rule: a package built with AI off reads very differently
+        // (tables and facts, no narration) and the reader must be told why
+        // rather than left to conclude the product got worse. Derived from the
+        // sections, so it states what was really produced.
+        generation: packageGenerationMode(sections.map((sec) => sec.generation_context)),
         coverage: snapMeta
           ? {
               snapshotCreatedAt: snapMeta.created_at,
@@ -683,10 +699,12 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
               // (trace dead-ends, unmodeled packages, journey gaps) are shown,
               // never silently dropped.
               detectionUnknowns: Array.isArray(snapMeta.unknowns) ? snapMeta.unknowns : [],
-              rankingSignals: Object.entries(CANDIDATE_WEIGHTS).map(([signal, weight]) => ({
-                signal,
-                weight,
-              })),
+              // The weight table with its formula attached. The strip used to
+              // ship bare signal/weight pairs and the frontend supplied its own
+              // labels and its own sentence about what they meant — two copies
+              // of the same claim, only one of which was checked against the
+              // ranker.
+              rankingProvenance: buildWeightTableProvenance(),
             }
           : null,
         sections: sections.map((sec) => {

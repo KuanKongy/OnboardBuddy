@@ -83,6 +83,7 @@ import type {
   SourceReceipt,
 } from "@/types/onboarding";
 import { ReceiptViewer } from "@/components/ReceiptViewer";
+import { ScoreProvenance } from "@/components/ScoreProvenance";
 import { cn } from "@/lib/utils";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -188,19 +189,6 @@ function CoverageFiles({
   );
 }
 
-/** Human names for the ranker's signals (served with their real weights). */
-const SIGNAL_LABELS: Record<string, string> = {
-  workflowParticipation: "workflow participation",
-  fanCentrality: "fan-in/out centrality",
-  exportedSurface: "exported surface",
-  sideEffects: "side effects",
-  entrypointParticipation: "entry points",
-  routeSchemaOwnership: "route/schema ownership",
-  testProximity: "test proximity",
-  configRelevance: "config relevance",
-  churn: "churn (90d)",
-};
-
 /**
  * "How packages work" tour: the transparency contract for package lifecycle —
  * when a package is updated in place, when a new one appears, when nothing is
@@ -288,7 +276,29 @@ function splitTldr(body: string): { tldr: string; rest: string } | null {
  * Sections that retell what an interactive tab already shows link to it
  * (audit §8): the prose is the narrative, the tab is the reference.
  */
+/**
+ * The handoff from "read about it" to "go look at it".
+ *
+ * This only ever listed the LEGACY section ids (`architecture`,
+ * `dependency-graph`, `capability-map`, `workflows`, `data-schema`). None of
+ * them is one of the twelve ids a current package actually contains, so every
+ * package generated against the Diátaxis schema silently lost the link out to
+ * the interactive tab — the sections are deliberately the narrative and the
+ * tabs are deliberately the complete data, and the bridge between them was
+ * pointing at a schema that no longer ships.
+ *
+ * Current ids first; the legacy entries stay because legacy packages are still
+ * rendered.
+ */
 const TAB_FOR_SECTION: Partial<Record<SectionId, { path: string; label: string }>> = {
+  // ── current (Diátaxis) ──────────────────────────────────────────────────
+  "architecture-deep": { path: "architecture", label: "Explore the interactive cluster map in the Architecture tab" },
+  "traced-flows": { path: "workflows", label: "See every traced flow, ranked, in the Workflows tab" },
+  "code-map": { path: "dependencies", label: "Browse the full symbol graph in the Dependencies tab" },
+  capabilities: { path: "capabilities", label: "Open the Capabilities tab for flows and starting points" },
+  "routes-jobs": { path: "workflows", label: "See these entry points as traced flows in the Workflows tab" },
+  "data-model": { path: "dependencies", label: "Trace table accessors in the Dependencies tab" },
+  // ── legacy (11-section packages still render) ───────────────────────────
   architecture: { path: "architecture", label: "Explore the interactive cluster map in the Architecture tab" },
   "dependency-graph": { path: "dependencies", label: "Browse the full symbol graph in the Dependencies tab" },
   "capability-map": { path: "capabilities", label: "Open the Capabilities tab for flows and starting points" },
@@ -1319,6 +1329,35 @@ export function OnboardingPage() {
         </div>
       </div>
 
+      {/* How this package was built. Sits above the coverage strip because it
+          changes how everything below should be read: a structural-only
+          package has no explanation in it by design, and without this banner
+          switching privacy to "AI disabled" produced a package that looked
+          broken rather than deliberately different — the reported "changing to
+          no-AI does not do anything" was partly that the change was invisible. */}
+      {!isMissing && pkg.generation?.label && pkg.generation.kind !== "ai" && (
+        <div
+          className="flex items-start gap-2 border-b bg-muted/30 px-5 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground"
+          role="status"
+        >
+          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 opacity-60" aria-hidden />
+          <p className="flex-1">
+            <span className="font-medium text-foreground">
+              {pkg.generation.kind === "deterministic" ? "Built without AI" : "Partly built without AI"}
+            </span>{" "}
+            {pkg.generation.label}
+            {pkg.generation.kind === "mixed" && (
+              <>
+                {" "}
+                <span className="tabular-nums">
+                  ({pkg.generation.deterministicSections} of {pkg.generation.totalSections} sections)
+                </span>
+              </>
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Coverage strip (audit §4.2): what was analyzed, what this package
           actually cites, and the signals behind the ranking — the honest
           denominators the "critical 25%" story needs. All counts, no prose. */}
@@ -1335,19 +1374,25 @@ export function OnboardingPage() {
             <span className="font-medium text-foreground">{pkg.coverage.workflows.covered}</span> of{" "}
             {pkg.coverage.workflows.total} traced workflows in sections & tutorials
           </span>
-          {pkg.coverage.rankingSignals.length > 0 && (
+          {/* The weight table with its formula, served by the API. This line
+              used to restate the ranker's signal names in the frontend and
+              print the weights with no formula around them — two places to
+              keep in sync, and no way to tell what the percentages summed to. */}
+          {pkg.coverage.rankingProvenance && (
             <>
               <span aria-hidden>·</span>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
-                    ranked by {pkg.coverage.rankingSignals.length} signals
+                    ranked by{" "}
+                    {pkg.coverage.rankingProvenance.available
+                      ? pkg.coverage.rankingProvenance.inputs.length
+                      : "?"}{" "}
+                    signals
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-80">
-                  {pkg.coverage.rankingSignals
-                    .map((s) => `${SIGNAL_LABELS[s.signal] ?? s.signal} ${Math.round(s.weight * 100)}%`)
-                    .join(" · ")}
+                <TooltipContent side="bottom" className="max-w-sm text-left">
+                  <ScoreProvenance data={pkg.coverage.rankingProvenance} variant="tooltip" />
                 </TooltipContent>
               </Tooltip>
             </>

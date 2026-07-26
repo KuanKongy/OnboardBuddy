@@ -35,10 +35,33 @@ Parts 0–4 are the core. Parts 5–7 are optional if you are short on time.
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | From the repo root: `docker compose -f docker-compose.test.yml run --rm test` | `617 passing` (backend), then `103 passed` (frontend). Exit code 0. |
+| 1 | From the repo root: `docker compose -f docker-compose.test.yml run --rm test` | Both suites scroll past, then a **per-area summary table** — how many tests passed in each part of the system — ending in `Overall: PASS`. Exit code 0. |
+
+The table is the quickest way to see what is covered where:
+
+```text
+  AREA                                                  PASSED   FAILED  SKIPPED    RESULT
+  ────────────────────────────────────────────────────────────────────────────────────────
+  Backend · security (hostile input)                        83        0        0      PASS
+  Backend · analysis pipeline                              245        0        0      PASS
+  Backend · AI, caching & model routing                     89        0        0      PASS
+  Backend · document generation                            167        0        0      PASS
+  Backend · API & auth (HTTP)                              156        0        0      PASS
+  Backend · unit (libs, queue, crypto)                      19        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      147        0        0      PASS
+  E2E · Playwright (browser)                                 0        0       68   SKIPPED
+  ────────────────────────────────────────────────────────────────────────────────────────
+  TOTAL                                                    906        0       68      PASS
+```
+
+Every number is parsed from the runners' own machine-readable output, not written down anywhere — see
+[TESTING.md → Run everything](./TESTING.md#run-everything). If any area fails, that row says `FAIL`,
+the failing tests are listed with their file and message, and the command exits 1. E2E is honestly
+reported as skipped because the test image has no browser; `RUN_E2E=1 npm test` runs it for real on a
+machine that does.
 
 Nothing else is required — no `.env`, no cloud accounts, no running app. First run builds the image
-(1–2 min); after that it is cached.
+(1–2 min); after that it is cached — add `--build` if you have run an older version before.
 
 **Test 0.2 — security evidence report** *(optional, 1 min)*
 
@@ -51,7 +74,7 @@ Nothing else is required — no `.env`, no cloud accounts, no running app. First
 > non-zero if a defence regresses, so it doubles as a CI gate. Output is committed at
 > [SECURITY_TEST_EVIDENCE.md](./SECURITY_TEST_EVIDENCE.md).
 
-What all 720 tests cover and why: [TESTING.md](./TESTING.md).
+What all 906 tests cover and why: [TESTING.md](./TESTING.md).
 
 ---
 

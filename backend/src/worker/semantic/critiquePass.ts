@@ -142,12 +142,21 @@ async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Prom
     for (const row of rows) receiptById.set(row.id, row);
   }
 
+  // Receipts are stored WITH their snippets (the reader needs them), so the
+  // privacy filter has to happen here, at the prompt boundary. Without this
+  // check facts_only_ai leaked code anyway: symbolPass withheld snippets from
+  // its own prompt, then critique re-read the same receipts straight from the
+  // DB and pasted 1.2k characters of source per receipt into a provider call.
+  const withSnippets = ctx.privacyMode === 'full_ai';
   const sections: string[] = [];
   for (const record of batch) {
     const receipts = record.receipt_ids.map((id) => receiptById.get(id)).filter((r): r is ReceiptRow => r !== undefined);
-    const receiptLines = receipts.map((r) =>
-      `  - [${r.id}] ${r.receipt_kind} (${r.trust_level}) ${r.file_path ?? r.node_stable_key ?? ''}${r.snippet ? `\n    ${r.snippet.slice(0, RECEIPT_SNIPPET_CAP).replace(/\n/g, '\n    ')}` : ''}`,
-    );
+    const receiptLines = receipts.map((r) => {
+      const evidence = withSnippets && r.snippet
+        ? `\n    ${r.snippet.slice(0, RECEIPT_SNIPPET_CAP).replace(/\n/g, '\n    ')}`
+        : '\n    (code snippet withheld by privacy settings — judge from the file/symbol identity above)';
+      return `  - [${r.id}] ${r.receipt_kind} (${r.trust_level}) ${r.file_path ?? r.node_stable_key ?? ''}${evidence}`;
+    });
     const claims = (record.record.claims ?? []).map((c) => `  - "${c.claim}" cites [${c.receiptIds.join(', ') || 'nothing'}]`);
     sections.push([
       `### Record ${record.stable_key} (${record.record_level})`,

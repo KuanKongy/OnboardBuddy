@@ -11,10 +11,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   fetchDependencyGraph,
+  fetchFileSymbolGraph,
   fetchNodeDetail,
   type GraphResponse,
   type NodeDetail,
 } from "@/lib/graphData";
+import type { DrillFrame } from "@/lib/drillStack";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -30,6 +32,17 @@ const VIEWS: { key: GraphView; label: string }[] = [
   { key: "files", label: "Files" },
   { key: "classes", label: "Classes & interfaces" },
 ];
+
+/** The directory a cluster node stands for (`cluster:src/lib` → `src/lib`). */
+function clusterDirectory(nodeId: string): string {
+  return nodeId.slice("cluster:".length);
+}
+
+/** True when `filePath` lives in the directory a cluster node covers. */
+function clusterContains(nodeId: string, filePath: string): boolean {
+  const dir = clusterDirectory(nodeId);
+  return dir === "." ? !filePath.includes("/") : filePath === dir || filePath.startsWith(`${dir}/`);
+}
 
 export function GraphPage() {
   const { id } = useParams<{ id: string }>();
@@ -60,7 +73,11 @@ export function GraphPage() {
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const stack = useDrillStack();
-  const activeCluster = stack.current?.kind === "cluster" ? stack.current.id : null;
+  const currentFrame = stack.current;
+  /** Set only on the bottom rung, where nodes are the symbols of one file. */
+  const symbolsOfFile = currentFrame?.kind === "file" ? currentFrame.id : null;
+  /** Class/interface handed over to the Classes view by "See inheritance". */
+  const [inheritanceFocus, setInheritanceFocus] = useState<string | null>(null);
   // Suppresses React Flow's own declarative initial fitView on this mount
   // so ViewportFocus is the sole viewport writer while resolving a
   // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
@@ -77,20 +94,27 @@ export function GraphPage() {
    * stack once the data is actually in hand — a failed load then leaves the
    * user on the level they were already on instead of on a blank one.
    */
-  const levelKey = (cluster: string | null) => `${id ?? ""}::${selectedPackageId ?? ""}::${cluster ?? ""}`;
+  const levelKey = (frame: DrillFrame | null) =>
+    `${id ?? ""}::${selectedPackageId ?? ""}::${frame ? `${frame.kind}:${frame.id}` : ""}`;
   const loadedKeyRef = useRef<string | null>(null);
   const pendingFocusDrillRef = useRef<string | null>(null);
 
   const loadLevel = useCallback(
-    async (cluster: string | null): Promise<void> => {
+    async (frame: DrillFrame | null): Promise<void> => {
       if (!id) return;
       setLoading(true);
       setError("");
       setSelectedNodeId(null);
       try {
-        const d = await fetchDependencyGraph(id, cluster ?? undefined, selectedPackageId);
+        // A `file` frame is the bottom rung: the symbols that file declares,
+        // with the calls between them. Everything above it is a directory
+        // level served by the same endpoint.
+        const d =
+          frame?.kind === "file"
+            ? await fetchFileSymbolGraph(id, frame.id, selectedPackageId)
+            : await fetchDependencyGraph(id, frame?.kind === "cluster" ? frame.id : undefined, selectedPackageId);
         setData(d);
-        loadedKeyRef.current = levelKey(cluster);
+        loadedKeyRef.current = levelKey(frame);
 
         // Resolve a pending `?focus=<file>` in the SAME commit as the data
         // that makes it resolvable, rather than in a later effect: mounting
@@ -104,14 +128,16 @@ export function GraphPage() {
           setFocusNotFoundId(null);
           return;
         }
-        // Large repos render as directory groups at the root, so the target
-        // file is never a root-level node — it lives inside a group. Drill to
-        // its 2-level prefix (mirroring the backend rule in graph.ts) before
-        // calling it missing.
-        if (d.clustered && !cluster) {
-          const parts = focus.split("/");
-          pendingFocusDrillRef.current =
-            parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : ".";
+        // Not on this canvas: if one of the groups here covers it, that group
+        // is the next hop. Asking the returned nodes — rather than
+        // recomputing the server's directory rule here — is what lets this
+        // keep working now that a level can regroup more than once before
+        // reaching the file.
+        const owningGroup = d.graph.nodes.find(
+          (n) => n.id.startsWith("cluster:") && clusterContains(n.id, focus),
+        );
+        if (owningGroup) {
+          pendingFocusDrillRef.current = clusterDirectory(owningGroup.id);
           return;
         }
         setFocusNotFoundId(focus);
@@ -131,7 +157,7 @@ export function GraphPage() {
 
   const drill = useGraphDrill({
     stack,
-    loadLevel: (frame) => loadLevel(frame?.kind === "cluster" ? frame.id : null),
+    loadLevel,
     readViewport: () => viewportRef.current?.() ?? null,
   });
 
@@ -151,8 +177,8 @@ export function GraphPage() {
     }
     // A drill already fetched this level before moving the stack; refetching
     // here would double-request and clobber the transition mid-flight.
-    if (loadedKeyRef.current === levelKey(activeCluster)) return;
-    void loadLevel(activeCluster).catch(() => {});
+    if (loadedKeyRef.current === levelKey(currentFrame)) return;
+    void loadLevel(currentFrame).catch(() => {});
   }, [id, selectedPackageId, searchParams]);
 
   // A `?focus=` target that lives inside a directory group needs one drill to
@@ -206,14 +232,19 @@ export function GraphPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [fullscreen]);
 
-  // Enrich the selected node with the symbol doc, critical-path score and
+  // With nothing selected on the symbols level, the panel describes the file
+  // the reader drilled into. Otherwise opening a file's symbols would delete
+  // the only way to read that file's own score, imports and workflows.
+  const panelNodeId = selectedNodeId ?? symbolsOfFile;
+
+  // Enrich the panel's node with the symbol doc, critical-path score and
   // connected workflows; best-effort, so a failure just leaves the panel basic.
   useEffect(() => {
     setSelectedNodeDetail(null);
-    if (!id || !selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
+    if (!id || !panelNodeId || panelNodeId.startsWith("cluster:")) return;
     setDetailLoading(true);
     let cancelled = false;
-    fetchNodeDetail(id, selectedNodeId, selectedPackageId)
+    fetchNodeDetail(id, panelNodeId, selectedPackageId)
       .then((detail) => {
         if (!cancelled) setSelectedNodeDetail(detail);
       })
@@ -221,7 +252,7 @@ export function GraphPage() {
         if (!cancelled) setDetailLoading(false);
       });
     return () => { cancelled = true; };
-  }, [id, selectedNodeId, selectedPackageId]);
+  }, [id, panelNodeId, selectedPackageId]);
 
   const nodes: GraphNode[] = useMemo(() => {
     if (!data) return [];
@@ -234,6 +265,8 @@ export function GraphPage() {
         importCount: (n.metadata?.importCount as number) ?? 0,
         externalImportCount: (n.metadata?.externalImportCount as number) ?? 0,
         dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        symbolCount: (n.metadata?.symbolCount as number) ?? undefined,
+        exported: (n.metadata?.exported as boolean) ?? undefined,
       },
     }));
   }, [data]);
@@ -283,7 +316,34 @@ export function GraphPage() {
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
-  const showPanel = view === "files" && selectedNode && !data?.clustered;
+  // The file frame is not a node on this canvas — it is the level itself —
+  // so it gets a stand-in for the panel header.
+  const panelNode: GraphNode | undefined =
+    selectedNode ??
+    (symbolsOfFile && currentFrame
+      ? {
+          id: symbolsOfFile,
+          label: currentFrame.label,
+          kind: "module",
+          metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
+        }
+      : undefined);
+  // A cluster node is never selected (clicking it navigates), so the guard is
+  // simply "is there something to describe" — the old `!data.clustered` test
+  // suppressed the panel for real files sitting next to groups on a
+  // regrouped level.
+  const showPanel = view === "files" && !!panelNode;
+  const truncation = data?.truncation ?? null;
+  const levelUnit = data?.level?.unit ?? (data?.clustered ? "groups" : "files");
+  const groupCount = nodes.filter((n) => n.id.startsWith("cluster:")).length;
+  const fileCount = nodes.length - groupCount;
+  // A class/interface is reachable in the project-wide Classes view; offer the
+  // hand-off from the symbol that made the reader ask.
+  const inheritanceTarget =
+    selectedNode && (selectedNode.kind === "class" || selectedNode.kind === "interface")
+      ? selectedNode.id
+      : null;
+  const isEmptyLevel = view === "files" && !loading && !error && (!data || nodes.length === 0);
 
   return (
     <div style={{ "--graph-chrome": fullscreen ? "90px" : "230px" } as React.CSSProperties}>
@@ -349,9 +409,21 @@ export function GraphPage() {
             )}
             {view === "files" && data && (
               <>
-                <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
-                  {data.totalNodes} files · {data.totalEdges} edges
+                <Badge
+                  variant="outline"
+                  className="text-[0.6875rem] tabular-nums"
+                  title={
+                    truncation
+                      ? `${truncation.shown} of ${truncation.total} drawn — ${truncation.hidden} left out by the ${truncation.limit}-node cap`
+                      : "Everything at this level is drawn"
+                  }
+                >
+                  {/* Scoped to this level. It used to print the whole
+                      snapshot's counts on every level, so a drilled group of
+                      107 files still claimed the repo's 227. */}
+                  {data.totalNodes} {symbolsOfFile ? "symbols" : "files"} · {data.totalEdges} edges
                   {data.clustered && " (grouped)"}
+                  {truncation && ` · ${truncation.shown} drawn`}
                 </Badge>
                 <Button
                   variant="outline"
@@ -392,7 +464,12 @@ export function GraphPage() {
               {VIEWS.map((v) => (
                 <button
                   key={v.key}
-                  onClick={() => setView(v.key)}
+                  onClick={() => {
+                    // Choosing the view from the toggle asks for the whole
+                    // view, not the symbol a previous hand-off focused.
+                    setInheritanceFocus(null);
+                    setView(v.key);
+                  }}
                   aria-pressed={view === v.key}
                   className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
                     view === v.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
@@ -406,7 +483,7 @@ export function GraphPage() {
         }
       />
 
-      {view === "classes" && id && <ClassGraphSection projectId={id} />}
+      {view === "classes" && id && <ClassGraphSection projectId={id} focusNodeId={inheritanceFocus} />}
 
       {view === "files" && loading && (
         <div className="flex items-center justify-center py-20">
@@ -414,17 +491,36 @@ export function GraphPage() {
         </div>
       )}
 
-      {view === "files" && (error || (!data && !loading)) && (
+      {/* A successful response with zero nodes used to fall through this guard
+          and render an empty canvas under "0 / 0 files" — the reader could not
+          tell an empty level from a broken one. Same shape as
+          ClassGraphSection's guard. */}
+      {view === "files" && (error || isEmptyLevel) && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
           <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
           <div className="flex-1">
             <p className="text-sm font-medium text-foreground">
-              {error || "No graph data available yet"}
+              {error ||
+                (symbolsOfFile
+                  ? `No symbols were extracted from ${currentFrame?.label ?? symbolsOfFile}`
+                  : currentFrame
+                    ? `Nothing to show in ${currentFrame.label}`
+                    : "No graph data available yet")}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Run an analysis first to generate the dependency graph, or retry if analysis has completed.
+              {error || !currentFrame
+                ? "Run an analysis first to generate the dependency graph, or retry if analysis has completed."
+                : symbolsOfFile
+                  ? "The file is in the graph but no symbols were parsed from it — that happens for a language this analyzer does not read, or a file that only re-exports."
+                  : "This group came back empty. It may have been renamed or removed since this link was made."}
             </p>
           </div>
+          {currentFrame && !error && (
+            <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy}>
+              <CornerLeftUp className="mr-1 h-3 w-3" />
+              Back
+            </Button>
+          )}
           <Button
             variant="outline"
             size="xs"
@@ -432,7 +528,7 @@ export function GraphPage() {
               // Clear the guard first, or the retry is skipped as
               // already-loaded and the button silently does nothing.
               loadedKeyRef.current = null;
-              void loadLevel(activeCluster).catch(() => {});
+              void loadLevel(currentFrame).catch(() => {});
             }}
           >
             <RefreshCw className="mr-1 h-3 w-3" />
@@ -441,12 +537,34 @@ export function GraphPage() {
         </div>
       )}
 
-      {view === "files" && data && !loading && (
+      {view === "files" && data && !loading && !isEmptyLevel && (
         <>
           {data.clustered && (
             <p className="mb-2 text-xs text-muted-foreground">
-              Large codebase ({data.totalNodes} files) — showing directory groups. Click a group to drill in.
+              {currentFrame
+                ? `${currentFrame.label} holds ${data.totalNodes} files — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. Click a subfolder to drill in.`
+                : `Large codebase (${data.totalNodes} files) — showing ${groupCount} directory groups. Click a group to drill in.`}
             </p>
+          )}
+
+          {symbolsOfFile && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              Symbols declared in <code className="font-mono">{symbolsOfFile}</code> — arrows are calls
+              between them. Click one for its detail.
+            </p>
+          )}
+
+          {/* The cap used to bite in silence below the root. */}
+          {truncation && (
+            <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="flex-1 text-foreground">
+                Showing {truncation.shown} of {truncation.total} {truncation.unit}
+                {currentFrame ? ` in ${currentFrame.label}` : ""} — {truncation.hidden} not drawn. A single
+                view is capped at {truncation.limit} nodes, so this kept {truncation.keptBy}.
+                {truncation.seeRest ? ` ${truncation.seeRest}` : ""}
+              </span>
+            </div>
           )}
 
           {focusNotFoundId && (
@@ -466,7 +584,10 @@ export function GraphPage() {
             onSearchChange={setSearch}
             matchCount={visibleNodes.length}
             totalCount={nodes.length}
-            noun={data.clustered ? "groups" : "files"}
+            noun={levelUnit}
+            // "60 / 60 files" on a level that holds 107 reads as "that is all
+            // of them"; the count is over what was drawn, so it has to say so.
+            extra={truncation ? `${truncation.hidden} more not drawn` : undefined}
           />
 
           <div className={cn(showPanel ? "grid gap-3 lg:grid-cols-[1fr_340px]" : "", fullscreen && "fixed inset-0 z-50 bg-background p-3")}>
@@ -484,16 +605,28 @@ export function GraphPage() {
                 focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
-                // A group opens a level below it — that is navigation, and it
-                // gets the zoom transition. A file is a leaf: clicking it
-                // opens the detail panel and leaves the camera alone.
+                // A group or a file with symbols under it opens a level —
+                // that is navigation, and it gets the zoom transition.
+                // Anything with nothing below it is a leaf: clicking it opens
+                // the detail panel and leaves the camera alone.
                 onDrillInto={(nodeId) => {
-                  if (!nodeId.startsWith("cluster:")) return false;
-                  const path = nodeId.replace("cluster:", "");
-                  drill.drillInto(
-                    { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
-                    nodeId,
-                  );
+                  if (nodeId.startsWith("cluster:")) {
+                    const path = clusterDirectory(nodeId);
+                    drill.drillInto(
+                      { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+                      nodeId,
+                    );
+                    return true;
+                  }
+                  // Symbols are the bottom rung; they never open anything.
+                  if (symbolsOfFile) return false;
+                  const node = nodes.find((n) => n.id === nodeId);
+                  // Gate on the server's count of symbol nodes, not on the
+                  // exported-name list: that list carries re-exported names
+                  // belonging to other modules, so it would offer a level
+                  // that turns out to be empty.
+                  if (!node || (node.metadata.symbolCount ?? 0) === 0) return false;
+                  drill.drillInto({ kind: "file", id: nodeId, label: node.label }, nodeId);
                   return true;
                 }}
                 onSelectNode={(nodeId) => {
@@ -503,14 +636,25 @@ export function GraphPage() {
               />
             </div>
 
-            {showPanel && (
+            {showPanel && panelNode && (
               <aside className="graph-canvas overflow-y-auto !bg-card">
                 <NodeInfoPanel
-                  node={selectedNode}
+                  node={panelNode}
                   detail={selectedNodeDetail}
                   loading={detailLoading}
                   githubRepo={githubRepo}
-                  onClose={() => setSelectedNodeId(null)}
+                  // Nothing selected on the symbols level means the panel is
+                  // describing the file itself, which there is no selection to
+                  // clear.
+                  onClose={selectedNodeId ? () => setSelectedNodeId(null) : undefined}
+                  onSeeInheritance={
+                    inheritanceTarget
+                      ? () => {
+                          setInheritanceFocus(inheritanceTarget);
+                          setView("classes");
+                        }
+                      : undefined
+                  }
                 />
               </aside>
             )}

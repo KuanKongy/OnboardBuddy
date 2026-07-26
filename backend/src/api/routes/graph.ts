@@ -2,21 +2,198 @@ import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { resolveForRequest } from "../services/packageResolver.js";
+import { buildCandidateProvenance, buildMeanProvenance } from "../services/scoreProvenance.js";
+import { loadClusterNarratives } from "../../worker/engine/architectureClusterer.js";
 
 export const graphRouter = Router({ mergeParams: true });
 
 const MAX_GRAPH_NODES = 60;
 
+/**
+ * The symbol node types a source file declares — the bottom rung of the
+ * Dependencies ladder (cluster → nested cluster → file → symbols). Method
+ * nodes are included so a class-heavy file shows its members rather than one
+ * opaque class box.
+ */
+const SYMBOL_NODE_TYPES = ["function", "method", "class", "interface", "type", "enum", "variable"];
+
+export interface GraphTruncation {
+  shown: number;
+  total: number;
+  hidden: number;
+  limit: number;
+  unit: "groups" | "files" | "symbols" | "groups and files";
+  /** The rule that picked the survivors, in the reader's words. */
+  keptBy: string;
+  /** Where the rest can still be reached, or null when nowhere. */
+  seeRest: string | null;
+}
+
+/**
+ * Every level of this graph is capped at MAX_GRAPH_NODES, and below the root
+ * the cap used to be silent: drilling into a 107-file group drew 60 files and
+ * the toolbar said "60 / 60 files", so the reader had no way to know 47 were
+ * missing. A level that hides part of itself has to say so — with the real
+ * numbers and the rule that chose what stayed.
+ */
+function truncationNotice(opts: {
+  shown: number;
+  total: number;
+  unit: GraphTruncation["unit"];
+  keptBy: string;
+  seeRest?: string | null;
+}): GraphTruncation | null {
+  if (opts.shown >= opts.total) return null;
+  return {
+    shown: opts.shown,
+    total: opts.total,
+    hidden: opts.total - opts.shown,
+    limit: MAX_GRAPH_NODES,
+    unit: opts.unit,
+    keptBy: opts.keptBy,
+    seeRest: opts.seeRest ?? null,
+  };
+}
+
+/** Segments of a repo-relative path; `.` is the repo root, which has none. */
+function pathSegments(p: string): string[] {
+  return p === "." ? [] : p.split("/").filter(Boolean);
+}
+
+/**
+ * Symbols declared per file. The file → symbols rung must only be offered
+ * where there is something below it: a node that opens an empty level is
+ * worse than a node that opens nothing.
+ */
+async function symbolCountsByFile(snapshotId: string, filePaths: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  if (filePaths.length === 0) return counts;
+  const result = await query(
+    `SELECT file_path, count(*)::int AS symbols
+     FROM graph_nodes
+     WHERE snapshot_id = $1 AND type = ANY($2) AND file_path = ANY($3)
+     GROUP BY file_path`,
+    [snapshotId, SYMBOL_NODE_TYPES, filePaths],
+  );
+  for (const r of result.rows as Array<{ file_path: string; symbols: number }>) {
+    counts.set(r.file_path, r.symbols);
+  }
+  return counts;
+}
+
 graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
     const cluster = req.query.cluster as string | undefined;
+    const file = req.query.file as string | undefined;
 
     const ctx = await resolveForRequest(req, res);
     if (ctx === false) return;
     const snapshotId = ctx?.snapshotId ?? null;
     if (!snapshotId) {
       res.status(404).json({ error: "No completed analysis snapshot found" });
+      return;
+    }
+
+    // ── file → symbols ────────────────────────────────────────────────────
+    // The bottom rung. Nothing new is computed: these are the symbol nodes
+    // and the `calls` edges the analyzer already stored for this file.
+    if (file) {
+      const [symbolResult, symbolEdgeResult] = await Promise.all([
+        query(
+          `SELECT stable_key, type, name, exported, line_start
+           FROM graph_nodes
+           WHERE snapshot_id = $1 AND file_path = $2 AND type = ANY($3)`,
+          [snapshotId, file, SYMBOL_NODE_TYPES],
+        ),
+        query(
+          `SELECT e.id, e.type,
+                  s.stable_key AS source_key, t.stable_key AS target_key
+           FROM graph_edges e
+           JOIN graph_nodes s ON s.id = e.source_node_id
+           JOIN graph_nodes t ON t.id = e.target_node_id
+           WHERE e.snapshot_id = $1
+             AND e.type IN ('calls', 'contains', 'handles_route')
+             AND (s.file_path = $2 OR t.file_path = $2)`,
+          [snapshotId, file],
+        ),
+      ]);
+
+      type SymbolRow = { stable_key: string; type: string; name: string; exported: boolean; line_start: number | null };
+      type SymbolEdgeRow = { id: string; type: string; source_key: string; target_key: string };
+      const symbols = symbolResult.rows as SymbolRow[];
+      const symbolEdges = symbolEdgeResult.rows as SymbolEdgeRow[];
+      const symbolKeys = new Set(symbols.map((s) => s.stable_key));
+
+      // Call counts are project-wide: a function called from another file is
+      // still called, and counting only what fits on this canvas would make
+      // the file look more isolated than it is. The DRAWN edges are the
+      // intra-file subset, because an edge to a symbol that is not here has
+      // nothing to attach to.
+      const callsOut = new Map<string, number>();
+      const callsIn = new Map<string, number>();
+      const entryPoints = new Set<string>();
+      for (const e of symbolEdges) {
+        if (e.type === "calls") {
+          if (symbolKeys.has(e.source_key)) callsOut.set(e.source_key, (callsOut.get(e.source_key) ?? 0) + 1);
+          if (symbolKeys.has(e.target_key)) callsIn.set(e.target_key, (callsIn.get(e.target_key) ?? 0) + 1);
+        } else if (e.type === "handles_route" && symbolKeys.has(e.target_key)) {
+          // file -> handler symbol: the route handlers of this file.
+          entryPoints.add(e.target_key);
+        }
+      }
+
+      const degree = (key: string) => (callsOut.get(key) ?? 0) + (callsIn.get(key) ?? 0);
+      symbols.sort(
+        (a, b) => degree(b.stable_key) - degree(a.stable_key) || (a.line_start ?? 0) - (b.line_start ?? 0),
+      );
+      const keptSymbols = symbols.slice(0, MAX_GRAPH_NODES);
+      const keptKeys = new Set(keptSymbols.map((s) => s.stable_key));
+
+      // `contains` here is class -> method only; the file -> symbol contains
+      // edge has the module node as its source, which is not on this canvas.
+      const inFileEdges = symbolEdges.filter(
+        (e) => e.type !== "handles_route" && symbolKeys.has(e.source_key) && symbolKeys.has(e.target_key),
+      );
+
+      res.json({
+        projectId,
+        snapshotId,
+        clustered: false,
+        level: { kind: "file", id: file, unit: "symbols" },
+        totalNodes: symbols.length,
+        totalEdges: inFileEdges.length,
+        truncation: truncationNotice({
+          shown: keptSymbols.length,
+          total: symbols.length,
+          unit: "symbols",
+          keptBy: "the symbols with the most calls in and out",
+          seeRest: "Open the file on GitHub to read the rest.",
+        }),
+        graph: {
+          nodes: keptSymbols.map((s) => ({
+            id: s.stable_key,
+            label: s.name,
+            kind: s.type,
+            metadata: {
+              exportedSymbols: [],
+              // Symbols relate by CALLS, not imports — the same distinction
+              // /nodes/:nodeId draws with `relation_labels`.
+              importCount: callsOut.get(s.stable_key) ?? 0,
+              externalImportCount: 0,
+              dependentCount: callsIn.get(s.stable_key) ?? 0,
+              symbolCount: 0,
+              exported: s.exported,
+              lineStart: s.line_start,
+            },
+          })),
+          edges: inFileEdges
+            .filter((e) => keptKeys.has(e.source_key) && keptKeys.has(e.target_key))
+            .map((e) => ({ id: e.id, source: e.source_key, target: e.target_key, kind: e.type, weight: 1 })),
+          entryPoints: [...entryPoints].filter((k) => keptKeys.has(k)),
+        },
+        fileAnalyses: [],
+      });
       return;
     }
 
@@ -45,6 +222,14 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
 
     const nodeIdToKey = new Map<string, string>();
     for (const n of allNodes) nodeIdToKey.set(n.id, n.stable_key);
+
+    // File-level edges only. The edge query deliberately keeps symbol-level
+    // rows (calls/contains) because the endpoint filter below discards them —
+    // but counting them as "edges" is what made the header badge claim
+    // thousands of dependencies that were never drawn.
+    const fileEdges = allEdges.filter(
+      (e) => nodeIdToKey.has(e.source_node_id) && nodeIdToKey.has(e.target_node_id),
+    );
 
     // If too many nodes, cluster by 2-level directory path
     if (allNodes.length > MAX_GRAPH_NODES && !cluster) {
@@ -112,24 +297,155 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
         projectId,
         snapshotId,
         clustered: true,
+        level: { kind: "root", id: null, unit: "groups" },
         totalNodes: allNodes.length,
-        totalEdges: allEdges.length,
+        // File-to-file edges, not every edge in the snapshot. `allEdges`
+        // includes calls/contains rows that are dropped before drawing, so
+        // this number used to be several times what the canvas showed.
+        totalEdges: fileEdges.length,
+        truncation: truncationNotice({
+          shown: clusterNodes.length,
+          total: dirMap.size,
+          unit: "groups",
+          keptBy: "the groups whose files make the most imports",
+          seeRest: null,
+        }),
         graph: { nodes: clusterNodes, edges: filteredClusterEdges, entryPoints: [] },
         fileAnalyses: [],
       });
       return;
     }
 
-    // Filter to a cluster if requested. Prefix match so breadcrumb
-    // intermediate segments work: cluster "src" also matches files whose
-    // 2-level dir is "src/lib".
+    // Files at this level. Prefix-matching the PATH (rather than a 2-segment
+    // directory key) is what lets a nested group such as `backend/src/worker`
+    // inside `backend/src` resolve to its own files at all — the old rule
+    // compared against a key that is never longer than two segments, so a
+    // deeper group matched nothing.
     let filteredNodes = allNodes;
     if (cluster) {
-      filteredNodes = allNodes.filter((n) => {
-        const parts = n.file_path.split('/');
-        const dir = parts.length > 2 ? `${parts[0]}/${parts[1]}` : parts.length > 1 ? parts[0]! : '.';
-        return dir === cluster || dir.startsWith(`${cluster}/`);
-      });
+      filteredNodes = allNodes.filter((n) =>
+        cluster === "."
+          ? !n.file_path.includes("/")
+          : n.file_path === cluster || n.file_path.startsWith(`${cluster}/`),
+      );
+    }
+    const levelKeySet = new Set(filteredNodes.map((n) => n.stable_key));
+    const levelEdges = fileEdges.filter(
+      (e) =>
+        levelKeySet.has(nodeIdToKey.get(e.source_node_id)!) &&
+        levelKeySet.has(nodeIdToKey.get(e.target_node_id)!),
+    );
+
+    // ── nested cluster ────────────────────────────────────────────────────
+    // A drilled group with more files than fit is regrouped one directory
+    // level deeper instead of being cut. Cutting is what made 47 of
+    // `backend/src`'s 107 files unreachable: the drilled level is flat, so
+    // there was no smaller group left to open. Regrouping keeps every file
+    // one click away.
+    if (cluster && filteredNodes.length > MAX_GRAPH_NODES) {
+      const groupDepth = pathSegments(cluster).length + 1;
+      const subMap = new Map<string, { count: number; importCount: number; keys: string[] }>();
+      const loose: NodeRow[] = [];
+      for (const n of filteredNodes) {
+        const parts = pathSegments(n.file_path);
+        // A file sitting directly in this directory has no deeper group to
+        // join; it stays a file node alongside the groups.
+        if (parts.length <= groupDepth) { loose.push(n); continue; }
+        const dir = parts.slice(0, groupDepth).join("/");
+        const info = subMap.get(dir) ?? { count: 0, importCount: 0, keys: [] };
+        info.count++;
+        info.importCount += (n.metadata?.importCount as number) ?? 0;
+        info.keys.push(n.stable_key);
+        subMap.set(dir, info);
+      }
+      // A group holding one file is a click that reveals that one file —
+      // promote it back rather than making the reader open it to find out.
+      const keyToNode = new Map(filteredNodes.map((n) => [n.stable_key, n]));
+      for (const [dir, info] of [...subMap]) {
+        if (info.count > 1) continue;
+        const only = keyToNode.get(info.keys[0]!);
+        if (only) loose.push(only);
+        subMap.delete(dir);
+      }
+
+      // Only worth it if it actually shrinks the level; a directory whose
+      // files are all loose regroups into itself and must fall through to
+      // the capped list (with the cut disclosed) instead.
+      if (subMap.size > 0 && subMap.size + loose.length < filteredNodes.length) {
+        loose.sort(
+          (a, b) => ((b.metadata?.importCount as number) ?? 0) - ((a.metadata?.importCount as number) ?? 0),
+        );
+        const subClusters = [...subMap.entries()]
+          .sort((a, b) => b[1].importCount - a[1].importCount)
+          .map(([dir, info]) => ({
+            id: `cluster:${dir}`,
+            label: `${dir.split("/").pop()}/ (${info.count} files)`,
+            kind: "cluster" as const,
+            metadata: {
+              exportedSymbols: [] as string[],
+              importCount: info.importCount,
+              dependentCount: 0,
+              fileCount: info.count,
+              directory: dir,
+            },
+          }));
+        // Loose files are real files, so they open their symbols like any
+        // other — the count is what decides whether the rung exists.
+        const looseCounts = await symbolCountsByFile(snapshotId, loose.map((n) => n.file_path));
+        const looseNodes = loose.map((n) => ({
+          id: n.stable_key,
+          label: n.name,
+          kind: n.type,
+          metadata: {
+            exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+            importCount: (n.metadata?.importCount as number) ?? 0,
+            externalImportCount: (n.metadata?.externalImportCount as number) ?? 0,
+            dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+            symbolCount: looseCounts.get(n.file_path) ?? 0,
+          },
+        }));
+        const mixed = [...subClusters, ...looseNodes].slice(0, MAX_GRAPH_NODES);
+        const keptIds = new Set(mixed.map((n) => n.id));
+
+        // Every file key maps to the node that stands for it here: its group,
+        // or itself when it is loose.
+        const keyToNodeId = new Map<string, string>();
+        for (const [dir, info] of subMap) for (const key of info.keys) keyToNodeId.set(key, `cluster:${dir}`);
+        for (const n of loose) keyToNodeId.set(n.stable_key, n.stable_key);
+
+        const seen = new Set<string>();
+        const mixedEdges: Array<{ id: string; source: string; target: string; kind: string; weight: number }> = [];
+        for (const e of levelEdges) {
+          const s = keyToNodeId.get(nodeIdToKey.get(e.source_node_id)!);
+          const t = keyToNodeId.get(nodeIdToKey.get(e.target_node_id)!);
+          if (!s || !t || s === t || !keptIds.has(s) || !keptIds.has(t)) continue;
+          const key = `${s}->${t}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          mixedEdges.push({ id: key, source: s, target: t, kind: "dependency", weight: 1 });
+        }
+
+        const unit: GraphTruncation["unit"] =
+          subClusters.length > 0 && looseNodes.length > 0 ? "groups and files" : "groups";
+        res.json({
+          projectId,
+          snapshotId,
+          clustered: true,
+          level: { kind: "cluster", id: cluster, unit },
+          totalNodes: filteredNodes.length,
+          totalEdges: levelEdges.length,
+          truncation: truncationNotice({
+            shown: mixed.length,
+            total: subClusters.length + looseNodes.length,
+            unit,
+            keptBy: "the subfolders and files that make the most imports",
+            seeRest: null,
+          }),
+          graph: { nodes: mixed, edges: mixedEdges, entryPoints: [] },
+          fileAnalyses: [],
+        });
+        return;
+      }
     }
 
     // Cap at MAX_GRAPH_NODES sorted by importance (importCount desc)
@@ -141,6 +457,8 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
     const cappedNodes = filteredNodes.slice(0, MAX_GRAPH_NODES);
     const cappedKeySet = new Set(cappedNodes.map((n) => n.stable_key));
 
+    const symbolCounts = await symbolCountsByFile(snapshotId, cappedNodes.map((n) => n.file_path));
+
     const nodes = cappedNodes.map((n) => ({
       id: n.stable_key,
       label: n.name,
@@ -150,10 +468,11 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
         importCount: (n.metadata?.importCount as number) ?? 0,
         externalImportCount: (n.metadata?.externalImportCount as number) ?? 0,
         dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        symbolCount: symbolCounts.get(n.file_path) ?? 0,
       },
     }));
 
-    const edges = allEdges
+    const edges = levelEdges
       .map((e) => ({
         id: e.id,
         source: nodeIdToKey.get(e.source_node_id) ?? '',
@@ -174,8 +493,19 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
       projectId,
       snapshotId,
       clustered: false,
-      totalNodes: allNodes.length,
-      totalEdges: allEdges.length,
+      level: { kind: cluster ? "cluster" : "root", id: cluster ?? null, unit: "files" },
+      // Scoped to THIS level. Both numbers used to describe the whole
+      // snapshot at every level, so a drilled group of 107 files reported
+      // "227 files" in the header while drawing 60 of them.
+      totalNodes: filteredNodes.length,
+      totalEdges: levelEdges.length,
+      truncation: truncationNotice({
+        shown: cappedNodes.length,
+        total: filteredNodes.length,
+        unit: "files",
+        keptBy: "the files that import the most other project files",
+        seeRest: null,
+      }),
       graph: { nodes, edges, entryPoints: Array.from(entryPointSet) },
       fileAnalyses: [],
     });
@@ -191,6 +521,8 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
 graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
+    // `?cluster=<stable_key>` is the drill level: the same component, opened.
+    const drilledClusterKey = (req.query.cluster as string | undefined) || null;
 
     const ctx = await resolveForRequest(req, res);
     if (ctx === false) return;
@@ -200,7 +532,7 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       return;
     }
 
-    const [clustersResult, edgesResult, membersResult, recordsResult] = await Promise.all([
+    const [clustersResult, edgesResult, membersResult, recordsResult, memberScoresResult, narratives] = await Promise.all([
       query(
         `SELECT id, stable_key, label, kind, critical_score, deterministic_summary, metadata
          FROM architecture_clusters WHERE snapshot_id = $1
@@ -230,6 +562,21 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
          WHERE ssr.snapshot_id = $1 AND ssr.record_level = 'module'`,
         [snapshotId],
       ),
+      // Member scores, so a cluster's criticality can show the average it
+      // actually is. The clusterer averages candidate scores over the members
+      // it saw; these are the ones still on the table (persistence keeps the
+      // top 500 per snapshot), which is why the provenance says so when the
+      // two disagree instead of presenting a tidier number than we have.
+      query(
+        `SELECT stable_key, score, score_breakdown, reasons FROM criticality_scores
+         WHERE snapshot_id = $1 AND phase = 'candidate' AND view = 'candidate'
+           AND role = 'general' AND target_type IN ('file', 'symbol')`,
+        [snapshotId],
+      ),
+      // What each component is FOR, what crosses its boundary, and why it is
+      // separate — derived from the same stored rows the `architecture_deep`
+      // section reads, so the tab and the generated prose cannot disagree.
+      loadClusterNarratives(snapshotId),
     ]);
 
     const membersByCluster = new Map<string, Array<{ key: string; name: string; filePath: string | null }>>();
@@ -241,22 +588,44 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       (recordsResult.rows as Array<{ stable_key: string; summary: string; confidence: string }>)
         .map((r) => [r.stable_key, r]),
     );
+    type ScoreRow = { stable_key: string; score: string | number; score_breakdown: unknown; reasons: string[] | null };
+    const rowByKey = new Map((memberScoresResult.rows as ScoreRow[]).map((r) => [r.stable_key, r]));
+    const scoreByKey = new Map([...rowByKey].map(([key, r]) => [key, Number(r.score)]));
 
     const clusters = (clustersResult.rows as Array<{
       id: string; stable_key: string; label: string; kind: string;
       critical_score: string | number; deterministic_summary: string | null;
       metadata: Record<string, unknown>;
-    }>).map((c) => ({
-      id: c.stable_key,
-      label: c.label,
-      kind: c.kind,
-      criticalScore: Number(c.critical_score),
-      summary: recordByCluster.get(c.stable_key)?.summary ?? c.deterministic_summary ?? "",
-      summarySource: recordByCluster.has(c.stable_key) ? "semantic" : "deterministic",
-      confidence: recordByCluster.get(c.stable_key)?.confidence ?? null,
-      members: membersByCluster.get(c.stable_key) ?? [],
-      metadata: c.metadata,
-    }));
+    }>).map((c) => {
+      const members = membersByCluster.get(c.stable_key) ?? [];
+      const scoredMembers = members
+        .filter((m) => scoreByKey.has(m.key))
+        .map((m) => ({ key: m.key, name: m.name, filePath: m.filePath, score: scoreByKey.get(m.key)! }));
+      return {
+        id: c.stable_key,
+        label: c.label,
+        kind: c.kind,
+        criticalScore: Number(c.critical_score),
+        // The bar in the UI is a mean; without this it was a bare percentage
+        // whose only explanation was a tooltip describing a different ranking.
+        provenance: buildMeanProvenance({
+          label: "Criticality",
+          score: Number(c.critical_score),
+          scoredMembers,
+          totalMemberCount: members.length,
+          memberNoun: (c.metadata?.primaryMemberNoun as string) ?? "file",
+        }),
+        summary: recordByCluster.get(c.stable_key)?.summary ?? c.deterministic_summary ?? "",
+        summarySource: recordByCluster.has(c.stable_key) ? "semantic" : "deterministic",
+        confidence: recordByCluster.get(c.stable_key)?.confidence ?? null,
+        // Responsibility / boundary / separation, always derived from stored
+        // structure. The AI module summary above can be absent or stale; this
+        // never is, and it is what the component card and aside actually read.
+        narrative: narratives.get(c.stable_key) ?? null,
+        members,
+        metadata: c.metadata,
+      };
+    });
 
     const edges = (edgesResult.rows as Array<{
       id: string; source_key: string; target_key: string; type: string; weight: string | number;
@@ -268,7 +637,102 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
       weight: Number(e.weight),
     }));
 
-    res.json({ projectId, snapshotId, clusters, edges });
+    // ── The level beneath a component: the members it is actually made of ────
+    // Without this a cluster could only be "opened" into a list of links to
+    // another tab, so the map had exactly one level and the boxes on it were
+    // unopenable. Everything the level needs comes from rows already loaded
+    // above except the members' own metadata and the edges between them.
+    let level: unknown = undefined;
+    if (drilledClusterKey) {
+      const target = clusters.find((c) => c.id === drilledClusterKey);
+      if (!target) {
+        res.status(404).json({ error: "No such component in this analysis" });
+        return;
+      }
+
+      const memberKeys = target.members.map((m) => m.key);
+      const [memberNodesResult, memberEdgesResult] = await Promise.all([
+        query(
+          `SELECT id, stable_key, type, name, file_path, metadata
+           FROM graph_nodes
+           WHERE snapshot_id = $1 AND stable_key = ANY($2::text[])
+             AND type IN ('module', 'file', 'config', 'schema')`,
+          [snapshotId, memberKeys],
+        ),
+        query(
+          `SELECT e.id, s.stable_key AS source_key, t.stable_key AS target_key, e.type,
+                  COALESCE((e.metadata->>'weight')::numeric, 1) AS weight
+           FROM graph_edges e
+           JOIN graph_nodes s ON s.id = e.source_node_id
+           JOIN graph_nodes t ON t.id = e.target_node_id
+           WHERE e.snapshot_id = $1
+             AND s.stable_key = ANY($2::text[]) AND t.stable_key = ANY($2::text[])
+             AND e.type NOT IN ('extends', 'implements')`,
+          [snapshotId, memberKeys],
+        ),
+      ]);
+
+      type MemberRow = {
+        id: string; stable_key: string; type: string; name: string;
+        file_path: string | null; metadata: Record<string, unknown> | null;
+      };
+      const allMembers = (memberNodesResult.rows as MemberRow[]).map((n) => {
+        const row = rowByKey.get(n.stable_key);
+        return {
+          id: n.stable_key,
+          label: n.name,
+          kind: n.type,
+          filePath: n.file_path,
+          criticalScore: row ? Number(row.score) : null,
+          // Per-file derivation, not the component's mean: inside a component
+          // the question stops being "how critical is this box" and becomes
+          // "which of these files is the one that matters".
+          provenance: buildCandidateProvenance({
+            label: "Criticality",
+            score: row ? Number(row.score) : 0,
+            breakdown: row?.score_breakdown,
+            reasons: row?.reasons ?? [],
+            targetType: "file",
+            unavailableReason:
+              "This file carries no stored criticality score. Tests and fixtures are excluded from ranking by design, and only the top 500 scores per snapshot are kept.",
+          }),
+          exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+          importCount: (n.metadata?.importCount as number) ?? 0,
+          dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        };
+      });
+
+      // Ranked before capping so the cap drops the least important members,
+      // and the number dropped is reported rather than silently swallowed —
+      // a graph that quietly hides 40 of a component's 61 files is worse than
+      // one that says it did.
+      allMembers.sort((a, b) =>
+        (b.criticalScore ?? -1) - (a.criticalScore ?? -1) || b.dependentCount - a.dependentCount);
+      const shown = allMembers.slice(0, MAX_GRAPH_NODES);
+      const shownKeys = new Set(shown.map((n) => n.id));
+
+      level = {
+        clusterId: target.id,
+        label: target.label,
+        kind: target.kind,
+        nodes: shown,
+        edges: (memberEdgesResult.rows as Array<{
+          id: string; source_key: string; target_key: string; type: string; weight: string | number;
+        }>)
+          .filter((e) => shownKeys.has(e.source_key) && shownKeys.has(e.target_key))
+          .map((e) => ({
+            id: e.id,
+            source: e.source_key,
+            target: e.target_key,
+            kind: e.type,
+            weight: Number(e.weight ?? 1),
+          })),
+        totalNodes: allMembers.length,
+        truncated: allMembers.length - shown.length,
+      };
+    }
+
+    res.json({ projectId, snapshotId, clusters, edges, level });
   } catch (err) {
     console.error("Graph architecture error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -594,6 +1058,21 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         composite_score: ranking ? Number(ranking.composite_score) : null,
         ranking_scope: ranking ? rankingScope : null,
         ranking_reasons: ranking?.ranking_reasons ?? [],
+        // The breakdown has always been selected here and then thrown away at
+        // serialisation, leaving the panel with a number and no derivation.
+        ranking_provenance: ranking
+          ? buildCandidateProvenance({
+              label: "Importance",
+              score: Number(ranking.composite_score),
+              breakdown: ranking.scores,
+              reasons: ranking.ranking_reasons,
+              targetType: isFileNode || rankingScope === "file_fallback" ? "file" : "symbol",
+              caveat:
+                rankingScope === "file_fallback"
+                  ? "This is the score of the file this symbol lives in. The symbol itself was not ranked in this snapshot, so the signals below describe the file, not the function."
+                  : null,
+            })
+          : null,
         callers: callersResult.rows,
         callees: calleesResult.rows,
         // Panel labels matching the relationship semantics above.

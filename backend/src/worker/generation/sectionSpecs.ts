@@ -22,6 +22,19 @@ import {
   type ConfigFacts,
 } from './referenceBackbones.js';
 import { loadDecisionNotes } from './decisionComments.js';
+import { loadClusterNarratives } from '../engine/architectureClusterer.js';
+
+/**
+ * How many components `architecture_deep` writes a subsection for.
+ *
+ * One subsection per cluster is what pushed FloowForge's section past its
+ * output budget — 9 components × several required elements each, on a repo the
+ * `small` size class budgets 6,000 tokens for. Six is what fits at two to four
+ * sentences apiece with room for the flow walk, the decisions and the tensions;
+ * the rest are named in one line as deliberately not covered, which is honest
+ * and costs a sentence instead of a section.
+ */
+const MAX_NARRATED_CLUSTERS = 6;
 
 export const SECTION_TYPES = [
   // ORIENT
@@ -258,12 +271,56 @@ const snapshotCounts = async (snapshotId: string) => {
     skippedLanguages: inv.unsupported ?? {},
     symbols: row.symbol_count,
     workflows: row.workflow_count,
+    /**
+     * Languages present in the repo that no parser reads, largest first, with
+     * the share of the repo they represent.
+     *
+     * Pre-computed as a sentence rather than left as a map for the model to
+     * interpret. FloowForge is 100 Python files out of 167 — roughly forty
+     * FastAPI route handlers — and its generated package never once said the
+     * word "Python": a reader finished it believing FloowForge is a frontend.
+     * The facts were present in `skippedLanguages` and simply never surfaced,
+     * because `coverageNote` told the model what NOT to claim and never told
+     * it what it MUST disclose.
+     */
+    unreadStacks: unreadStackSummary(inv.unsupported ?? {}, row.file_count),
     coverageNote:
       row.parsed_file_count === null
         ? 'Parsed-file count unavailable for this snapshot. Do not state a file total.'
         : `Only ${row.parsed_file_count} files were parsed. Never describe the codebase as ${row.file_count} files — that count includes assets, docs and lockfiles nothing was extracted from.`,
   };
 };
+
+/** Prose for the languages nothing was extracted from, or null when trivial. */
+function unreadStackSummary(unsupported: Record<string, number>, filesInScope: number): {
+  mustDisclose: boolean;
+  sentence: string;
+  languages: Array<{ language: string; files: number }>;
+} | null {
+  // Source-ish languages only: markdown, json and images being unparsed is
+  // expected and disclosing it would be noise. A language nobody reads that
+  // holds real code is the case a reader must be told about.
+  const NON_SOURCE = new Set(['markdown', 'json', 'yaml', 'css', 'html', 'text', 'other', 'unknown', 'svg', 'image']);
+  const langs = Object.entries(unsupported)
+    .filter(([lang, n]) => n > 0 && !NON_SOURCE.has(lang.toLowerCase()))
+    .map(([language, files]) => ({ language, files }))
+    .sort((a, b) => b.files - a.files);
+  if (langs.length === 0) return null;
+
+  const total = langs.reduce((n, l) => n + l.files, 0);
+  const share = filesInScope > 0 ? Math.round((total / filesInScope) * 100) : 0;
+  const list = langs.slice(0, 3).map((l) => `${l.language} (${l.files} files)`).join(', ');
+  // 10% of a repo in an unread language is enough that a reader who is not
+  // told will form a wrong model of what the system is.
+  const mustDisclose = share >= 10 || total >= 20;
+  return {
+    mustDisclose,
+    languages: langs,
+    sentence: mustDisclose
+      ? `${total} files (${share}% of this repository) are written in ${list}, which OnboardBuddy does not parse. NOTHING in this package describes them. You MUST say so plainly in your own words — a reader who is not told will assume this part of the system does not exist.`
+      : `${total} files in ${list} were not parsed; mention it only if it is relevant to what you are explaining.`,
+  };
+}
 
 export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
   // ═══ ORIENT ═══════════════════════════════════════════════════════════════
@@ -277,6 +334,9 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       'Explain what this system IS — the reader has never seen it. The anchor diagram (runtime topology) opens the section; refer to it, never contradict it.',
       'Cover, as flowing prose with a few short headers: (1) what the system does end to end and for whom, from the evidence; (2) the runtime shape — each compose service/process and its job, plus the external services (from the topology facts); (3) the product journeys BY NAME (the journeys data is authoritative — walk the 2-4 most important in one paragraph each: what enters, what crosses which boundary, what comes out); (4) why the system is shaped this way — the 2-3 structural decisions visible in the evidence (queues between phases, content-addressing, separate worker), each with its receipt.',
       'No instructions, no tables, no file inventories — link forward: details live in Architecture in Depth, commands in Set Up & Run It, lookup tables in the Consult chapter.',
+      // A reader who is not told forms a wrong model of the whole system, and
+      // this is the section where that model is formed.
+      'IF `snapshot.unreadStacks.mustDisclose` is true you MUST state, in your own words and in the opening paragraphs, that a substantial part of this repository is written in a language nothing here parsed, name the language(s), and say that no section describes that code. Do not bury it at the end and do not soften it — a reader who is not told will conclude that part of the system does not exist.',
     ].join(' '),
     deterministic: async (deps) => {
       const facts = await loadConfigFacts(deps.snapshotId);
@@ -391,48 +451,113 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['purpose', 'dependency'],
     retrievalTask: () => 'System architecture in depth: each subsystem\'s responsibility, boundaries, crossings, and the design decisions behind them.',
     instructions: [
-      'The anchor diagram (cluster map) opens the section — the prose walks it. Open with "## How a request flows": ONE real end-to-end path across cluster boundaries using clusterEdges and their workflow crossings, naming clusters in order.',
-      'Then one "## <cluster label>" subsection PER major cluster (cover every cluster in the evidence with more than 2 files): its responsibility (from deterministic_summary — no "handles business logic" filler), its real file count, and what crosses its boundary in and out (from clusterEdges).',
+      // Length is a hard constraint here, not a style preference. This section
+      // asked for a subsection per cluster with several required elements each;
+      // on FloowForge (9 clusters, `small` size class) the model wrote past
+      // `maxOutputTokens` and the structured response was cut mid-array —
+      // "Expected ',' or ']' after array element in JSON at position 25336" —
+      // which pauses the whole package. The fix is to demand less prose, not to
+      // buy more tokens: `clusters` below is already capped at the components
+      // worth covering, and the per-component budget is stated in sentences.
+      'The anchor diagram (cluster map) opens the section — the prose walks it. Open with "## How a request flows": ONE real end-to-end path across components, naming them in the order it touches them, from `clusterEdges`. One short paragraph.',
+      // Two measured failures fixed here. "Its real file count" invited the
+      // count to BE the explanation, producing headings like
+      // "Configuration & Deployment — File Count: 0 config files". And
+      // direction came from a flat edge list the model had to sort itself,
+      // which it did not: the same edge appeared as both In and Out with
+      // identical numbers. `clusters[].responsibility` / `.boundary` are the
+      // SAME sentences the Architecture tab renders for that component, so the
+      // two surfaces can no longer describe one component differently.
+      'Then one "## <label>" subsection for each entry in `clusters` — those only, no subsection for anything else. TWO TO FOUR SENTENCES EACH, hard limit; the limit binds no matter how many facts the entry carries. Each entry gives you `responsibility` (what it is for), `boundary` (what crosses it and what those crossings carry), `separation` (why it is its own component) and `unknowns` (what the evidence could not establish). Put them in your own words with this repo\'s nouns and keep the meaning: always cover responsibility and boundary, and spend the remaining sentences on whichever of separation and unknowns a newcomer would otherwise get wrong.',
+      'NEVER write a responsibility that is just the label reworded ("API Routes — handles API requests" says nothing). NEVER put a file or symbol count in a sentence; the interface shows counts beside the component already.',
       // The narration fix: the decisions are handed over as data, and the
       // required sentence shape is stated as a hard format rule rather than an
       // aspiration. Structure-only prose was the measured failure mode.
-      'DESIGN DECISIONS ARE MANDATORY, NOT OPTIONAL. `decisionNotes` contains rationale the repo\'s authors wrote in their own comments, each with the file and line it came from. Use them: for each cluster that has a matching note, state the decision in the form "<decision> ⇒ <consequence>" — a literal "⇒" between the choice and what it forces on you, e.g. "transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock" — then cite that note\'s receipt. Write at least three such statements in the section. Paraphrase the note into decision→consequence form; do not quote it verbatim and do not invent a decision that no note or other evidence supports. Admitting trade-offs is correct here; inventing them is not.',
-      'Close with "## Tensions to know about": 2-3 places where the evidence shows coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes).',
+      'DESIGN DECISIONS ARE MANDATORY, NOT OPTIONAL. `decisionNotes` contains rationale the repo\'s authors wrote in their own comments, each with the file and line it came from. Write EXACTLY THREE statements of the form "<decision> ⇒ <consequence>" — a literal "⇒" between the choice and what it forces on you, e.g. "transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock" — each inside the subsection it belongs to, each citing that note\'s receipt. Paraphrase; do not quote verbatim and do not invent a decision no note supports.',
+      'Close with "## Tensions to know about": exactly three bullets, one line each, on coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes).',
+      'If `otherClusters` is non-empty, name those components in ONE sentence at the end and say they are smaller and left out of this walkthrough. Do not give them subsections.',
       'The interactive Architecture tab holds the full drill-down graph — say so once at the end, not per cluster.',
+      'IF `snapshot.unreadStacks.mustDisclose` is true, add a "## Not covered here" subsection of at most three sentences naming the unparsed language(s) and saying plainly that those files form part of this system but no component above describes them. A component map that silently omits an entire stack reads as the complete architecture.',
     ].join(' '),
-    deterministic: async (deps) => ({
-      // Routed in so the prose has WHY to work with and not only structure
-      // (plan golden checklist: "describes structure without
-      // decision→consequence language").
-      decisionNotes: (await loadDecisionNotes(deps.snapshotId, 10)).map((n) => ({
-        where: `${n.filePath ?? n.nodeStableKey}${n.lineStart ? `:${n.lineStart}` : ''}`,
-        symbol: n.symbolName,
-        rationale: n.note,
-      })),
-      clusters: (await query(
+    deterministic: async (deps) => {
+      // One component per subsection, and the subsection count is what drove
+      // the output past its budget — so the cap lives here, in the data, where
+      // the completeness check can read the same list the prompt was given.
+      // Ranked by criticality, so what gets cut is what matters least.
+      const allClusters = (await query(
         // See the note on topClusters: file_count is the cluster's own
         // metadata, not a member row count over symbols and configs.
-        `SELECT c.label, c.kind, c.critical_score, c.deterministic_summary,
+        `SELECT c.stable_key, c.label, c.kind, c.critical_score,
                 COALESCE((c.metadata->>'fileCount')::int, 0) AS file_count,
+                COALESCE((c.metadata->>'memberCount')::int, 0) AS member_count,
                 c.metadata->>'primaryMemberNoun' AS member_noun
          FROM architecture_clusters c WHERE c.snapshot_id = $1 ORDER BY c.critical_score DESC`,
         [deps.snapshotId],
-      )).rows,
-      clusterEdges: (await query(
-        `SELECT sc.label AS source, tc.label AS target, e.type, e.weight, e.metadata->'workflowCrossings' AS workflow_crossings
-         FROM architecture_edges e
-         JOIN architecture_clusters sc ON sc.id = e.source_cluster_id
-         JOIN architecture_clusters tc ON tc.id = e.target_cluster_id
-         WHERE e.snapshot_id = $1 ORDER BY e.weight DESC LIMIT 30`,
-        [deps.snapshotId],
-      )).rows,
-      centralNodes: (await query(
-        `SELECT stable_key, name, (metadata->>'dependentCount')::int AS dependents
-         FROM graph_nodes WHERE snapshot_id = $1 AND (metadata->>'dependentCount')::int > 0
-         ORDER BY 3 DESC LIMIT 12`,
-        [deps.snapshotId],
-      )).rows,
-    }),
+      )).rows as Array<{
+        stable_key: string; label: string; kind: string;
+        critical_score: string; file_count: number; member_count: number; member_noun: string | null;
+      }>;
+      // The narrative the Architecture tab renders, from the same rows. The
+      // section used to compose its own boundary prose out of `workflowCrossings`
+      // stable keys (`wf:web/app/page.tsx:Home`) — bookkeeping the output rules
+      // forbid printing — while the tab printed a count-only summary. Two
+      // renderings, one dataset, one set of sentences.
+      const narratives = await loadClusterNarratives(deps.snapshotId);
+      // Sized by whichever member type the cluster is actually made of: a
+      // Database Schema cluster holds 37 tables and zero files, and filtering
+      // on file_count alone dropped it out of the architecture section entirely.
+      const major = allClusters.filter((c) => Math.max(c.file_count, c.member_count) > 2);
+      // A repo of many tiny components still has an architecture. Falling back
+      // to the top few keeps the section from emitting a walk with nothing in it.
+      const covered = (major.length > 0 ? major : allClusters).slice(0, MAX_NARRATED_CLUSTERS);
+
+      return {
+        // Routed in so the prose has WHY to work with and not only structure
+        // (plan golden checklist: "describes structure without
+        // decision→consequence language").
+        // Coverage reaches this section too, not only big_picture. A component
+        // map that silently omits an entire unread backend is the single most
+        // misleading thing this product can produce — a reader concludes the
+        // component map IS the system.
+        snapshot: await snapshotCounts(deps.snapshotId),
+        decisionNotes: (await loadDecisionNotes(deps.snapshotId, 8)).map((n) => ({
+          where: `${n.filePath ?? n.nodeStableKey}${n.lineStart ? `:${n.lineStart}` : ''}`,
+          symbol: n.symbolName,
+          rationale: n.note,
+        })),
+        clusters: covered.map((c) => {
+          const n = narratives.get(c.stable_key);
+          return {
+            label: c.label,
+            kind: c.kind,
+            responsibility: n?.responsibility ?? null,
+            boundary: n?.boundary ?? null,
+            separation: n?.separation ?? null,
+            unknowns: n?.unknowns ?? [],
+          };
+        }),
+        // Named so the section can say what it left out in one line instead of
+        // silently presenting a partial map as the whole architecture.
+        otherClusters: allClusters.filter((c) => !covered.includes(c)).map((c) => c.label),
+        // Kept flat and compact purely so the opening request-flow walk has a
+        // chainable topology; direction and traffic per component already live
+        // in `clusters[].boundary`.
+        clusterEdges: (await query(
+          `SELECT sc.label AS from_cluster, tc.label AS to_cluster, e.type
+           FROM architecture_edges e
+           JOIN architecture_clusters sc ON sc.id = e.source_cluster_id
+           JOIN architecture_clusters tc ON tc.id = e.target_cluster_id
+           WHERE e.snapshot_id = $1 ORDER BY e.weight DESC LIMIT 24`,
+          [deps.snapshotId],
+        )).rows,
+        centralNodes: (await query(
+          `SELECT stable_key, name, (metadata->>'dependentCount')::int AS dependents
+           FROM graph_nodes WHERE snapshot_id = $1 AND (metadata->>'dependentCount')::int > 0
+           ORDER BY 3 DESC LIMIT 8`,
+          [deps.snapshotId],
+        )).rows,
+      };
+    },
     diagrams: async (deps) => {
       const clusters = (await query(
         `SELECT stable_key, label, kind FROM architecture_clusters WHERE snapshot_id = $1`,
@@ -456,11 +581,13 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     },
     completenessCheck: (content, det) => {
       const issues: string[] = [];
-      // Cover the clusters that are big enough to be worth a subsection.
-      const majorClusters = (det.clusters as Array<{ label?: string; file_count?: number }> ?? [])
-        .filter((c) => (c.file_count ?? 0) > 2)
-        .map((c) => c.label ?? '');
-      issues.push(...missingItems(content, majorClusters, 'major clusters'));
+      // `det.clusters` IS the bounded list the prompt was handed, so the retry
+      // can never demand coverage the instructions did not ask for. It used to
+      // re-filter every cluster in the snapshot by file count, which meant a
+      // 9-component repo was told to cover nine — and each retry pushed the
+      // response further past its output budget until the JSON was cut off.
+      const majorClusters = (det.clusters as Array<{ label?: string }> ?? []).map((c) => c.label ?? '');
+      issues.push(...missingItems(content, majorClusters, 'components'));
 
       // The narration gate. "⇒" is required because the instructions name that
       // exact shape, which makes the check mechanical: counting "because" would
@@ -482,7 +609,13 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       }
       return issues;
     },
-    outputBudget: { small: 6_000, mid: 10_000, large: 15_000 },
+    // `small` carries headroom the other classes do not need: FloowForge is 256
+    // symbols (small) but NINE components, because two thirds of it is Python
+    // this pipeline cannot parse — so the size class understates how much
+    // structure the section has to describe. Overrunning here does not truncate
+    // the prose, it truncates the JSON mid-array and pauses the whole package,
+    // which is worth a little slack against.
+    outputBudget: { small: 7_000, mid: 10_000, large: 15_000 },
   },
 
   traced_flows: {
@@ -606,22 +739,60 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['domain'],
     retrievalTask: () => 'The product capabilities: what the system does for its users and where each capability lives in the code.',
     instructions: [
-      'Describe each capability the system provides: what user value it delivers, which journeys/workflows implement it, which clusters/modules own it, and the 1-2 seams you would touch to EXTEND it (from the member evidence — the files where that capability\'s behavior is decided).',
-      'This is business context anchored in code, not code documentation. If a capability has no userValue in the evidence, omit that line entirely — never print "N/A". Refer to workflows and modules by their human-readable titles; internal keys (wf:…, cluster:…) must never appear in the output.',
+      'Every capability below was DERIVED from evidence and then named: it exists because a group of traced flows binds to an entry point, a flow that goes somewhere, and the schema table or external service it touches. Write about the ones you are given and invent none.',
+      'For each: what a user of the system gets from it, which flows deliver it (by title), which tables or services it touches, and the seam to change when EXTENDING it — take that from `seams`, which are the entry points and effect sites it binds to, never the file the capability happens to be named after.',
+      'If `capabilities` is empty, that is the finding, not a gap in your writing: say plainly that no capability could be derived from this snapshot, quote `bindingRule` and the counts in `notBound`, and stop. Never describe the repo\'s directories, layers or utilities as capabilities to fill the space.',
+      'This is business context anchored in code, not code documentation. If a capability has no user_value in the evidence, omit that line entirely — never print "N/A".',
     ].join(' '),
     deterministic: async (deps) => {
+      // Members arrive as human-readable titles, not stable keys. The old
+      // query passed `cm.stable_key` and relied on the prompt forbidding
+      // internal keys in the output — the monorepo package shipped 31 `wf:…`
+      // / `cluster:…` occurrences anyway. Facts that contain no internal key
+      // cannot leak one.
       const rows = (await query(
-        `SELECT c.name, c.description, c.confidence, c.metadata->>'userValue' AS user_value,
-                json_agg(json_build_object('type', cm.member_type, 'key', cm.stable_key)) AS members
+        `SELECT c.name, c.description, c.confidence,
+                c.metadata->>'user_value' AS user_value,
+                COALESCE(c.metadata->>'tier', 'supporting') AS tier,
+                c.metadata->'derivation' AS derivation,
+                COALESCE(c.metadata->'binding'->'schemas', '[]'::jsonb) AS tables,
+                COALESCE(c.metadata->'binding'->'services', '[]'::jsonb) AS services,
+                ARRAY(SELECT w.title FROM capability_members cm JOIN workflows w ON w.id = cm.member_id
+                       WHERE cm.capability_id = c.id AND cm.member_type = 'workflow'
+                       ORDER BY w.title LIMIT 8) AS flows,
+                ARRAY(SELECT ac.label FROM capability_members cm JOIN architecture_clusters ac ON ac.id = cm.member_id
+                       WHERE cm.capability_id = c.id AND cm.member_type = 'cluster'
+                       ORDER BY ac.label LIMIT 6) AS modules,
+                ARRAY(SELECT DISTINCT gn.file_path FROM capability_members cm JOIN graph_nodes gn ON gn.id = cm.member_id
+                       WHERE cm.capability_id = c.id AND cm.member_type = 'node' AND gn.file_path IS NOT NULL
+                       ORDER BY gn.file_path LIMIT 6) AS seams
          FROM capabilities c
-         LEFT JOIN capability_members cm ON cm.capability_id = c.id
-         WHERE c.snapshot_id = $1 GROUP BY c.id`,
+         WHERE c.snapshot_id = $1
+         ORDER BY CASE COALESCE(c.metadata->>'tier', 'supporting') WHEN 'core' THEN 0 ELSE 1 END,
+                  COALESCE((c.metadata->>'score')::numeric, 0) DESC, c.name`,
         [deps.snapshotId],
-      )).rows as Array<{ members: Array<Record<string, unknown>> | null } & Record<string, unknown>>;
+      )).rows as Array<Record<string, unknown>>;
+      const counts = (await query(
+        `SELECT (SELECT COUNT(*)::int FROM workflows WHERE snapshot_id = $1) AS traced_flows,
+                (SELECT COUNT(DISTINCT cm.member_id)::int FROM capability_members cm
+                  WHERE cm.member_type = 'workflow'
+                    AND cm.capability_id IN (SELECT id FROM capabilities WHERE snapshot_id = $1)) AS bound_flows,
+                (SELECT COUNT(*)::int FROM graph_nodes WHERE snapshot_id = $1 AND type = 'schema') AS schema_tables`,
+        [deps.snapshotId],
+      )).rows[0] as Record<string, unknown>;
+      // The rule and the counts are a finding only when there were flows to
+      // apply them to. With nothing traced they are boilerplate, and shipping
+      // boilerplate as facts would grade an evidence-free section `medium`.
+      const tracedFlows = Number(counts?.traced_flows ?? 0);
       return {
-        // Unbounded member lists flooded the facts budget and starved the
-        // prose — a capability's identity is its top seams, not every file.
-        capabilities: rows.map((r) => ({ ...r, members: (r.members ?? []).slice(0, 12) })),
+        capabilities: rows,
+        ...(rows.length > 0 || tracedFlows > 0
+          ? {
+            bindingRule:
+              'A capability is emitted only when a group of traced flows binds to all three: an entry point, a flow that reaches past its trigger, and a schema table or named external service it touches.',
+            notBound: counts,
+          }
+          : {}),
         journeys: (await query(
           `SELECT title, purpose FROM workflows WHERE snapshot_id = $1 AND trigger_type IN ('journey', 'dev_command') LIMIT 10`,
           [deps.snapshotId],

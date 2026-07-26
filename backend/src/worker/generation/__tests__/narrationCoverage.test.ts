@@ -187,11 +187,15 @@ describe('decision-comment extraction (the "no decision→consequence" miss)', (
 describe('architecture_deep — the gate that forces decision→consequence prose', () => {
   const spec = SECTION_SPECS.architecture_deep;
   const det = {
+    // `clusters` is now the BOUNDED list the prompt was handed, so the gate can
+    // only ever demand what was asked for. It used to be every cluster in the
+    // snapshot with the check re-filtering by file count, which is how a
+    // 9-component repo got told to cover nine and wrote past its output budget.
     clusters: [
-      { label: 'API Routes', file_count: 12 },
-      { label: 'Worker Pipeline', file_count: 30 },
-      { label: 'Tiny Helper', file_count: 1 },
+      { label: 'API Routes' },
+      { label: 'Worker Pipeline' },
     ],
+    otherClusters: ['Tiny Helper'],
     decisionNotes: [
       { where: 'docker-compose.yml:9', rationale: 'transaction-mode pooler; clients multiplex' },
       { where: 'lib/queue.ts:20', rationale: 'queue suffix per developer so a stale worker cannot eat this run' },
@@ -252,8 +256,9 @@ describe('architecture_deep — the gate that forces decision→consequence pros
     expect(spec.completenessCheck!(noTensions, det).join(' ')).to.include('Tensions');
   });
 
-  it('does not require a subsection for a cluster too small to deserve one', () => {
-    // "Tiny Helper" has 1 file; the instructions scope subsections to >2 files.
+  it('does not require a subsection for a cluster the prompt was told to leave out', () => {
+    // "Tiny Helper" is in `otherClusters`, not `clusters` — the section names it
+    // in one line and gives it no subsection, so the gate must not ask for one.
     expect(spec.completenessCheck!(structureOnly, det).join(' ')).to.not.include('Tiny Helper');
   });
 });

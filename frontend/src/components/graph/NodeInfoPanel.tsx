@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Copy, ExternalLink, Info, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, Copy, ExternalLink, Network, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NodeDetail } from "@/lib/graphData";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
-import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
+import { ScoreProvenance, ScoreProvenanceInfo } from "@/components/ScoreProvenance";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphNode } from "@/types/graph";
@@ -21,6 +21,14 @@ interface NodeInfoPanelProps {
   githubRepo?: GithubRepoRef;
   /** Deselects the node (also reachable via Esc / clicking empty canvas). */
   onClose?: () => void;
+  /**
+   * Set only for a class or interface, and only outside the Classes view.
+   * Inheritance is a sibling view rather than a rung of this ladder — the
+   * class graph is project-wide with no file scope, so nesting it under a
+   * file would assert a containment that does not exist. The hand-off is
+   * therefore an explicit switch, not a drill.
+   */
+  onSeeInheritance?: () => void;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -50,7 +58,14 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * (doc/Pipeline.md): one-line summary, signature/params/returns, a real
  * call-site example, then importance and receipts.
  */
-export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClose }: NodeInfoPanelProps) {
+export function NodeInfoPanel({
+  node,
+  detail,
+  loading = false,
+  githubRepo,
+  onClose,
+  onSeeInheritance,
+}: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
@@ -120,6 +135,19 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
       </div>
 
       <div className="flex-1 space-y-4 overflow-y-auto p-4">
+        {onSeeInheritance && (
+          <div>
+            <Button variant="outline" size="xs" className="w-full justify-center" onClick={onSeeInheritance}>
+              <Network className="mr-1 h-3 w-3" />
+              See inheritance
+            </Button>
+            <p className="mt-1 text-[0.65625rem] leading-snug text-muted-foreground">
+              Opens the project-wide class graph focused on {node.label}. It is a separate view, not a level
+              inside this file — extends/implements relationships cross files.
+            </p>
+          </div>
+        )}
+
         {/* 1. One-line summary */}
         {doc?.summary && (
           <div>
@@ -170,14 +198,10 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
           <div>
             <div className="mb-1.5 flex items-center gap-1.5">
               <p className="section-label">Importance</p>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
-                    <Info className="h-3 w-3" />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-left">{RANKING_EXPLANATION}</TooltipContent>
-              </Tooltip>
+              <ScoreProvenanceInfo
+                data={detail.ranking_provenance}
+                label="How this importance score was derived"
+              />
               {projectId && (
                 <Link
                   to={`/projects/${projectId}/settings`}
@@ -210,6 +234,15 @@ export function NodeInfoPanel({ node, detail, loading = false, githubRepo, onClo
                   </li>
                 ))}
               </ul>
+            )}
+            {/* The arithmetic under the reasons. Reasons say what the ranker
+                noticed; this says what each observation was worth, which is
+                the part a reader needs to argue with the number. Suppressed
+                reasons — the list above is the same stored strings. */}
+            {detail.composite_score !== null && (
+              <div className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2">
+                <ScoreProvenance data={detail.ranking_provenance} showReasons={false} />
+              </div>
             )}
           </div>
         )}

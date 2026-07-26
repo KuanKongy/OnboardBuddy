@@ -2,8 +2,27 @@ import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { resolveForRequest } from "../services/packageResolver.js";
+import { buildCandidateProvenance } from "../services/scoreProvenance.js";
 
 export const workflowsRouter = Router({ mergeParams: true });
+
+/**
+ * How the rail is ordered, written next to the ORDER BY that does it.
+ *
+ * The list header claims "most critical first" and the tooltip beside it used
+ * to explain a per-target score, which is not what orders this list at all —
+ * tier wins before any score is compared. Serving the real sequence from here
+ * is the only version that cannot drift away from the query below.
+ */
+const WORKFLOW_ORDERING = {
+  summary: "Tier first, then business capability, then the flow's own importance score.",
+  steps: [
+    "Tier: core user flows, then supporting (jobs, admin, dev), then untraced endpoints & pages",
+    "Within a tier: flows that realize a named business capability come first",
+    "Then the flow's importance score (trigger type and traced effects, not step count)",
+    "Ties break alphabetically by title",
+  ],
+} as const;
 
 workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
@@ -35,10 +54,24 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
                      THEN ARRAY(SELECT jsonb_array_elements_text(w.metadata->'ranking_reasons'))
                 END,
                 cs.reasons, '{}') AS reasons,
-              COALESCE(cs.score_breakdown, '{}') AS score_breakdown,
+              cs.score_breakdown,
+              -- composite_score above falls back to the extractor's own
+              -- importance score when no candidate row exists. That is a
+              -- different number with different inputs, so the response has to
+              -- say which one the reader is looking at rather than serve both
+              -- under one name.
+              (cs.score IS NOT NULL) AS has_candidate_score,
+              -- capability_members is polymorphic: (member_type, member_id),
+              -- NOT a node_id column. Joining on cm.node_id threw
+              -- "column cm.node_id does not exist", which failed this whole
+              -- statement — so the endpoint 500'd and the Workflows tab was
+              -- empty for every project. It was missed because the ordering
+              -- was checked by running SQL against the database directly
+              -- rather than through this route.
               EXISTS (
                 SELECT 1 FROM workflow_steps ws
-                JOIN capability_members cm ON cm.node_id = ws.node_id
+                JOIN capability_members cm
+                  ON cm.member_type = 'node' AND cm.member_id = ws.node_id
                 WHERE ws.workflow_id = w.id
               ) AS realizes_capability
        FROM workflows w
@@ -55,7 +88,27 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
       [snapshotId],
     );
 
-    res.json({ workflows: wfResult.rows, snapshotId });
+    type WorkflowRow = {
+      composite_score: string | number;
+      score_breakdown: unknown;
+      has_candidate_score: boolean;
+      reasons: string[] | null;
+    } & Record<string, unknown>;
+
+    const workflows = (wfResult.rows as WorkflowRow[]).map(({ score_breakdown, has_candidate_score, ...wf }) => ({
+      ...wf,
+      provenance: buildCandidateProvenance({
+        label: "Criticality",
+        score: Number(wf.composite_score),
+        breakdown: has_candidate_score ? score_breakdown : null,
+        reasons: wf.reasons,
+        targetType: "workflow",
+        unavailableReason:
+          "This flow has no candidate-ranking row in this snapshot, so the number shown is the extractor's own importance score (trigger type, tier and traced effects) with no signal breakdown behind it.",
+      }),
+    }));
+
+    res.json({ workflows, ordering: WORKFLOW_ORDERING, snapshotId });
   } catch (err) {
     console.error("Workflows list error:", err);
     res.status(500).json({ error: "Internal server error" });

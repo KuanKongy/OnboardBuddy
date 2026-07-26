@@ -9,3 +9,8 @@ spec:
 # hook inside the Docker test image (host runs are faster and passed), which
 # made the documented one-command run fail while `npm test` was green locally.
 timeout: 30000
+# A *failing* async test can leave a socket open (supertest binds a real port), and
+# without this mocha waits for the event loop to drain and never exits — so the
+# one-command run would hang instead of reporting the failure. The JSON reporter
+# writes its file on the run-end event, before this force-exit, so counts survive.
+exit: true

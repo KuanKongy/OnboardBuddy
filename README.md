@@ -70,7 +70,10 @@ One command, no credentials and no running services needed:
 docker compose -f docker-compose.test.yml run --rm test
 ```
 
-Expected: backend **`617 passing`**, frontend **`103 passed`**, exit code 0. What they cover:
+Both suites run, then a **per-area summary** prints how many tests passed in each part of the system
+(backend security / analysis pipeline / AI & caching / document generation / API / unit, frontend unit,
+and e2e reported honestly as skipped because the image has no browser). Exit code is 0 only if every
+area passed. Every number is parsed from the runners' own machine-readable output — see
 [doc/TESTING.md](doc/TESTING.md). How to test M4 by hand: [doc/TESTPLAN.md](doc/TESTPLAN.md).
 
 ## Milestones
@@ -367,7 +370,7 @@ Keeping the handbook current no longer requires remembering to press a button.
 | **Account management** | Password reset, profile editing, disconnect GitHub, delete account | The gaps flagged in M3 feedback are closed |
 | **UI/UX** | A full audit-and-fix pass: **93 findings across six phases**, plus a nine-item polish round | Accessible colour contrast, keyboard-reachable graphs, real error states instead of misleading empty ones, a **Help page** with guided tours and an FAQ, keyboard shortcuts, adjustable text size, theme that follows the OS |
 | **Security** | Full XSS and prompt-injection assessment, all findings mitigated | [See below](#xss-security-assessment) |
-| **Tests** | 346 → **720** automated tests | Every bug fixed this sprint has a test so it cannot come back |
+| **Tests** | 346 → **906** automated tests | Every bug fixed this sprint has a test so it cannot come back; the one-command run prints how many passed in each part of the system |
 
 #### 2. Progress against the design document
 
@@ -521,13 +524,13 @@ payloads, and **exits non-zero if any check regresses** — so it is a CI gate, 
 
 **[doc/TESTPLAN.md](doc/TESTPLAN.md)** is the walkthrough — a numbered path through the M4 features
 with the expected result at each step, about 45 minutes end to end, with the automated suites as
-step 1. **[doc/TESTING.md](doc/TESTING.md)** explains what all **720 automated tests** cover and why,
+step 1. **[doc/TESTING.md](doc/TESTING.md)** explains what all **906 automated tests** cover and why,
 grouped by what they protect.
 
 One command runs everything, no credentials needed:
 
 ```sh
-docker compose -f docker-compose.test.yml run --rm test    # backend 617 passing · frontend 103 passed
+docker compose -f docker-compose.test.yml run --rm test    # ends with a per-area pass/fail summary
 ```
 
 ### Milestone 4 Bug List

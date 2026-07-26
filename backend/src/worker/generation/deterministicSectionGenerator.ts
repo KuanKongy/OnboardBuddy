@@ -67,7 +67,11 @@ export async function generateDeterministicSection(params: {
      SECTION_TITLES[params.sectionType] ?? params.sectionType, content,
      JSON.stringify(diagrams), confidence, params.commitHash, params.role,
      JSON.stringify([{ kind: 'ai_disabled', detail: 'Generated without LLM assistance' }]),
-     JSON.stringify({ mode: 'deterministic', prompt_version: null })],
+     // privacy_mode is the stored proof of HOW this section was built, read
+     // back by GET /onboarding and /provenance. The snapshot's copy cannot be
+     // used for that: it records the analysis, which usually ran earlier and
+     // under a different setting than the package the reader is looking at.
+     JSON.stringify({ mode: 'deterministic', prompt_version: null, privacy_mode: 'ai_disabled' })],
   )).rows[0] as { id: string };
 
   // The same evidence drill-down the AI path gets: section-owned receipt

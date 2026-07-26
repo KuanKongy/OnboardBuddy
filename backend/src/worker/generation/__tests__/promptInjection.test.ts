@@ -303,7 +303,11 @@ describe('layer 3 — every prompt site and the output choke point are wired up'
     // reused (and re-fed into later prompts) indefinitely.
     const versions = read('../../semantic/recordTypes.ts');
     expect(versions).to.include("symbol: 'symbol-record-v3'");
-    expect(versions).to.include("capability: 'capability-extraction-v4'");
+    // v5 (capability derivation rework) also supersedes the unfenced v3 —
+    // the assertion pins the CURRENT version, so a rollback to an
+    // at-or-below-v4 string fails here rather than silently re-serving
+    // records extracted under the old prompt.
+    expect(versions).to.include("capability: 'capability-naming-v5'");
     expect(read('../sectionGenerator.ts')).to.include("SECTION_PROMPT_VERSION = 'section-v6'");
   });
 });

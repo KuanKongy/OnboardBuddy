@@ -121,6 +121,79 @@ export function confidenceReasonFor(generationContext: unknown, receiptCount: nu
   return parts.join(" · ");
 }
 
+export type PackageGenerationKind = "deterministic" | "ai_assisted" | "mixed" | "unknown";
+
+export interface PackageGenerationMode {
+  /** What actually produced this package's sections. */
+  kind: PackageGenerationKind;
+  /** The privacy mode the sections were generated under (null = not unanimous / not recorded). */
+  privacyMode: "full_ai" | "facts_only_ai" | "ai_disabled" | null;
+  /** How many sections came from the deterministic backbone (no LLM). */
+  deterministicSections: number;
+  totalSections: number;
+  /** One honest sentence for the reader; null when there is nothing to disclose. */
+  label: string | null;
+}
+
+/**
+ * How a package was ACTUALLY made, read back from the sections themselves.
+ *
+ * This exists because `analysis_snapshots.privacy_mode` — what the provenance
+ * panel used to display — records the mode the ANALYSIS ran under and is never
+ * refreshed. Generation follows the live setting (summaryWorker.loadSnapshot),
+ * so a package regenerated after switching to ai_disabled is deterministic
+ * while its snapshot still says `full_ai`. Reporting the snapshot's copy told
+ * the user their no-AI setting had been ignored when it had in fact been
+ * honored — the setting looked broken because the label was wrong.
+ *
+ * Sections written before privacy_mode was recorded still resolve: the
+ * deterministic path has always stamped `mode: 'deterministic'`.
+ */
+export function packageGenerationMode(generationContexts: unknown[]): PackageGenerationMode {
+  const modes = generationContexts.map((raw) => {
+    const ctx = raw as { privacy_mode?: unknown; mode?: unknown } | null;
+    const recorded = ctx?.privacy_mode;
+    if (recorded === "full_ai" || recorded === "facts_only_ai" || recorded === "ai_disabled") return recorded;
+    return ctx?.mode === "deterministic" ? ("ai_disabled" as const) : null;
+  });
+  const total = modes.length;
+  const deterministic = modes.filter((m) => m === "ai_disabled").length;
+  if (total === 0) {
+    return { kind: "unknown", privacyMode: null, deterministicSections: 0, totalSections: 0, label: null };
+  }
+  const unanimous = modes.every((m) => m !== null && m === modes[0]) ? modes[0]! : null;
+
+  if (deterministic === total) {
+    return {
+      kind: "deterministic",
+      privacyMode: "ai_disabled",
+      deterministicSections: deterministic,
+      totalSections: total,
+      label:
+        "Structural only — built without AI (privacy mode: AI disabled). Every item below was extracted directly from the code by static analysis, so it reads as facts and tables rather than explanation.",
+    };
+  }
+  if (deterministic > 0) {
+    return {
+      kind: "mixed",
+      privacyMode: null,
+      deterministicSections: deterministic,
+      totalSections: total,
+      label: `Mixed package — ${deterministic} of ${total} sections were built without AI (structural only); the rest carry AI narration from an earlier run.`,
+    };
+  }
+  return {
+    kind: "ai_assisted",
+    privacyMode: unanimous,
+    deterministicSections: 0,
+    totalSections: total,
+    label:
+      unanimous === "facts_only_ai"
+        ? "Facts-only AI — no code left the system: explanations were written from extracted facts, signatures and graph metadata, with every code snippet withheld from the model."
+        : null,
+  };
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** "analyzed today" / "analyzed 6 days ago" / "analyzed on 16 Jun 2026". */

@@ -51,6 +51,10 @@ export interface GraphNodeMetadata {
   externalImportCount?: number;
   /** Distinct internal files importing this file (deduped edges). */
   dependentCount: number;
+  /** Symbols this file declares — 0 means there is no symbols level under it. */
+  symbolCount?: number;
+  /** Symbol-level only: whether the symbol is part of the file's public surface. */
+  exported?: boolean;
 }
 
 export interface GraphNode {

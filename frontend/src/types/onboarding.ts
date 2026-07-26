@@ -1,3 +1,5 @@
+import type { ScoreProvenanceData } from "@/components/ScoreProvenance";
+
 export type PackageStatus = "missing" | "generating" | "draft" | "approved" | "stale" | "failed";
 export type ConfidenceLevel = "high" | "medium" | "low";
 export type SectionStatus = "complete" | "stale" | "missing";
@@ -137,7 +139,13 @@ export interface PackageCoverage {
   languages: LanguageInventory | null;
   /** Honesty rule: snapshot-level unknowns (trace dead-ends, unmodeled packages, journey gaps). */
   detectionUnknowns?: Array<{ kind: string; count?: number; packages?: string[]; expected?: string; queue?: string }>;
-  rankingSignals: Array<{ signal: string; weight: number }>;
+  /**
+   * The ranker's weight table with the formula it feeds, served whole. The
+   * strip used to receive bare signal/weight pairs and narrate them in the
+   * page, which meant the weights existed in two places and the sentence
+   * around them was never checked against the ranker.
+   */
+  rankingProvenance?: ScoreProvenanceData;
 }
 
 export interface OnboardingPackage {
@@ -150,7 +158,26 @@ export interface OnboardingPackage {
   reviewedBy?: string;
   analyzedCommit?: string;
   coverage?: PackageCoverage | null;
+  /** How this package was actually built — see PackageGenerationMode. */
+  generation?: PackageGenerationMode | null;
   sections: OnboardingSection[];
+}
+
+/**
+ * What produced this package, derived from what each section actually recorded
+ * rather than from what the project setting currently says.
+ *
+ * The distinction matters: a package generated under `full_ai` does not
+ * retroactively become structural because someone later switched AI off. This
+ * reports the artefact, not the toggle.
+ */
+export interface PackageGenerationMode {
+  kind: "ai" | "deterministic" | "mixed" | "unknown";
+  privacyMode: "full_ai" | "facts_only_ai" | "ai_disabled" | null;
+  deterministicSections: number;
+  totalSections: number;
+  /** One sentence for the reader; null when nothing needs saying. */
+  label: string | null;
 }
 
 /** POST /projects/:id/ask response (grounded Q&A with receipts). */

@@ -4,6 +4,7 @@ import {
   claimForReceipt,
   confidenceReasonFor,
   inlineMarkersToText,
+  packageGenerationMode,
   receiptStaleness,
   receiptVerification,
 } from "../../src/api/lib/receiptPresentation.js";
@@ -218,5 +219,47 @@ describe("receiptPresentation.claimForReceipt", () => {
     expect(claimForReceipt(null, ctx)).to.equal(null);
     expect(claimForReceipt("r-uuid-1", null)).to.equal(null);
     expect(claimForReceipt("r-uuid-1", { claims: "bogus" })).to.equal(null);
+  });
+});
+
+describe("receiptPresentation.packageGenerationMode", () => {
+  const det = { mode: "deterministic", privacy_mode: "ai_disabled" };
+  const ai = (privacy: string) => ({ prompt_version: "section-v6", privacy_mode: privacy });
+
+  it("reports a no-AI package as structural-only and says why", () => {
+    const mode = packageGenerationMode([det, det, det]);
+    expect(mode.kind).to.equal("deterministic");
+    expect(mode.privacyMode).to.equal("ai_disabled");
+    expect(mode.deterministicSections).to.equal(3);
+    expect(mode.label).to.match(/Structural only/);
+    expect(mode.label).to.match(/extracted directly from the code/);
+  });
+
+  it("labels facts-only packages and stays silent for ordinary full_ai ones", () => {
+    expect(packageGenerationMode([ai("facts_only_ai")]).label).to.match(/no code left the system/);
+    const full = packageGenerationMode([ai("full_ai"), ai("full_ai")]);
+    expect(full.kind).to.equal("ai_assisted");
+    expect(full.label).to.equal(null); // nothing unusual to disclose
+  });
+
+  it("does not claim a package is no-AI when only some sections are", () => {
+    // A regenerate_section under ai_disabled against an otherwise AI package:
+    // calling the whole thing structural-only would be as wrong as calling it
+    // AI-written.
+    const mixed = packageGenerationMode([det, ai("full_ai"), ai("full_ai")]);
+    expect(mixed.kind).to.equal("mixed");
+    expect(mixed.privacyMode).to.equal(null);
+    expect(mixed.label).to.match(/1 of 3 sections/);
+  });
+
+  it("reads legacy rows that predate privacy_mode, and stays silent with nothing to read", () => {
+    // The deterministic path has always stamped mode:'deterministic'.
+    expect(packageGenerationMode([{ mode: "deterministic" }]).kind).to.equal("deterministic");
+    // A pre-privacy_mode AI section is ai_assisted with an unknown mode, never
+    // mislabeled as no-AI.
+    const legacy = packageGenerationMode([{ prompt_version: "section-v5" }]);
+    expect(legacy.kind).to.equal("ai_assisted");
+    expect(legacy.privacyMode).to.equal(null);
+    expect(packageGenerationMode([]).kind).to.equal("unknown");
   });
 });

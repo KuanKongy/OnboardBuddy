@@ -134,6 +134,10 @@ export default function App() {
               <Route path="dependencies" element={<GraphPage />} />
               <Route path="workflows" element={<WorkflowsPage />} />
               <Route path="capabilities" element={<CapabilitiesPage />} />
+              <Route path="tutorials" element={<WalkthroughTab />} />
+              {/* The tab has always been labelled "Tutorials"; the path said
+                  "walkthrough". Both resolve so links shared before the
+                  rename keep working. */}
               <Route path="walkthrough" element={<WalkthroughTab />} />
               <Route path="team" element={<TeamPage />} />
               <Route path="settings" element={<ProjectSettingsPage />} />

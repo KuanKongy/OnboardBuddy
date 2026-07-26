@@ -1,0 +1,25 @@
+{
+  "repo": "KuanKongy/MasterPokedex",
+  "clone": "https://github.com/KuanKongy/MasterPokedex.git",
+  "shape": "Vite + React SPA, react-router with a <Layout> wrapper route. No server of any kind.",
+  "whyThisShape": "The pure-client case. There is no schema, no queue, no HTTP route and no background job, so every prompt written against a full-stack repo has to degrade rather than invent. Its domain also lives in an external API (PokeAPI), which tests whether the prose can name a domain it cannot read the source of.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Read src/App.tsx (nested router config) and listed src/pages/; domain nouns taken from src/pages/ and src/types/.",
+  "expectShape": {
+    "entrypointKinds": { "mustInclude": ["ui_route"], "mustExclude": ["http_route", "worker_job"] },
+    "uiRoutesAtLeast": 8
+  },
+  "domainNouns": ["pokemon", "pokedex", "trainer", "item", "region", "ability", "type", "team"],
+  "mustDisclose": [],
+  "budgetsMeasuredOn": "2026-07-25, snapshot 8be8a59e (12 sections, 6 clusters, 4 capabilities, 92/107 files parsed). measured: domainNouns=7/8 · cited=42.9% · narrationErrors=30 · levelErrors=6 · sectionsWithGaps=6/12",
+  "budgets": {
+    "minDomainNounsInPackage": 7,
+    "minCitedShare": 0.35,
+    "maxNarrationErrors": 40,
+    "maxLevelErrors": 9,
+    "minSectionsDisclosingGaps": 5
+  },
+  "knownGaps": [
+    "The Pokemon data model lives in the external PokeAPI, not in this repo. Nothing in the analysis can describe it, so a 'Data Model' section here can only describe the local TypeScript types."
+  ]
+}
