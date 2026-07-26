@@ -32,6 +32,12 @@ export function installFakeDb(overrides: {
   jobStatus?: string;
   hasCachedRun?: boolean;
   budgetUsageRow?: Record<string, unknown> | null;
+  /**
+   * analysis_jobs.checkpoint->'budgetBaseline' as already stored. Set it to
+   * simulate a retry/resume of a job that already claimed its per-run
+   * baseline; leave it undefined and the claim UPDATE wins (fresh run).
+   */
+  jobBaseline?: Record<string, unknown> | null;
   /** Caller-owned routes, consulted first; return null to fall through. */
   extra?: (text: string, params?: unknown[]) => unknown[] | null;
 } = {}): QueryLogEntry[] {
@@ -42,6 +48,16 @@ export function installFakeDb(overrides: {
     const extra = overrides.extra?.(text, params);
     if (extra !== null && extra !== undefined) return { rows: extra } as never;
     if (text.includes('FROM project_llm_keys')) return { rows: overrides.llmKeyRows ?? [] } as never;
+    // Per-run baseline claim/read. Must precede the kill-switch route: the
+    // read also selects FROM analysis_jobs.
+    if (text.includes("'{budgetBaseline}'")) {
+      // Conditional UPDATE: no rows when a baseline already exists.
+      if (overrides.jobBaseline) return { rows: [] } as never;
+      return { rows: [{ baseline: JSON.parse(String(params?.[1] ?? '{}')) }] } as never;
+    }
+    if (text.includes("checkpoint -> 'budgetBaseline'")) {
+      return { rows: [{ baseline: overrides.jobBaseline ?? null }] } as never;
+    }
     if (text.includes('FROM analysis_jobs')) return { rows: [{ status: overrides.jobStatus ?? 'running' }] } as never;
     if (text.includes('FROM ai_generation_runs')) {
       return { rows: overrides.hasCachedRun ? [{ '?column?': 1 }] : [] } as never;
@@ -119,9 +135,12 @@ export function makeBudget(opts: {
   stopBehavior?: 'fail' | 'pause' | 'degrade';
   overrides?: unknown;
   now?: () => number;
+  /** Set to exercise the per-run baseline claim on the job row. */
+  jobId?: string;
 } = {}): BudgetEnforcer {
   return new BudgetEnforcer({
     snapshotId: 'snap-1',
+    jobId: opts.jobId,
     depth: opts.depth ?? 'standard',
     stopBehavior: opts.stopBehavior,
     budgetOverrides: opts.overrides,

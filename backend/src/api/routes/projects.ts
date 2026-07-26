@@ -8,6 +8,7 @@ import { getInstallationTokenForUser, userCanAccessInstallation } from "../../li
 import { getRepo, isValidGitRef } from "../../lib/github.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
+import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
 const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -673,10 +674,18 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
               sc.path_prefix AS scope_path, sc.display_name AS scope_name,
               cost.llm_calls, cost.cached_calls, cost.input_tokens, cost.output_tokens, cost.estimated_cost_usd,
               pkg.id AS package_id, pkg.role AS package_role, pkg.branch AS package_branch, pkg.status AS package_status,
-              sections.generated_sections, sections.cached_sections
+              sections.generated_sections, sections.cached_sections,
+              -- Per-run budget transparency: the zero point this run was
+              -- metered from (null on runs that predate per-run metering),
+              -- the snapshot's lifetime counters, and the cap that applied.
+              aj.checkpoint -> 'budgetBaseline' AS budget_baseline,
+              s.budget_usage AS snapshot_budget_usage,
+              COALESCE(s.semantic_depth, aj.semantic_depth, pst.analysis_depth) AS effective_depth,
+              pst.budget_overrides
        FROM analysis_jobs aj
        LEFT JOIN users u ON u.id = aj.requested_by
        LEFT JOIN analysis_snapshots s ON s.id = aj.snapshot_id
+       LEFT JOIN project_settings pst ON pst.project_id = aj.project_id
        LEFT JOIN analysis_scopes sc ON sc.id = COALESCE(aj.scope_id, s.scope_id)
        LEFT JOIN LATERAL (
          SELECT COUNT(*) FILTER (WHERE r.status = 'complete')::int AS llm_calls,
@@ -739,6 +748,15 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
         input_tokens: Number(r.input_tokens ?? 0),
         output_tokens: Number(r.output_tokens ?? 0),
       },
+      // Caps apply per run; the snapshot's counters are the lifetime record.
+      // Both are shown so "$0.42 · 40 calls" reads against something.
+      budget: summarizeRunBudget({
+        depth: r.effective_depth as string | null,
+        budgetOverrides: r.budget_overrides,
+        baseline: r.budget_baseline,
+        jobLlmCalls: Number(r.llm_calls ?? 0),
+        snapshotUsage: r.snapshot_budget_usage,
+      }),
       sections: {
         generated: (r.generated_sections as string[] | null) ?? [],
         cached: (r.cached_sections as string[] | null) ?? [],

@@ -121,7 +121,17 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     for (const sym of fa.symbols) {
       const symKey = sym.stableKey ?? symbolKey(relPath, sym.name);
       addNode(symbolNode(symKey, sym, relPath, fileTrust));
-      addEdge({ sourceKey: relPath, targetKey: symKey, type: 'contains', confidence: 'high', metadata: {} });
+      // A handler declared inside another function hangs off its container, not
+      // off the file — exactly as a method hangs off its class. Keeping it out
+      // of the file's `contains` list is what stops it from competing with the
+      // file's top-level symbols when an entrypoint has to guess its seed.
+      addEdge({
+        sourceKey: sym.containerName ? symbolKey(relPath, sym.containerName) : relPath,
+        targetKey: symKey,
+        type: 'contains',
+        confidence: 'high',
+        metadata: {},
+      });
 
       // Class methods become their own nodes under `path#Class.method`.
       if (sym.kind === 'class' && sym.methods) {
@@ -363,6 +373,7 @@ function symbolNode(stableKey: string, sym: SymbolInfo, relPath: string, trust: 
       ...(sym.returnType ? { returnType: sym.returnType } : {}),
       ...(sym.parameters ? { params: sym.parameters.map((p) => p.name) } : {}),
       ...(sym.jsDoc ? { jsdoc: sym.jsDoc.slice(0, 2000) } : {}),
+      ...(sym.containerName ? { container: sym.containerName } : {}),
       isTrivial: sym.isTrivial ?? false,
       isDefault: sym.isDefault,
     },
@@ -451,6 +462,14 @@ function resolveImport(
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
+//
+// Deliberately NOT wrapped in withStatementTimeoutRetry, and it would be a bug
+// to add it here: both functions below execute inside the caller's open
+// transaction (worker/index.ts, "Persisting results"). A statement timeout
+// aborts that transaction, so every command after it — including a retry of the
+// same statement — fails with 25P02 "current transaction is aborted". The 57014
+// guard for this work lives one level up, around the whole BEGIN…COMMIT, where
+// ROLLBACK makes a second pass meaningful.
 
 const INSERT_CHUNK = 200;
 

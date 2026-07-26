@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NodeDetail } from "@/lib/graphData";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
-import { ScoreProvenance, ScoreProvenanceInfo } from "@/components/ScoreProvenance";
+import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphNode } from "@/types/graph";
+
+/** Tiers whose members can actually move the ranking weights. */
+const CAN_ADJUST_WEIGHTS = new Set(["owner", "admin", "manager"]);
 
 interface NodeInfoPanelProps {
   node: GraphNode;
@@ -54,6 +57,38 @@ async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 /**
+ * One caller/callee.
+ *
+ * UX §17.6 measured this list rendering `page.tsx` six times with no directory
+ * in a Next.js App Router repo — "six identical rows look like a rendering bug
+ * and convey nothing. Show the parent path." For an import relation the path
+ * IS the identity, so it is what the row prints; a symbol relation keeps the
+ * symbol name and prints the file under it. Neither needs a tooltip any more
+ * (owner H1): the disambiguator is on screen.
+ */
+function RelationItem({
+  name,
+  filePath,
+  isFileRelation,
+}: {
+  name: string;
+  filePath: string | null;
+  isFileRelation: boolean;
+}) {
+  if (isFileRelation && filePath) {
+    return <li className="truncate font-mono text-[0.6875rem] text-muted-foreground">{filePath}</li>;
+  }
+  return (
+    <li className="min-w-0">
+      <p className="truncate font-mono text-[0.6875rem] text-muted-foreground">{name}</p>
+      {filePath && (
+        <p className="truncate font-mono text-[0.625rem] text-muted-foreground/60">{filePath}</p>
+      )}
+    </li>
+  );
+}
+
+/**
  * Single-column detail panel following the standard symbol doc format
  * (doc/Pipeline.md): one-line summary, signature/params/returns, a real
  * call-site example, then importance and receipts.
@@ -69,8 +104,16 @@ export function NodeInfoPanel({
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
   const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
-  const projectId = useOptionalProject()?.project?.id ?? null;
+  const project = useOptionalProject()?.project ?? null;
+  const projectId = project?.id ?? null;
+  // UX §9.3 / ledger E10: the link was rendered for every tier and landed on a
+  // settings page whose sliders are disabled below manager — a dead end, on
+  // three projects in the audit.
+  const canAdjustWeights = CAN_ADJUST_WEIGHTS.has(project?.permission_tier ?? "");
   const doc = detail?.doc;
+  const isFileRelation = detail?.relation_labels?.inbound === "Imported by";
+  const inboundTotal = detail?.relation_totals?.inbound ?? detail?.callers?.length ?? 0;
+  const outboundTotal = detail?.relation_totals?.outbound ?? detail?.callees?.length ?? 0;
 
   async function handleCopyPath() {
     const ok = await copyToClipboard(node.id);
@@ -86,13 +129,12 @@ export function NodeInfoPanel({
   return (
     <div className="flex h-full flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+        {/* Wrapped, not truncated-with-a-tooltip: owner H1 — a tooltip that
+            reveals text the panel had room to print is the screen refusing to
+            do its job. */}
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-foreground" title={node.label}>
-            {node.label}
-          </p>
-          <p className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={node.id}>
-            {node.id}
-          </p>
+          <p className="text-sm font-semibold break-words text-foreground">{node.label}</p>
+          <p className="font-mono text-[0.6875rem] break-all text-muted-foreground">{node.id}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {githubUrl && (
@@ -148,13 +190,29 @@ export function NodeInfoPanel({
           </div>
         )}
 
-        {/* 1. One-line summary */}
-        {doc?.summary && (
+        {/* 1. What this thing does. For a FILE this is the file record, which
+            the endpoint never looked up before — owner E3: "The dependencies
+            should also have explanation of what file does." */}
+        {doc?.summary ? (
           <div>
+            <p className="section-label mb-1">
+              {isFileRelation ? "What this file does" : "What this does"}
+            </p>
             <p className="text-[0.8125rem] leading-relaxed text-foreground">{doc.summary}</p>
+            {doc.role && (
+              <p className="mt-1 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+                {doc.role}
+              </p>
+            )}
+            {(doc.keySymbols?.length ?? 0) > 0 && (
+              <p className="mt-1 text-[0.71875rem] text-muted-foreground">
+                Key symbols:{" "}
+                <span className="font-mono text-[0.6875rem]">{doc.keySymbols!.join(", ")}</span>
+              </p>
+            )}
             <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
               {doc.factsOnly ? (
-                "Deterministic facts only — no AI summary for this symbol"
+                "Deterministic facts only — no AI summary here"
               ) : (
                 <>
                   <Sparkles className="h-2.5 w-2.5" /> AI summary ({doc.summaryConfidence} confidence), backed by the receipts below
@@ -162,6 +220,13 @@ export function NodeInfoPanel({
               )}
             </p>
           </div>
+        ) : (
+          detail && (
+            <p className="text-[0.71875rem] text-muted-foreground">
+              No description was generated for this {isFileRelation ? "file" : "symbol"}. The
+              relationships and score below are traced from the code and are always present.
+            </p>
+          )
         )}
 
         {/* 2-3. Signature, params, returns (deterministic) */}
@@ -193,58 +258,53 @@ export function NodeInfoPanel({
           </div>
         )}
 
-        {/* Importance (ranking always shown with its reasons) */}
+        {/* Importance. The derivation used to sit open under every score, plus
+            a hover ⓘ repeating it — owner B1 asked for one explicit control,
+            owner J1 for the content to be staged behind it. */}
         {detail && (
-          <div>
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <p className="section-label">Importance</p>
-              <ScoreProvenanceInfo
-                data={detail.ranking_provenance}
-                label="How this importance score was derived"
-              />
-              {projectId && (
+          <ScoreProvenanceDisclosure
+            data={detail.ranking_provenance}
+            sectionLabel="Importance"
+            buttonLabel="Explain how this importance score was derived"
+            extra={
+              projectId && canAdjustWeights ? (
                 <Link
                   to={`/projects/${projectId}/settings`}
                   className="text-[0.65625rem] font-medium text-primary hover:underline"
                 >
                   Adjust weights
                 </Link>
-              )}
-            </div>
-            {detail.composite_score === null ? (
-              <p className="text-[0.71875rem] text-muted-foreground">Not ranked in this snapshot</p>
-            ) : (
-              <div className="flex items-baseline gap-2">
-                <span className="text-lg font-semibold tabular-nums text-foreground">
-                  {Math.round(detail.composite_score * 100)}
-                </span>
-                <span className="text-[0.65625rem] text-muted-foreground">
-                  / 100 critical-path score
-                  {detail.ranking_scope === "file_fallback" &&
-                    " — from this symbol's file (symbol not individually ranked)"}
-                </span>
-              </div>
-            )}
-            {detail.ranking_reasons.length > 0 && (
-              <ul className="mt-1.5 space-y-1">
-                {detail.ranking_reasons.map((reason) => (
-                  <li key={reason} className="flex items-start gap-1.5">
-                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-success" />
-                    <span className="text-[0.71875rem] text-muted-foreground">{reason}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {/* The arithmetic under the reasons. Reasons say what the ranker
-                noticed; this says what each observation was worth, which is
-                the part a reader needs to argue with the number. Suppressed
-                reasons — the list above is the same stored strings. */}
-            {detail.composite_score !== null && (
-              <div className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2">
-                <ScoreProvenance data={detail.ranking_provenance} showReasons={false} />
-              </div>
-            )}
-          </div>
+              ) : undefined
+            }
+            headline={
+              <>
+                {detail.composite_score === null ? (
+                  <p className="text-[0.71875rem] text-muted-foreground">Not ranked in this snapshot</p>
+                ) : (
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-lg font-semibold tabular-nums text-foreground">
+                      {Math.round(detail.composite_score * 100)}
+                    </span>
+                    <span className="text-[0.65625rem] text-muted-foreground">
+                      / 100 critical-path score
+                      {detail.ranking_scope === "file_fallback" &&
+                        " — from this symbol's file (symbol not individually ranked)"}
+                    </span>
+                  </div>
+                )}
+                {detail.ranking_reasons.length > 0 && (
+                  <ul className="mt-1.5 space-y-1">
+                    {detail.ranking_reasons.map((reason) => (
+                      <li key={reason} className="flex items-start gap-1.5">
+                        <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-success" />
+                        <span className="text-[0.71875rem] text-muted-foreground">{reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
+            }
+          />
         )}
 
         {/* Deterministic relationships — every node has these, so the panel
@@ -252,31 +312,46 @@ export function NodeInfoPanel({
         {detail && ((detail.callers?.length ?? 0) > 0 || (detail.callees?.length ?? 0) > 0) && (
           <div>
             <Separator className="mb-3" />
+            {/* "(8)" used to be the LIMIT, printed as if it were the total,
+                directly under a reason saying "Imported by 12 files"
+                (UX §17.6). Both numbers are now on the heading. */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {(detail.callers?.length ?? 0) > 0 && (
-                <div>
+                <div className="min-w-0">
                   <p className="section-label mb-1.5">
-                    {detail.relation_labels?.inbound ?? "Used by"} ({detail.callers!.length})
+                    {detail.relation_labels?.inbound ?? "Used by"}{" "}
+                    {inboundTotal > detail.callers!.length
+                      ? `(${detail.callers!.length} of ${inboundTotal})`
+                      : `(${inboundTotal})`}
                   </p>
-                  <ul className="space-y-0.5">
+                  <ul className="max-h-48 space-y-0.5 overflow-y-auto">
                     {detail.callers!.map((c) => (
-                      <li key={c.stable_key} className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={c.file_path ?? undefined}>
-                        {c.name}
-                      </li>
+                      <RelationItem
+                        key={c.stable_key}
+                        name={c.name}
+                        filePath={c.file_path}
+                        isFileRelation={isFileRelation}
+                      />
                     ))}
                   </ul>
                 </div>
               )}
               {(detail.callees?.length ?? 0) > 0 && (
-                <div>
+                <div className="min-w-0">
                   <p className="section-label mb-1.5">
-                    {detail.relation_labels?.outbound ?? "Uses"} ({detail.callees!.length})
+                    {detail.relation_labels?.outbound ?? "Uses"}{" "}
+                    {outboundTotal > detail.callees!.length
+                      ? `(${detail.callees!.length} of ${outboundTotal})`
+                      : `(${outboundTotal})`}
                   </p>
-                  <ul className="space-y-0.5">
+                  <ul className="max-h-48 space-y-0.5 overflow-y-auto">
                     {detail.callees!.map((c) => (
-                      <li key={c.stable_key} className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={c.file_path ?? undefined}>
-                        {c.name}
-                      </li>
+                      <RelationItem
+                        key={c.stable_key}
+                        name={c.name}
+                        filePath={c.file_path}
+                        isFileRelation={isFileRelation}
+                      />
                     ))}
                   </ul>
                 </div>
@@ -292,13 +367,23 @@ export function NodeInfoPanel({
             {(detail.side_effects?.length ?? 0) > 0 && (
               <div className="mb-2">
                 <p className="section-label mb-1.5">Side effects</p>
-                <div className="flex flex-wrap gap-1">
+                {/* The target ("POST /api/jobs") is printed, not hovered: it
+                    is the only place in the panel that fact appears, so hiding
+                    it behind a tooltip hid the content, not the chrome. */}
+                <ul className="space-y-0.5">
                   {detail.side_effects!.map((se, i) => (
-                    <Badge key={i} variant="outline" className="h-5 px-1.5 text-[0.625rem]" title={se.target ?? undefined}>
-                      {se.type.replace(/_/g, " ")}
-                    </Badge>
+                    <li key={i} className="flex min-w-0 items-baseline gap-1.5">
+                      <Badge variant="outline" className="h-5 shrink-0 px-1.5 text-[0.625rem]">
+                        {se.type.replace(/_/g, " ")}
+                      </Badge>
+                      {se.target && (
+                        <span className="min-w-0 break-all font-mono text-[0.65625rem] text-muted-foreground">
+                          {se.target}
+                        </span>
+                      )}
+                    </li>
                   ))}
-                </div>
+                </ul>
               </div>
             )}
             {detail.cluster && (
@@ -347,7 +432,10 @@ export function NodeInfoPanel({
                   </>
                 );
                 return (
-                  <li key={r.id} className="flex items-center gap-1.5 text-[0.6875rem]">
+                  // No tooltip: it repeated the path already printed on the row
+                  // (owner H1). The row wraps instead, so the whole path is
+                  // readable without hovering.
+                  <li key={r.id} className="flex items-start gap-1.5 text-[0.6875rem]">
                     <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[0.5625rem] uppercase">
                       {r.trust_level}
                     </Badge>
@@ -356,14 +444,13 @@ export function NodeInfoPanel({
                         href={receiptUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        title={r.file_path ?? undefined}
-                        className="inline-flex min-w-0 flex-1 items-center gap-1 truncate font-mono text-muted-foreground hover:text-foreground hover:underline"
+                        className="inline-flex min-w-0 flex-1 items-baseline gap-1 break-all font-mono text-muted-foreground hover:text-foreground hover:underline"
                       >
-                        <span className="min-w-0 truncate">{label}</span>
+                        <span className="min-w-0 break-all">{label}</span>
                         <ExternalLink className="h-2.5 w-2.5 shrink-0" />
                       </a>
                     ) : (
-                      <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={r.file_path ?? undefined}>
+                      <span className="min-w-0 flex-1 break-all font-mono text-muted-foreground">
                         {label}
                       </span>
                     )}

@@ -5,6 +5,18 @@ export interface GithubRepoRef {
 }
 
 /**
+ * Builds a GitHub URL for the repository itself, pinned to the ref that is
+ * actually being viewed (`opts.ref` — normally the analyzed commit, so the
+ * link lands on the code the package describes rather than whatever the
+ * branch has moved on to). Falls back to the repo's branch.
+ */
+export function buildGithubRepoUrl(repo: GithubRepoRef, opts?: { ref?: string | null }): string {
+  const base = `https://github.com/${repo.owner}/${repo.repo}`;
+  const ref = opts?.ref ?? repo.branch;
+  return ref ? `${base}/tree/${encodeURIComponent(ref)}` : base;
+}
+
+/**
  * Builds a GitHub blob URL for a file in a repo, optionally pinned to a
  * specific commit (via `opts.ref`, overriding `repo.branch`) and scrolled to
  * a line range. `opts.ref` should be a commit hash — receipts carry

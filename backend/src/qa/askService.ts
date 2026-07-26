@@ -189,8 +189,12 @@ export async function answerQuestion(input: AskInput): Promise<AskAnswer> {
   const intent = classifyIntent(input.question);
   const views = viewsForIntent(intent);
 
-  // Q&A shares the snapshot's budget: counters and limits apply, but an
-  // HTTP request has no pause semantics — trips surface as errors.
+  // Q&A writes to the snapshot's lifetime counters like everything else, but
+  // the cap is per run and one question IS the run: it is baselined in memory
+  // here (no job row to resume) and may spend up to max_llm_calls of its own
+  // — a question no longer 429s just because past analyses filled the
+  // snapshot's cumulative total. Trips still surface as errors: an HTTP
+  // request has no pause semantics.
   const budget = await new BudgetEnforcer({
     snapshotId: snapshot.snapshotId,
     depth: snapshot.depth,

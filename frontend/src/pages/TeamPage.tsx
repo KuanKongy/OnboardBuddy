@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { apiFetch } from "@/lib/api";
+import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 interface Member {
   user_id: string;
@@ -43,14 +44,6 @@ interface PendingInvitation {
   invited_by_email: string | null;
   created_at: string;
 }
-
-const roleOptions = [
-  { value: "backend", label: "Backend" },
-  { value: "frontend", label: "Frontend" },
-  { value: "devops", label: "DevOps" },
-  { value: "qa", label: "QA" },
-  { value: "general", label: "General" },
-];
 
 const avatarColors = [
   "bg-blue-500",
@@ -90,12 +83,12 @@ export function TeamPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteTier, setInviteTier] = useState("developer");
-  const [inviteRole, setInviteRole] = useState("general");
+  const [inviteRole, setInviteRole] = useState<string>(FALLBACK_ROLE);
   const [inviting, setInviting] = useState(false);
 
   const [manageMember, setManageMember] = useState<Member | null>(null);
   const [editTier, setEditTier] = useState("developer");
-  const [editRole, setEditRole] = useState("general");
+  const [editRole, setEditRole] = useState<string>(FALLBACK_ROLE);
   const [savingMember, setSavingMember] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<Member | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -278,7 +271,7 @@ export function TeamPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {roleOptions.map((r) => (
+                      {ROLE_OPTIONS.map((r) => (
                         <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                       ))}
                     </SelectContent>
@@ -499,7 +492,7 @@ export function TeamPage() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {roleOptions.map((r) => (
+                          {ROLE_OPTIONS.map((r) => (
                             <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
                           ))}
                         </SelectContent>

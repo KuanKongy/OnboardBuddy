@@ -6,31 +6,34 @@ import {
   Database,
   FileCode2,
   Info,
-  Loader2,
   Maximize2,
   Minimize2,
   Plug,
   RefreshCw,
   Route as RouteIcon,
   SearchX,
+  Sparkles,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Handle, Position, type Edge, type Node, type NodeProps } from "reactflow";
+import { Handle, MarkerType, Position, type Edge, type Node, type NodeProps } from "reactflow";
 import "reactflow/dist/style.css";
 import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { apiFetch } from "@/lib/api";
 import { CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
-import { fetchWorkflowGraph, type WorkflowGraphResponse } from "@/lib/graphData";
-import { layoutGraph } from "@/lib/graphLayout";
+import { triggerLabel } from "@/lib/graphData";
+import { layoutGraph, layoutRows } from "@/lib/graphLayout";
+import { buildStepChain, layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
 import { cn } from "@/lib/utils";
 import type { GraphEdge, GraphNode } from "@/types/graph";
 
@@ -73,6 +76,13 @@ interface Capability {
     entrypoints: Array<{ kind: string; route: string | null; filePath: string; symbol: string | null }>;
     schemas: string[];
     services: string[];
+    /**
+     * Non-table persistence the flow reaches (filesystem, job queue, network).
+     * Binding leg 3 accepts these, so a capability can be fully bound with
+     * zero tables — without this the card reported "0 tables, 0 services" for
+     * a flow that demonstrably writes to disk.
+     */
+    surfaces: string[];
   };
   whereToStart: StartHereRef[];
   workflows: CapabilityFlow[];
@@ -97,6 +107,71 @@ interface CapabilitiesResponse {
   derivation?: Derivation | null;
 }
 
+/** One row per step of a flow — see `workflows.ts` `/walkthrough`. */
+interface WalkthroughStep {
+  stepOrder: number;
+  filePath: string;
+  symbolName: string | null;
+  lineStart: number | null;
+  stepKind: string;
+  explanation: string;
+  narrated: boolean;
+  syntheticReturn: boolean;
+}
+
+interface WalkthroughResponse {
+  workflow: { id: string; title: string; trigger_type: string; purpose: string | null };
+  steps: Array<Record<string, unknown>>;
+}
+
+/**
+ * Normalizes a walkthrough row and picks the best sentence available for it.
+ *
+ * The narration pass writes `explanation` for a small minority of steps; the
+ * rest carry a formatter's structural sentence. Both are real, and which one a
+ * reader is looking at is marked rather than blurred.
+ */
+function normalizeStep(raw: Record<string, unknown>, index: number): WalkthroughStep {
+  const str = (...keys: string[]): string | null => {
+    for (const k of keys) {
+      const v = raw[k];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return null;
+  };
+  const num = (...keys: string[]): number | null => {
+    for (const k of keys) {
+      const v = raw[k];
+      if (typeof v === "number") return v;
+    }
+    return null;
+  };
+  const filePath = str("filePath", "file_path") ?? "";
+  const narrated = str("explanation");
+  const deterministic = str("deterministicDescription", "deterministic_description");
+  const explanation =
+    narrated ??
+    (deterministic ? (filePath ? deterministic.replace(` (${filePath})`, "") : deterministic) : null) ??
+    (filePath ? `Runs in ${filePath}. No description was recorded for this step.` : "No description was recorded for this step.");
+  return {
+    stepOrder: num("stepOrder", "step_order") ?? index + 1,
+    filePath,
+    symbolName: str("symbolName", "symbol_name"),
+    lineStart: num("lineStart", "line_start"),
+    stepKind: str("stepKind", "step_kind") ?? "transform",
+    explanation,
+    narrated: narrated !== null,
+    syntheticReturn: raw.syntheticReturn === true,
+  };
+}
+
+/** "backend/src/api/routes/ask.ts" → "ask.ts" */
+function stepTitle(step: WalkthroughStep): string {
+  const base = step.filePath.split("/").pop() ?? step.filePath;
+  const name = step.symbolName ?? base;
+  return step.syntheticReturn ? `Response from ${name}` : name;
+}
+
 /** Symbol keys look like "path/file.ts#Symbol"; graphs focus the file part. */
 function fileOf(stableKey: string): string {
   return stableKey.split("#")[0] ?? stableKey;
@@ -109,13 +184,32 @@ const TIERS: Array<{ key: "core" | "supporting"; label: string; note?: string }>
 
 // ── Nodes ────────────────────────────────────────────────────────────────────
 
+/** Handle ids match `HandleId` in serpentine.ts. */
+const HANDLE_SIDES = [
+  { id: "t", position: Position.Top },
+  { id: "r", position: Position.Right },
+  { id: "b", position: Position.Bottom },
+  { id: "l", position: Position.Left },
+] as const;
+
+/**
+ * All four sides, as source and target.
+ *
+ * A snaked chain enters and leaves sideways within a row and vertically at the
+ * turn, so a fixed Left-target/Right-source pair cannot draw it. React Flow
+ * keys handles by (node, type, id), so the same id on a source and a target is
+ * fine; unused ones stay mounted but invisible because React Flow has to
+ * measure a handle to route to it.
+ */
 function Ports() {
   return (
     <>
-      <Handle type="target" position={Position.Left} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
-      <Handle type="source" position={Position.Right} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
-      <Handle id="t" type="target" position={Position.Top} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
-      <Handle id="b" type="source" position={Position.Bottom} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
+      {HANDLE_SIDES.map(({ id, position }) => (
+        <Handle key={`t-${id}`} id={id} type="target" position={position} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
+      ))}
+      {HANDLE_SIDES.map(({ id, position }) => (
+        <Handle key={`s-${id}`} id={id} type="source" position={position} isConnectable={false} className="!h-2 !w-2 !border-0 !bg-muted-foreground/50 !opacity-0" />
+      ))}
     </>
   );
 }
@@ -130,6 +224,13 @@ interface CapNodeData {
   selected: boolean;
 }
 
+/**
+ * A capability, as a card in a rail of them.
+ *
+ * No tooltip: the name is on the node, the numbers are on the node, and the
+ * hover layer that used to repeat the name sat over the click target. What is
+ * not on the node is one level down, which is what the click is for.
+ */
 function CapabilityNode({ data }: NodeProps<CapNodeData>) {
   const color = data.tier === "core" ? "var(--node-api)" : "var(--node-shared)";
   return (
@@ -143,7 +244,7 @@ function CapabilityNode({ data }: NodeProps<CapNodeData>) {
       <Ports />
       <div className="flex items-center gap-2">
         <Boxes className="h-3.5 w-3.5 shrink-0" style={{ color }} />
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground" title={data.name}>
+        <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">
           {data.name}
         </span>
       </div>
@@ -178,12 +279,12 @@ function FlowNode({ data }: NodeProps<FlowNodeData>) {
       <Ports />
       <div className="flex items-center gap-2">
         <Zap className="h-3 w-3 shrink-0" style={{ color }} />
-        <span className="min-w-0 flex-1 truncate text-[0.75rem] font-medium text-foreground" title={data.title}>
+        <span className="min-w-0 flex-1 truncate text-[0.75rem] font-medium text-foreground">
           {data.title}
         </span>
       </div>
       <p className="mt-0.5 text-[0.65625rem] text-muted-foreground">
-        {data.trigger ?? "flow"} · {data.steps} step{data.steps === 1 ? "" : "s"}
+        {triggerLabel(data.trigger)} · {data.steps} step{data.steps === 1 ? "" : "s"}
       </p>
     </div>
   );
@@ -209,7 +310,7 @@ function ResourceNode({ data }: NodeProps<ResourceNodeData>) {
       <Ports />
       <span className="flex items-center gap-1.5">
         <Icon className="h-3 w-3 shrink-0" style={{ color }} />
-        <span className="max-w-[11rem] truncate font-mono text-[0.6875rem] text-foreground" title={data.label}>
+        <span className="max-w-[11rem] truncate font-mono text-[0.6875rem] text-foreground">
           {data.label}
         </span>
       </span>
@@ -219,7 +320,8 @@ function ResourceNode({ data }: NodeProps<ResourceNodeData>) {
 
 interface StepNodeData {
   label: string;
-  filePath: string;
+  explanation: string;
+  narrated: boolean;
   stepKind: string;
   order: number | null;
   selected: boolean;
@@ -231,12 +333,13 @@ const STEP_KIND_PALETTE: Record<string, string> = {
   side_effect: "worker", transform: "shared", response: "ui",
 };
 
+/** Matches the Workflows tab node: same data, same no-tooltip rule. */
 function StepNode({ data }: NodeProps<StepNodeData>) {
   const color = `var(--node-${STEP_KIND_PALETTE[data.stepKind] ?? "shared"})`;
   return (
     <div
       className={cn(
-        "w-56 rounded-lg border bg-card px-3 py-2 shadow-sm transition-all",
+        "w-64 rounded-lg border bg-card px-3 py-2 shadow-sm transition-all",
         data.selected ? "ring-2 ring-ring" : "hover:shadow-md",
       )}
       style={{ borderColor: data.selected ? color : "var(--border)" }}
@@ -251,7 +354,7 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
             {data.order}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.71875rem] font-medium text-foreground" title={data.label}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[0.71875rem] font-medium text-foreground">
           {data.label}
         </span>
         <span
@@ -261,8 +364,9 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
           {data.stepKind.replace(/_/g, " ")}
         </span>
       </div>
-      <p className="mt-0.5 truncate text-[0.625rem] text-muted-foreground" title={data.filePath}>
-        {data.filePath}
+      <p className="mt-1 line-clamp-3 text-[0.625rem] leading-snug text-muted-foreground">
+        {data.narrated && <Sparkles className="mr-1 inline h-2.5 w-2.5 align-[-1px] text-primary" />}
+        {data.explanation}
       </p>
     </div>
   );
@@ -298,7 +402,7 @@ export function CapabilitiesPage() {
   const [data, setData] = useState<CapabilitiesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [flowGraph, setFlowGraph] = useState<WorkflowGraphResponse | null>(null);
+  const [flowGraph, setFlowGraph] = useState<WalkthroughResponse | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -327,6 +431,7 @@ export function CapabilitiesPage() {
               entrypoints: c.binding?.entrypoints ?? [],
               schemas: c.binding?.schemas ?? [],
               services: c.binding?.services ?? [],
+              surfaces: c.binding?.surfaces ?? [],
             },
             whereToStart: c.whereToStart ?? [],
             workflows: (c.workflows ?? []).map((w) => ({ ...w, tutorials: w.tutorials ?? [], stepCount: w.stepCount ?? 0 })),
@@ -359,8 +464,11 @@ export function CapabilitiesPage() {
       setSelectedNodeId(null);
       try {
         await loadList();
-        if (frame?.kind === "workflow") setFlowGraph(await fetchWorkflowGraph(id, frame.id));
-        else setFlowGraph(null);
+        // The walkthrough route, not the folded workflow graph: it serves one
+        // row per step, which is the count the flow node above it advertises.
+        if (frame?.kind === "workflow") {
+          setFlowGraph((await apiFetch(`/projects/${id}/workflows/${encodeURIComponent(frame.id)}/walkthrough`)) as WalkthroughResponse);
+        } else setFlowGraph(null);
         loadedKeyRef.current = levelKeyOf(frame);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load capabilities");
@@ -414,37 +522,37 @@ export function CapabilitiesPage() {
 
   const level = flowFrame ? "code" : capabilityFrame ? "flows" : "capabilities";
 
+  const steps = useMemo(
+    () => (flowGraph?.steps ?? []).map(normalizeStep),
+    [flowGraph],
+  );
+
+  /**
+   * What each level draws.
+   *
+   * The first two levels are SETS, and they are laid out as rows of nodes for
+   * that reason. The capabilities level used to draw an edge between any two
+   * capabilities sharing a table, and the flows level drew every flow to every
+   * resource — a complete bipartite graph, because which flow reaches which
+   * resource is not stored per flow. Both were read as dependency structures
+   * that the evidence never claimed. The relationship is still shown, but as a
+   * band heading and a count, which is what the data actually supports.
+   *
+   * Only the deepest level is genuinely a graph: a flow's steps are ordered and
+   * connected, so that one keeps its arrows — and its chain snakes, exactly as
+   * the Workflows tab does.
+   */
   const graph = useMemo((): { nodes: GraphNode[]; edges: GraphEdge[] } => {
     if (level === "capabilities") {
-      const nodes: GraphNode[] = capabilities.map((c) => ({
-        id: `cap:${c.stableKey}`,
-        label: c.name,
-        kind: c.tier ?? "supporting",
-        metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
-      }));
-      // Two capabilities are connected when they operate on the same table or
-      // call the same service — the only relationship the evidence actually
-      // supports between them, and the one that tells a reader where a change
-      // will be felt twice.
-      const edges: GraphEdge[] = [];
-      for (let i = 0; i < capabilities.length && edges.length < 40; i += 1) {
-        for (let j = i + 1; j < capabilities.length && edges.length < 40; j += 1) {
-          const a = capabilities[i]!;
-          const b = capabilities[j]!;
-          const shared = [
-            ...a.binding.schemas.filter((s) => b.binding.schemas.includes(s)),
-            ...a.binding.services.filter((s) => b.binding.services.includes(s)),
-          ];
-          if (shared.length === 0) continue;
-          edges.push({
-            id: `share:${a.stableKey}:${b.stableKey}`,
-            source: `cap:${a.stableKey}`,
-            target: `cap:${b.stableKey}`,
-            kind: shared.join(", "),
-          });
-        }
-      }
-      return { nodes, edges };
+      return {
+        nodes: capabilities.map((c) => ({
+          id: `cap:${c.stableKey}`,
+          label: c.name,
+          kind: c.tier ?? "supporting",
+          metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
+        })),
+        edges: [],
+      };
     }
 
     if (level === "flows" && activeCapability) {
@@ -454,60 +562,65 @@ export function CapabilitiesPage() {
         kind: w.tier ?? "supporting",
         metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
       }));
-      const edges: GraphEdge[] = [];
-      const resources = [
-        ...activeCapability.binding.schemas.slice(0, 8).map((s) => ({ key: `res:table:${s}`, label: s, kind: "table" })),
-        ...activeCapability.binding.services.slice(0, 6).map((s) => ({ key: `res:service:${s}`, label: s, kind: "service" })),
-      ];
-      for (const r of resources) {
-        nodes.push({ id: r.key, label: r.label, kind: r.kind, metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 } });
-        // Which flow reaches which resource is not stored per flow on older
-        // snapshots, so every flow is drawn to every resource of its own
-        // capability — the honest granularity of what we know here.
-        for (const w of activeCapability.workflows) {
-          edges.push({ id: `${w.id}->${r.key}`, source: w.id, target: r.key, kind: "touches" });
-        }
+      // Every table and service, not a slice of them: the node one level up
+      // prints `schemas.length`, so drawing eight of twenty here is the
+      // headline-bigger-than-the-detail bug in miniature. Rows hold them.
+      for (const s of activeCapability.binding.schemas) {
+        nodes.push({ id: `res:table:${s}`, label: s, kind: "table", metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 } });
       }
-      return { nodes, edges };
+      for (const s of activeCapability.binding.services) {
+        nodes.push({ id: `res:service:${s}`, label: s, kind: "service", metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 } });
+      }
+      for (const s of activeCapability.binding.surfaces) {
+        nodes.push({ id: `res:surface:${s}`, label: s, kind: "service", metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 } });
+      }
+      return { nodes, edges: [] };
     }
 
-    if (level === "code" && flowGraph) {
-      return {
-        nodes: flowGraph.graph.nodes.map((n) => ({
-          id: n.id,
-          label: n.label,
-          kind: n.kind,
-          metadata: { exportedSymbols: [], importCount: 0, dependentCount: 0 },
-        })),
-        edges: flowGraph.graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, kind: e.kind })),
-      };
+    if (level === "code" && steps.length > 0) {
+      const chain = buildStepChain(steps, (s) => ({ label: stepTitle(s), kind: s.stepKind }));
+      return { nodes: chain.nodes, edges: chain.edges };
     }
     return { nodes: [], edges: [] };
-  }, [level, capabilities, activeCapability, flowGraph]);
+  }, [level, capabilities, activeCapability, steps]);
 
   const stepByNodeId = useMemo(() => {
-    const m = new Map<string, { order: number; kind: string; filePath: string; symbolName: string | null; description: string; lineStart: number | null }>();
-    for (const s of flowGraph?.steps ?? []) {
-      if (!m.has(s.nodeId)) {
-        m.set(s.nodeId, {
-          order: s.stepOrder, kind: s.stepKind, filePath: s.filePath,
-          symbolName: s.symbolName, description: s.description, lineStart: s.lineStart,
-        });
-      }
-    }
+    const m = new Map<string, WalkthroughStep>();
+    for (const s of steps) m.set(`step:${s.stepOrder}`, s);
     return m;
-  }, [flowGraph]);
+  }, [steps]);
 
-  const positioned = useMemo(
-    () => layoutGraph(graph.nodes, graph.edges, {
-      direction: level === "code" ? "TB" : "LR",
-      nodeWidth: level === "capabilities" ? 248 : 232,
-      nodeHeight: level === "code" ? 62 : 74,
-      ranksep: level === "code" ? 48 : 110,
-      nodesep: 28,
-    }),
-    [graph, level],
-  );
+  const layout = useMemo(() => {
+    if (level === "code") {
+      if (graph.nodes.length === 0) return { nodes: [], routing: null as SerpentineLayout["edgeRouting"] | null };
+      if (!shouldSerpentine(graph.nodes, graph.edges)) {
+        return {
+          nodes: layoutGraph(graph.nodes, graph.edges, { direction: "TB", nodeWidth: 256, nodeHeight: 84, ranksep: 44, nodesep: 28 }),
+          routing: null,
+        };
+      }
+      const out = layoutSerpentine(graph.nodes, graph.edges, { nodeWidth: 256, nodeHeight: 84, rowGap: 80 });
+      return { nodes: out.nodes, routing: out.edgeRouting };
+    }
+    // Rows. Flows first, then the tables and services they reach — two bands,
+    // so the level reads as "these, over these" without an edge saying it.
+    const bands =
+      level === "flows"
+        ? [
+            { nodes: graph.nodes.filter((n) => !n.id.startsWith("res:")) },
+            { nodes: graph.nodes.filter((n) => n.id.startsWith("res:")) },
+          ]
+        : [{ nodes: graph.nodes }];
+    return {
+      nodes: layoutRows(bands, {
+        nodeWidth: level === "capabilities" ? 248 : 232,
+        nodeHeight: level === "capabilities" ? 78 : 70,
+      }),
+      routing: null as SerpentineLayout["edgeRouting"] | null,
+    };
+  }, [graph, level]);
+
+  const positioned = layout.nodes;
 
   const flowNodes: Node[] = useMemo(
     () =>
@@ -534,8 +647,9 @@ export function CapabilitiesPage() {
           return {
             id: p.id, type: "step", position: { x: p.x, y: p.y },
             data: {
-              label: p.label, filePath: step?.filePath ?? p.id, stepKind: step?.kind ?? p.kind,
-              order: step?.order ?? null, selected: p.id === selectedNodeId,
+              label: p.label, explanation: step?.explanation ?? "", narrated: step?.narrated ?? false,
+              stepKind: step?.stepKind ?? p.kind,
+              order: step?.stepOrder ?? null, selected: p.id === selectedNodeId,
             } satisfies StepNodeData,
           };
         }
@@ -551,25 +665,24 @@ export function CapabilitiesPage() {
     [positioned, capabilities, activeCapability, stepByNodeId, level, selectedNodeId],
   );
 
+  /** Only the step chain has edges now; the set levels draw none. */
   const rfEdges: Edge[] = useMemo(
     () =>
-      graph.edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        type: level === "code" ? "smoothstep" : "default",
-        animated: level === "code",
-        label: level === "capabilities" ? e.kind : undefined,
-        labelStyle: { fill: "var(--muted-foreground)", fontSize: 10 },
-        labelBgStyle: { fill: "var(--card)" },
-        style: {
-          stroke: "var(--primary)",
-          strokeWidth: 1.4,
-          opacity: level === "flows" ? 0.35 : 0.6,
-          ...(level === "flows" ? { strokeDasharray: "4 3" } : {}),
-        },
-      })),
-    [graph.edges, level],
+      graph.edges.map((e) => {
+        const route = layout.routing?.get(e.id);
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          ...(route ? { sourceHandle: route.sourceHandle, targetHandle: route.targetHandle } : {}),
+          type: "smoothstep",
+          ...(route ? { pathOptions: { borderRadius: 16 } } : {}),
+          animated: true,
+          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--primary)" },
+          style: { stroke: "var(--primary)", strokeWidth: 1.4, opacity: 0.6 },
+        };
+      }),
+    [graph.edges, layout.routing],
   );
 
   const drillInto = (nodeId: string): boolean => {
@@ -598,6 +711,22 @@ export function CapabilitiesPage() {
   const bindingRule = data?.bindingRule ?? null;
   const isEmpty = !loading && !error && capabilities.length === 0;
 
+  /**
+   * Why the header's bound-flow count is smaller than the flows you can reach
+   * by opening every capability.
+   *
+   * `boundFlows` counts DISTINCT flows; the drill-downs list one row per
+   * (capability, flow) pair. On OnboardBuddy that is 71 against 84. Both
+   * numbers are correct and the gap is the interesting part — a flow that
+   * delivers two capabilities is a real fact about the system — so it is
+   * stated rather than papered over by making one of them match the other.
+   */
+  const flowListings = useMemo(
+    () => capabilities.reduce((n, c) => n + c.workflows.length, 0),
+    [capabilities],
+  );
+  const sharedFlows = derivation ? flowListings - derivation.boundFlows : 0;
+
   return (
     <div
       style={{
@@ -610,12 +739,16 @@ export function CapabilitiesPage() {
       <PageHeader
         title={
           stack.depth > 0 ? (
+            /* No tooltips on the crumbs. Each one said "Back to <the word you
+               are looking at>", which is the definition of a tooltip that
+               shows what the user can already see; the Back button beside them
+               carries the one explanation worth having. */
             <span className="flex flex-wrap items-baseline gap-1.5">
               <button
-                className="transition-colors hover:text-primary disabled:opacity-50"
+                type="button"
+                className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
                 onClick={() => drill.jumpTo(-1)}
                 disabled={drill.busy}
-                title="Back to all capabilities"
               >
                 Capabilities
               </button>
@@ -628,10 +761,10 @@ export function CapabilitiesPage() {
                       <span className="text-foreground">{frame.label}</span>
                     ) : (
                       <button
-                        className="transition-colors hover:text-primary disabled:opacity-50"
+                        type="button"
+                        className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
                         onClick={() => drill.jumpTo(i)}
                         disabled={drill.busy}
-                        title={`Back to ${frame.label}`}
                       >
                         {frame.label}
                       </button>
@@ -654,25 +787,38 @@ export function CapabilitiesPage() {
         actions={
           <>
             {stack.depth > 0 && (
-              <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy} title="Back to the level you came from">
-                <CornerLeftUp className="mr-1 h-3 w-3" />
-                Back
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy}>
+                    <CornerLeftUp className="mr-1 h-3 w-3" />
+                    Back
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Back to the level you came from</TooltipContent>
+              </Tooltip>
             )}
             {capabilities.length > 0 && (
               <>
                 <Badge variant="outline" className="text-[0.6875rem] tabular-nums">
                   {capabilities.length} capabilit{capabilities.length === 1 ? "y" : "ies"}
-                  {derivation && ` · ${derivation.boundFlows}/${derivation.tracedFlows} flows bound`}
+                  {derivation && ` · ${derivation.boundFlows} of ${derivation.tracedFlows} traced flows bound`}
                 </Badge>
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => setFullscreen((v) => !v)}
-                  title={fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
-                >
-                  {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => setFullscreen((v) => !v)}
+                      aria-pressed={fullscreen}
+                      aria-label={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    >
+                      {fullscreen ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+                  </TooltipContent>
+                </Tooltip>
               </>
             )}
           </>
@@ -680,20 +826,20 @@ export function CapabilitiesPage() {
       />
 
       {loading && (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <Skeleton className="graph-canvas" role="status" aria-label="Loading capabilities" />
       )}
 
       {!loading && error && (
-        <div className="flex items-center gap-3 rounded-lg border border-warning/40 bg-warning-soft px-4 py-3">
-          <SearchX className="h-4 w-4 shrink-0 text-warning" />
-          <p className="flex-1 text-sm text-foreground">{error}</p>
-          <Button variant="outline" size="xs" onClick={retry}>
-            <RefreshCw className="mr-1 h-3 w-3" />
-            Retry
-          </Button>
-        </div>
+        <EmptyState
+          icon={<SearchX className="h-4 w-4 shrink-0 text-warning" />}
+          heading={error}
+          actions={
+            <Button variant="outline" size="xs" onClick={retry}>
+              <RefreshCw className="mr-1 h-3 w-3" />
+              Retry
+            </Button>
+          }
+        />
       )}
 
       {isEmpty && <EmptyFinding derivation={derivation} bindingRule={bindingRule} onRetry={retry} />}
@@ -758,7 +904,16 @@ export function CapabilitiesPage() {
                           <Circle className="mt-0.5 h-3 w-3 shrink-0 opacity-40" />
                         )}
                         <span className="min-w-0">
-                          <span className="block truncate text-[0.78125rem] font-medium" title={cap.name}>{cap.name}</span>
+                          {/* The rail row is the tab stop; this tooltip is
+                              hover-only overflow relief for a truncated name. */}
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="block truncate text-[0.78125rem] font-medium">{cap.name}</span>
+                            </TooltipTrigger>
+                            <TooltipContent side="right" className="max-w-xs text-left">
+                              {cap.name}
+                            </TooltipContent>
+                          </Tooltip>
                           <span className="block text-[0.6875rem] opacity-60">
                             {cap.workflows.length} flow{cap.workflows.length === 1 ? "" : "s"}
                             {cap.binding.schemas.length > 0 && ` · ${cap.binding.schemas.length} table${cap.binding.schemas.length === 1 ? "" : "s"}`}
@@ -770,6 +925,13 @@ export function CapabilitiesPage() {
                 );
               })}
             </div>
+            {sharedFlows > 0 && (
+              <p className="mt-2 border-t border-border px-2 pt-2 text-[0.625rem] leading-relaxed text-muted-foreground/70">
+                Opening every capability lists {flowListings} flows, against {derivation!.boundFlows} bound in the header:{" "}
+                {sharedFlows} listing{sharedFlows === 1 ? "" : "s"} {sharedFlows === 1 ? "is" : "are"} a flow that delivers
+                more than one capability, counted once above and once per capability below.
+              </p>
+            )}
             {derivation && derivation.unbound.length > 0 && (
               <div className="mt-3 border-t border-border px-2 pt-2">
                 <p className="section-label mb-1">Not bound ({derivation.unbound.length})</p>
@@ -778,8 +940,22 @@ export function CapabilitiesPage() {
                 </p>
                 <ul className="mt-1 space-y-0.5">
                   {derivation.unbound.slice(0, 6).map((u) => (
-                    <li key={u.title} className="truncate text-[0.625rem] text-muted-foreground" title={`${u.title} — ${u.missing}`}>
-                      {u.title}
+                    <li key={u.title}>
+                      {/* Focusable: which binding leg a flow missed exists
+                          nowhere else on the page, and the list is capped at 6. */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            tabIndex={0}
+                            className="block cursor-help truncate text-[0.625rem] text-muted-foreground"
+                          >
+                            {u.title}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="right" className="max-w-xs text-left">
+                          {`${u.title} — ${u.missing}`}
+                        </TooltipContent>
+                      </Tooltip>
                     </li>
                   ))}
                   {derivation.unbound.length > 6 && (
@@ -799,6 +975,20 @@ export function CapabilitiesPage() {
                   <div className="absolute left-2 top-2 z-10 rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[0.6875rem] text-foreground">
                     {drill.error}
                   </div>
+                )}
+                {/* Fullscreen's own exit: the header control that toggles it is
+                    outside this overlay, so once it covered the viewport there
+                    was nothing visible to click. */}
+                {fullscreen && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setFullscreen(false)}
+                    className="absolute right-2 top-2 z-10"
+                  >
+                    <Minimize2 className="mr-1 h-3 w-3" />
+                    Exit fullscreen (Esc)
+                  </Button>
                 )}
                 <GraphCanvas
                   nodes={flowNodes}
@@ -834,18 +1024,28 @@ export function CapabilitiesPage() {
 
               {selectedStep && (
                 <aside className="graph-canvas overflow-y-auto !bg-card p-4">
-                  <p className="section-label mb-2">Step {selectedStep.order}</p>
+                  <p className="section-label mb-2">Step {selectedStep.stepOrder} of {steps.length}</p>
                   <p className="font-mono text-[0.8125rem] font-medium text-foreground">
                     {selectedStep.symbolName ?? selectedStep.filePath}
                   </p>
-                  <p className="mt-0.5 font-mono text-[0.6875rem] text-muted-foreground">
+                  <p className="mt-0.5 break-all font-mono text-[0.6875rem] text-muted-foreground">
                     {selectedStep.filePath}
                     {selectedStep.lineStart ? ` · L${selectedStep.lineStart}` : ""}
                   </p>
                   <Badge variant="secondary" className="mt-2 text-[0.625rem] uppercase">
-                    {selectedStep.kind.replace(/_/g, " ")}
+                    {selectedStep.stepKind.replace(/_/g, " ")}
                   </Badge>
-                  <p className="mt-3 text-[0.8125rem] leading-relaxed text-muted-foreground">{selectedStep.description}</p>
+                  <p className="mt-3 text-[0.8125rem] leading-relaxed text-foreground">{selectedStep.explanation}</p>
+                  <p className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/80">
+                    {selectedStep.narrated ? (
+                      <>
+                        <Sparkles className="h-2.5 w-2.5 text-primary" />
+                        Written by the narration pass for this step
+                      </>
+                    ) : (
+                      "Deterministic description — derived from the step's kind and target, not written about this code"
+                    )}
+                  </p>
                   <Link
                     to={`/projects/${id}/dependencies?focus=${encodeURIComponent(selectedStep.filePath)}`}
                     className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -888,9 +1088,19 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
         <h2 className="text-[0.875rem] font-semibold text-foreground">{cap.name}</h2>
         <Badge variant="secondary" className="text-[0.625rem] uppercase">{cap.confidence} confidence</Badge>
         {cap.namedBy === "deterministic" && (
-          <Badge variant="outline" className="text-[0.625rem]" title="No usable name came back from the naming step, so this label is the domain noun the grouping was formed on.">
-            named from evidence
-          </Badge>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              {/* Focusable: "named from evidence" only means something once you
+                  can read why, and that reason lives only in the tooltip. */}
+              <Badge variant="outline" tabIndex={0} className="text-[0.625rem]">
+                named from evidence
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs text-left">
+              No usable name came back from the naming step, so this label is the domain noun the
+              grouping was formed on.
+            </TooltipContent>
+          </Tooltip>
         )}
       </div>
       {(cap.description || cap.summary) && (
@@ -914,12 +1124,26 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 border-t border-border pt-2">
         {cap.binding.entrypoints.length > 0 && (
           <div className="min-w-[12rem]">
-            <p className="section-label mb-1">Entry points</p>
-            <ul className="space-y-0.5">
-              {cap.binding.entrypoints.slice(0, 4).map((e) => (
+            {/* Headed with the real total, and scrolled rather than sliced.
+                This list used to cut silently at four: a capability bound to
+                ten entry points printed four and said nothing, which is the
+                same headline-bigger-than-the-detail defect reported across the
+                tabs, just without a headline to compare against. */}
+            <p className="section-label mb-1">Entry points ({cap.binding.entrypoints.length})</p>
+            <ul className="max-h-28 space-y-0.5 overflow-y-auto pr-1">
+              {cap.binding.entrypoints.map((e) => (
                 <li key={`${e.filePath}:${e.route ?? ""}`} className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                   <RouteIcon className="h-3 w-3 shrink-0 opacity-60" />
-                  <span className="truncate font-mono" title={e.route ?? e.filePath}>{e.route ?? e.filePath}</span>
+                  {/* Kept: the row truncates, and this is the only place the
+                      full route or path is readable. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="truncate font-mono">{e.route ?? e.filePath}</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs break-all text-left">
+                      {e.route ?? e.filePath}
+                    </TooltipContent>
+                  </Tooltip>
                 </li>
               ))}
             </ul>
@@ -931,14 +1155,21 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
             <ul className="space-y-1">
               {cap.whereToStart.map((s) => (
                 <li key={s.stable_key} className="text-[0.6875rem]">
-                  <Link
-                    to={`/projects/${projectId}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
-                    className="flex min-w-0 items-center gap-1.5 font-mono text-primary hover:underline"
-                    title={s.stable_key}
-                  >
-                    <FileCode2 className="h-3 w-3 shrink-0" />
-                    <span className="min-w-0 truncate">{s.stable_key}</span>
-                  </Link>
+                  {/* The link is already the tab stop. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Link
+                        to={`/projects/${projectId}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
+                        className="flex min-w-0 items-center gap-1.5 font-mono text-primary hover:underline"
+                      >
+                        <FileCode2 className="h-3 w-3 shrink-0" />
+                        <span className="min-w-0 truncate">{s.stable_key}</span>
+                      </Link>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs break-all text-left">
+                      {s.stable_key}
+                    </TooltipContent>
+                  </Tooltip>
                   {s.reason && <p className="text-muted-foreground">{s.reason}</p>}
                 </li>
               ))}
@@ -949,20 +1180,29 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
           <div className="min-w-[10rem]">
             <p className="section-label mb-1">Where the code lives</p>
             <div className="flex flex-wrap gap-1.5">
-              {cap.modules.map((mod) => (
-                <Link
-                  key={mod.id}
-                  to={`/projects/${projectId}/architecture?cluster=${encodeURIComponent(mod.stableKey ?? "")}`}
-                  title={mod.reason ?? undefined}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[0.6875rem] text-foreground transition-colors hover:border-primary/50"
-                >
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ background: `var(--node-${CLUSTER_KIND_PALETTE[mod.kind ?? ""] ?? "shared"})` }}
-                  />
-                  {mod.label}
-                </Link>
-              ))}
+              {cap.modules.map((mod) => {
+                const chip = (
+                  <Link
+                    to={`/projects/${projectId}/architecture?cluster=${encodeURIComponent(mod.stableKey ?? "")}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2 py-0.5 text-[0.6875rem] text-foreground transition-colors hover:border-primary/50"
+                  >
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ background: `var(--node-${CLUSTER_KIND_PALETTE[mod.kind ?? ""] ?? "shared"})` }}
+                    />
+                    {mod.label}
+                  </Link>
+                );
+                if (!mod.reason) return <span key={mod.id}>{chip}</span>;
+                return (
+                  <Tooltip key={mod.id}>
+                    <TooltipTrigger asChild>{chip}</TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-left">
+                      {mod.reason}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
             </div>
           </div>
         )}

@@ -16,6 +16,7 @@
     "security:report": "node --import tsx scripts/security-report.ts",
     "lint": "eslint .",
     "truth": "node --import tsx scripts/truth-diff.ts",
+    "role-census": "node --env-file-if-exists=.env --import tsx scripts/role-census.ts",
     "explain": "node --import tsx scripts/explanation-diff.ts"
   },
   "dependencies": {

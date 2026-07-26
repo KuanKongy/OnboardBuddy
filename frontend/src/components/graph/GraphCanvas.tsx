@@ -49,6 +49,18 @@ export interface GraphCanvasProps {
   children?: ReactNode;
 }
 
+/**
+ * Below this many nodes a minimap is chrome, not navigation.
+ *
+ * A minimap earns its corner by showing where you are in something bigger than
+ * the viewport. Over eight edge-less boxes that all fit on screen it shows the
+ * picture you are already looking at, shrunk — and it covers the bottom-right
+ * of the canvas while doing it. Pages pass `showMiniMap={n >= MINIMAP_MIN_NODES}`
+ * rather than this being applied here, so a tab that genuinely needs one at a
+ * lower count can still ask.
+ */
+export const MINIMAP_MIN_NODES = 15;
+
 /** Publishes `getViewport` to the parent; renders nothing. */
 function ViewportProbe({ target }: { target: MutableRefObject<(() => Viewport) | null> }) {
   const { getViewport } = useReactFlow();
@@ -156,7 +168,13 @@ export function GraphCanvas({
             size={1}
             color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.8 0.01 265)"}
           />
-          <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
+          {/* No padlock: every canvas here sets `nodesDraggable={false}`, so
+              the interactive toggle had nothing to unlock — pressing it only
+              turned OFF `elementsSelectable` and made the nodes unclickable. */}
+          <Controls
+            showInteractive={false}
+            className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current"
+          />
           {showMiniMap && (
             <MiniMap
               pannable

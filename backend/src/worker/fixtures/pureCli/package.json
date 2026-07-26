@@ -1,0 +1,10 @@
+{
+  "name": "@acme/taskr",
+  "version": "1.4.0",
+  "description": "Archetype fixture: a command-line tool. No routes, no pages, no exports a consumer imports — the entry surface is the set of COMMANDS, declared in `bin` and registered in the entry script.",
+  "type": "module",
+  "bin": {
+    "taskr": "./dist/main.js"
+  },
+  "files": ["dist"]
+}

@@ -247,6 +247,20 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
           rows: [{
             id: PKG, role: "general", analyzed_commit: "9f4d168", branch: "main",
             created_at: "2026-07-17T01:00:00Z", semantic_depth: "standard", privacy_mode: "full_ai",
+            snapshot_budget_usage: { llm_calls: 258, input_tokens: 20, output_tokens: 9, estimated_cost_usd: 3.4 },
+            budget_overrides: {},
+          }],
+        };
+      }
+      // The generation job that built this package, with the per-run budget
+      // baseline the enforcer metered from. Must precede the models route:
+      // this query also names ai_generation_runs (in a subquery).
+      if (text.includes("budgetBaseline")) {
+        return {
+          rows: [{
+            id: "job-gen-1",
+            budget_baseline: { llm_calls: 240, input_tokens: 10, output_tokens: 5, estimated_cost_usd: 3 },
+            llm_calls: 18,
           }],
         };
       }
@@ -289,6 +303,13 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
     expect(res.body.package).to.deep.include({
       id: PKG, role: "general", analyzedCommit: "9f4d168",
       semanticDepth: "standard", privacyMode: "full_ai",
+    });
+    // Budget is reported per run against the cap, with the snapshot's
+    // lifetime totals beside it — a package built on an already-expensive
+    // snapshot must not read as "over budget".
+    expect(res.body.budget).to.deep.equal({
+      capLlmCalls: 300, usedThisRun: 18, remaining: 282,
+      lifetimeLlmCalls: 258, lifetimeCostUsd: 3.4, jobId: "job-gen-1",
     });
     expect(res.body.models).to.have.length(1);
     expect(res.body.models[0]).to.deep.include({

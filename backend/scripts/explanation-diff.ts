@@ -285,10 +285,43 @@ const EMPTY_SCORE = (): ProseScore => ({
   findings: [],
 });
 
-function lintInto(score: ProseScore, where: string, markdown: string, evidence: ExplanationEvidence): void {
+/**
+ * @param countGrounding  whether this text feeds the P2 receipts ratio.
+ *
+ * OFF for every lint below the package sections, and the reason is arithmetic
+ * rather than taste. Three text streams are linted here — package sections,
+ * `## <cluster>` / `### <capability>` slices OF those same sections, and the
+ * stored `capabilities.description` rows — and only the first is package prose
+ * counted once:
+ *
+ *   • A cluster slice is the SAME paragraph again. FloowForge's six narrated
+ *     components were counted as twelve claim paragraphs, verbatim, so every
+ *     uncited component paragraph cost the ratio twice.
+ *   • `capabilities.description` is a one-line card subtitle written by the
+ *     semantic capability pass, which has no receipt channel at all: 0 of the
+ *     21 rows stored across every project carry a receipt marker or a
+ *     file:line locator. Folding them in made P2 partly a count of how many
+ *     capabilities were extracted — FloowForge's regeneration went from 5 to 9
+ *     and lost points for it with no change in prose.
+ *
+ * Both distortions scale with cluster/capability count rather than with prose
+ * length, so they punish SHORT packages hardest: 12 of FloowForge's 79 claim
+ * blocks against 12 of OnboardBuddy's 232. Every one of these texts is still
+ * linted, and still contributes level / narration / gap findings — that is what
+ * the sub-level lints are for.
+ */
+function lintInto(
+  score: ProseScore,
+  where: string,
+  markdown: string,
+  evidence: ExplanationEvidence,
+  countGrounding = false,
+): void {
   const r = lintExplanation(markdown, evidence);
-  score.claimBlocks += r.stats.claimBlocks;
-  score.citedBlocks += r.stats.citedBlocks;
+  if (countGrounding) {
+    score.claimBlocks += r.stats.claimBlocks;
+    score.citedBlocks += r.stats.citedBlocks;
+  }
   for (const n of r.stats.domainNounsHit) score.domainNounsHit.add(n);
   for (const f of r.findings) {
     if (f.severity !== 'error') continue;
@@ -312,7 +345,7 @@ function scorePackage(fx: GoldenFixture, pkg: StoredPackage): ProseScore {
     const spec = SECTION_SPECS[section.type as SectionType];
     const mode = spec?.mode ?? 'explanation';
     const evidence: ExplanationEvidence = { scope: { kind: 'section' }, domainNouns: fx.domainNouns, mode };
-    lintInto(score, `section:${section.type}`, section.content, evidence);
+    lintInto(score, `section:${section.type}`, section.content, evidence, true);
     if (lintExplanation(section.content, evidence).stats.disclosesGaps) score.sectionsDisclosingGaps++;
 
     // Cluster altitude: each `## <cluster>` subsection is judged as a cluster

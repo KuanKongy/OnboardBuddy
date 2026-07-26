@@ -115,16 +115,41 @@ workflowsRouter.get("/", requireProjectAccess(), async (req, res) => {
   }
 });
 
+/**
+ * Every step of one flow, in order — the canvas source for the Workflows tab.
+ *
+ * It serves ONE ROW PER STEP, deliberately. `/graph/workflows/:id` folds the
+ * path down to one node per distinct symbol, which is where two owner-reported
+ * defects came from at once: the rail advertised `COUNT(*) workflow_steps`
+ * while the canvas drew the folded set (OnboardBuddy: 774 steps → 650 nodes,
+ * and its top-ranked flow claimed 8 steps over a 4-node picture), and the
+ * serpentine gate — which needs a chain of 6+ — was measuring the folded count,
+ * so flows the rail called long were laid out as short vertical columns.
+ *
+ * A step that re-enters a file it already visited is genuinely a later step in
+ * the trace, so the row it gets here is not a duplicate.
+ *
+ * `explanation` is the narrated text and is only written for steps a tutorial
+ * covered (~5% of them); `deterministic_description` is always present. Both
+ * are returned, and which one a reader is looking at is not guesswork on the
+ * client: `explanationSource` says so.
+ */
 workflowsRouter.get("/:workflowId/walkthrough", requireProjectAccess(), async (req, res) => {
   try {
     const { workflowId } = req.params;
+    const projectId = req.params.id;
 
+    // Scoped to the project in the path: the id came from the URL, and
+    // membership was checked against that project, not against whatever
+    // snapshot this workflow belongs to.
     const wfResult = await query(
       `SELECT w.id, w.title, w.trigger_type, w.purpose,
               COALESCE((w.metadata->>'importance_score')::numeric, 0) AS importance_score,
               w.confidence
-       FROM workflows w WHERE w.id = $1`,
-      [workflowId],
+       FROM workflows w
+       JOIN analysis_snapshots s ON s.id = w.snapshot_id
+       WHERE w.id = $1 AND s.project_id = $2`,
+      [workflowId, projectId],
     );
     if (wfResult.rows.length === 0) {
       res.status(404).json({ error: "Workflow not found" });
@@ -136,16 +161,68 @@ workflowsRouter.get("/:workflowId/walkthrough", requireProjectAccess(), async (r
       `SELECT ws.id, ws.step_order, ws.file_path, ws.symbol_name,
               ws.line_start, ws.line_end, ws.explanation,
               ws.step_kind, ws.deterministic_description,
-              ws.role_relevance
+              ws.role_relevance, ws.metadata, ws.node_id, n.stable_key
        FROM workflow_steps ws
+       LEFT JOIN graph_nodes n ON n.id = ws.node_id
        WHERE ws.workflow_id = $1
        ORDER BY ws.step_order ASC`,
       [workflowId],
     );
 
+    type StepRow = {
+      id: string; step_order: number; file_path: string; symbol_name: string | null;
+      line_start: number | null; line_end: number | null; explanation: string | null;
+      step_kind: string; deterministic_description: string; role_relevance: unknown;
+      metadata: { syntheticReturn?: boolean } | null; node_id: string | null;
+      stable_key: string | null;
+    };
+    const rows = stepsResult.rows as StepRow[];
+
+    const steps = rows.map((s) => {
+      const narrated = (s.explanation ?? "").trim();
+      return {
+        id: s.id,
+        stepOrder: s.step_order,
+        filePath: s.file_path,
+        symbolName: s.symbol_name,
+        lineStart: s.line_start,
+        lineEnd: s.line_end,
+        stepKind: s.step_kind,
+        /** Always populated; a formatter wrote it. */
+        deterministicDescription: s.deterministic_description,
+        /** Written by the narration pass for the minority of covered steps. */
+        explanation: narrated || null,
+        explanationSource: narrated ? ("narrated" as const) : ("deterministic" as const),
+        /** For the node-detail lookup, which accepts a stable key or a UUID. */
+        nodeKey: s.stable_key ?? s.node_id,
+        syntheticReturn: s.metadata?.syntheticReturn === true,
+        roleRelevance: s.role_relevance,
+        // Kept for callers written against the pre-camelCase shape.
+        step_order: s.step_order,
+        file_path: s.file_path,
+        symbol_name: s.symbol_name,
+        line_start: s.line_start,
+        line_end: s.line_end,
+        step_kind: s.step_kind,
+        deterministic_description: s.deterministic_description,
+        role_relevance: s.role_relevance,
+      };
+    });
+
     res.json({
       workflow,
-      steps: stepsResult.rows,
+      steps,
+      /**
+       * What the canvas is entitled to claim. `stepCount` is the same
+       * `COUNT(*)` the rail shows, and it is also `steps.length` — the tab has
+       * one number, not a headline number and a smaller drawn one.
+       */
+      counts: {
+        stepCount: steps.length,
+        narratedSteps: steps.filter((s) => s.explanationSource === "narrated").length,
+        distinctFiles: new Set(steps.map((s) => s.filePath)).size,
+        distinctSymbols: new Set(steps.map((s) => s.symbolName).filter(Boolean)).size,
+      },
     });
   } catch (err) {
     console.error("Workflow walkthrough error:", err);

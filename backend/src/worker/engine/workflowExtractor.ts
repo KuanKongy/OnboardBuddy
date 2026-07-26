@@ -166,7 +166,7 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
  * file seed dying quietly is expected, not an extraction failure.
  */
 function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
-  if (ep.kind === 'ui_route' || ep.kind === 'export') return false;
+  if (ep.kind === 'ui_route' || ep.kind === 'ui_action' || ep.kind === 'export') return false;
   if (ep.kind === 'http_route') return Boolean(ep.routePattern);
   return true;
 }
@@ -421,7 +421,8 @@ function trace(
     workflow: {
       title: workflowTitle(ep, seed),
       triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}`
-        : ep.kind === 'ui_route' ? 'UI page' : ep.kind,
+        : ep.kind === 'ui_route' ? 'UI page'
+        : ep.kind === 'ui_action' ? 'UI action' : ep.kind,
       purpose: classifyPurpose(ep, seed, steps, ctx),
       stableKey: `wf:${ep.nodeStableKey}:${seed.name}`,
       confidence: unknownOnly ? 'low'
@@ -444,8 +445,25 @@ function trace(
 
 /** Effects that mean the flow changed something outside itself. */
 const PERSISTENT_STEP_KINDS = new Set(['data_write', 'async_work', 'side_effect']);
+/**
+ * Authentication is state.
+ *
+ * `PERSISTENT_STEP_KINDS` counts rows, jobs and outbound calls, and nothing
+ * else — so a login handler whose entire job is `supabase.auth.signInWith…`
+ * or `jwt.sign` measured as a flow that changes NOTHING. Every auth route in
+ * every repo therefore tiered `supporting`, sat below read-only endpoints in
+ * the rail, and never reached the tutorial selector: a reviewer opening the
+ * product saw `GET /installations` tutorialized while login was absent.
+ *
+ * What a login changes is who the caller IS — a session, a token, a cookie —
+ * which is exactly the state a newcomer needs to watch change. It is counted
+ * here as a state change; `PERSISTENT_STEP_KINDS` stays as it was for the
+ * places that mean *stored* state specifically (the "changes stored state"
+ * reason below).
+ */
+const STATE_CHANGING_STEP_KINDS = new Set([...PERSISTENT_STEP_KINDS, 'auth_guard']);
 /** Entry points a person triggers, as opposed to the system triggering itself. */
-const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'event_handler']);
+const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_handler']);
 
 /**
  * Where a flow belongs in the list, and how high within its tier.
@@ -472,9 +490,15 @@ export function rankWorkflow(
 ): { tier: WorkflowTier; score: number; reasons: string[] } {
   const reasons: string[] = [];
   const kinds = new Set(steps.map((s) => s.stepKind));
-  const distinctEffects = [...kinds].filter((k) => PERSISTENT_STEP_KINDS.has(k) || k === 'data_read').length;
+  const distinctEffects = [...kinds].filter((k) => STATE_CHANGING_STEP_KINDS.has(k) || k === 'data_read').length;
   const persists = [...kinds].some((k) => PERSISTENT_STEP_KINDS.has(k));
-  const guarded = kinds.has('auth_guard');
+  // Passing through somebody else's guard and BEING the thing that signs the
+  // caller in are different facts. The second is this flow's own effect —
+  // an `auth_call` detected in the handler's own body, surfaced as a
+  // synthetic seed effect step — and it is what makes a login a core flow.
+  const authSteps = steps.filter((s) => s.stepKind === 'auth_guard');
+  const changesAuthState = authSteps.some((s) => s.metadata?.syntheticSeedEffect === true);
+  const guarded = authSteps.length > 0;
   const userTriggered = USER_TRIGGERED.has(ep.kind);
 
   if (isSurface) {
@@ -487,7 +511,8 @@ export function rankWorkflow(
   let score = 0;
   if (userTriggered) { score += 0.25; reasons.push('triggered by a user'); }
   if (persists) { score += 0.25; reasons.push('changes stored state'); }
-  if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
+  if (changesAuthState) { score += 0.25; reasons.push('changes who is signed in'); }
+  else if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
   if (distinctEffects > 0) {
     score += Math.min(distinctEffects, 4) * 0.08;
     reasons.push(`${distinctEffects} kind${distinctEffects === 1 ? '' : 's'} of side effect`);
@@ -501,7 +526,10 @@ export function rankWorkflow(
   // trace reaches no effect, so it lands in `surface`. This small prior only
   // decides otherwise-identical flows, preferring the side that implements the
   // effect over the side that delegates to it.
-  if (ep.kind === 'http_route') score += 0.03;
+  // Same tie-break, same reason: prefer the side that implements the effect
+  // over the side that merely contains it. A handler wired to an interaction is
+  // where the action happens; the page it sits on only hosts it.
+  if (ep.kind === 'http_route' || ep.kind === 'ui_action') score += 0.03;
 
   // A trace that keeps going has usually wandered into shared utilities
   // rather than found more meaning. Bounded so a genuinely long flow is
@@ -516,7 +544,7 @@ export function rankWorkflow(
     reasons.push('effects inferred, not resolved');
   }
 
-  const tier: WorkflowTier = userTriggered && persists ? 'core' : 'supporting';
+  const tier: WorkflowTier = userTriggered && (persists || changesAuthState) ? 'core' : 'supporting';
   return { tier, score: Math.max(0, Math.round(score * 10000) / 10000), reasons };
 }
 
@@ -555,6 +583,10 @@ function classifyStep(node: EvidenceNode, effects: DetectedSideEffect[], signals
   if (effectKinds.has('database_write') || signals.includes('database_write')) return 'data_write';
   if (effectKinds.has('message_publish') || signals.includes('queue_enqueue')) return 'async_work';
   if (effectKinds.has('auth_call')) return 'auth_guard';
+  // Before the generic `side_effect` fallback: a read is not a state change,
+  // and `side_effect` counts as one — classifying reads there would tier every
+  // read-only view as a flow that changes something.
+  if (effectKinds.has('database_read')) return 'data_read';
   if (effectKinds.size > 0 || signals.includes('http_request') || signals.includes('filesystem')) return 'side_effect';
   if (signals.includes('auth_check') || AUTH_NAME.test(node.name)) return 'auth_guard';
   if (signals.includes('database_read')) return 'data_read';
@@ -593,7 +625,7 @@ function describeStep(
     case 'data_write':
       return `Persists data (${effectLabel('database_write') || 'database write'}) in ${where}`;
     case 'data_read':
-      return `Reads data in ${where}`;
+      return `Reads data (${effectLabel('database_read') || 'database read'}) in ${where}`;
     case 'async_work':
       return `Enqueues async work (${effectLabel('message_publish') || 'queue job'}) in ${where}`;
     case 'side_effect':
@@ -605,10 +637,58 @@ function describeStep(
   }
 }
 
+/**
+ * Callback prefixes that carry no meaning of their own, and the bare callback
+ * names left with nothing once they are stripped. Both lists are about the
+ * SHAPE of a callback name, not about any domain: `handleSubmit` says the same
+ * thing in every codebase ever written, which is why it needs its object
+ * supplied from somewhere else.
+ */
+const CALLBACK_PREFIX = /^(?:handle|on)(?=[A-Z])/;
+const CONTENTLESS_ACTION = /^(?:submit|click|change|press|key\w*|input|select|blur|focus|drag|drop|mouse\w*|touch\w*|action|event|it|this)$/i;
+
+/** `handleCreateSet` -> `Create set`; `onDrop` -> `Drop`; `Form.handleSubmit` -> `Submit`. */
+function humanizeAction(symbolName: string): string {
+  // A member name (`Container.handleAddItem`, `Class.save`) already states its
+  // owner, and the title states the owner separately — say it once.
+  const member = symbolName.slice(symbolName.lastIndexOf('.') + 1);
+  const stripped = member.replace(CALLBACK_PREFIX, '');
+  const words = stripped
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+  if (!words) return '';
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+/**
+ * What a UI action DOES, in the repo's own words.
+ *
+ * `Page: FlashcardsView` names a place; `Create set — CreateFlashcardSet`
+ * names an action, and an action is what a newcomer is looking for. The verb
+ * comes from the handler symbol the author wrote and the object from the
+ * component it lives in, so nothing is invented and no vocabulary is assumed.
+ * When the handler name is pure callback boilerplate the component carries the
+ * whole title rather than shipping a workflow called "Submit".
+ */
+function uiActionTitle(seed: EvidenceNode, ep: DetectedEntrypoint): string {
+  const container = (ep.filePath.split('/').pop() ?? ep.filePath).replace(/\.[jt]sx?$/, '');
+  const action = humanizeAction(seed.name);
+  if (!action || CONTENTLESS_ACTION.test(action.replace(/\s+/g, ''))) {
+    return `Action: ${container}`;
+  }
+  // When the handler and the file say the same thing, saying it twice is noise.
+  if (action.replace(/\s+/g, '').toLowerCase() === container.replace(/[^A-Za-z0-9]/g, '').toLowerCase()) {
+    return action;
+  }
+  return `${action} — ${container}`;
+}
+
 function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {
   if (ep.kind === 'http_route') {
     return `${ep.method ?? 'HTTP'} ${ep.routePattern ?? seed.name}`;
   }
+  if (ep.kind === 'ui_action') return uiActionTitle(seed, ep);
   if (ep.kind === 'ui_route') return `Page: ${seed.name}`;
   if (ep.kind === 'message_consumer') return `Queue consumer: ${ep.routePattern ?? seed.name}`;
   return `${ep.kind.replace(/_/g, ' ')}: ${seed.name}`;

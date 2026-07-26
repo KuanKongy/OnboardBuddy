@@ -85,6 +85,24 @@ export interface SectionUnknown {
   claim?: string;
 }
 
+/**
+ * A10: gaps deduped on their template by the API (`api/lib/gapSummary.ts`),
+ * so a section that raised the same sentence once per env var renders as one
+ * `kind × N` row with the names behind an expander, not N rows.
+ */
+export interface SectionGapVariant {
+  signature: string;
+  count: number;
+  detail: string | null;
+  members: string[];
+}
+
+export interface SectionGapGroup {
+  kind: string;
+  count: number;
+  variants: SectionGapVariant[];
+}
+
 export interface OnboardingSection {
   id: SectionId;
   sectionId?: string;
@@ -102,6 +120,8 @@ export interface OnboardingSection {
   diagrams?: Array<{ kind: string; mermaid: string }>;
   /** Honest unknowns: gaps the generator refused to invent content for. */
   unknowns?: SectionUnknown[];
+  /** The same gaps, deduped on their template — render these, count with `unknowns`. */
+  unknownGroups?: SectionGapGroup[];
   analyzedCommit?: string;
 }
 
@@ -139,6 +159,13 @@ export interface PackageCoverage {
   languages: LanguageInventory | null;
   /** Honesty rule: snapshot-level unknowns (trace dead-ends, unmodeled packages, journey gaps). */
   detectionUnknowns?: Array<{ kind: string; count?: number; packages?: string[]; expected?: string; queue?: string }>;
+  /**
+   * A10: the one known-gap number. The strip used to print only
+   * `detectionUnknowns.length` ("6 known unknowns") over a page whose sections
+   * held 89 gap entries — two populations, one word. `total` is the sum, and
+   * the parts are named so the strip can say where they come from.
+   */
+  gaps?: { total: number; sections: number; detection: number; groups: number };
   /**
    * The ranker's weight table with the formula it feeds, served whole. The
    * strip used to receive bare signal/weight pairs and narrate them in the
@@ -208,6 +235,18 @@ export interface PackageProvenance {
     generatedAt: string;
     semanticDepth: string;
     privacyMode: string;
+  };
+  /** Budget for the generation run that built this package: the cap it was
+   * measured against, what it spent, and the snapshot's lifetime totals. */
+  budget: {
+    capLlmCalls: number;
+    /** null when the run predates per-run metering — see `note`. */
+    usedThisRun: number | null;
+    remaining: number | null;
+    lifetimeLlmCalls: number;
+    lifetimeCostUsd: number;
+    note?: string;
+    jobId: string | null;
   };
   models: Array<{
     provider: string;

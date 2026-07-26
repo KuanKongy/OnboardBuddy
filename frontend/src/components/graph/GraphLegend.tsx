@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { isGraphHintDismissed } from "@/components/graph/GraphFirstVisitHint";
 import { NODE_KIND_INFO } from "@/lib/graphNodeType";
 
@@ -74,18 +75,22 @@ export function GraphLegend({
               <div className="grid grid-cols-2 gap-x-2 gap-y-1">
                 {kinds.map((kind) => {
                   const isHidden = hiddenKinds?.has(kind.type) ?? false;
+                  const hint = isHidden ? `Show ${kind.label} nodes` : `Hide ${kind.label} nodes`;
                   return (
-                    <button
-                      key={kind.type}
-                      type="button"
-                      aria-pressed={!isHidden}
-                      onClick={() => onToggleKind?.(kind.type)}
-                      title={isHidden ? `Show ${kind.label} nodes` : `Hide ${kind.label} nodes`}
-                      className={`flex items-center gap-1.5 rounded px-0.5 text-left transition-opacity hover:opacity-100 ${isHidden ? "opacity-40" : "opacity-100"}`}
-                    >
-                      <span className={`h-2.5 w-2.5 shrink-0 rounded border ${kind.swatchClasses}`} />
-                      <span className="truncate text-muted-foreground">{kind.label}</span>
-                    </button>
+                    <Tooltip key={kind.type}>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          aria-pressed={!isHidden}
+                          onClick={() => onToggleKind?.(kind.type)}
+                          className={`flex items-center gap-1.5 rounded px-0.5 text-left transition-opacity hover:opacity-100 ${isHidden ? "opacity-40" : "opacity-100"}`}
+                        >
+                          <span className={`h-2.5 w-2.5 shrink-0 rounded border ${kind.swatchClasses}`} />
+                          <span className="truncate text-muted-foreground">{kind.label}</span>
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">{hint}</TooltipContent>
+                    </Tooltip>
                   );
                 })}
               </div>

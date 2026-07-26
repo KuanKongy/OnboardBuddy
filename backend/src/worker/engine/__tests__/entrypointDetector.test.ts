@@ -8,16 +8,17 @@ import type { FileAnalysis } from '../../types/analysis';
 
 const FIXTURE_DIR = path.resolve(__dirname, '../../fixtures/simple');
 
+async function analyzeFixture(dir: string): Promise<FileAnalysis[]> {
+  const index = await buildRepoIndex(dir);
+  const tsFiles = filterByLanguage(index, 'typescript');
+  const program = createProgram(tsFiles, dir);
+  return tsFiles.map((entry) => extractFileAnalysis(parseSourceFile(program, entry.absolutePath), dir));
+}
+
 let fileAnalyses: FileAnalysis[];
 
 before(async () => {
-  const index = await buildRepoIndex(FIXTURE_DIR);
-  const tsFiles = filterByLanguage(index, 'typescript');
-  const program = createProgram(tsFiles, FIXTURE_DIR);
-  fileAnalyses = tsFiles.map((entry) => {
-    const parsed = parseSourceFile(program, entry.absolutePath);
-    return extractFileAnalysis(parsed, FIXTURE_DIR);
-  });
+  fileAnalyses = await analyzeFixture(FIXTURE_DIR);
 });
 
 describe('entrypointDetector', () => {
@@ -45,6 +46,72 @@ describe('entrypointDetector', () => {
     for (const ep of eps) {
       expect(validKinds.has(ep.kind)).to.be.true;
     }
+  });
+});
+
+/**
+ * The two archetypes none of the 11 calibration repos covers. A grader can
+ * point the product at any repository, and until now a published library
+ * reported one `index.ts` and a command-line tool reported one symbol per file.
+ */
+describe('entrypointDetector — library and CLI archetypes', () => {
+  it('reports a library’s public API, resolved through the manifest and its barrel', async () => {
+    // `main`/`module`/`exports` all point into ./dist, which does not exist in
+    // a source tree; the barrel forwards thirteen values and deliberately
+    // withholds `codec.ts#debugDump` and everything under `internal/`, so this
+    // list is what a consumer can actually import — not every `export`.
+    const eps = detectEntrypoints(await analyzeFixture(path.resolve(__dirname, '../../fixtures/pureLibrary')));
+    expect(eps.map((e) => e.symbolStableKey).sort()).to.deep.equal([
+      'src/core/codec.ts#parseEntry',
+      'src/core/codec.ts#serializeEntry',
+      'src/core/ledger.ts#EMPTY_BALANCE',
+      'src/core/ledger.ts#Ledger',
+      'src/core/ledger.ts#isBalanced',
+      'src/core/ledger.ts#mergeLedgers',
+      'src/core/ledger.ts#normalizePosting',
+      'src/core/money.ts#ZERO',
+      'src/core/money.ts#add',
+      'src/core/money.ts#allocate',
+      'src/core/money.ts#formatMoney',
+      'src/core/money.ts#subtract',
+      'src/factory.ts#createLedger',
+    ]);
+  });
+
+  it('reports one entrypoint per CLI command, seeded with the handler it runs', async () => {
+    // One `bin` file registering five subcommands. The commands/ directory
+    // contributes no second copy of a handler a registration already named.
+    const eps = detectEntrypoints(await analyzeFixture(path.resolve(__dirname, '../../fixtures/pureCli')));
+    expect(eps.map((e) => `${e.routePattern} -> ${e.symbolStableKey}`)).to.deep.equal([
+      'init -> src/commands/init.ts#runInit',
+      'build -> src/commands/build.ts#runBuild',
+      'watch -> src/commands/watch.ts#runWatch',
+      'clean -> src/commands/clean.ts#runClean',
+      'report -> src/report.ts#printReport',
+    ]);
+  });
+});
+
+describe('entrypointDetector — trigger types', () => {
+  it('types a DOM handler as an event listener even inside controllers/', () => {
+    // kuankongy.github.io shipped `HTTP InputController.onKeyDown`: a keyboard
+    // handler classified as an endpoint because a path convention was the only
+    // branch that claimed the file. Evidence of a listener now outranks it, and
+    // the thin bound wrapper resolves to the method it forwards to.
+    const fa = {
+      relativePath: 'src/controllers/InputController.ts',
+      symbols: [{
+        name: 'InputController', kind: 'class', exported: true,
+        snippet: 'export class InputController {\n  constructor() { window.addEventListener("keydown", this.boundKeyDown); }\n}',
+        methods: [
+          { name: 'boundKeyDown', snippet: 'private boundKeyDown = (e: KeyboardEvent) => this.onKeyDown(e);' },
+          { name: 'onKeyDown', snippet: 'private onKeyDown(e: KeyboardEvent) { this.queue.push(e); }' },
+        ],
+      }],
+    } as unknown as FileAnalysis;
+    expect(detectEntrypoints([fa]).map((e) => [e.kind, e.routePattern, e.symbolStableKey])).to.deep.equal([
+      ['event_handler', 'dom:keydown', 'src/controllers/InputController.ts#InputController.onKeyDown'],
+    ]);
   });
 });
 

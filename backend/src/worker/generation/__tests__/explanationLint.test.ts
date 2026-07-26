@@ -379,6 +379,32 @@ describe('grounding — every claim carries a receipt', () => {
     expect(has(r.findings, 'uncited_claim')).to.equal(false);
     expect(lintExplanation('This project does not specify a run command in its `package.json` scripts.').stats.disclosesGaps).to.equal(true);
   });
+
+  it('does not bill the mechanical unread-stack disclosure as an uncited claim', () => {
+    // Both emitters, verbatim: the `## Not covered here` subsection
+    // `sectionSpecs.ts` demands, and the blockquote `repairExplanation` appends
+    // when the model omitted it. Both are rendered from the language inventory,
+    // so counting them as ungrounded claims fines a section for admitting what
+    // was never read — and diluted FloowForge's measured receipts share.
+    const cited = 'The worker drains the analysis queue and writes each snapshot row to Postgres [[receipt:a1]].';
+    const heading = [
+      cited,
+      '',
+      '## Not covered here',
+      'These files are part of the system, but no component described above parses or accounts for them in the architecture.',
+    ].join('\n');
+    const appended =
+      `${cited}\n\n> **Not covered here.** Part of this repository is written in Python, which OnboardBuddy ` +
+      'does not parse. No section in this package describes that code — it exists, and nothing here tells you what it does.';
+
+    for (const markdown of [heading, appended]) {
+      const r = lintExplanation(markdown);
+      expect(has(r.findings, 'uncited_claim'), markdown.slice(0, 40)).to.equal(false);
+      // Excluded from the denominator too — it is not a claim paragraph at all.
+      expect(r.stats.claimBlocks, markdown.slice(0, 40)).to.equal(1);
+      expect(r.stats.citedBlocks, markdown.slice(0, 40)).to.equal(1);
+    }
+  });
 });
 
 // ── rule 3: gaps ────────────────────────────────────────────────────────────

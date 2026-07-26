@@ -8,7 +8,7 @@ import { scanConfigNodes } from '../configScanner';
 import { ingestDocs } from '../docsIngester';
 import { buildEvidenceGraph } from '../evidenceGraphBuilder';
 import { extractWorkflows, type ExtractedWorkflow, type WorkflowStep } from '../workflowExtractor';
-import { composeJourneys } from '../journeyComposer';
+import { composeJourneys, composeJourneysDetailed } from '../journeyComposer';
 import { validateGoldenJourneys } from '../journeyGate';
 import type { DetectedEntrypoint } from '../entrypointDetector';
 import type { DetectedSideEffect } from '../sideEffectDetector';
@@ -16,9 +16,14 @@ import type { DetectedSideEffect } from '../sideEffectDetector';
 const SIMPLE_DIR = path.resolve(__dirname, '../../fixtures/simple');
 
 /**
- * Journey composition + golden gate (ONBOARDING_UX_GOALS.md items 3 and 7):
- * deterministic stitching across queue boundaries and route groups, and the
- * shape-conditional assertion that detectable journeys actually composed.
+ * Journey composition + golden gate (TUTORIAL_REDESIGN.md §1, OWNER_FEEDBACK_M4
+ * A1). CONTRACT CHANGE from the recipe era: journeys are no longer categories
+ * (`golden_kind: 'pipeline' | 'auth' | 'import'`) matched by route-name regexes.
+ * They are chains linked by typed, receipted continuation boundaries, so these
+ * fixtures assert boundary KINDS and their guards instead of category names —
+ * the auth-route-group and oauth-route-chain fixtures are gone with the recipes
+ * they tested, and the gate no longer penalizes a repo for owning routes whose
+ * names look like a login.
  */
 
 function wf(over: {
@@ -52,21 +57,23 @@ function wf(over: {
     })),
     importanceScore: over.importanceScore ?? 1,
     externalDependencies: [],
-  };
+  } as ExtractedWorkflow;
 }
 
+const boundaryKinds = (j: ExtractedWorkflow): string[] =>
+  ((j.metadata!.journey as { boundaries: Array<{ kind: string }> }).boundaries).map((b) => b.kind);
+
 describe('journeyComposer', () => {
-  it('stitches enqueue -> consumer -> chained consumer into one pipeline journey', () => {
+  it('chains publish -> consumer -> chained consumer as async_token boundaries', () => {
     const analyzeRoute = wf({
       stableKey: 'wf:routes/projects.ts:analyzeHandler',
       title: 'POST /api/projects/:id/analyze',
-      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/projects/:id/analyze' },
+      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/projects/:id/analyze', filePath: 'routes/projects.ts' },
       steps: [
         { stepKind: 'trigger', nodeStableKey: 'routes/projects.ts#analyzeHandler' },
         { stepKind: 'async_work', nodeStableKey: 'routes/projects.ts#analyzeHandler' },
       ],
       importanceScore: 3,
-      purpose: 'Handles POST analyze (repository analysis): enqueues async work',
     });
     const analysisConsumer = wf({
       stableKey: 'wf:worker/index.ts:worker',
@@ -77,7 +84,6 @@ describe('journeyComposer', () => {
         { stepKind: 'data_write', nodeStableKey: 'worker/index.ts#processAnalysisJob' },
       ],
       importanceScore: 4.6,
-      purpose: 'Handles message consumer (repository analysis): writes data',
     });
     const summaryConsumer = wf({
       stableKey: 'wf:worker/summaryWorker.ts:processSummaryJob',
@@ -88,16 +94,17 @@ describe('journeyComposer', () => {
         { stepKind: 'data_write', nodeStableKey: 'worker/summaryWorker.ts#processSummaryJob' },
       ],
       importanceScore: 4,
-      purpose: 'Handles message consumer (onboarding generation): writes data',
     });
     const sideEffects: DetectedSideEffect[] = [
       {
         nodeStableKey: 'routes/projects.ts', symbolStableKey: 'routes/projects.ts#analyzeHandler',
-        filePath: 'routes/projects.ts', kind: 'message_publish', target: 'analyze_scope', queueHint: 'analysi',
+        filePath: 'routes/projects.ts', kind: 'message_publish', target: 'analyze_scope',
+        queueHint: 'analysi', evidence: 'getAnalysisQueue().add',
       },
       {
         nodeStableKey: 'worker/index.ts', symbolStableKey: 'worker/index.ts#processAnalysisJob',
-        filePath: 'worker/index.ts', kind: 'message_publish', target: 'generate_summary', queueHint: 'summary',
+        filePath: 'worker/index.ts', kind: 'message_publish', target: 'generate_summary',
+        queueHint: 'summary', evidence: 'getSummaryQueue().add',
       },
     ];
 
@@ -105,88 +112,82 @@ describe('journeyComposer', () => {
       workflows: [analyzeRoute, analysisConsumer, summaryConsumer],
       sideEffects,
     });
-    const pipeline = journeys.find((j) =>
-      (j.metadata?.journey as { golden_kind?: string }).golden_kind === 'pipeline');
-    expect(pipeline, 'pipeline journey').to.exist;
-    expect(pipeline!.triggerType).to.equal('journey');
-    const members = (pipeline!.metadata!.journey as { members: string[] }).members;
-    expect(members).to.deep.equal([
+    expect((journeys[0]!.metadata!.journey as { members: string[] }).members).to.deep.equal([
       'wf:routes/projects.ts:analyzeHandler',
       'wf:worker/index.ts:worker',
       'wf:worker/summaryWorker.ts:processSummaryJob',
     ]);
-    // Two queue boundaries, annotated as steps.
-    const boundarySteps = pipeline!.steps.filter((s) => s.metadata?.journeyBoundary === 'queue');
-    expect(boundarySteps).to.have.length(2);
-    expect(pipeline!.title).to.equal('Analysis → onboarding generation pipeline');
-    // Ranks above its best member.
-    expect(pipeline!.importanceScore).to.be.greaterThan(4.6);
+    expect(boundaryKinds(journeys[0]!)).to.deep.equal(['async_token', 'async_token']);
   });
 
-  it('groups auth routes into a User authentication journey in canonical order', () => {
-    const mk = (key: string, method: string, route: string) => wf({
-      stableKey: `wf:auth:${key}`, title: `${method} ${route}`,
-      entrypoint: { kind: 'http_route', method, routePattern: route },
-      steps: [{ stepKind: 'trigger' }, { stepKind: 'auth_guard' }],
+  it('forms no boundary when a hand-off token matches two consumer registrations', () => {
+    const publisher = wf({
+      stableKey: 'wf:pub', title: 'POST /api/jobs',
+      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/jobs', filePath: 'routes/jobs.ts' },
+      steps: [{ stepKind: 'trigger', nodeStableKey: 'routes/jobs.ts#create' }],
     });
-    const journeys = composeJourneys({
-      workflows: [
-        mk('me', 'GET', '/api/auth/me'),
-        mk('logout', 'POST', '/api/auth/logout'),
-        mk('signup', 'POST', '/api/auth/signup'),
-        mk('login', 'POST', '/api/auth/login'),
+    const mkConsumer = (key: string, file: string) => wf({
+      stableKey: key, title: `Queue consumer: ${key}`,
+      entrypoint: { kind: 'message_consumer', routePattern: 'REPORTS_QUEUE', filePath: file },
+      steps: [{ stepKind: 'trigger', nodeStableKey: `${file}#run` }],
+    });
+    const { journeys, unknowns } = composeJourneysDetailed({
+      workflows: [publisher, mkConsumer('wf:c1', 'worker/a.ts'), mkConsumer('wf:c2', 'worker/b.ts')],
+      sideEffects: [{
+        nodeStableKey: 'routes/jobs.ts', symbolStableKey: 'routes/jobs.ts#create',
+        filePath: 'routes/jobs.ts', kind: 'message_publish', queueHint: 'report', evidence: 'reportQueue.add',
+      }],
+    });
+    expect(journeys).to.deep.equal([]);
+    expect(unknowns[0]!.kind).to.equal('ambiguous_handoff_token');
+  });
+
+  it('links a creator to an id-addressed operator, and refuses it once the target has many writers', () => {
+    const write = (key: string, symbol: string): DetectedSideEffect => ({
+      nodeStableKey: 'routes/projects.ts', symbolStableKey: symbol, filePath: 'routes/projects.ts',
+      kind: 'database_write', target: 'projects', evidence: '.insertOne(', confidence: 'high',
+    });
+    const creator = wf({
+      stableKey: 'wf:create', title: 'POST /api/projects',
+      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/projects', filePath: 'routes/projects.ts' },
+      steps: [{ stepKind: 'trigger', nodeStableKey: 'routes/projects.ts#create' },
+              { stepKind: 'data_write', nodeStableKey: 'routes/projects.ts#create' }],
+    });
+    const operator = wf({
+      stableKey: 'wf:get', title: 'GET /api/projects/:id',
+      entrypoint: { kind: 'http_route', method: 'GET', routePattern: '/api/projects/:id', filePath: 'routes/projects.ts' },
+      steps: [{ stepKind: 'trigger', nodeStableKey: 'routes/projects.ts#getOne' },
+              { stepKind: 'data_read', nodeStableKey: 'routes/projects.ts#getOne' }],
+    });
+    const readEffect: DetectedSideEffect = {
+      nodeStableKey: 'routes/projects.ts', symbolStableKey: 'routes/projects.ts#getOne',
+      filePath: 'routes/projects.ts', kind: 'database_read', target: 'projects', evidence: '.findOne(',
+    };
+    const linked = composeJourneys({
+      workflows: [creator, operator],
+      sideEffects: [write('wf:create', 'routes/projects.ts#create'), readEffect],
+    });
+
+    // Same shape, but four distinct flows write the target: an entity everything
+    // touches is not one entity's lifecycle (§1.1 guard).
+    const crowd = ['a', 'b', 'c'].map((n) => wf({
+      stableKey: `wf:${n}`, title: `POST /api/${n}`,
+      entrypoint: { kind: 'http_route', method: 'POST', routePattern: `/api/${n}`, filePath: 'routes/projects.ts' },
+      steps: [{ stepKind: 'data_write', nodeStableKey: `routes/projects.ts#${n}` }],
+    }));
+    const crowded = composeJourneys({
+      workflows: [creator, operator, ...crowd],
+      sideEffects: [
+        write('wf:create', 'routes/projects.ts#create'), readEffect,
+        ...['a', 'b', 'c'].map((n) => write(`wf:${n}`, `routes/projects.ts#${n}`)),
       ],
-      sideEffects: [],
     });
-    const auth = journeys.find((j) =>
-      (j.metadata?.journey as { golden_kind?: string }).golden_kind === 'auth');
-    expect(auth, 'auth journey').to.exist;
-    expect(auth!.title).to.equal('User authentication');
-    const members = (auth!.metadata!.journey as { member_titles: string[] }).member_titles;
-    expect(members).to.deep.equal([
-      'POST /api/auth/signup', 'POST /api/auth/login', 'GET /api/auth/me', 'POST /api/auth/logout',
-    ]);
+
+    expect(linked.map(boundaryKinds)).to.deep.equal([['resource_lifecycle']]);
+    expect(crowded).to.deep.equal([]);
   });
 
-  it('chains OAuth start -> callback -> link and appends the terminal project-create POST', () => {
-    const journeys = composeJourneys({
-      workflows: [
-        wf({
-          stableKey: 'wf:gh:complete', title: 'POST /api/github/oauth/complete',
-          entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/github/oauth/complete' },
-        }),
-        wf({
-          stableKey: 'wf:gh:start', title: 'GET /api/github/oauth/start',
-          entrypoint: { kind: 'http_route', method: 'GET', routePattern: '/api/github/oauth/start' },
-        }),
-        wf({
-          stableKey: 'wf:gh:link', title: 'POST /api/github/installations/link',
-          entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/github/installations/link' },
-        }),
-        wf({
-          stableKey: 'wf:projects:create', title: 'POST /api/projects',
-          entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/projects' },
-          steps: [{ stepKind: 'trigger' }, { stepKind: 'data_write' }],
-          purpose: 'Handles POST /api/projects (github integration): writes data',
-        }),
-      ],
-      sideEffects: [],
-    });
-    const imp = journeys.find((j) =>
-      (j.metadata?.journey as { golden_kind?: string }).golden_kind === 'import');
-    expect(imp, 'import journey').to.exist;
-    const members = (imp!.metadata!.journey as { member_titles: string[] }).member_titles;
-    expect(members).to.deep.equal([
-      'GET /api/github/oauth/start',
-      'POST /api/github/oauth/complete',
-      'POST /api/github/installations/link',
-      'POST /api/projects',
-    ]);
-    const boundaries = (imp!.metadata!.journey as { boundaries: Array<{ kind: string }> }).boundaries;
-    expect(boundaries[0]!.kind).to.equal('redirect');
-  });
-
-  it('composes the queue pipeline on the simple fixture end-to-end', async () => {
+  it('composes the hand-off chain on the simple fixture end-to-end', async () => {
     const records = await scanRepositoryFiles(SIMPLE_DIR);
     const inventory = await detectRepoInventory(SIMPLE_DIR, records);
     const index = await buildRepoIndex(SIMPLE_DIR);
@@ -200,12 +201,11 @@ describe('journeyComposer', () => {
       fileAnalyses, fileRecords: records, entrypoints, sideEffects, configNodes, docs, rootPath: SIMPLE_DIR,
     });
     const workflows = extractWorkflows({ graph, entrypoints, sideEffects });
-    const journeys = composeJourneys({ workflows, sideEffects });
+    const journeys = composeJourneys({ workflows, sideEffects, nodes: graph.nodes });
 
-    const pipeline = journeys.find((j) =>
-      (j.metadata?.journey as { golden_kind?: string }).golden_kind === 'pipeline');
-    expect(pipeline, 'fixture pipeline journey (enqueueReportHandler -> reports consumer)').to.exist;
-    const memberTitles = (pipeline!.metadata!.journey as { member_titles: string[] }).member_titles;
+    const chain = journeys.find((j) => boundaryKinds(j).includes('async_token'));
+    expect(chain, 'fixture hand-off journey (enqueueReportHandler -> reports consumer)').to.exist;
+    const memberTitles = (chain!.metadata!.journey as { member_titles: string[] }).member_titles;
     expect(memberTitles.some((t) => t === 'Queue consumer: reports')).to.equal(true);
   });
 });
@@ -227,17 +227,17 @@ describe('journeyGate (golden-journey validation)', () => {
     expect(result.gaps.some((g) => g.expected === 'queue_pipeline')).to.equal(true);
   });
 
-  it('passes when the pipeline journey spans the queue', () => {
+  it('passes when a journey spans the token', () => {
     const journey = wf({
-      stableKey: 'journey:pipeline:analysi', title: 'Analysis pipeline',
+      stableKey: 'journey:routes/projects.ts:analyze', title: 'Analysis pipeline',
       entrypoint: { kind: 'http_route', routePattern: '/x' },
     });
     journey.triggerType = 'journey';
     journey.metadata = {
       journey: {
-        golden_kind: 'pipeline',
         members: [],
-        boundaries: [{ after: 0, kind: 'queue', detail: "job 'analyze_scope' crosses queue 'analysi' to Queue consumer: ANALYSIS_QUEUE" }],
+        // CONTRACT CHANGE: the spanned token is a field now, not prose to regex.
+        boundaries: [{ after: 0, kind: 'async_token', token: 'analysi', detail: "token 'analysi' crosses", receipts: [] }],
       },
     };
     const result = validateGoldenJourneys({
@@ -247,20 +247,18 @@ describe('journeyGate (golden-journey validation)', () => {
     expect(result.gaps).to.deep.equal([]);
   });
 
-  it('requires an auth journey only when auth routes exist, and a dev journey only with compose', () => {
-    const authWf = wf({
-      stableKey: 'wf:a', title: 'POST /api/auth/login',
-      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/auth/login' },
-    });
-    const authWf2 = wf({
-      stableKey: 'wf:b', title: 'POST /api/auth/signup',
-      entrypoint: { kind: 'http_route', method: 'POST', routePattern: '/api/auth/signup' },
-    });
+  it('never asks for a journey a repo has no boundary evidence for, and still requires the dev journey with compose', () => {
+    // CONTRACT CHANGE: two routes whose paths read like a login used to be
+    // enough to demand an "auth" journey. Now only detected boundary evidence
+    // (issuance + guard, a matched token, a lifecycle) can demand a chain.
+    const authish = ['/api/auth/login', '/api/auth/signup'].map((route, i) => wf({
+      stableKey: `wf:${i}`, title: `POST ${route}`,
+      entrypoint: { kind: 'http_route', method: 'POST', routePattern: route },
+    }));
     const result = validateGoldenJourneys({
-      workflows: [authWf, authWf2], entrypoints: [], sideEffects: [], hasCompose: true,
+      workflows: authish, entrypoints: [], sideEffects: [], hasCompose: true,
     });
-    expect(result.gaps.some((g) => g.expected === 'auth')).to.equal(true);
-    expect(result.gaps.some((g) => g.expected === 'local_dev')).to.equal(true);
+    expect(result.gaps).to.deep.equal([{ kind: 'journey_gap', expected: 'local_dev' }]);
 
     const clean = validateGoldenJourneys({
       workflows: [], entrypoints: [], sideEffects: [], hasCompose: false,

@@ -4,6 +4,7 @@ import {
   BookOpen,
   CheckCircle2,
   ChevronDown,
+  ExternalLink,
   History,
   Loader2,
   PauseCircle,
@@ -26,7 +27,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
-import { ROLES } from "@/lib/onboardingData";
+import { buildGithubRepoUrl } from "@/lib/githubUrl";
+import { ROLE_OPTIONS, roleTitle } from "@/lib/roles";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
@@ -45,10 +47,6 @@ function runConfigParts(job: AnalysisJob | undefined, defaultBranch: string): st
   if (job.requested_depth) parts.push(`${job.requested_depth} depth`);
   if (job.requested_role) parts.push(`${job.requested_role} role`);
   return parts;
-}
-
-function roleLabel(role: string): string {
-  return ROLES.find((r) => r.key === role)?.label ?? role;
 }
 
 const JOB_TYPE_LABEL: Record<string, string> = {
@@ -71,7 +69,7 @@ function runActionLabel(run: RunHistoryEntry): string {
     case "generate_package": {
       const role = run.package?.role ?? run.config.role;
       const branch = run.package?.branch ?? run.config.branch;
-      return `Generated ${role ? `${roleLabel(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
+      return `Generated ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
     }
     case "regenerate_section":
       return `Regenerated section ${(run.section_type ?? run.sections.generated[0] ?? "").replace(/_/g, " ")}`.trim();
@@ -306,6 +304,30 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           </div>
         )}
 
+        {/* Budgets cap ONE run; the snapshot's counters are the lifetime
+            record. Showing both is the only way "40 calls" means anything. */}
+        {run.job_type !== "preflight" && (
+          <p className="text-[0.6875rem] text-muted-foreground">
+            {run.budget.usedThisRun === null ? (
+              <>
+                <span className="font-medium text-foreground">Budget:</span>{" "}
+                cap {run.budget.capLlmCalls.toLocaleString()} calls per run · usage this run not recorded
+                {run.budget.note ? ` (${run.budget.note})` : ""} ·{" "}
+                lifetime on this snapshot: {run.budget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
+                ${run.budget.lifetimeCostUsd.toFixed(4)}
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-foreground">Budget:</span>{" "}
+                {run.budget.usedThisRun.toLocaleString()} of {run.budget.capLlmCalls.toLocaleString()} calls used this run
+                {run.budget.remaining !== null && ` · ${run.budget.remaining.toLocaleString()} left`} ·{" "}
+                lifetime on this snapshot: {run.budget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
+                ${run.budget.lifetimeCostUsd.toFixed(4)}
+              </>
+            )}
+          </p>
+        )}
+
         {!hasCost && run.job_type !== "preflight" && (
           <p className="text-[0.6875rem] text-muted-foreground/70">
             No per-run cost recorded (run predates cost tracking, or it was fully deterministic).
@@ -352,6 +374,7 @@ export function ProjectOverviewPage() {
     refreshPackages,
     selectPackage,
     selectedPackageId,
+    selectedPackage,
     status: analysisStatus,
     refreshStatus,
     activeJobs,
@@ -452,17 +475,43 @@ export function ProjectOverviewPage() {
   const neverAnalyzed = !snap && activeJobs.length === 0 && (runs?.length ?? 0) === 0 && (packages?.length ?? 0) === 0;
   const loadError = packagesError || statusError;
 
+  // What this page is currently describing. The sidebar chooser wins when a
+  // package is pinned (M3 — the header used to say "latest: …" no matter what
+  // was selected); otherwise it is the newest complete analysis.
+  const viewedBranch = selectedPackage?.branch ?? snap?.branch ?? project.branch;
+  const viewedCommit = selectedPackage?.analyzed_commit ?? snap?.commit_hash ?? null;
+  const viewedRefLabel = viewedCommit ? `${viewedBranch}@${viewedCommit.slice(0, 7)}` : viewedBranch;
+  // Counts belong to the snapshot, so only print them when the thing being
+  // viewed IS that snapshot — otherwise they would describe a different commit.
+  const countsMatchView = !!snap && (!selectedPackage || selectedPackage.analyzed_commit === snap.commit_hash);
+  const repoUrl = buildGithubRepoUrl(
+    { owner: project.repo_owner, repo: project.repo_name, branch: project.branch },
+    { ref: viewedCommit },
+  );
+
   return (
     <div>
       <PageHeader
         title="Overview"
         subtitle={
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-medium text-foreground">{project.repo_owner}/{project.repo_name}</span>
+            {/* M1: the analysed repository, as a real link, pinned to the
+                commit this page is describing rather than to a moving branch. */}
+            <a
+              href={repoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`Open ${project.repo_owner}/${project.repo_name} on GitHub at ${viewedRefLabel}`}
+              className="inline-flex items-center gap-1 font-medium text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:underline"
+            >
+              {project.repo_owner}/{project.repo_name}
+              <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
+            </a>
             <Badge variant="outline" className="text-[0.6875rem] capitalize">{project.developer_role}</Badge>
-            {snap && (
-              <span className="font-mono text-[0.6875rem] text-muted-foreground" title="Latest complete analysis">
-                latest: {snap.branch}@{snap.commit_hash.slice(0, 7)} · {snap.file_count} files · {snap.symbol_count} symbols · {snap.workflow_count} workflows
+            {viewedCommit && (
+              <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                {selectedPackage ? "viewing" : "latest"}: {viewedRefLabel}
+                {countsMatchView && ` · ${snap!.file_count} files · ${snap!.symbol_count} symbols · ${snap!.workflow_count} workflows`}
               </span>
             )}
           </span>
@@ -588,7 +637,12 @@ export function ProjectOverviewPage() {
       {/* Paused / just-failed runs surface here for resume without digging into history. */}
       {activeJobs.length === 0 && pausedOrFailed.length > 0 && (
         <div className="mb-4 space-y-2">
-          {pausedOrFailed.map((job) => (
+          {pausedOrFailed.map((job) => {
+            // A budget pause is only actionable if the banner says how much
+            // of the per-run cap was actually spent — the run-history row for
+            // this same job already carries those numbers.
+            const jobBudget = runs?.find((r) => r.id === job.id)?.budget ?? null;
+            return (
             <Card key={job.id}>
               <CardContent className="flex flex-wrap items-center gap-2 p-3">
                 {job.status === "paused"
@@ -602,6 +656,14 @@ export function ProjectOverviewPage() {
                     </span>
                   </p>
                   {job.error_message && <p className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">{job.error_message}</p>}
+                  {jobBudget && jobBudget.usedThisRun !== null && (
+                    <p className="mt-0.5 text-[0.6875rem] tabular-nums text-muted-foreground">
+                      {jobBudget.usedThisRun.toLocaleString()} of {jobBudget.capLlmCalls.toLocaleString()} calls used this run
+                      {jobBudget.remaining !== null && ` · ${jobBudget.remaining.toLocaleString()} left`}
+                      {" · "}lifetime on this snapshot: {jobBudget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
+                      ${jobBudget.lifetimeCostUsd.toFixed(4)}
+                    </p>
+                  )}
                 </div>
                 {canManage && ["analyze_scope", "incremental_update", "generate_package"].includes(job.job_type) && (
                   <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job — checkpointed phases and cached AI work are skipped">
@@ -617,7 +679,8 @@ export function ProjectOverviewPage() {
                 )}
               </CardContent>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -666,7 +729,7 @@ export function ProjectOverviewPage() {
                 <SelectTrigger className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All roles</SelectItem>
-                  {ROLES.map((r) => <SelectItem key={r.key} value={r.key}>{r.label}</SelectItem>)}
+                  {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
