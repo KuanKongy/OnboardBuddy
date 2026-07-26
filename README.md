@@ -102,12 +102,6 @@ model-written, a confidence label with the reason behind it, and a note of what 
 The Consult chapter is generated deterministically from code facts rather than cited — the table is the
 evidence. Owners approve content before it is shared; every member tracks their own reading progress.
 
-> **Known gap (audited 2026-07-25).** Receipt coverage is currently uneven: 10 of 12 sections in our
-> benchmark package carry no receipts, and confidence labels do not yet track evidence — see
-> [doc/UX_AUDIT_FINDINGS.md §1](doc/UX_AUDIT_FINDINGS.md#1-the-trust-layer-contradicts-itself--start-here).
-> Three of those ten are the deterministic Consult sections, where that is correct by design; the other
-> four explanation sections are a real gap and are first in the M5 content queue.
-
 **Guided walkthroughs.** Step-by-step traces through the flows that matter, each stop pairing real
 code with an explanation. Receipts deep-link to the exact lines on GitHub, pinned to the commit that
 was analysed.
@@ -162,6 +156,15 @@ and used as evidence; it just is not parsed into a call graph.
 | **Scripts** | Shell (`.sh`, `.bash`, `.zsh`), PowerShell (`.ps1`) | Read as evidence for the operational commands a developer needs |
 | **Recognised, not parsed** | Python, Go, Ruby, Java, Kotlin, C#, PHP, Rust, Swift, Scala, C, C++, Vue, Svelte, HTML, CSS/SCSS/LESS | Counted and reported. The cost preview tells you up front how much of the repository we cannot parse, rather than quietly analysing a fraction of it |
 | **Assets** | Images, fonts, archives, media, PDFs | Inventoried and hashed for change detection; contents never read |
+
+**What it finds, not just what it reads.** Parsing a file is only half the job; the other half is
+recognising where a system's work actually happens. Entry points are detected across the shapes real
+repositories take — HTTP routes, UI actions that reach an effect, socket and event handlers, queue
+consumers, CLI commands, and a package's public API — and effects are counted whether they go through
+an ORM, a document store, a client SDK, a cache, a queue, browser storage or the filesystem. This
+matters because a study app whose features live in React components calling a database directly, or a
+game whose protocol is socket events, has no HTTP surface to find: an analyser that only understands
+request handlers reports such a repository as doing almost nothing.
 
 In total the classifier knows **29 languages and formats across 42 file extensions**. The honest
 summary: a mixed TypeScript repository is analysed properly end to end, a repository whose core logic
@@ -391,7 +394,48 @@ and one stretch goal was promoted.
 | Invitations | Invitee can "accept or decline" | Accept works; invitations are in-app only, no email, no decline | Needs an email provider we have not provisioned — M5 item (#72) |
 | Permission tiers | Owner can transfer ownership | Blocked, not implemented | M5 item (#72) |
 
-#### 3. Scope changes going into M5
+#### 3. Known gaps
+
+Measured, not estimated. Each of these is a limit we can point at in the code, and none of them is
+hidden from the reader in the product.
+
+**Coverage of a repository's meaning**
+
+- **Narration is thin where the evidence is thin.** Workflow steps always carry a structural
+  description derived from the step's kind and target ("writes to `sessions`"). Only a minority
+  additionally carry written narration about *that* code — on our own repository, 37 of 774 steps.
+  The UI labels which is which rather than blurring them.
+- **File and class descriptions are partial** — about 59% of cluster members and 47% of classes have a
+  generated one-line description on the current fleet. The rest render as a path or a name, and the
+  coverage figure is printed next to the list instead of being papered over. Class coverage is capped
+  by depth-gating in the semantic pass, not by the UI.
+- **A repository with no traced effects produces no workflows.** For a static content site that is the
+  honest answer, and the product says so — but it means the Workflows, Capabilities and Tutorials tabs
+  are legitimately empty for that shape of project.
+
+**Detection**
+
+- **Two archetypes are covered by fixtures, not by a real repository we have graded.** A published
+  package's public API and a CLI's commands are both detected and unit-tested (validated against
+  `p-limit` and `ky`), but no library or CLI is in our audit set, so neither has been through a full
+  end-to-end review.
+- **Some effect verbs over-match.** `.add(`, `.delete(` and `.create(` are counted as data writes and
+  will also match a `Set`, a `Map` or a 3D-scene API, which inflates the effect count on repositories
+  that use those heavily.
+- **Background workers rank as core but not at the top.** A queue consumer reachable from a user
+  trigger is now tier-eligible, which it was not before. On our own repository the analysis pipeline
+  lands at #12 of 70 core flows — present, but not where a newcomer would look first.
+
+**Product surface**
+
+- **The pre-analysis language warning is opt-in.** The import screen's preview names how many files
+  are in languages we do not parse and warns when most of the repository is unparseable, but only if
+  you press *Preview first* before starting.
+- **One parsed language.** TypeScript and JavaScript are analysed to symbol level; everything else is
+  read, classified and cited but never parsed into a call graph. A repository whose core logic is in
+  another language gets a documentation-and-configuration-level handbook and is told so.
+
+#### 4. Scope changes going into M5
 
 **Dropped — will not ship:**
 

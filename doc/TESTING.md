@@ -127,7 +127,7 @@ the ones a manual pass will not catch, so they are the ones most worth automatin
 
 ---
 
-# Backend — 759 tests
+# Backend — 820 tests
 
 ## 1. Reading the code (167 tests)
 
