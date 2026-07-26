@@ -42,8 +42,20 @@ export interface ArchitectureCluster {
    * Ordered by the server: most critical first, then by path. It used to
    * arrive in join order, which is neither stable across requests nor
    * meaningful to read.
+   *
+   * `summary` is the file's stored one-line record — the same source the
+   * Dependencies tab reads — and is null for members the analyzer wrote no
+   * record for (59% of the fleet's members have one). A member without a
+   * record shows its path alone; a filler sentence would be worse than
+   * silence.
    */
-  members: Array<{ key: string; name: string; filePath: string | null }>;
+  members: Array<{
+    key: string;
+    name: string;
+    filePath: string | null;
+    summary?: string | null;
+    role?: string | null;
+  }>;
   /**
    * Architecture edges touching this component. 0 means it is drawn as an
    * island, which the UI has to explain rather than leave looking broken
@@ -134,6 +146,10 @@ export interface ArchitectureMember {
   /** Node type: module/file, or config/schema for the evidence-only clusters. */
   kind: string;
   filePath: string | null;
+  /** What this file does, from its stored file record. Null when none exists. */
+  summary?: string | null;
+  /** The record's own classification: "route file", "service", "config glue". */
+  role?: string | null;
   /** Null when this member carries no stored criticality score. */
   criticalScore: number | null;
   provenance?: ScoreProvenanceData;
@@ -226,6 +242,8 @@ export async function fetchArchitecture(
       label: m.name,
       kind: "module",
       filePath: m.filePath,
+      summary: m.summary ?? null,
+      role: m.role ?? null,
       criticalScore: null,
       exportedSymbols: [],
       importCount: 0,

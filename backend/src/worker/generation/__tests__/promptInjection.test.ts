@@ -308,6 +308,6 @@ describe('layer 3 — every prompt site and the output choke point are wired up'
     // at-or-below-v4 string fails here rather than silently re-serving
     // records extracted under the old prompt.
     expect(versions).to.include("capability: 'capability-naming-v5'");
-    expect(read('../sectionGenerator.ts')).to.include("SECTION_PROMPT_VERSION = 'section-v6'");
+    expect(read('../sectionGenerator.ts')).to.include("SECTION_PROMPT_VERSION = 'section-v7'");
   });
 });

@@ -24,6 +24,8 @@ export interface ModuleNodeData {
   role?: string | null;
   /** Group nodes only — the files folded into this box. */
   fileCount?: number;
+  /** What `fileCount` counts when the box does not stand for files ("classes"). */
+  groupNoun?: string;
   /** Group nodes only — links with both ends inside the box, so undrawn. */
   internalImportCount?: number;
   isEntryPoint: boolean;
@@ -44,6 +46,11 @@ export interface ModuleNodeData {
 export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   const typeInfo = inferNodeType(data.filePath, data.exportedSymbols);
   const isGroup = data.fileCount !== undefined;
+  // A class card's label is a bare name ("SnapshotWriter"), which two files can
+  // both declare; the path is the only thing that tells them apart, and it is
+  // the file-shape guess below that would otherwise fill the line describing
+  // the FILE as if it described the class.
+  const isSymbol = data.kind === "class" || data.kind === "interface";
 
   return (
     <div
@@ -90,8 +97,19 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </>
       ) : (
         <p className="mb-2 line-clamp-2 text-xs text-muted-foreground">
-          {isGroup ? `${data.fileCount} files in this folder` : typeInfo.description}
+          {isGroup
+            ? `${data.fileCount} ${data.groupNoun ?? "files"} in this folder`
+            : isSymbol
+              // No record worth showing: the type badge above already says
+              // "class", so restating that would be the tooltip mistake in
+              // card form. The file it is declared in is not on the card yet,
+              // so that is what the line spends itself on.
+              ? `Declared in ${data.filePath}`
+              : typeInfo.description}
         </p>
+      )}
+      {!isGroup && isSymbol && data.summary && (
+        <p className="mb-2 truncate font-mono text-[0.625rem] text-muted-foreground/70">{data.filePath}</p>
       )}
 
       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground">

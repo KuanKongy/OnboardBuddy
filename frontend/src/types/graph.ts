@@ -66,6 +66,8 @@ export interface GraphNodeMetadata {
   summaryConfidence?: string | null;
   /** Group nodes only: files folded into this group. */
   fileCount?: number;
+  /** Group nodes only: what `fileCount` counts, when it is not files. */
+  groupNoun?: string;
   /** Group nodes only: links whose two ends are both inside the group. */
   internalImportCount?: number;
 }
@@ -74,6 +76,13 @@ export interface GraphNode {
   id: string;
   label: string;
   kind: string;
+  /**
+   * The file this node lives in, when the id is not already that path. Set for
+   * class/interface nodes, whose id is `<path>#<Name>` and whose label is the
+   * bare name — without it the card can neither say where the class is nor
+   * colour itself by the file's role.
+   */
+  filePath?: string;
   metadata: GraphNodeMetadata;
 }
 

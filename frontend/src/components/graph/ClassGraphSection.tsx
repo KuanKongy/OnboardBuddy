@@ -1,13 +1,18 @@
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { Viewport } from "reactflow";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { Button } from "@/components/ui/button";
-import { fetchClassGraph, type GraphResponse } from "@/lib/graphData";
+import { fetchClassGraph, fetchNodeDetail, type GraphResponse, type NodeDetail } from "@/lib/graphData";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { useDrillStack } from "@/hooks/useDrillStack";
+import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
+import { useOptionalProject } from "@/contexts/ProjectContext";
+import type { DrillFrame } from "@/lib/drillStack";
 import type { GraphEdge, GraphNode } from "@/types/graph";
 
 interface ClassGraphSectionProps {
@@ -21,38 +26,151 @@ interface ClassGraphSectionProps {
   focusNodeId?: string | null;
 }
 
+/** The directory a group node stands for (`cluster:backend/src` → `backend/src`). */
+function groupDirectory(nodeId: string): string {
+  return nodeId.slice("cluster:".length);
+}
+
+/** True when `stableKey` (`<path>#<Name>`) lives under the group's directory. */
+function groupContains(nodeId: string, stableKey: string): boolean {
+  const dir = groupDirectory(nodeId);
+  const path = stableKey.split("#")[0] ?? stableKey;
+  return path === dir || path.startsWith(`${dir}/`);
+}
+
+/**
+ * Classes and interfaces, as a two-level ladder rather than one flat grid.
+ *
+ * VISUAL QA M4 #3 measured the flat version on OnboardBuddy: 267 chips, ~3px
+ * labels, 5 edges and a legend sitting on top of the first two columns — a
+ * canvas that draws everything and can be read nowhere, and where nothing said
+ * what any class DOES. Above the node cap the server now groups by directory
+ * (the same rule, ids and gestures as the Files view) and every class card
+ * carries its stored one-line summary where one exists.
+ */
 export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphSectionProps) {
   const selectedPackageId = useOptionalPackages()?.selectedPackageId ?? null;
+  const project = useOptionalProject()?.project ?? null;
+  const githubRepo =
+    project?.repo_owner && project?.repo_name && project?.branch
+      ? { owner: project.repo_owner, repo: project.repo_name, branch: project.branch }
+      : undefined;
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   /** True when the handed-over symbol is not in this graph — say so rather
    * than silently showing the unfocused graph as if nothing was asked. */
   const [focusMissing, setFocusMissing] = useState(false);
 
-  function loadClasses() {
-    setLoading(true);
-    setError("");
-    setSelectedNodeId(null);
-    setFocusMissing(false);
-    fetchClassGraph(projectId, selectedPackageId)
-      .then((d) => {
+  // Its own URL param, so drilling here never rewrites the Files view's drill
+  // path (and a shared link still lands on the same directory).
+  const stack = useDrillStack("classdrill");
+  const currentFrame: DrillFrame | null = stack.current;
+  const viewportRef = useRef<(() => Viewport) | null>(null);
+  const pendingFocusDrillRef = useRef<string | null>(null);
+  const levelKey = (frame: DrillFrame | null) =>
+    `${projectId}::${selectedPackageId ?? ""}::${frame?.id ?? ""}::${focusNodeId ?? ""}`;
+  const loadedKeyRef = useRef<string | null>(null);
+
+  const loadLevel = useCallback(
+    async (frame: DrillFrame | null): Promise<void> => {
+      setLoading(true);
+      setError("");
+      setSelectedNodeId(null);
+      setFocusMissing(false);
+      try {
+        const d = await fetchClassGraph(projectId, selectedPackageId, frame?.id ?? null);
         setData(d);
+        loadedKeyRef.current = levelKey(frame);
         if (!focusNodeId) return;
-        const found = d.graph.nodes.some((n) => n.id === focusNodeId);
-        setSelectedNodeId(found ? focusNodeId : null);
-        setFocusMissing(!found);
-      })
-      .catch((err: Error) => setError(err.message))
-      .finally(() => setLoading(false));
-  }
+        if (d.graph.nodes.some((n) => n.id === focusNodeId)) {
+          setSelectedNodeId(focusNodeId);
+          return;
+        }
+        // Not on this canvas: if a group here covers it, that group is the
+        // next hop. Asking the returned nodes rather than recomputing the
+        // server's directory rule keeps this working however deep it regroups.
+        const owning = d.graph.nodes.find((n) => n.id.startsWith("cluster:") && groupContains(n.id, focusNodeId));
+        if (owning) {
+          pendingFocusDrillRef.current = groupDirectory(owning.id);
+          return;
+        }
+        setFocusMissing(true);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load class graph data");
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [projectId, selectedPackageId, focusNodeId],
+  );
 
-  useEffect(() => { loadClasses(); }, [projectId, selectedPackageId, focusNodeId]);
+  const drill = useGraphDrill({
+    stack,
+    loadLevel,
+    readViewport: () => viewportRef.current?.() ?? null,
+  });
 
-  // ← / → cycle class/interface nodes, Esc deselects (mirrors the files view).
-  const cycleIds = useMemo(() => (data?.graph.nodes ?? []).map((n) => n.id), [data]);
+  // A project or package switch invalidates a directory path built from
+  // another snapshot's layout, so it resets to the root rather than carrying
+  // a stale one across.
+  const prevKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${projectId}::${selectedPackageId ?? ""}`;
+    const changed = prevKeyRef.current !== null && prevKeyRef.current !== key;
+    prevKeyRef.current = key;
+    if (changed && stack.depth > 0) {
+      stack.reset();
+      return;
+    }
+    // A drill already fetched this level before moving the stack; refetching
+    // here would double-request and clobber the transition mid-flight.
+    if (loadedKeyRef.current === levelKey(currentFrame)) return;
+    void loadLevel(currentFrame).catch(() => {});
+  }, [projectId, selectedPackageId, focusNodeId, currentFrame?.id]);
+
+  // A handed-over symbol that lives inside a group needs one drill to become
+  // reachable. Done as an effect so it runs after the load that discovered it.
+  useEffect(() => {
+    const target = pendingFocusDrillRef.current;
+    if (!target) return;
+    pendingFocusDrillRef.current = null;
+    stack.push({ kind: "cluster", id: target, label: target.split("/").filter(Boolean).pop() ?? target });
+  }, [data]);
+
+  const nodes: GraphNode[] = useMemo(() => {
+    if (!data) return [];
+    return data.graph.nodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+      kind: n.kind,
+      filePath: (n as { filePath?: string }).filePath,
+      metadata: {
+        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
+        importCount: (n.metadata?.importCount as number) ?? 0,
+        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
+        // What this class does, from its stored symbol record.
+        summary: (n.metadata?.summary as string | null) ?? null,
+        summaryConfidence: (n.metadata?.summaryConfidence as string | null) ?? null,
+        fileCount: (n.metadata?.fileCount as number) ?? undefined,
+        groupNoun: (n.metadata?.groupNoun as string) ?? undefined,
+        internalImportCount: (n.metadata?.internalImportCount as number) ?? undefined,
+      },
+    }));
+  }, [data]);
+
+  const edges: GraphEdge[] = useMemo(() => {
+    if (!data) return [];
+    return data.graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, kind: e.kind }));
+  }, [data]);
+
+  // ← / → cycle the selectable (non-group) nodes, Esc deselects.
+  const cycleIds = useMemo(() => nodes.map((n) => n.id).filter((nid) => !nid.startsWith("cluster:")), [nodes]);
   useHotkeys(
     {
       ArrowRight: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") + 1 + cycleIds.length) % cycleIds.length] ?? null),
@@ -62,24 +180,19 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
     !!data && !loading,
   );
 
-  const nodes: GraphNode[] = useMemo(() => {
-    if (!data) return [];
-    return data.graph.nodes.map((n) => ({
-      id: n.id,
-      label: n.label,
-      kind: n.kind,
-      metadata: {
-        exportedSymbols: (n.metadata?.exportedSymbols as string[]) ?? [],
-        importCount: (n.metadata?.importCount as number) ?? 0,
-        dependentCount: (n.metadata?.dependentCount as number) ?? 0,
-      },
-    }));
-  }, [data]);
-
-  const edges: GraphEdge[] = useMemo(() => {
-    if (!data) return [];
-    return data.graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, kind: e.kind }));
-  }, [data]);
+  // The panel's own content: the class's summary, score, receipts and the
+  // symbols that call it. This view never fetched it, which is why selecting a
+  // class produced a panel reading "No additional details available".
+  useEffect(() => {
+    setSelectedNodeDetail(null);
+    if (!selectedNodeId || selectedNodeId.startsWith("cluster:")) return;
+    setDetailLoading(true);
+    let cancelled = false;
+    fetchNodeDetail(projectId, selectedNodeId, selectedPackageId)
+      .then((detail) => { if (!cancelled) setSelectedNodeDetail(detail); })
+      .finally(() => { if (!cancelled) setDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [projectId, selectedNodeId, selectedPackageId]);
 
   const filteredNodeIds = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -90,6 +203,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
           return (
             node.label.toLowerCase().includes(query) ||
             node.id.toLowerCase().includes(query) ||
+            (node.metadata.summary ?? "").toLowerCase().includes(query) ||
             node.metadata.exportedSymbols.some((s) => s.toLowerCase().includes(query))
           );
         })
@@ -111,6 +225,11 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  const truncation = data?.truncation ?? null;
+  const groupCount = nodes.filter((n) => n.id.startsWith("cluster:")).length;
+  const classCount = nodes.length - groupCount;
+  const describedNodes = data?.describedNodes ?? 0;
+  const levelUnit = data?.level?.unit ?? (data?.clustered ? "groups" : "classes");
 
   if (loading) {
     return (
@@ -126,14 +245,31 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
         <div className="flex-1">
           <p className="text-sm font-medium text-foreground">
-            {error || "No class or interface data available"}
+            {error ||
+              (currentFrame
+                ? `No classes or interfaces in ${currentFrame.label}`
+                : "No class or interface data available")}
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            The class graph is built from classes and interfaces found during analysis. Run a
-            (re-)analysis first — snapshots from before this feature have no class data.
+            {currentFrame && !error
+              ? "This folder came back empty. It may have been renamed or removed since this link was made."
+              : "The class graph is built from classes and interfaces found during analysis. Run a (re-)analysis first — snapshots from before this feature have no class data."}
           </p>
         </div>
-        <Button variant="outline" size="xs" onClick={loadClasses}>
+        {currentFrame && !error && (
+          <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy}>
+            <CornerLeftUp className="mr-1 h-3 w-3" />
+            Back
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => {
+            loadedKeyRef.current = null;
+            void loadLevel(currentFrame).catch(() => {});
+          }}
+        >
           <RefreshCw className="mr-1 h-3 w-3" />
           Retry
         </Button>
@@ -143,6 +279,49 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
 
   return (
     <>
+      {/* Where in the class ladder this level is. The page header's breadcrumb
+          tracks the FILES drill, so without this the only path shown on screen
+          belonged to another view (VISUAL QA M4 #3: "breadcrumb still claims a
+          file context"). */}
+      <div className="mb-2 flex flex-wrap items-baseline gap-1.5 text-xs text-muted-foreground">
+        <nav aria-label="Class graph levels" className="flex flex-wrap items-baseline gap-1.5">
+          <button
+            type="button"
+            className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
+            onClick={() => drill.jumpTo(-1)}
+            disabled={drill.busy || stack.depth === 0}
+          >
+            All classes
+          </button>
+          {stack.frames.map((frame, i) => {
+            const isLast = i === stack.frames.length - 1;
+            return (
+              <span key={`${frame.kind}:${frame.id}`} className="flex items-baseline gap-1.5">
+                <span>/</span>
+                {isLast ? (
+                  <span className="text-foreground">{frame.label}</span>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-sm transition-colors hover:text-primary disabled:opacity-50"
+                    onClick={() => drill.jumpTo(i)}
+                    disabled={drill.busy}
+                  >
+                    {frame.label}
+                  </button>
+                )}
+              </span>
+            );
+          })}
+        </nav>
+        {stack.depth > 0 && (
+          <Button variant="outline" size="xs" onClick={drill.drillUp} disabled={drill.busy} className="ml-1">
+            <CornerLeftUp className="mr-1 h-3 w-3" />
+            Back
+          </Button>
+        )}
+      </div>
+
       {focusNodeId && !focusMissing && (
         <p className="mb-2 text-xs text-muted-foreground">
           Focused on <code className="font-mono">{focusNodeId.split("#").pop()}</code>. This graph is
@@ -160,13 +339,51 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         </div>
       )}
 
+      {/* What this level is, and what a click will give you. */}
+      <p className="mb-2 text-xs text-muted-foreground">
+        {data.clustered ? (
+          <>
+            {currentFrame
+              ? `${currentFrame.label} holds ${data.totalNodes} classes — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${classCount > 0 ? ` and ${classCount} class${classCount === 1 ? "" : "es"}` : ""}. `
+              : `${data.totalNodes} classes and interfaces, too many to draw at once — showing ${groupCount} folder${groupCount === 1 ? "" : "s"}. `}
+            Open a folder to see its classes, each with a line saying what it does. Arrows are
+            extends/implements links crossing a folder boundary.
+          </>
+        ) : (
+          <>
+            {currentFrame ? `Classes and interfaces in ${currentFrame.label}` : "Classes and interfaces in this project"}{" "}
+            — arrows are extends/implements links, so a class with none stands alone.{" "}
+            {describedNodes > 0
+              ? `${describedNodes} of ${classCount} carry a generated description; the rest were recorded by name and kind only, which the card already shows.`
+              : "None of them carry a generated description in this snapshot — the cards show where each one is declared."}{" "}
+            Click one for its score, callers and receipts.
+          </>
+        )}
+      </p>
+
+      {/* The cap, disclosed (AUDIT C14) rather than left as a silent cut. */}
+      {truncation && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+          <span className="flex-1 text-foreground">
+            Showing {truncation.shown} of {truncation.total} {truncation.unit}
+            {currentFrame ? ` in ${currentFrame.label}` : ""} — {truncation.hidden} not drawn. A single view is
+            capped at {truncation.limit} nodes, so this kept {truncation.keptBy}. Search to reach the rest.
+          </span>
+        </div>
+      )}
+
       <GraphToolbar
         search={search}
         onSearchChange={setSearch}
         matchCount={visibleNodes.length}
         totalCount={nodes.length}
-        noun="classes"
-        extra={`${edges.length} relationships`}
+        noun={levelUnit}
+        extra={
+          truncation
+            ? `${truncation.hidden} more not drawn`
+            : `${data.totalEdges} inheritance link${data.totalEdges === 1 ? "" : "s"}`
+        }
       />
 
       <div className={selectedNode ? "grid gap-3 lg:grid-cols-[1fr_340px]" : ""}>
@@ -181,12 +398,34 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
             // chose no viewport here, so the handed-over symbol is framed.
             suppressInitialFit={!!focusNodeId}
             focusMode={focusNodeId ? "frame" : "pan-into-view"}
+            drill={drill}
+            restoreViewport={stack.savedViewport(stack.depth)}
+            viewportRef={viewportRef}
+            // Never fit below a readable label (VISUAL QA M4 #3 measured 3px).
+            minZoom={0.35}
+            // Top-left sat over the first two columns of the grid.
+            legendPosition="top-right"
+            onDrillInto={(nodeId) => {
+              if (!nodeId.startsWith("cluster:")) return false;
+              const path = groupDirectory(nodeId);
+              drill.drillInto(
+                { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+                nodeId,
+              );
+              return true;
+            }}
           />
         </div>
 
         {selectedNode && (
           <aside className="graph-canvas overflow-y-auto !bg-card">
-            <NodeInfoPanel node={selectedNode} onClose={() => setSelectedNodeId(null)} />
+            <NodeInfoPanel
+              node={selectedNode}
+              detail={selectedNodeDetail}
+              loading={detailLoading}
+              githubRepo={githubRepo}
+              onClose={() => setSelectedNodeId(null)}
+            />
           </aside>
         )}
       </div>

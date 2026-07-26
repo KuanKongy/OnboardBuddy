@@ -97,6 +97,7 @@ export function ScoreProvenance({
   data,
   variant = "panel",
   showReasons = true,
+  showCaveat = true,
   detail = "full",
   className,
 }: {
@@ -105,6 +106,19 @@ export function ScoreProvenance({
   variant?: "panel" | "tooltip";
   /** Off where the host already prints the same stored reasons beside it. */
   showReasons?: boolean;
+  /**
+   * Off where the caveat is an internal reconciliation note rather than
+   * something a reader of THIS surface needs.
+   *
+   * Two of them are: "Averaging the 4 member scores stored here gives 29.1,
+   * not 15.2 — the stored number was averaged over all 61 members…" and "2 of
+   * the 9 signals describe a file's position in the import graph…". Both are
+   * true, both were written for whoever is auditing the ranker, and both
+   * appeared in amber on a reading surface, above the diagram, on every flow.
+   * The payload still carries them — this only decides whether a given host
+   * prints one.
+   */
+  showCaveat?: boolean;
   /**
    * `headline` is the first thing a reader gets after asking: the formula, the
    * signal that moved the number, and the top three terms. `full` adds the
@@ -210,7 +224,7 @@ export function ScoreProvenance({
         </p>
       )}
 
-      {data.caveat && (
+      {data.caveat && showCaveat && (
         <p className={cn("flex items-start gap-1.5", compact ? "opacity-90" : "text-warning")}>
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           <span>{data.caveat}</span>

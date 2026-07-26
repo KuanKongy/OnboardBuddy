@@ -322,6 +322,15 @@ export function ArchitecturePage() {
   // was only ever visible on the way past.
   const rootSelectedCluster = !insideCluster && selectedId ? clusterById.get(selectedId) ?? null : null;
   const asideCluster = insideCluster ? (selectedMember ? null : openCluster) : rootSelectedCluster;
+  /**
+   * How many of this component's members actually carry a description.
+   *
+   * Printed under the list because coverage is uneven and unexplained
+   * blank rows read as a rendering fault: 156 of OnboardBuddy's 286 members
+   * have a file record, 6 of UBCPSS's 30. Saying so is what makes the empty
+   * rows a fact about the analysis rather than a bug in the panel.
+   */
+  const describedMembers = (asideCluster?.members ?? []).filter((m) => m.summary).length;
 
   // A response can legitimately contain zero components — a snapshot where
   // nothing clustered, or an unparsed stack. The old guard was
@@ -724,23 +733,38 @@ export function ArchitecturePage() {
                     nor meaningful), and bounded with its own scrollbar instead
                     of dumping the first 30 and hiding the rest behind
                     "+ N more". */}
-                <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border border-border/60 p-1.5">
+                {/* Every member says what it DOES, not just where it lives.
+                    The line is the file's stored record — the same source the
+                    Dependencies tab reads — so this list and that tab cannot
+                    describe one file two ways. A member with no record shows
+                    its path alone and says nothing else: "no description
+                    available" on 41% of the rows would be noise, not
+                    information (owner H1). */}
+                <ul className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border/60 p-1.5">
                   {asideCluster.members.map((m, i) => (
                     <li key={m.key} className="flex min-w-0 items-baseline gap-1.5">
                       <span className="w-5 shrink-0 text-right text-[0.625rem] tabular-nums text-muted-foreground/50">
                         {i + 1}
                       </span>
-                      <Link
-                        to={`/projects/${id}/dependencies?focus=${encodeURIComponent(m.filePath ?? m.key)}`}
-                        className="min-w-0 break-all font-mono text-[0.71875rem] text-muted-foreground hover:text-primary hover:underline"
-                      >
-                        {m.filePath ?? m.key}
-                      </Link>
+                      <div className="min-w-0 flex-1">
+                        <Link
+                          to={`/projects/${id}/dependencies?focus=${encodeURIComponent(m.filePath ?? m.key)}`}
+                          className="block min-w-0 break-all font-mono text-[0.71875rem] text-muted-foreground hover:text-primary hover:underline"
+                        >
+                          {m.filePath ?? m.key}
+                        </Link>
+                        {m.summary && (
+                          <p className="text-[0.6875rem] leading-snug text-foreground/80">{m.summary}</p>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
                 <p className="mt-1 text-[0.625rem] text-muted-foreground/70">
                   Most critical first, then by path. Each link opens the file on the Dependencies tab.
+                  {describedMembers > 0
+                    ? ` ${describedMembers} of ${asideCluster.members.length} carry a generated description; the rest were not summarised in this snapshot.`
+                    : " No generated descriptions exist for these members in this snapshot."}
                 </p>
               </aside>
             )}

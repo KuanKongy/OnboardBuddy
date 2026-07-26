@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
+import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
 import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
 import { buildWeightTableProvenance } from "../services/scoreProvenance.js";
 import { CHAPTERS, SECTION_SPECS, SECTION_TYPES, type SectionType } from "../../worker/generation/sectionSpecs.js";
@@ -54,10 +55,10 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
     let targetSnapshotId = section.snapshot_id;
     if (section.review_status === "stale") {
       const latest = await query(
-        `SELECT id FROM analysis_snapshots
+        `SELECT id FROM analysis_snapshots s
          WHERE scope_id = $1 AND status = 'complete'
-         ORDER BY created_at DESC LIMIT 1`,
-        [section.scope_id],
+         ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+        [section.scope_id, section.package_branch],
       );
       targetSnapshotId = (latest.rows[0] as { id: string } | undefined)?.id ?? section.snapshot_id;
     }
@@ -158,11 +159,15 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
     }
 
     if (!snapshot) {
+      // Newest by PUSH recency on the requested (or default) branch — NOT by
+      // analysis_snapshots.created_at, which is stamped when the run reached
+      // persistResults and so orders by "which analysis got to run first".
+      // lib/snapshotOrdering.ts has the full rationale.
       snapshot = (await query(
-        `SELECT id, scope_id, commit_hash, branch FROM analysis_snapshots
+        `SELECT id, scope_id, commit_hash, branch FROM analysis_snapshots s
          WHERE project_id = $1 AND status = 'complete'
-         ORDER BY created_at DESC LIMIT 1`,
-        [projectId],
+         ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+        [projectId, branch],
       )).rows[0] as typeof snapshot;
     }
     if (!snapshot) {
@@ -254,7 +259,7 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
                  ORDER BY aj.created_at DESC LIMIT 1),
                 (SELECT s2.commit_hash FROM analysis_snapshots s2
                  WHERE s2.scope_id = op.scope_id AND s2.status = 'complete'
-                 ORDER BY s2.created_at DESC LIMIT 1)
+                 ORDER BY ${latestSnapshotOrderSql('s2', 'op.branch')} LIMIT 1)
               )) AS is_latest_commit
        FROM onboarding_packages op
        JOIN analysis_scopes sc ON sc.id = op.scope_id
@@ -578,10 +583,10 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
     // hashes — never asserted. No baseline -> compare against the receipt's
     // own snapshot (trivially fresh).
     const latestSnap = (await query(
-      `SELECT id, commit_hash FROM analysis_snapshots
+      `SELECT id, commit_hash FROM analysis_snapshots s
        WHERE scope_id = $1 AND status = 'complete'
-       ORDER BY created_at DESC LIMIT 1`,
-      [pkg.scope_id],
+       ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+      [pkg.scope_id, pkg.branch ?? null],
     )).rows[0] as { id: string; commit_hash: string } | undefined;
 
     // Coverage strip (audit §4.2): the "critical 25%" claim gets real

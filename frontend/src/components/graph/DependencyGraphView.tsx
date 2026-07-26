@@ -72,6 +72,15 @@ interface DependencyGraphViewProps {
   focusMode?: FocusMode;
   restoreViewport?: { x: number; y: number; zoom: number } | null;
   viewportRef?: MutableRefObject<(() => Viewport) | null>;
+  /**
+   * Floor for the initial fit. VISUAL QA M4 #3: a level with more boxes than
+   * the viewport can hold gets fitted to ~0.03 zoom, which renders a 13px
+   * label at 3px — a canvas that technically shows everything and can be read
+   * nowhere. A floor makes the level overflow and scroll instead.
+   */
+  minZoom?: number;
+  /** Top-left overlaps the first column on grid-shaped levels. */
+  legendPosition?: "top-left" | "top-right";
 }
 
 export function DependencyGraphView({
@@ -89,13 +98,17 @@ export function DependencyGraphView({
   focusMode,
   restoreViewport,
   viewportRef,
+  minZoom,
+  legendPosition = "top-left",
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
 
-  // Legend shows only kinds that actually occur on this canvas.
+  // Legend shows only kinds that actually occur on this canvas. A class node's
+  // id carries a `#Symbol` suffix, so the file it belongs to is what the kind
+  // is inferred from.
   const nodeKindById = useMemo(
-    () => new Map(nodes.map((n) => [n.id, inferNodeType(n.id, n.metadata.exportedSymbols).type])),
+    () => new Map(nodes.map((n) => [n.id, inferNodeType(n.filePath ?? n.id, n.metadata.exportedSymbols).type])),
     [nodes],
   );
   const presentKinds = useMemo(() => [...new Set(nodeKindById.values())], [nodeKindById]);
@@ -123,7 +136,7 @@ export function DependencyGraphView({
           data: {
             label: node.label,
             kind: node.kind,
-            filePath: node.id,
+            filePath: node.filePath ?? node.id,
             exportedSymbols: node.metadata.exportedSymbols,
             importCount: node.metadata.importCount,
             externalImportCount: node.metadata.externalImportCount ?? 0,
@@ -134,6 +147,7 @@ export function DependencyGraphView({
             summary: node.metadata.summary ?? null,
             role: node.metadata.role ?? null,
             fileCount: node.metadata.fileCount,
+            groupNoun: node.metadata.groupNoun,
             internalImportCount: node.metadata.internalImportCount,
             isEntryPoint: entryPointSet.has(node.id),
             selected: node.id === selectedNodeId,
@@ -202,8 +216,9 @@ export function DependencyGraphView({
       refitSignal={refitSignal}
       restoreViewport={restoreViewport}
       viewportRef={viewportRef}
+      {...(minZoom !== undefined ? { minZoom, fitMinZoom: minZoom } : {})}
     >
-      <Panel position="top-left">
+      <Panel position={legendPosition}>
         <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
       </Panel>
       <Panel position="bottom-center">

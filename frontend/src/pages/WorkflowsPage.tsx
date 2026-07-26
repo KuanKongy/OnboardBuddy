@@ -11,7 +11,7 @@ import {
   type NodeProps,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { GraphCanvas } from "@/components/graph/GraphCanvas";
+import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import {
   type WorkflowOrdering,
   type WorkflowSummary,
 } from "@/lib/graphData";
+import { middleTruncate } from "@/lib/format";
 import { layoutGraph } from "@/lib/graphLayout";
 import { buildStepChain, layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
 import { ScoreProvenance } from "@/components/ScoreProvenance";
@@ -159,6 +160,15 @@ function stepTitle(step: WalkthroughStep): string {
   return step.syntheticReturn ? `Response from ${name}` : name;
 }
 
+/**
+ * How many characters of a rail row's title survive.
+ *
+ * Sized for the 280px rail at 0.78125rem. Rows 7, 8, 9 and 12 of OnboardBuddy's
+ * rail all read "POST /api/projects/:id/…" — four rows, one string, nothing to
+ * choose between them. Middle truncation keeps the segment that differs.
+ */
+const RAIL_TITLE_CHARS = 34;
+
 // ── Node ─────────────────────────────────────────────────────────────────────
 
 interface StepNodeData {
@@ -223,7 +233,11 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
         >
           {data.order}
         </span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[0.75rem] font-medium text-foreground">
+        {/* Two lines, wrapped, and broken on the path separators — not
+            `truncate`. A 256px node had empty width below a title clipped at
+            one line, and route-shaped titles clipped to the same prefix as
+            their siblings. */}
+        <span className="min-w-0 flex-1 line-clamp-2 break-all font-mono text-[0.75rem] font-medium leading-tight text-foreground">
           {data.title}
         </span>
         <span
@@ -336,9 +350,15 @@ export function WorkflowsPage() {
     [steps],
   );
 
+  const triggerType = detail?.workflow.trigger_type ?? null;
+
   const layout = useMemo(() => {
     if (chain.nodes.length === 0) return { nodes: [], routing: null as SerpentineLayout["edgeRouting"] | null };
-    const snake = layoutMode === "snake" || (layoutMode === "auto" && shouldSerpentine(chain.nodes, chain.edges));
+    // The trigger type is part of the gate: a journey is a chain by
+    // construction, and the owner's flagship pipeline was the case Auto lost on.
+    const snake =
+      layoutMode === "snake" ||
+      (layoutMode === "auto" && shouldSerpentine(chain.nodes, chain.edges, { triggerType }));
     if (!snake) {
       return {
         nodes: layoutGraph(chain.nodes, chain.edges, {
@@ -351,7 +371,7 @@ export function WorkflowsPage() {
       nodeWidth: NODE_WIDTH, nodeHeight: NODE_HEIGHT, rowGap: 84,
     });
     return { nodes: out.nodes, routing: out.edgeRouting };
-  }, [chain, layoutMode]);
+  }, [chain, layoutMode, triggerType]);
 
   const stepByNodeId = useMemo(() => {
     const m = new Map<string, WalkthroughStep>();
@@ -445,7 +465,12 @@ export function WorkflowsPage() {
   }, [steps]);
 
   return (
-    <div style={{ "--graph-chrome": "170px" } as React.CSSProperties}>
+    <div
+      style={{
+        // Fullscreen leaves only the overlay's own p-3 above and below.
+        "--graph-chrome": fullscreen ? "28px" : "170px",
+      } as React.CSSProperties}
+    >
       <PageHeader
         title="Workflows"
         subtitle="Traced request flows — from the entry point through every function to its side effects, ranked by how critical they are."
@@ -543,7 +568,10 @@ export function WorkflowsPage() {
       {!loadingList && !error && workflows && workflows.length > 0 && (
         <div
           className={cn(
-            "grid gap-3 lg:grid-cols-[250px_1fr]",
+            // 280px, not 250: at 250 the rail clipped four sibling routes to
+            // the identical string. Widening it is half the fix; the other
+            // half is middle-truncating what still does not fit.
+            "grid gap-3 lg:grid-cols-[280px_1fr]",
             fullscreen && "fixed inset-0 z-50 bg-background p-3",
           )}
         >
@@ -655,7 +683,9 @@ export function WorkflowsPage() {
                         which is the one thing a tooltip is for. */}
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span className="block truncate text-[0.78125rem] font-medium">{wf.title}</span>
+                        <span className="block truncate text-[0.78125rem] font-medium">
+                          {middleTruncate(wf.title, RAIL_TITLE_CHARS)}
+                        </span>
                       </TooltipTrigger>
                       <TooltipContent side="right" className="max-w-xs text-left">
                         {wf.title}
@@ -675,14 +705,18 @@ export function WorkflowsPage() {
             </div>
           </div>
 
-          {/* flow graph + step detail */}
-          <div>
+          {/* flow graph + step detail. `graph-shell` makes this column own the
+              same viewport slice the canvas used to claim on its own, so the
+              summary block below eats into the canvas instead of pushing it
+              past the bottom of the window — which is what left the first node
+              at y≈670 with a void band above it. */}
+          <div className="graph-shell">
             {/* Why this flow matters — plain-language ranking reasons, and the
                 derivation of the score that ranked it. The derivation is behind
                 a toggle: it is detail a reader asks for, not a wall they have
                 to read past to reach the diagram. */}
             {selectedSummary && (
-              <div className="mb-2 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
+              <div className="mb-2 shrink-0 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
                 {selectedSummary.purpose && (
                   <p className="text-foreground">{selectedSummary.purpose}</p>
                 )}
@@ -711,13 +745,27 @@ export function WorkflowsPage() {
                         {selectedSummary.reasons!.slice(1).join(" · ")}
                       </p>
                     )}
-                    <ScoreProvenance data={selectedSummary.provenance} showReasons={false} />
+                    {/* No amber caveat: the one this payload carries is the
+                        signal-exclusion note ("2 of the 9 signals describe a
+                        file's position in the import graph…"), which is a
+                        reconciliation note for whoever audits the ranker, not
+                        something a reader of this flow needs above the diagram.
+                        It is still in the response, and still shown where a
+                        derivation is the subject rather than the aside. */}
+                    <ScoreProvenance
+                      data={selectedSummary.provenance}
+                      showReasons={false}
+                      showCaveat={false}
+                    />
                   </div>
                 )}
               </div>
             )}
-          <div className={selectedStep ? "grid gap-3 xl:grid-cols-[1fr_300px]" : ""}>
-            <div className="graph-canvas relative">
+          {/* `min-h-80` is the floor: an open derivation must not squeeze the
+              canvas out of existence — past that the column overflows and the
+              page scrolls, which is the right outcome. */}
+          <div className={cn("min-h-80 flex-1", selectedStep && "grid gap-3 xl:grid-cols-[1fr_300px]")}>
+            <div className="graph-canvas relative !h-full">
               {loadingGraph && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -745,7 +793,9 @@ export function WorkflowsPage() {
                 </Button>
               )}
               {/* Shared canvas: selection no longer moves the camera here
-                  either, and this tab finally gets a minimap. */}
+                  either. The minimap appears only once the flow is longer than
+                  the viewport can hold — over a six-step chain it was a second,
+                  smaller copy of the picture already on screen. */}
               <GraphCanvas
                 nodes={flowNodes}
                 edges={flowEdges}
@@ -755,12 +805,16 @@ export function WorkflowsPage() {
                 fitPadding={0.15}
                 fitMinZoom={0.5}
                 minZoom={0.2}
-                refitSignal={`${layoutMode}:${fullscreen}:${selectedWorkflowId}`}
+                showMiniMap={flowNodes.length >= MINIMAP_MIN_NODES}
+                // `showScoring` too: opening the derivation shortens the
+                // canvas, and a fit computed against the taller box leaves the
+                // graph hanging below the fold.
+                refitSignal={`${layoutMode}:${fullscreen}:${selectedWorkflowId}:${showScoring}`}
               />
             </div>
 
             {selectedStep && (
-              <aside className="graph-canvas overflow-y-auto !bg-card p-4">
+              <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
                 <p className="section-label mb-2">
                   Step {selectedStep.stepOrder} of {steps.length}
                 </p>

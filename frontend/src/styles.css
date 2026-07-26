@@ -222,4 +222,15 @@
     @apply w-full overflow-hidden rounded-xl border border-border bg-card/40;
     height: max(420px, calc(100dvh - var(--graph-chrome, 220px)));
   }
+  /* A column that owns exactly the slice `.graph-canvas` would have taken, so
+     a tab can put a summary block ABOVE its canvas and have the canvas take
+     what is left rather than overflowing the window by the block's height.
+     Without it, Workflows' canvas started ~250px down the viewport while still
+     claiming `100dvh - 170px` of height: React Flow centred the graph in the
+     box instead of in the visible part of it, and the first node landed at
+     y≈670 under a band of empty canvas. Children use `flex-1` + `!h-full`. */
+  .graph-shell {
+    @apply flex min-h-0 flex-col;
+    height: max(420px, calc(100dvh - var(--graph-chrome, 220px)));
+  }
 }

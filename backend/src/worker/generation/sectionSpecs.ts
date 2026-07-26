@@ -101,9 +101,79 @@ const SPECIFICITY_FLOOR = [
   'Prefer a short section that is all substance over a complete-looking one padded with absence statements. Length is never a goal.',
 ].join(' ');
 
-/** Prefix every spec's instructions with the three shared contracts. */
+/**
+ * How to write a citation, shared by every spec.
+ *
+ * Two shapes were measured shipping to readers, and neither is a taste
+ * complaint — both are labels that resolve to nothing.
+ *
+ *   `FloowForge/traced_flows` cited `(r_evidence)` three times. The pipeline
+ *   mints `r1…rN` and nothing else, so that id never existed; it matched no
+ *   rewrite rule and shipped verbatim, and no counter recorded it. The section
+ *   read as receipted while pointing at a fabrication.
+ *
+ *   `OnboardBuddy/architecture_deep` cited `(r1:backend/src/worker/semantic/
+ *   semanticPipeline.ts:36)` on all three of its decision bullets — the alias
+ *   glued to the `where` string the deterministic facts hand it. The rewriter
+ *   needs the closing paren right after the id, so all three shipped as dead
+ *   `r1:` text and the section recorded `resolved: 0`.
+ *
+ * Both are now stripped mechanically (`citationMarkers.ts`), which protects the
+ * reader but costs the claim its evidence. This says it up front so the claim
+ * keeps it.
+ */
+const CITATION_CONTRACT = [
+  'CITATION FORMAT: cite with the bare short id in parentheses, inside the sentence it supports — "(r7)".',
+  'ONLY ids that literally appear in the receipt list exist. An id you composed — "(r_evidence)", "(receipt_1)", "(rN)" — is a fabricated citation: it is stripped before the reader sees it and the claim ships bare, which is worse than not citing at all.',
+  'NEVER glue the id to a path or a line number: "(r7:src/db.ts:14)" does not resolve. The id alone is enough — the chip shows the reader the file and the line.',
+  'Where no receipt supports a sentence, write the locator yourself ("backend/src/lib/db.ts:14") or drop the sentence. Never a bare "r7" at the end of a line.',
+].join(' ');
+
+/** Prefix every spec's instructions with the shared contracts. */
 const withContracts = (instructions: string[]): string =>
-  [NO_PREAMBLE, NO_REPETITION, SPECIFICITY_FLOOR, ...instructions].join(' ');
+  [NO_PREAMBLE, NO_REPETITION, SPECIFICITY_FLOOR, CITATION_CONTRACT, ...instructions].join(' ');
+
+/**
+ * Anything the READER can follow back to the code, in either of the two forms
+ * a completeness check sees.
+ *
+ * `completenessCheck` runs twice over a section's life: on fresh model output,
+ * where citations are still `(r7)` aliases, and again on a CACHED row before it
+ * is reused, where `rewriteInlineCitations` has already turned them into
+ * `[[receipt:uuid]]` markers. A check that knew only one form would reject
+ * every cached row on sight and regenerate the whole package on hash luck.
+ * `file.ext:line` counts as well — it is what `explanationLint` counts, and a
+ * locator a reader can open is a receipt whatever produced it.
+ */
+const CITATION_IN_PROSE = new RegExp(
+  String.raw`\[\[receipt:[0-9a-f-]{8,}\]\]` +
+    `|` +
+    // `(r7)`, `(receipt r7)`, `(r1, r4)`, and the glued `(r7:path…)` form.
+    String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?\[?[rR]\d+(?:\s*(?:,|;|/|&|and)\s*[rR]\d+)*\]?\s*[):]` +
+    `|` +
+    String.raw`[\w@./-]+\.(?:tsx?|jsx?|mjs|cjs|py|rb|go|rs|java|sql|ya?ml|json|toml):\d+`,
+);
+
+/** `## <heading>` slices of a section, fenced code respected. */
+function slicesByHeading(markdown: string): Array<{ heading: string; body: string }> {
+  const out: Array<{ heading: string; body: string }> = [];
+  let heading: string | null = null;
+  let body: string[] = [];
+  let fenced = false;
+  for (const line of markdown.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    const m = fenced ? null : line.match(/^##\s+(?!#)(.+)$/);
+    if (m) {
+      if (heading !== null) out.push({ heading, body: body.join('\n') });
+      heading = m[1]!.replace(/[`*_]/g, '').trim();
+      body = [];
+    } else if (heading !== null) {
+      body.push(line);
+    }
+  }
+  if (heading !== null) out.push({ heading, body: body.join('\n') });
+  return out;
+}
 
 export const SECTION_TYPES = [
   // ORIENT
@@ -646,6 +716,23 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       'Close with "## Tensions to know about": exactly three bullets, one line each, on coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes). Give the real number from `centralNodes` where you have it ("`db.ts` has 47 dependents"), never "a high fan-in".',
       'If `otherClusters` is non-empty, name those components in ONE sentence at the end and say they are smaller and left out of this walkthrough. Do not give them subsections.',
       'The interactive Architecture tab holds the full drill-down graph — say so once at the end, not per cluster.',
+      // The citation desert, and why the general "cite your claims" rule never
+      // reached this section. Measured across 11 stored packages: SEVEN
+      // architecture_deep sections carry zero citations of any kind — no
+      // receipt marker, no alias, no file:line — over 3,000-4,900 characters of
+      // claim paragraphs each. The reason is in the base prompt, which tells
+      // every section that "a claim grounded in the deterministic facts carries
+      // an EMPTY receiptIds array". Every sentence this section is asked for is
+      // grounded in `clusters[].responsibility/boundary/separation`, so the
+      // model correctly concluded that none of them owed a receipt — and a
+      // component map with nothing to open is exactly the section the reviewer
+      // said "does not make sense". The evidence was always there: every
+      // component has member receipts and every decision note is citable at its
+      // comment line. They just were not labelled as belonging to a component,
+      // so the model could not tell which of forty file paths went with which
+      // heading. They are labelled now ("evidence for: …") — this makes using
+      // them the contract.
+      'EVERY "## <label>" COMPONENT SUBSECTION MUST CARRY AT LEAST ONE CITATION. The receipt list below labels each receipt with what it is evidence for — "evidence for: Member of the \\"Backend · Workers\\" cluster", "evidence for: Design rationale recorded in the code: …". Match the label to the heading you are writing and cite that receipt as "(r7)". The responsibility and boundary sentences come from the deterministic facts, and that does NOT excuse the subsection from a citation: a reader who cannot open one real file for a component has been given a shape, not an explanation. Every "<decision> ⇒ <consequence>" bullet cites the rationale note it paraphrases, by its short id.',
       'IF `snapshot.unreadStacks.mustDisclose` is true, add a "## Not covered here" subsection of at most three sentences naming the unparsed language(s) and saying plainly that those files form part of this system but no component above describes them. A component map that silently omits an entire stack reads as the complete architecture.',
     ]),
     deterministic: async (deps) => {
@@ -787,6 +874,36 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       }
       if (!/##\s*Tensions/i.test(content)) {
         issues.push('INCOMPLETE: the closing "## Tensions to know about" section is missing.');
+      }
+
+      // The citation gate — the half of the contract the prompt could only ask
+      // for. Measured on the stored corpus: CourseInsights, FloowForge,
+      // Multiplayer-Tetris, NationalPokedex, OnboardBuddy, StudyFlow and UBCPSS
+      // all shipped architecture_deep with zero citations, and every one of
+      // them passed this check, because it only ever counted headings and
+      // arrows. Two thresholds, because the two failures are different: a
+      // section with nothing citable anywhere is a desert, and a section that
+      // cites its decisions but leaves every component bare is a map of things
+      // the reader cannot open.
+      if (!CITATION_IN_PROSE.test(content)) {
+        issues.push(
+          'INCOMPLETE: this section cites NOTHING — not one receipt id, not one file:line. Every component subsection has member receipts in the list, each labelled "evidence for: Member of the …" with the component it belongs to. Cite one per subsection as "(r7)", and cite each decision note on the bullet that paraphrases it.',
+        );
+      } else {
+        // Judged only on the components that actually got a subsection, so the
+        // complaint can never be about a heading the model was right to omit.
+        const bare = slicesByHeading(content)
+          .filter((s) => majorClusters.some((label) => label && s.heading.includes(label)))
+          .filter((s) => s.body.replace(/\s+/g, ' ').trim().length >= 80 && !CITATION_IN_PROSE.test(s.body))
+          .map((s) => s.heading);
+        const narrated = slicesByHeading(content).filter((s) =>
+          majorClusters.some((label) => label && s.heading.includes(label)),
+        ).length;
+        if (narrated >= 2 && bare.length * 2 > narrated) {
+          issues.push(
+            `INCOMPLETE: ${bare.length} of ${narrated} component subsections cite nothing — ${bare.slice(0, 4).join(', ')}. Each of these has at least one receipt in the list labelled "evidence for: Member of the “<component>” cluster"; cite it as "(r7)" in the sentence it supports. A component the reader cannot open one file of has been described, not explained.`,
+          );
+        }
       }
       return issues;
     },

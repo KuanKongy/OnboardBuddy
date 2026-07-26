@@ -11,6 +11,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { latestSnapshotOrderSql, pushedAtSql } from '../lib/snapshotOrdering.js';
 import type { EvidenceGraph, RepoInventory } from './types/analysis.js';
 import type { DetectedSideEffect } from './engine/sideEffectDetector.js';
 import type { ArchitectureMap } from './engine/architectureClusterer.js';
@@ -21,18 +22,24 @@ import type { RecordLevel } from './semantic/recordTypes.js';
 // ── Previous snapshot resolution ─────────────────────────────────────────────
 
 /**
- * Latest complete snapshot of the same scope created before this one.
+ * Latest complete snapshot of the same scope PUSHED before this one.
  * Re-scans of an old commit find nothing newer and skip the diff.
+ *
+ * The "before this one" cursor is push recency, matching how every reader
+ * resolves "latest" (lib/snapshotOrdering.ts) — ordering the diff baseline by
+ * row-insertion time while readers order by push time would let the two
+ * disagree about which snapshot precedes which.
  */
 export async function findPreviousSnapshot(
   scopeId: string,
   newSnapshotId: string,
 ): Promise<{ snapshotId: string; commitHash: string } | null> {
   const row = (await query(
-    `SELECT id, commit_hash FROM analysis_snapshots
+    `SELECT id, commit_hash FROM analysis_snapshots s
      WHERE scope_id = $1 AND id <> $2 AND status = 'complete'
-       AND created_at < (SELECT created_at FROM analysis_snapshots WHERE id = $2)
-     ORDER BY created_at DESC
+       AND ${pushedAtSql('s')} < (
+         SELECT ${pushedAtSql('cur')} FROM analysis_snapshots cur WHERE cur.id = $2)
+     ORDER BY ${latestSnapshotOrderSql('s')}
      LIMIT 1`,
     [scopeId, newSnapshotId],
   )).rows[0] as { id: string; commit_hash: string } | undefined;

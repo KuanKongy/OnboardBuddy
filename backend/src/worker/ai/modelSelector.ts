@@ -24,6 +24,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { latestSnapshotOrderSql } from '../../lib/snapshotOrdering.js';
 
 export interface CandidateModel {
   id: string;
@@ -147,7 +148,7 @@ async function incumbentModelFor(projectId: string): Promise<string | null> {
        JOIN snapshot_semantic_records ssr ON ssr.snapshot_id = s.id
        JOIN semantic_records sr ON sr.id = ssr.record_id
        WHERE s.project_id = $1 AND s.status = 'complete'
-       ORDER BY s.created_at DESC LIMIT 1`,
+       ORDER BY ${latestSnapshotOrderSql('s')} LIMIT 1`,
       [projectId],
     )).rows[0] as { model_family: string } | undefined;
     return row?.model_family ?? null;
