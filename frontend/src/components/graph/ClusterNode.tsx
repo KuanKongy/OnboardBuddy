@@ -131,6 +131,13 @@ export interface ClusterMemberNodeData {
   dependentCount: number;
   /** Kind of the component this member belongs to — keeps the level colored. */
   clusterKind: string;
+  /**
+   * What this file does, from its stored file record. Null where the analyzer
+   * wrote none, and then nothing takes its place: the drilled canvas used to
+   * be a grid of paths and numbers, and a made-up sentence would be worse than
+   * the path on its own.
+   */
+  summary?: string | null;
   selected: boolean;
   dimmed: boolean;
 }
@@ -166,6 +173,9 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
       <p className="truncate font-mono text-[0.65625rem] text-muted-foreground/70">
         {data.filePath ?? " "}
       </p>
+      {data.summary && (
+        <p className="mt-1 line-clamp-2 text-[0.6875rem] leading-snug text-foreground/80">{data.summary}</p>
+      )}
 
       <div className="mt-1.5 flex items-center gap-2">
         <span className="text-[0.65625rem] tabular-nums text-muted-foreground">

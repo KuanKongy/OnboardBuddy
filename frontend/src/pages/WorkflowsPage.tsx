@@ -761,11 +761,14 @@ export function WorkflowsPage() {
                 )}
               </div>
             )}
-          {/* `min-h-80` is the floor: an open derivation must not squeeze the
-              canvas out of existence — past that the column overflows and the
-              page scrolls, which is the right outcome. */}
-          <div className={cn("min-h-80 flex-1", selectedStep && "grid gap-3 xl:grid-cols-[1fr_300px]")}>
-            <div className="graph-canvas relative !h-full">
+          {/* Flex, not grid, and `!h-auto` on the canvases: their own
+              `100dvh - chrome` height is what overflowed the window in the
+              first place, and a flex child sized by the row needs no
+              percentage to resolve against. `min-h-80` is the floor — an open
+              derivation must not squeeze the canvas out of existence; past
+              that the column overflows and the page scrolls, which is right. */}
+          <div className="flex min-h-80 flex-1 flex-col gap-3 xl:flex-row">
+            <div className="graph-canvas relative !h-auto min-h-0 flex-1">
               {loadingGraph && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -814,7 +817,7 @@ export function WorkflowsPage() {
             </div>
 
             {selectedStep && (
-              <aside className="graph-canvas !h-full overflow-y-auto !bg-card p-4">
+              <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
                 <p className="section-label mb-2">
                   Step {selectedStep.stepOrder} of {steps.length}
                 </p>

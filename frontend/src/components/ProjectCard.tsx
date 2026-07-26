@@ -146,10 +146,32 @@ export function ProjectCard({
   }, [project.id, project.status]);
 
   const live = pipelineProgress(liveJob);
-  const progressValue = project.status === "analyzing" && liveJob ? live.pct : status.progress;
-  const progressText = project.status === "analyzing"
-    ? `${live.stageLabel ? `${live.stageLabel.split(" — ")[0]} ${live.pct}%` : `Analyzing ${live.pct}%`}${extraActiveRuns > 0 ? ` (+${extraActiveRuns} more run${extraActiveRuns > 1 ? "s" : ""})` : ""}`
-    : "";
+  const analyzing = project.status === "analyzing";
+  const progressValue = analyzing && liveJob ? live.pct : status.progress;
+
+  /**
+   * One run, one set of words.
+   *
+   * The same run read "Generating onboarding 93%" on the dashboard, "Analyzing
+   * 0%" in the project list and "In Progress" on the chip beside both. Two
+   * separate faults produced that. The chip carried a status word from a fixed
+   * table while the line next to it carried the live pipeline stage, so the two
+   * halves of one card never used the same vocabulary; and before the first
+   * `/analysis-status` response landed, `pipelineProgress(null)` returned 0 and
+   * the card printed "Analyzing 0%" as though it were a measurement — which is
+   * why a freshly opened list disagreed with a dashboard that had been polling
+   * for a minute.
+   *
+   * Now the stage IS the status word while a run is live, the percentage is
+   * printed once beside it, and an unknown percentage says it is unknown.
+   */
+  const stageToken = live.stageLabel ? live.stageLabel.split(" — ")[0]! : null;
+  const statusLabel = analyzing ? stageToken ?? status.label : status.label;
+  const progressText = !analyzing
+    ? ""
+    : liveJob
+      ? `${live.pct}%${extraActiveRuns > 0 ? ` · +${extraActiveRuns} more run${extraActiveRuns > 1 ? "s" : ""}` : ""}`
+      : "Checking run status…";
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -228,15 +250,15 @@ export function ProjectCard({
           {project.repo_description ?? ""}
         </p>
 
-        <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="truncate text-muted-foreground">{progressText}</span>
+        <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+          <span className="min-w-0 shrink truncate tabular-nums text-muted-foreground">{progressText}</span>
           <Tooltip>
             <TooltipTrigger asChild>
               <span
                 tabIndex={0}
-                className={`cursor-help underline decoration-dotted underline-offset-2 ${status.tone}`}
+                className={`min-w-0 shrink-0 cursor-help truncate underline decoration-dotted underline-offset-2 ${status.tone}`}
               >
-                {status.label}
+                {statusLabel}
               </span>
             </TooltipTrigger>
             <TooltipContent side="top">{status.hint}</TooltipContent>

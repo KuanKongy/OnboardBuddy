@@ -69,7 +69,19 @@ export interface GraphResponse {
    */
   describedNodes?: number;
   truncation?: GraphTruncation | null;
-  graph: { nodes: Array<{ id: string; label: string; kind: string; metadata: Record<string, unknown> }>; edges: Array<{ id: string; source: string; target: string; kind: string }>; entryPoints: string[] };
+  graph: {
+    nodes: Array<{
+      id: string;
+      label: string;
+      kind: string;
+      /** Class/interface nodes only: the id is `<path>#<Name>`, so the file
+       *  it is declared in has to be carried separately. */
+      filePath?: string;
+      metadata: Record<string, unknown>;
+    }>;
+    edges: Array<{ id: string; source: string; target: string; kind: string }>;
+    entryPoints: string[];
+  };
   fileAnalyses: unknown[];
 }
 

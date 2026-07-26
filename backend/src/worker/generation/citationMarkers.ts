@@ -57,16 +57,29 @@ const ALIAS_WITH_LOCATOR = new RegExp(
  * section read as though it carried receipts while pointing at an id that
  * never existed.
  *
+ * `UBCPSS/architecture_deep` found the third shape, and it is the worst one:
+ * `(r142772a7287cf939)` — the letter `r` welded to the untrusted-data FENCE
+ * NONCE. Twice, in the disclosure paragraph. `[rR]\d+` matches `r142772` and
+ * then hits `a`, so the whole thing sailed through as prose and the run
+ * recorded `dropped: []`. A pipeline-internal nonce is the last string that
+ * should reach a reader.
+ *
  * Deliberately narrow, because this DELETES text and a wrong deletion mangles
- * a sentence. Only `r`/`receipt` followed by `_`/`:` and a word, or by `-` and
- * a DIGIT, qualifies. That is enough for every hallucination shape seen
- * (`r_evidence`, `receipt_1`, `r:2`, `r-3`) and cannot reach the English and
- * code parentheticals that live in this corpus — `(r squared)`, `(r1cm)`,
+ * a sentence. Three qualifying shapes: `r`/`receipt` + `_`/`:` + a word;
+ * `r-` + a digit; or `r` + a digit + at least six more alphanumerics. Nothing
+ * else. That covers every hallucination seen (`r_evidence`, `receipt_1`,
+ * `r:2`, `r-3`, `r142772a7287cf939`) and cannot reach the English and code
+ * parentheticals that live in this corpus — `(r squared)`, `(r1cm)`,
  * `(runId)`, `(req.body)`, `(r-value)`, `(read-only)` all fail it.
  */
-const UNKNOWN_REF = String.raw`[rR](?:eceipt)?(?:[_:][A-Za-z0-9][\w:.-]{0,39}|-\d[\w.-]{0,39})`;
+const UNKNOWN_REF = String.raw`[rR](?:eceipt)?(?:[_:][A-Za-z0-9][\w:.-]{0,39}|-\d[\w.-]{0,39}|\d[0-9A-Za-z]{6,})`;
+// The bracket branch is guarded on both sides: `[[receipt:<uuid>]]` — the
+// marker this module EMITS — is `[receipt:…]` inside one more bracket, and an
+// unguarded rule ate every citation it had just resolved.
 const UNKNOWN_ALIAS_GROUP = new RegExp(
-  String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?\[?(${UNKNOWN_REF})\]?\s*\)` + `|` + String.raw`\[(${UNKNOWN_REF})\]`,
+  String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?\[?(${UNKNOWN_REF})\]?\s*\)` +
+    `|` +
+    String.raw`(?<!\[)\[(${UNKNOWN_REF})\](?!\])`,
   'g',
 );
 

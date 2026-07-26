@@ -92,6 +92,24 @@ export interface WorkflowExtraction {
 
 const MAX_DEPTH = 8;
 const MAX_STEPS = 20;
+/**
+ * Steps held back for continuations that actually arrive somewhere.
+ *
+ * The walk is depth-first in source order, so the first branch out of a
+ * handler gets to spend the whole budget before any sibling is tried. Where
+ * that branch is wide and inert — validation, shaping, formatting — the trace
+ * hits the cap inside it and the sibling holding the effect is never visited:
+ * CourseInsights' `POST /query` filled all twenty steps with validators and
+ * stopped one hop short of the persister that is the point of the endpoint,
+ * reporting a flow that touches nothing.
+ *
+ * Raising the cap only moves the cliff and costs a step on every trace in the
+ * fleet. Instead the last quarter of the budget is reserved: once it is
+ * reached, only edges that can still arrive at an effect are followed. A
+ * branch that cannot reach one adds shaping detail, and shaping detail is
+ * exactly what a trace should give up to keep what the flow DOES.
+ */
+const EFFECT_RESERVE = Math.ceil(MAX_STEPS / 4);
 
 /** Edge types a request-flow trace follows (spec traversal set). */
 const TRAVERSAL_EDGES: ReadonlySet<EvidenceEdgeType> = new Set([
@@ -205,6 +223,12 @@ interface TraversalContext {
   contained: Map<string, string[]>;
   /** Side effects by symbol stable key (class methods fall back to class). */
   effectsByKey: Map<string, DetectedSideEffect[]>;
+  /**
+   * Keys from which a traversal path still ARRIVES at something that does
+   * anything. Computed once per snapshot by a reverse sweep from every
+   * effect-bearing node, so the trace can ask the question for free.
+   */
+  effectReaching: Set<string>;
 }
 
 function buildTraversalContext(input: ExtractWorkflowsInput): TraversalContext {
@@ -226,7 +250,43 @@ function buildTraversalContext(input: ExtractWorkflowsInput): TraversalContext {
     effectsByKey.set(key, [...(effectsByKey.get(key) ?? []), se]);
   }
 
-  return { nodesByKey, outgoing, contained, effectsByKey };
+  const ctx: TraversalContext = { nodesByKey, outgoing, contained, effectsByKey, effectReaching: new Set() };
+  ctx.effectReaching = computeEffectReaching(ctx);
+  return ctx;
+}
+
+/**
+ * Reverse sweep from every node that does something, over the same edges the
+ * trace follows. Linear in nodes+edges and run once, which is what makes it
+ * affordable to consult on every edge of every trace.
+ */
+function computeEffectReaching(ctx: TraversalContext): Set<string> {
+  const incoming = new Map<string, string[]>();
+  for (const [sourceKey, edges] of ctx.outgoing) {
+    for (const e of edges) {
+      const prev = incoming.get(e.targetKey);
+      if (prev) prev.push(sourceKey);
+      else incoming.set(e.targetKey, [sourceKey]);
+    }
+  }
+
+  const reaching = new Set<string>();
+  const frontier: string[] = [];
+  for (const [key, node] of ctx.nodesByKey) {
+    // A schema node is the effect itself — the trace ends on it with a data
+    // step — and everything else is judged by the same test the trace uses.
+    if (node.type !== 'schema' && !hasEffect(node, ctx)) continue;
+    reaching.add(key);
+    frontier.push(key);
+  }
+  for (let i = 0; i < frontier.length; i++) {
+    for (const sourceKey of incoming.get(frontier[i]!) ?? []) {
+      if (reaching.has(sourceKey)) continue;
+      reaching.add(sourceKey);
+      frontier.push(sourceKey);
+    }
+  }
+  return reaching;
 }
 
 /**
@@ -379,6 +439,10 @@ function trace(
     if (!isSeed && signals.includes('response_output')) return;
 
     for (const edge of ctx.outgoing.get(key) ?? []) {
+      // Spend the reserve on paths that arrive somewhere — see EFFECT_RESERVE.
+      // Checked per edge, so the guard bites the moment the budget gets short
+      // no matter how deep in a barren subtree the trace happens to be.
+      if (MAX_STEPS - steps.length <= EFFECT_RESERVE && !ctx.effectReaching.has(edge.targetKey)) continue;
       visit(edge.targetKey, depth + 1);
     }
   };

@@ -5,6 +5,7 @@ import {
   branchRankSql,
   latestSnapshotOrderSql,
   pushedAtSql,
+  wantedBranchSql,
 } from "../../src/lib/snapshotOrdering.js";
 import { resolvePackageContext } from "../../src/api/services/packageResolver.js";
 import { mockQuery, resetTestHarness } from "../helpers/testHarness.js";
@@ -54,8 +55,11 @@ describe("snapshotOrdering", () => {
     expect(rank).to.contain("COALESCE($2, '') = ''");
     // Row predates branch stamping -> it still qualifies.
     expect(rank).to.contain("COALESCE(s.branch, '') = ''");
-    // It is an ORDER BY term, so it can only reorder rows, never drop them.
-    expect(latestSnapshotOrderSql("s", "$2")).to.contain(`${rank} DESC`);
+    // It is an ORDER BY term, so it can only reorder rows, never drop them —
+    // and an unspecified branch falls back to the project's own default.
+    const order = latestSnapshotOrderSql("s", "$2");
+    expect(order).to.contain(`${branchRankSql("s", wantedBranchSql("s", "$2"))} DESC`);
+    expect(order).to.contain("SELECT pb.branch FROM projects pb");
 
     let latestQuery = "";
     let latestParams: unknown[] | undefined;
@@ -69,8 +73,13 @@ describe("snapshotOrdering", () => {
     });
     const ctx = await resolvePackageContext({ projectId: PROJECT_ID, branch: "branch-never-analyzed" });
     expect(latestParams).to.deep.equal([PROJECT_ID, "branch-never-analyzed"]);
-    // No WHERE clause filters on branch, so the safe-degrade path resolves.
-    expect(latestQuery).to.not.match(/WHERE[\s\S]*\bs\.branch\s*=/i);
+    // Branch appears only in ORDER BY, never in WHERE — so asking for a branch
+    // nobody analyzed still resolves instead of returning nothing.
+    const whereClause = latestQuery.slice(
+      latestQuery.search(/\bWHERE\b/i),
+      latestQuery.search(/\bORDER BY\b/i),
+    );
+    expect(whereClause).to.not.match(/\bbranch\b/i);
     expect(ctx?.snapshotId).to.equal("s1");
   });
 
@@ -88,12 +97,22 @@ describe("snapshotOrdering", () => {
         }
         if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) continue;
         const src = readFileSync(full, "utf8");
-        // Statements that read analysis_snapshots AND order by a bare
-        // created_at — the exact shape this module replaced.
         for (const stmt of src.split("`")) {
-          if (!/FROM analysis_snapshots/i.test(stmt)) continue;
-          if (/ORDER BY\s+(?:[a-z0-9_]+\.)?created_at DESC/i.test(stmt)) {
-            offenders.push(`${full}: ${stmt.replace(/\s+/g, " ").trim().slice(0, 110)}`);
+          // Every alias analysis_snapshots is bound to in this statement.
+          const aliases = [...stmt.matchAll(/\b(?:FROM|JOIN)\s+analysis_snapshots(?:\s+(?!ON\b|WHERE\b)([a-z0-9_]+))?/gi)]
+            .map((m) => m[1] ?? "analysis_snapshots");
+          if (aliases.length === 0) continue;
+          // The banned shape: created_at as the FIRST sort key of a snapshot
+          // relation. latestSnapshotOrderSql keeps `<alias>.created_at DESC`
+          // as its LAST tiebreak, which is fine — only leading it is the bug.
+          for (const alias of aliases) {
+            const leading = new RegExp(
+              `ORDER BY\\s+(?:${alias}\\.)?created_at DESC`, "i",
+            );
+            if (leading.test(stmt)) {
+              offenders.push(`${full}: ${stmt.replace(/\s+/g, " ").trim().slice(0, 110)}`);
+              break;
+            }
           }
         }
       }

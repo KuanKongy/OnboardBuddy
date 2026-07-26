@@ -918,7 +918,7 @@ export function detectEntrypoints(fileAnalyses: FileAnalysis[]): DetectedEntrypo
 
     // UI action handlers — the interaction surface of a client-side app.
     for (const action of detectUiActions(
-      fa, relativePath, effectfulSymbolNames, effectfulByFile.get(relativePath) ?? new Set(),
+      fa, relativePath, effectfulKeys, effectfulByFile.get(relativePath) ?? new Set(),
     )) {
       entrypoints.push(action);
       foundEntrypoint = true;
