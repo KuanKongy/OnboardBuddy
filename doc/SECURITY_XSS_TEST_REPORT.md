@@ -199,9 +199,10 @@ dead weight — removed, see §5.)
 P-01…P-10, catalogued in `backend/test/security/injectionCatalogue.ts`) — not re-authored:
 
 - Payload files (`src/audit.ts`, `src/config.ts`, `src/index.ts`, `src/transfer.ts`, `PAYLOADS.md`)
-  copied byte-for-byte into `C:/Users/en808/AppData/Local/Temp/onboardbuddy-injection-demo/`,
-  keeping the `src/` layout (never under `fixtures/`, which the ingester ignores —
-  `repoIngester.ts:27-75`).
+  copied byte-for-byte into `doc/plans/injection-demo-repo/` (git-excluded, durable — relocated
+  here from a `%TEMP%` scratch dir mid-round so a Disk Cleanup can't silently lose the built repo
+  while waiting on a working credential), keeping the `src/` layout (never under `fixtures/`,
+  which the ingester ignores — `repoIngester.ts:27-75`).
   Root `README.md` = the fixture README's exact body (P-01…P-05 intact) with a disclaimer
   prepended stating the repo is a deliberate security-test artifact.
   Three payload-free filler modules (`src/accounts.ts`, `src/ledgerStore.ts`, `src/httpServer.ts`)
@@ -214,18 +215,35 @@ P-01…P-10, catalogued in `backend/test/security/injectionCatalogue.ts`) — no
   RFC — caught before commit, replaced with plain unlinked text.
 - `git init -b main`, committed locally (`a75b9c3`). **Not pushed.**
 
-**Live import: blocked on credential, by design contingency, not a stall.** The stored github.com
-credential for `ng-eugene` was already confirmed dead this session (`git ls-remote` fails
-non-interactively — `terminal prompts disabled`, no usable stored credential; `GET
-api.github.com/user` also `401`). The user supplied a PAT (`ghp_…P5On`, correct 40-char shape) —
-it also returned `401 Bad credentials` from a direct API check. Per the plan's own contingency and
-the user's explicit choice when asked, this stayed **local-build-only**: the repo is built,
-committed, and ready; the exact commands to finish are:
+**Live import: blocked on credential, twice, by design contingency, not a stall.** The stored
+github.com credential for `ng-eugene` was already confirmed dead this session (`git ls-remote`
+fails non-interactively — `terminal prompts disabled`, no usable stored credential; `GET
+api.github.com/user` also `401`).
+
+- **First PAT** (`ghp_…P5On`, classic, correct 40-char shape): `401 Bad credentials` from a direct
+  API check — dead/revoked token, not a scope issue.
+- **Second PAT** (`github_pat_11BA4T…`, fine-grained): **authenticates fine**
+  (`GET /user` → `200`, confirmed as `ng-eugene`; `GET /repos/ng-eugene/onboardbuddy-injection-demo`
+  → `200`, confirms the repo already exists, private, empty). `git push` still failed —
+  `403 Write access to repository not granted` — and `GET .../repos/...` responded with
+  `x-accepted-github-permissions: metadata=read`, confirming the **token itself** was never granted
+  `Contents: Read and write` for this repository (the repo JSON's `permissions.push: true` reflects
+  the *user's* role, not what this specific fine-grained token is scoped to — a common confusion
+  point with fine-grained PATs). This needs a token edit on github.com, not a retry: Settings →
+  Developer settings → Fine-grained tokens → this token → **Repository access** must explicitly
+  include `onboardbuddy-injection-demo`, and **Permissions → Contents** must be **Read and write**.
+  No regeneration needed — permission edits apply to the existing token.
+
+Per the plan's own contingency, this stayed **local-build-only** both times rather than stalling
+the rest of the round. The repo is built, committed, and now durably placed; the exact commands to
+finish once a correctly-scoped token exists are:
 
 ```bash
-cd "C:/Users/en808/AppData/Local/Temp/onboardbuddy-injection-demo"
+cd "doc/plans/injection-demo-repo"     # relative to repo root; git-excluded, not a submodule
 git remote add origin https://github.com/ng-eugene/onboardbuddy-injection-demo.git
 git push -u origin main
+# then remove the token from the URL/config immediately if it was embedded for auth:
+#   git push "https://ng-eugene:$GH_DEMO_TOKEN@github.com/ng-eugene/onboardbuddy-injection-demo.git" main:main
 ```
 
 After that, the remaining steps (confirm the GitHub App has repo access via
@@ -234,7 +252,7 @@ After that, the remaining steps (confirm the GitHub App has repo access via
 whether the beacon image / phishing link / "Verified safe" opener / suppressed-finding /
 echoed-system-prompt landed in stored section text) were **not run** — they require the push to
 land first. This is the one piece of the plan's ask genuinely not completed, and it is blocked on
-an external credential, not on effort.
+an external credential's permission scope, not on effort.
 
 ## 4. Results — does the central question hold?
 
@@ -277,8 +295,9 @@ or not reproduced):**
   information disclosure (verified), just an imprecise status code. One-line UUID-shape check,
   left as a follow-up rather than folded in, since the probes found no actual leak risk.
 - The demo-repo prompt-injection **live import** (github.com push → GitHub App import → per-payload
-  audit of the generated onboarding text) is blocked on a working PAT, not attempted further this
-  round per the user's explicit choice — see §3.7 for the exact resumption commands.
+  audit of the generated onboarding text) is blocked on a correctly-scoped GitHub token — two PATs
+  tried this round, one dead, one authenticating but missing `Contents: Read and write` for this
+  repo — see §3.7 for the exact diagnosis and resumption commands.
 
 **Also fixed — pre-existing, unrelated to the XSS/SQLi/CSRF/IDOR threat model, but directly
 blocking this round's own required verification (`npm run test`, `npx vitest run`) on this
@@ -343,9 +362,10 @@ Concrete acceptance, reproduced this session (not asserted, run):
   *after* the limiter, so no LLM call fires): flips to `429` at the exact count that fills the
   window given prior real `/ask` calls already made this session — consistent, not just internally
   self-tested.
-- Repo import: local build complete, `supportedFileCount = 7`, zero `beacon.invalid`/`evil.example`
-  leakage risk (both are the *intended* payload hosts, reserved/non-resolvable) confirmed by host
-  grep; live import blocked on credential, resumption commands in §3.7.
+- Repo import: local build complete (now at `doc/plans/injection-demo-repo/`, git-excluded,
+  durable), `supportedFileCount = 7`, zero `beacon.invalid`/`evil.example` leakage risk (both are
+  the *intended* payload hosts, reserved/non-resolvable) confirmed by host grep; live import
+  blocked on token permission scope (§3.7), resumption commands there.
 
 ## 7. Test-artifact hygiene
 
