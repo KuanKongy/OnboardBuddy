@@ -59,15 +59,6 @@ describe('workflow ranking', () => {
     expect(broad.reasons.join(' ')).to.contain('3 kinds of side effect');
   });
 
-  /**
-   * CONTRACT CHANGE: the penalty is on the SHARE of the trace that only shapes
-   * data, not on raw length. The old form charged `steps - 8` up to a flat
-   * −0.2, which billed a 20-step pipeline writing rows in eight modules exactly
-   * what it billed a 20-step wander through formatting helpers. Length is not
-   * the tell — the ratio is. What this test asserts is unchanged (a sprawling
-   * trace scores below a tight one); only the reason string moves, from
-   * "long traces drift" to a count of the drifting steps.
-   */
   it('penalises a trace that keeps going past the point of meaning', () => {
     const tight = rank(ep('http_route', '/a'), steps('trigger', 'auth_guard', 'data_write', 'response'));
     const sprawling = rank(
@@ -75,33 +66,7 @@ describe('workflow ranking', () => {
       steps('trigger', 'auth_guard', 'data_write', ...Array(14).fill('transform') as WorkflowStepKind[], 'response'),
     );
     expect(sprawling.score).to.be.lessThan(tight.score);
-    expect(sprawling.reasons.join(' ')).to.contain('14 of 18 steps only shape data');
-  });
-
-  it('charges drift by share, so a long flow doing real work keeps its score', () => {
-    // The reason the penalty moved off length. Both traces are 18 steps; only
-    // one of them spent them wandering.
-    const working = rank(
-      ep('http_route', '/a'),
-      steps('trigger', ...Array(17).fill('data_write') as WorkflowStepKind[]),
-    );
-    const drifting = rank(
-      ep('http_route', '/a'),
-      steps('trigger', 'data_write', ...Array(16).fill('transform') as WorkflowStepKind[]),
-    );
-    expect(working.score).to.be.greaterThan(drifting.score);
-    expect(working.reasons.join(' '), 'no drift charge for a trace that keeps working')
-      .to.not.contain('only shape data');
-  });
-
-  it('leaves ordinary plumbing alone: a few transform steps are not drift', () => {
-    // A short trace can read as mostly-transform (4 of 7) without having gone
-    // anywhere, so the charge is gated on an absolute count as well as a share.
-    const ordinary = rank(
-      ep('ui_action'),
-      steps('trigger', 'data_write', 'transform', 'transform', 'transform', 'transform', 'side_effect'),
-    );
-    expect(ordinary.reasons.join(' ')).to.not.contain('only shape data');
+    expect(sprawling.reasons.join(' ')).to.contain('long traces drift');
   });
 
   /**
@@ -111,9 +76,10 @@ describe('workflow ranking', () => {
    * repository: the analysis and generation pipelines both tiered `supporting`
    * while a settings DELETE was the #1 core flow.
    *
-   * Eligibility came first: a reached consumer becomes eligible for the
-   * `userTriggered` term that already existed. Fan-in is now scored on top of
-   * it — see the `inboundHandoffs` case below.
+   * The fix is eligibility only. Nothing here changes a weight: a reached
+   * consumer becomes eligible for the `userTriggered` term that already
+   * existed, and its position then falls out of the same arithmetic as
+   * everything else.
    */
   describe('async hand-offs', () => {
     const consumer = () => steps('trigger', 'data_read', 'data_write');
@@ -130,48 +96,11 @@ describe('workflow ranking', () => {
       expect(rank(ep('message_consumer', 'nightly'), consumer()).tier).to.equal('supporting');
     });
 
-    /**
-     * CONTRACT CHANGE: `inboundHandoffs` used to carry zero weight, and this
-     * test pinned the zero — eligibility was allowed to be the only difference
-     * between a reached consumer and an unreached one, deliberately, so that a
-     * ranking already verified across the calibration fleet would not move.
-     *
-     * That fleet has now been re-measured end to end, and the zero is wrong on
-     * the merits: how many distinct flows route work through a consumer is the
-     * clearest evidence available that it is load-bearing. On this repository
-     * the analysis and generation consumers own the whole pipeline and had four
-     * and three producers each, yet ranked 55th and 57th of 58 core flows —
-     * below a single-row settings delete. The term is bounded (four hand-offs)
-     * so a fan-in hub cannot run away with the list.
-     */
-    it('lifts a consumer that many flows hand work to, in bounded steps', () => {
+    it('scores a reached consumer exactly as the same shape with a user trigger', () => {
+      // The guard against reweighting: eligibility must be the ONLY difference.
       const reached = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true });
-      const fedByFour = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true, inboundHandoffs: 4 });
-      expect(fedByFour.score).to.be.greaterThan(reached.score);
-      expect(fedByFour.reasons.join(' ')).to.contain('4 other flows hand work to it');
-
-      // Bounded: past the cap, more producers add nothing.
-      const fedByTwenty = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true, inboundHandoffs: 20 });
-      expect(fedByTwenty.score).to.equal(fedByFour.score);
-
-      // And a single producer is worth strictly less than four.
-      const fedByOne = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true, inboundHandoffs: 1 });
-      expect(fedByOne.score).to.be.greaterThan(reached.score);
-      expect(fedByOne.score).to.be.lessThan(fedByFour.score);
-      expect(fedByOne.reasons.join(' ')).to.contain('1 other flow hands work to it');
-    });
-
-    it('ranks the pipeline consumer above a single-row settings delete', () => {
-      // The regression in one line: what the reweight exists to fix.
-      const pipeline = rank(
-        ep('message_consumer', 'ANALYSIS_QUEUE'),
-        [...steps('trigger', 'data_read', 'data_write', 'side_effect')]
-          .map((s, i) => ({ ...s, filePath: `src/worker/stage${i}.ts` })),
-        false, false, { reachedFromUser: true, inboundHandoffs: 4 },
-      );
-      const settingsDelete = rank(ep('http_route', '/ranking-weights/:role'), steps('trigger', 'data_write', 'response'));
-      expect(pipeline.tier).to.equal('core');
-      expect(pipeline.score).to.be.greaterThan(settingsDelete.score);
+      const direct = rank(ep('message_consumer', 'q'), consumer(), false, false, { reachedFromUser: true, inboundHandoffs: 4 });
+      expect(direct.score).to.equal(reached.score);
     });
   });
 
