@@ -52,6 +52,13 @@ import { query, pool } from '../lib/db.js';
 import { recomputeProjectStatus } from '../lib/projectStatus.js';
 
 const execFileAsync = promisify(execFile);
+// The worker image (Dockerfile.worker, alpine) ships BusyBox `unzip` on PATH —
+// the default here. On a native (non-Docker) dev machine, PATH resolution for
+// a bare command name does not reliably reach a spawned child process through
+// every npm/tsx-watch process hop, so this is override-able with an absolute
+// path via `UNZIP_BIN` in `.env` rather than patched to a Windows-specific
+// binary name, which would silently break the Linux/alpine deploy target.
+const UNZIP_BIN = process.env.UNZIP_BIN ?? 'unzip';
 
 // ─── Shared job helpers ──────────────────────────────────────────────────────
 
@@ -121,7 +128,7 @@ async function fetchRepoToTmp(project: ProjectRow, projectId: string, tmpDir: st
     : (await getCommitSha(token, project.repo_owner, project.repo_name, requestedCommit ?? branch)).trim();
   await downloadZipball(token, project.repo_owner, project.repo_name, requestedCommit ?? branch, zipPath);
   await assertZipEntriesStayInside(zipPath, extractDir);
-  await execFileAsync('unzip', ['-q', zipPath, '-d', extractDir]);
+  await execFileAsync(UNZIP_BIN, ['-q', zipPath, '-d', extractDir]);
   const entries = fs.readdirSync(extractDir);
   return { repoRoot: path.join(extractDir, entries[0]!), commitHash, token };
 }
