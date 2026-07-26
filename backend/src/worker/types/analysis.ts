@@ -205,6 +205,13 @@ export interface SymbolInfo {
   exported: boolean;
   isDefault: boolean;
   jsDoc?: string;
+  /**
+   * Name of the enclosing symbol for a function expression declared inside
+   * another function's body (`function Outer() { const inner = () => … }`).
+   * Set only on nested symbols; `name` is then `Outer.inner` and the stable
+   * key `path#Outer.inner`, mirroring how class members are keyed.
+   */
+  containerName?: string;
   // evidence identity (doc/Pipeline.md "Symbol extraction")
   stableKey?: string;        // relative/path.ts#SymbolName
   signatureHash?: string;
@@ -255,9 +262,49 @@ export interface ExportRecord {
   isDefault?: boolean;       // export default expression
   expression?: string;       // text of default export expression
   sourceSpecifier?: string;  // for re-exports: the specifier being re-exported
+  /**
+   * Local binding names, parallel to `namedExports`. Under an alias
+   * (`export { load as loadUser }`) the two differ: `namedExports` holds the
+   * PUBLIC name, this holds the declaration's own name. Export reconciliation
+   * needs the local one to find the symbol in this file.
+   */
+  localBindings?: string[];
+  /** Local declaration a default export points at — see `defaultExportLocalName`. */
+  defaultLocalName?: string;
 }
 
 // ─── Per-file parse result ────────────────────────────────────────────────────
+
+/**
+ * A UI route declared in a router config rather than implied by a directory
+ * convention — `<Route path element>` or `createBrowserRouter([{ path, element }])`.
+ * This is the only place a page's real path is written down.
+ */
+export interface UiRouteDeclaration {
+  /** Declared pattern, parent-joined for nested routes: '/app/settings'. */
+  routePath: string;
+  /** Component the route renders, when it is a bare reference (not inline JSX). */
+  componentName?: string;
+  line: number;
+}
+
+/**
+ * A Socket.IO event handler (`socket.on('draw-ops', handler)`). For a realtime
+ * app these ARE the interaction surface — the HTTP surface is often just a
+ * health check — so without them the whole product looks like it does nothing.
+ */
+export interface SocketHandler {
+  /** Event name as registered, e.g. 'create-room'. */
+  event: string;
+  /** Symbol name of the handler in `handlerRelativePath` (synthesized when inline). */
+  handlerSymbolName?: string;
+  handlerRelativePath?: string;
+  /** Declaring class when the handler is a class method. */
+  handlerParentName?: string;
+  /** 'connection' anchors the namespace; everything else is nested inside it. */
+  isConnection: boolean;
+  line: number;
+}
 
 /** An HTTP route registration (`router.get('/x', handler)`) found in a file. */
 export interface RouteRegistration {
@@ -289,6 +336,10 @@ export interface FileAnalysis {
   exports: ExportRecord[];
   /** HTTP route registrations found anywhere in the file (AST-detected). */
   routeRegistrations?: RouteRegistration[];
+  /** UI routes declared in a router config in this file. */
+  uiRouteDeclarations?: UiRouteDeclaration[];
+  /** Socket.IO event handlers registered in this file. */
+  socketHandlers?: SocketHandler[];
   /** Express-style sub-router mounts — lets route paths resolve to full paths. */
   routerMounts?: RouterMount[];
   hasParseErrors: boolean;

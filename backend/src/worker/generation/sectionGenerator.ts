@@ -13,7 +13,7 @@ import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import { SECTION_SPECS, SECTION_TITLES, type SectionType, type SectionDeps } from './sectionSpecs.js';
-import { collectSectionReceipts } from './deterministicReceipts.js';
+import { collectSectionReceiptsOrGap, type ReceiptGap } from './deterministicReceipts.js';
 import { validateGeneratedOutput, type GeneratedOutput, type ValidationOutcome } from './citationValidator.js';
 import {
   markUnverifiedClaims,
@@ -22,6 +22,8 @@ import {
   type UnverifiedMarkResult,
 } from './citationMarkers.js';
 import { lintVoice } from './voiceLint.js';
+import { lintExplanation, type ExplanationEvidence } from './explanationLint.js';
+
 import { makeUntrustedFence, safeIdentifier, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
 import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdownSanitizer.js';
 
@@ -29,7 +31,89 @@ import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdo
 // (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.4/§5.5): the prompt shape changed,
 // so cached sections generated under the old, unfenced prompt must not be
 // reused — the evidence hash includes this version.
-export const SECTION_PROMPT_VERSION = 'section-v6';
+//
+// v7: receipts now carry an "evidence for: …" label in the prompt, and the
+// inline rewriter drops invented aliases. Both are prompt/output-shape
+// changes that the evidence hash cannot otherwise see (retrieval is
+// deliberately excluded from the key), so without this bump a cache hit would
+// keep serving prose written against the unlabelled receipt list — the exact
+// citation desert this version fixes.
+export const SECTION_PROMPT_VERSION = 'section-v7';
+
+/**
+ * Repairs the two contract breaches that do not need a model to fix.
+ *
+ * Both were still present after the retry on real output: `capabilities`
+ * leaked `wf:`/`cluster:` keys the prompt explicitly forbids, and FloowForge's
+ * `big_picture` never mentioned that 49 of its 167 files are Python nobody
+ * read. Asking a second time is the wrong tool for either — one is a string
+ * the reader must never see, the other is a fact we hold with certainty. A
+ * prompt is a request; this is the guarantee.
+ *
+ * Deliberately narrow: it rewrites identifiers into their readable form and
+ * appends a disclosure the evidence entitles us to state. It never edits a
+ * claim, because that would be inventing prose the model did not write.
+ */
+export function repairExplanation(
+  markdown: string,
+  evidence: { mustDisclose?: string[] },
+): { markdown: string; repairs: string[] } {
+  const repairs: string[] = [];
+  let out = markdown ?? '';
+
+  // `wf:web/app/p/[token]/page.tsx:PublicFormPage` → `PublicFormPage`;
+  // `cluster:web/modules` → `web/modules`. The prefix is an internal join key
+  // and means nothing to a reader.
+  const before = out;
+  out = out
+    // Greedy to the LAST colon, because a real key's path contains brackets
+    // and dots (`wf:web/app/p/[token]/page.tsx:PublicFormPage`) — a lazy match
+    // that excluded `]` stopped inside `[token]` and left the prefix behind.
+    .replace(/\bwf:\S*:([A-Za-z_$][\w$]*)/g, '$1')
+    .replace(/\bcluster:([^\s`)\]]+)/g, '$1');
+  if (out !== before) repairs.push('internal_key_leak');
+
+  // Disclosure is appended only when the prose genuinely omits it — if the
+  // model complied, nothing is added.
+  const undisclosed = (evidence.mustDisclose ?? []).filter(
+    (lang) => !new RegExp(`\\b${lang.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(out),
+  );
+  if (undisclosed.length > 0) {
+    const list = undisclosed.join(', ');
+    out += `\n\n> **Not covered here.** Part of this repository is written in ${list}, which OnboardBuddy does not parse. No section in this package describes that code — it exists, and nothing here tells you what it does.\n`;
+    repairs.push('undisclosed_gap');
+  }
+
+  return { markdown: out, repairs };
+}
+
+/**
+ * What the explanation validator judges this section against.
+ *
+ * `mustDisclose` is the load-bearing part. FloowForge is 100 Python files out
+ * of 167 — about forty FastAPI route handlers — and its generated package
+ * never once said "Python", so a reader finished it believing the repo is a
+ * frontend. The facts were in the deterministic context the whole time; only
+ * the prompt asked for them, and a prompt is a request, not a guarantee. This
+ * makes it a check.
+ */
+function buildExplanationEvidence(
+  params: GenerateSectionParams,
+  spec: { mode: string },
+  bundle: { deterministicContext?: unknown },
+): ExplanationEvidence {
+  const det = (bundle.deterministicContext ?? {}) as {
+    snapshot?: { unreadStacks?: { mustDisclose?: boolean; languages?: Array<{ language: string }> } | null };
+  };
+  const unread = det.snapshot?.unreadStacks;
+  return {
+    mode: spec.mode as ExplanationEvidence['mode'],
+    // Only demand disclosure when the omission would actually mislead —
+    // `mustDisclose` already applies that threshold (≥10% of the repo, or ≥20
+    // files, in a source language nothing parsed).
+    mustDisclose: unread?.mustDisclose ? (unread.languages ?? []).map((l) => l.language) : [],
+  } satisfies ExplanationEvidence;
+}
 
 const SECTION_OUTPUT_SCHEMA = {
   type: 'object',
@@ -107,14 +191,44 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
   // (journey step nodes, mapped files, config files) become citable — the
   // prose narrates deterministic facts, so the receipts must cover them or
   // every file mention validates as "cites no receipt from it".
-  const detReceipts = await collectSectionReceipts(params.sectionType, params.deps);
-  const seenKeys = new Set(bundle.receipts.map((r) => r.nodeStableKey ?? r.filePath ?? r.receiptId));
+  // A broken receipt query costs this section its CITATIONS, never its prose:
+  // see `collectSectionReceiptsOrGap`. `receiptGap` is recorded as an honest
+  // unknown below and bars the row from the cache.
+  const { rows: detReceipts, gap: receiptGap } = await collectSectionReceiptsOrGap(params.sectionType, params.deps);
+  // What each deterministic receipt is evidence OF — "Member of the
+  // \"Backend · Workers\" cluster", "Design rationale recorded in the code: …".
+  //
+  // `collectSectionReceipts` has always computed this (`DeterministicReceiptRow
+  // .claim`, persisted on the receipt row so the receipt viewer can answer
+  // "what does this prove?"), and the merge below has always thrown it away.
+  // That is the architecture_deep citation desert, mechanically: the section is
+  // told to write one subsection per component and to cite each decision note's
+  // receipt, and the receipt list it is handed is a flat run of file paths with
+  // no component attached and no way to tell a rationale comment from any other
+  // snippet. Measured on 11 stored packages: 7 architecture_deep sections carry
+  // ZERO citations. A model cannot cite a cluster claim to evidence that is not
+  // labelled with a cluster.
+  const receiptLabels = new Map<string, string>();
+  const keyToReceiptId = new Map<string, string>();
+  for (const r of bundle.receipts) keyToReceiptId.set(r.nodeStableKey ?? r.filePath ?? r.receiptId, r.receiptId);
+  const seenKeys = new Set(keyToReceiptId.keys());
   let detIdx = 0;
   for (const det of detReceipts) {
     const key = det.nodeStableKey ?? det.filePath ?? '';
-    if (!key || seenKeys.has(key)) continue;
+    if (!key) continue;
+    if (seenKeys.has(key)) {
+      // Semantic retrieval already pulled this node in, so it needs no second
+      // row — but it still needs the LABEL, or the one receipt that could
+      // ground a component subsection arrives anonymous. Dropping the label
+      // with the duplicate is how a cluster's best evidence went unciteable.
+      const existing = keyToReceiptId.get(key);
+      if (existing && det.claim && !receiptLabels.has(existing)) receiptLabels.set(existing, det.claim);
+      continue;
+    }
     seenKeys.add(key);
     detIdx += 1;
+    keyToReceiptId.set(key, `det-${detIdx}`);
+    if (det.claim) receiptLabels.set(`det-${detIdx}`, det.claim);
     bundle.receipts.push({
       receiptId: `det-${detIdx}`,
       receiptKind: det.receiptKind,
@@ -145,6 +259,12 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     type: params.sectionType,
     role: params.role,
     mode: spec.mode,
+    // Privacy mode shapes the prompt (facts_only_ai withholds every snippet),
+    // so it belongs in the key. Omitting it made the cache serve full_ai prose
+    // — written with the code in front of the model — to a project that had
+    // just switched to facts_only_ai, which is exactly the "changing the
+    // setting changed nothing about my package" report.
+    privacy: params.privacyMode,
     budget: spec.outputBudget[params.deps.sizeClass],
     instructions: spec.instructions,
     deterministic: deterministicContext,
@@ -171,6 +291,10 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
        AND ps.confidence IN ('high', 'medium')
        AND NOT (ps.unknowns @> '[{"kind": "incomplete_coverage"}]'::jsonb)
        AND NOT (ps.unknowns @> '[{"kind": "critique_contradiction"}]'::jsonb)
+       -- A section written while its receipt query was broken cites nothing it
+       -- should have cited. Reusing it would outlive the fix, which is exactly
+       -- how the empty-content row this filter already excludes kept coming back.
+       AND NOT (ps.unknowns @> '[{"kind": "receipts_unavailable"}]'::jsonb)
      ORDER BY ps.created_at DESC LIMIT 1`,
     [params.projectId, params.sectionType, params.role, evidenceHash],
   )).rows[0] as { id: string; content: string; diagrams: unknown; confidence: 'high' | 'medium' | 'low'; unknowns: unknown } | undefined;
@@ -219,24 +343,39 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     sanitized.autolinks += counts.autolinks;
   };
 
-  const first = await callModel(params, bundle, null, aliasToId);
+  const first = await callModel(params, bundle, null, aliasToId, receiptLabels);
   let output = first.output;
   let runId = first.runId;
   addSanitized(first.sanitized);
   let validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
   let voice = lintVoice(output.contentMarkdown ?? '');
+  // The four explanation-contract rules: right altitude, claims grounded in
+  // receipts, gaps named, and no narrating the screen back at the reader.
+  // `lintVoice` only ever caught marketing tone, which is why prose could pass
+  // it while explaining nothing.
+  const explanationEvidence = buildExplanationEvidence(params, spec, bundle);
+  let explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
   let coverage = completeness(output);
   let retried = false;
-  if (validation.hardFailure || voice.issues.length > 0 || coverage.length > 0) {
+  if (validation.hardFailure || voice.issues.length > 0 || explain.issues.length > 0 || coverage.length > 0) {
     retried = true;
-    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...coverage], aliasToId);
+    const stricter = await callModel(params, bundle, [...validation.issues, ...voice.issues, ...explain.issues, ...coverage], aliasToId, receiptLabels);
     output = stricter.output;
     runId = stricter.runId;
     addSanitized(stricter.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
+    explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
     coverage = completeness(output);
   }
+  // Last: repair what does not need a model. Anything still flagged after
+  // this is a genuine explanation defect rather than a mechanical one.
+  const repaired = repairExplanation(output.contentMarkdown ?? '', explanationEvidence);
+  if (repaired.repairs.length > 0) {
+    output = { ...output, contentMarkdown: repaired.markdown };
+    explain = lintExplanation(repaired.markdown, explanationEvidence);
+  }
+
   if (coverage.length > 0) {
     // Still under-covered after the retry: recorded as an honest unknown,
     // never silently shipped as if complete.
@@ -258,12 +397,24 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     const issues = critique.verdicts
       .filter((v) => v.verdict !== 'supported')
       .map((v) => `CRITIQUE ${v.verdict}: "${v.claim.slice(0, 140)}" — ${v.reason}`);
-    const rewritten = await callModel(params, bundle, issues, aliasToId);
+    const rewritten = await callModel(params, bundle, issues, aliasToId, receiptLabels);
     output = rewritten.output;
     runId = rewritten.runId;
     addSanitized(rewritten.sanitized);
     validation = await validateGeneratedOutput({ bundle, output, snapshotId: params.snapshotId, mode: spec.mode });
     voice = lintVoice(output.contentMarkdown ?? '');
+    explain = lintExplanation(output.contentMarkdown ?? '', explanationEvidence);
+    // The critique rewrite replaces `output` wholesale, which silently
+    // discarded the deterministic repair applied above — measured on
+    // FloowForge: 10 of 12 sections lost the unread-stack disclosure this
+    // way. The repair is idempotent (it only appends when the text omits the
+    // disclosure), so re-running it after every path that replaces the
+    // markdown is the guarantee, not a duplicate.
+    const rerepaired = repairExplanation(output.contentMarkdown ?? '', explanationEvidence);
+    if (rerepaired.repairs.length > 0) {
+      output = { ...output, contentMarkdown: rerepaired.markdown };
+      explain = lintExplanation(rerepaired.markdown, explanationEvidence);
+    }
     coverage = completeness(output);
     critique = await runSectionCritique(params, output, bundle, aliasToId);
     if (critique && critique.contradicted > 0) {
@@ -320,9 +471,15 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
 
   const diagrams = spec.diagrams ? await spec.diagrams(params.deps) : [];
 
+  // The section shipped, but without the evidence it was supposed to cite —
+  // stated as a gap the reader sees rather than left to look complete.
+  if (receiptGap) {
+    validation = { ...validation, unknowns: [...validation.unknowns, receiptGap] };
+  }
+
   const sectionId = await persistSection(
-    params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits,
-    evidenceHash, critique, sanitized,
+    params, bundle, output, validation, diagrams, runId, retried, inline, unverified, voice.hits, explain.hits,
+    evidenceHash, critique, sanitized, receiptGap, detReceipts.length,
   );
   return { sectionId, validation, retried, runId };
 }
@@ -401,10 +558,20 @@ async function runSectionCritique(
     };
   } catch (err) {
     // Critique is a quality layer, not a gate — its own failure never blocks
-    // the section.
+    // the section. Control errors are NOT quality failures though: swallowing
+    // AiDisabledError here would let a privacy guard fire and vanish (the
+    // section ships as if nothing happened), and swallowing a pause/kill/
+    // budget trip would keep spending after the run was told to stop.
+    if (isControlError(err)) throw err;
     console.warn(`[sectionGenerator] critique failed for ${params.sectionType}:`, err instanceof Error ? err.message : err);
     return null;
   }
+}
+
+/** Run-control signals (same list as tutorialGenerator): never swallowed. */
+function isControlError(err: unknown): boolean {
+  const name = err instanceof Error ? err.name : '';
+  return name === 'AiPausedError' || name === 'KillSwitchError' || name === 'BudgetExceededError' || name === 'AiDisabledError';
 }
 
 /** Byte-identical reuse: clone the cached row and its receipt copies. */
@@ -427,6 +594,7 @@ async function persistCachedSection(
      JSON.stringify({
        prompt_version: SECTION_PROMPT_VERSION,
        evidence_hash: evidenceHash,
+       privacy_mode: params.privacyMode,
        cached_from_section_id: cached.id,
        mode: 'cache_hit',
      })],
@@ -452,9 +620,10 @@ async function callModel(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
+  receiptLabels?: Map<string, string>,
 ): Promise<{ output: GeneratedOutput; runId: string | null; sanitized: MarkdownSanitizeCounts }> {
   const spec = SECTION_SPECS[params.sectionType];
-  const prompt = renderPrompt(params, bundle, previousIssues, aliasToId);
+  const prompt = renderPrompt(params, bundle, previousIssues, aliasToId, receiptLabels);
   const response = await params.ai.call<GeneratedOutput>({
     tier: 'strong',
     targetType: 'section',
@@ -541,6 +710,13 @@ export function renderPrompt(
   bundle: EvidenceBundleV2,
   previousIssues: string[] | null,
   aliasToId: Map<string, string>,
+  /**
+   * What each receipt is evidence OF, by receipt id. Optional because the
+   * semantic half of the bundle has no such label; supplied for the
+   * deterministic half, where it is the difference between a citable receipt
+   * and an anonymous file path.
+   */
+  receiptLabels?: Map<string, string>,
 ): string {
   const spec = SECTION_SPECS[params.sectionType];
   const idToAlias = new Map([...aliasToId.entries()].map(([a, id]) => [id, a]));
@@ -552,7 +728,12 @@ export function renderPrompt(
   const receipts = bundle.receipts.map((r) => {
     const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
     const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 1_500).replace(/\n/g, '\n  ')}` : '';
-    return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
+    // "— evidence for: Member of the "Backend · Workers" cluster". Without it
+    // a component subsection has no way to tell which of forty file paths
+    // belongs to it, which is why cluster-level claims went uncited.
+    const label = receiptLabels?.get(r.receiptId);
+    const evidenceFor = label ? ` — evidence for: ${label.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+    return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${evidenceFor}${snippet}`;
   });
   // Everything below this line is repo-derived and therefore attacker-chosen
   // on an imported repo: snippets, file and symbol names, record summaries
@@ -590,13 +771,21 @@ async function persistSection(
   inline: RewriteResult,
   unverified: UnverifiedMarkResult,
   voiceHits: string[],
+  explanationHits: string[],
   evidenceHash: string,
   critique: CritiqueOutcome | null,
   sanitized: MarkdownSanitizeCounts,
+  receiptGap: ReceiptGap | null,
+  deterministicReceiptCount: number,
 ): Promise<string> {
   const generationContext = {
     prompt_version: SECTION_PROMPT_VERSION,
     evidence_hash: evidenceHash,
+    // The mode this section was ACTUALLY built under. analysis_snapshots
+    // .privacy_mode records what the analysis ran under and never changes
+    // afterwards, so it cannot answer "how was this package made" once the
+    // setting is changed and only the package is regenerated.
+    privacy_mode: params.privacyMode,
     // Non-zero counts mean the model emitted markdown we refused to store —
     // on an imported repo that is the visible tail of a prompt-injection
     // attempt, so it is recorded rather than dropped (§5.5).
@@ -617,10 +806,29 @@ async function persistSection(
     inline_citations: {
       resolved: inline.resolved.length,
       dropped: inline.dropped,
+      // Aliases the model invented — `(r_evidence)` and friends. A well-formed
+      // `rN` in `dropped` is bookkeeping (the receipt existed, it just was not
+      // used); a label in here never existed, so a non-zero count is the
+      // section asserting support it does not have. Counted, and the distinct
+      // labels kept, so "which sections fabricate citations" is a query.
+      unknown_aliases: inline.unknownAliases.length,
+      unknown_alias_labels: [...new Set(inline.unknownAliases)].slice(0, 10),
       unverified_marked: unverified.marked,
       unverified_unmatched: unverified.unmatched,
     },
+    // Did the section's own deterministic evidence actually arrive? `failed`
+    // means a receipt query did not execute — a deploy-time defect, not a data
+    // condition — and the reason lives HERE, where failures are queried,
+    // instead of in the content column where it was being read as prose.
+    deterministic_receipts: {
+      collected: deterministicReceiptCount,
+      failed: receiptGap !== null,
+      reason: receiptGap?.detail ?? null,
+    },
     voice_lint: { remaining_hits: voiceHits },
+    // Explanation-contract findings that survived the retry: kept so a section
+    // that still narrates the screen is findable, not silently shipped.
+    explanation_lint: { remaining_hits: explanationHits },
   };
 
   // Replace the previous version of this section; generation runs stay for audit.

@@ -1,0 +1,26 @@
+{
+  "repo": "KuanKongy/Skribbl",
+  "clone": "https://github.com/KuanKongy/Skribbl.git",
+  "shape": "Vite + React SPA (TypeScript) plus a plain-JavaScript Express + Socket.IO server under server/.",
+  "whyThisShape": "Mixed TS/JS in one tree, and an interaction surface made almost entirely of socket events — the only HTTP route is a health check. A prompt that reasons in terms of 'routes' finds one endpoint and concludes the app does nothing; the real surface is eleven socket.on handlers in a .js file.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "Read server/index.js, server/src/handlers.js and src/lib/protocol.ts; domain nouns are the protocol's own type names.",
+  "expectShape": {
+    "entrypointKinds": { "mustInclude": ["ui_route", "http_route"] },
+    "httpRoutesAtLeast": 1,
+    "uiRoutesAtLeast": 2
+  },
+  "domainNouns": ["room", "canvas", "player", "word", "stroke", "guess", "socket", "drawer"],
+  "mustDisclose": [],
+  "budgetsMeasuredOn": "2026-07-25, snapshot 6da73e74 (12 sections, 8 clusters, 5 capabilities, 85/104 files parsed). measured: domainNouns=8/8 · cited=64.2% · narrationErrors=31 · levelErrors=5 · sectionsWithGaps=5/12",
+  "budgets": {
+    "minDomainNounsInPackage": 8,
+    "minCitedShare": 0.55,
+    "maxNarrationErrors": 40,
+    "maxLevelErrors": 8,
+    "minSectionsDisclosingGaps": 4
+  },
+  "knownGaps": [
+    "The server is plain JS with no type information, so symbol-level evidence there is weaker than on the TS side — claims about the server lean on call graphs rather than signatures."
+  ]
+}

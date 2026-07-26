@@ -169,3 +169,64 @@ describe('recordStore bulk primitives (latency overhaul Track C)', () => {
     expect(log[1]!.params).to.deep.equal(['snap-1', 'rec-1', 'n-1', 'a.ts#fn', 'symbol', 'snap-1', 'rec-2', null, 'b.ts#g', 'symbol']);
   });
 });
+
+/**
+ * Bug #76: two of nine live analyses died at 98% on SQLSTATE 57014
+ * ("canceling statement due to statement timeout") in the bulk writes, and
+ * both succeeded on a plain re-run — the transaction-mode pooler cut the
+ * statement under load, nothing was wrong with the write.
+ */
+describe('recordStore — statement-timeout retry (bug #76)', () => {
+  afterEach(() => __setQueryForTests(null));
+
+  function timeoutError(): Error & { code: string } {
+    return Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' });
+  }
+
+  it('retries once on 57014 and succeeds, and never retries any other error', async () => {
+    let attempts = 0;
+    __setQueryForTests(async (text) => {
+      if (!text.includes('INSERT INTO snapshot_semantic_records')) return { rows: [] } as never;
+      attempts += 1;
+      if (attempts === 1) throw timeoutError();
+      return { rows: [] } as never;
+    });
+
+    // The write that timed out goes through on the second attempt, so the run
+    // survives instead of failing the whole analysis at 98%.
+    await mapToSnapshotBulk('snap-1', [{ record: record('rec-1', 'a.ts#fn'), nodeId: 'n-1' }]);
+    expect(attempts).to.equal(2);
+
+    // Bounded at two attempts: a pooler that stays busy fails honestly rather
+    // than looping.
+    let persistent = 0;
+    __setQueryForTests(async (text) => {
+      if (!text.includes('INSERT INTO snapshot_semantic_records')) return { rows: [] } as never;
+      persistent += 1;
+      throw timeoutError();
+    });
+    try {
+      await mapToSnapshotBulk('snap-1', [{ record: record('rec-1', 'a.ts#fn'), nodeId: 'n-1' }]);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as { code?: string }).code).to.equal('57014');
+    }
+    expect(persistent).to.equal(2);
+
+    // Never a blanket retry: a constraint violation must surface on the first
+    // attempt, not be doubled and hidden behind extra latency.
+    let other = 0;
+    __setQueryForTests(async (text) => {
+      if (!text.includes('INSERT INTO snapshot_semantic_records')) return { rows: [] } as never;
+      other += 1;
+      throw Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505' });
+    });
+    try {
+      await mapToSnapshotBulk('snap-1', [{ record: record('rec-1', 'a.ts#fn'), nodeId: 'n-1' }]);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as { code?: string }).code).to.equal('23505');
+    }
+    expect(other).to.equal(1);
+  });
+});

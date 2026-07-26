@@ -92,6 +92,70 @@ describe('citationMarkers.rewriteInlineCitations', () => {
     expect(r.content).to.equal(text);
   });
 
+  // The FloowForge/traced_flows defect: `(r_evidence)` ×3, an alias the
+  // pipeline never mints. It matched no rule, shipped verbatim, and no counter
+  // recorded it — the section read as receipted while citing a fabrication.
+  it('an alias the pipeline could never mint never survives, and is counted apart from dropped ones', () => {
+    const r = rewriteInlineCitations(
+      [
+        'The worker drains the queue before exit (r_evidence).',
+        'Auth is checked at the edge (receipt r_evidence).',
+        'The token is signed here [r-2].',
+        // Observed on UBCPSS/architecture_deep: the untrusted-data fence nonce,
+        // welded to an `r`, cited twice as if it were a receipt.
+        'CSS and HTML are not described above (r142772a7287cf939).',
+        'A real but unused receipt goes to dropped (r14).',
+      ].join('\n'),
+      aliasToId,
+      used,
+    );
+    expect(r.content).to.equal(
+      [
+        'The worker drains the queue before exit.',
+        'Auth is checked at the edge.',
+        'The token is signed here.',
+        'CSS and HTML are not described above.',
+        'A real but unused receipt goes to dropped.',
+      ].join('\n'),
+    );
+    expect(r.unknownAliases).to.deep.equal(['r_evidence', 'r_evidence', 'r-2', 'r142772a7287cf939']);
+    // Invented ids are NOT folded into `dropped`: one means the model made a
+    // citation up, the other means a real receipt went unused.
+    expect(r.dropped).to.deep.equal(['r14']);
+  });
+
+  it('leaves prose that merely starts with "r" alone — the unknown-alias rule must not eat English', () => {
+    const text =
+      'The handler reads (req.body) and returns (runId). Values are (read-only) and (r-value) semantics apply. Radius (r1cm) differs.';
+    const r = rewriteInlineCitations(text, aliasToId, used);
+    expect(r.content).to.equal(text);
+    expect(r.unknownAliases).to.deep.equal([]);
+  });
+
+  // The OnboardBuddy/architecture_deep defect: the model glues the alias to
+  // the `where` string the deterministic facts hand it, and the parenthetical
+  // stops matching. All three decision bullets shipped as dead `r1:` text.
+  it('resolves an alias glued to its locator, and keeps the locator when it cannot', () => {
+    const r = rewriteInlineCitations(
+      [
+        'Phase 7 degrades internally on budget trips (r1:backend/src/worker/semantic/semanticPipeline.ts:36).',
+        'The bar is shared across both stages (r14: frontend/src/pages/ProjectOverviewPage.tsx:219).',
+      ].join('\n'),
+      aliasToId,
+      used,
+    );
+    expect(r.content).to.equal(
+      [
+        'Phase 7 degrades internally on budget trips [[receipt:uuid-1]].',
+        // r14 is a real alias whose receipt was never used: the chip goes, the
+        // file and line the reader can open stay.
+        'The bar is shared across both stages (frontend/src/pages/ProjectOverviewPage.tsx:219).',
+      ].join('\n'),
+    );
+    expect(r.resolved).to.deep.equal(['r1']);
+    expect(r.dropped).to.deep.equal(['r14']);
+  });
+
   it('never rewrites inside fenced code blocks and preserves indentation', () => {
     const text = [
       'Cited (receipt r1).',

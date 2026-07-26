@@ -10,6 +10,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { latestSnapshotOrderSql } from '../lib/snapshotOrdering.js';
 import { AiClient } from '../worker/ai/aiClient.js';
 import { BudgetEnforcer } from '../worker/ai/budgetEnforcer.js';
 import { resolveTierConfig } from '../worker/ai/modelTiers.js';
@@ -107,7 +108,14 @@ async function resolveSnapshot(input: AskInput): Promise<ResolvedSnapshot> {
     where = `sc.path_prefix = '' AND s.status = 'complete'`;
   }
   const row = (await query(
-    `SELECT s.id AS snapshot_id, s.scope_id, s.commit_hash, s.semantic_depth, s.privacy_mode,
+    // Privacy follows the LIVE setting, exactly as generation does
+    // (summaryWorker.loadSnapshot). Reading s.privacy_mode alone froze the
+    // mode at analysis time: a project analyzed under full_ai kept answering
+    // questions with full LLM calls — and shipping snippets — after the owner
+    // switched Settings → AI & privacy to ai_disabled/facts_only_ai, because
+    // no re-analysis had happened to refresh the snapshot's copy.
+    `SELECT s.id AS snapshot_id, s.scope_id, s.commit_hash, s.semantic_depth,
+            COALESCE(ps.privacy_mode, s.privacy_mode) AS privacy_mode,
             COALESCE(ps.default_developer_role, 'general') AS default_role,
             COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
             COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
@@ -116,7 +124,7 @@ async function resolveSnapshot(input: AskInput): Promise<ResolvedSnapshot> {
      JOIN analysis_scopes sc ON sc.id = s.scope_id
      LEFT JOIN project_settings ps ON ps.project_id = s.project_id
      WHERE s.project_id = $1 AND ${where}
-     ORDER BY s.created_at DESC
+     ORDER BY ${latestSnapshotOrderSql('s')}
      LIMIT 1`,
     params,
   )).rows[0] as {
@@ -182,8 +190,12 @@ export async function answerQuestion(input: AskInput): Promise<AskAnswer> {
   const intent = classifyIntent(input.question);
   const views = viewsForIntent(intent);
 
-  // Q&A shares the snapshot's budget: counters and limits apply, but an
-  // HTTP request has no pause semantics — trips surface as errors.
+  // Q&A writes to the snapshot's lifetime counters like everything else, but
+  // the cap is per run and one question IS the run: it is baselined in memory
+  // here (no job row to resume) and may spend up to max_llm_calls of its own
+  // — a question no longer 429s just because past analyses filled the
+  // snapshot's cumulative total. Trips still surface as errors: an HTTP
+  // request has no pause semantics.
   const budget = await new BudgetEnforcer({
     snapshotId: snapshot.snapshotId,
     depth: snapshot.depth,

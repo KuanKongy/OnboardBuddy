@@ -1,3 +1,5 @@
+import type { ScoreProvenanceData } from "@/components/ScoreProvenance";
+
 export type PackageStatus = "missing" | "generating" | "draft" | "approved" | "stale" | "failed";
 export type ConfidenceLevel = "high" | "medium" | "low";
 export type SectionStatus = "complete" | "stale" | "missing";
@@ -83,6 +85,24 @@ export interface SectionUnknown {
   claim?: string;
 }
 
+/**
+ * A10: gaps deduped on their template by the API (`api/lib/gapSummary.ts`),
+ * so a section that raised the same sentence once per env var renders as one
+ * `kind × N` row with the names behind an expander, not N rows.
+ */
+export interface SectionGapVariant {
+  signature: string;
+  count: number;
+  detail: string | null;
+  members: string[];
+}
+
+export interface SectionGapGroup {
+  kind: string;
+  count: number;
+  variants: SectionGapVariant[];
+}
+
 export interface OnboardingSection {
   id: SectionId;
   sectionId?: string;
@@ -100,20 +120,59 @@ export interface OnboardingSection {
   diagrams?: Array<{ kind: string; mermaid: string }>;
   /** Honest unknowns: gaps the generator refused to invent content for. */
   unknowns?: SectionUnknown[];
+  /** The same gaps, deduped on their template — render these, count with `unknowns`. */
+  unknownGroups?: SectionGapGroup[];
   analyzedCommit?: string;
+}
+
+/** Per-language file counts from the analysis guardrail. */
+export interface LanguageInventory {
+  supported?: Record<string, number>;
+  /** Languages present in the repo that no parser reads — named, not hidden. */
+  unsupported?: Record<string, number>;
+  evidenceOnly?: Record<string, number>;
+  supportedFileCount?: number;
+  unsupportedFileCount?: number;
 }
 
 /** Honest denominators for the "critical 25%" story — counts over stored rows. */
 export interface PackageCoverage {
   snapshotCreatedAt: string;
-  files: { analyzed: number; unsupported: number | null; cited: number };
+  /**
+   * Four different denominators, none interchangeable. `parsed` is what the
+   * AST parser actually read and is the only honest coverage figure; `inScope`
+   * counts every file including assets and lockfiles. The UI showed `inScope`
+   * labelled "Analyzed", overstating coverage by up to 9x. `parsed` is null
+   * only for snapshots taken before the backing column existed — render that
+   * as unknown, never fall back to `inScope`.
+   */
+  files: {
+    parsed: number | null;
+    supported: number | null;
+    inScope: number;
+    unsupported: number | null;
+    cited: number;
+  };
   symbols: { total: number; cited: number };
   workflows: { total: number; covered: number };
   tutorialCount: number;
-  languages: Record<string, unknown> | null;
+  languages: LanguageInventory | null;
   /** Honesty rule: snapshot-level unknowns (trace dead-ends, unmodeled packages, journey gaps). */
   detectionUnknowns?: Array<{ kind: string; count?: number; packages?: string[]; expected?: string; queue?: string }>;
-  rankingSignals: Array<{ signal: string; weight: number }>;
+  /**
+   * A10: the one known-gap number. The strip used to print only
+   * `detectionUnknowns.length` ("6 known unknowns") over a page whose sections
+   * held 89 gap entries — two populations, one word. `total` is the sum, and
+   * the parts are named so the strip can say where they come from.
+   */
+  gaps?: { total: number; sections: number; detection: number; groups: number };
+  /**
+   * The ranker's weight table with the formula it feeds, served whole. The
+   * strip used to receive bare signal/weight pairs and narrate them in the
+   * page, which meant the weights existed in two places and the sentence
+   * around them was never checked against the ranker.
+   */
+  rankingProvenance?: ScoreProvenanceData;
 }
 
 export interface OnboardingPackage {
@@ -126,7 +185,26 @@ export interface OnboardingPackage {
   reviewedBy?: string;
   analyzedCommit?: string;
   coverage?: PackageCoverage | null;
+  /** How this package was actually built — see PackageGenerationMode. */
+  generation?: PackageGenerationMode | null;
   sections: OnboardingSection[];
+}
+
+/**
+ * What produced this package, derived from what each section actually recorded
+ * rather than from what the project setting currently says.
+ *
+ * The distinction matters: a package generated under `full_ai` does not
+ * retroactively become structural because someone later switched AI off. This
+ * reports the artefact, not the toggle.
+ */
+export interface PackageGenerationMode {
+  kind: "ai" | "deterministic" | "mixed" | "unknown";
+  privacyMode: "full_ai" | "facts_only_ai" | "ai_disabled" | null;
+  deterministicSections: number;
+  totalSections: number;
+  /** One sentence for the reader; null when nothing needs saying. */
+  label: string | null;
 }
 
 /** POST /projects/:id/ask response (grounded Q&A with receipts). */
@@ -157,6 +235,18 @@ export interface PackageProvenance {
     generatedAt: string;
     semanticDepth: string;
     privacyMode: string;
+  };
+  /** Budget for the generation run that built this package: the cap it was
+   * measured against, what it spent, and the snapshot's lifetime totals. */
+  budget: {
+    capLlmCalls: number;
+    /** null when the run predates per-run metering — see `note`. */
+    usedThisRun: number | null;
+    remaining: number | null;
+    lifetimeLlmCalls: number;
+    lifetimeCostUsd: number;
+    note?: string;
+    jobId: string | null;
   };
   models: Array<{
     provider: string;

@@ -149,4 +149,33 @@ describe('side-effect sink detection (DETECTION_COVERAGE.md §2)', () => {
     } as never));
     expect(effects.filter((e) => e.kind === 'unknown_external')).to.have.length(0);
   });
+  // Contract: a data client that is not an ORM still writes. `Jobs.insertOne`
+  // matched no pattern before, so the flows that were the product measured as
+  // changing nothing and never bound a capability.
+  it('detects a document-store write through a file-level resource binding and names the resource', () => {
+    const effects = detectSideEffects(fileWith({
+      relativePath: 'api/src/index.js',
+      symbols: [
+        { name: 'Jobs', kind: 'variable', initializer: `db.collection("jobs")` },
+        { name: 'createJob', callsSymbols: ['Jobs.insertOne'], snippet: `const { insertedId } = await Jobs.insertOne(job);` },
+      ],
+    } as never));
+    const write = effects.find((e) => e.kind === 'database_write' && e.symbolName === 'createJob');
+    expect(write, 'insertOne through a bound collection is a write').to.not.equal(undefined);
+    expect(write!.target).to.equal('jobs');
+  });
+
+  // Contract: declaration is not mutation. A module-scope literal used to match
+  // its OWN declaration text, so every constant table in a repo shipped as a
+  // low-confidence write and crowded the real mutators out of the top slice.
+  it('reads a module-scope declaration as a declaration and only a later write as a mutation', () => {
+    const effects = detectSideEffects(fileWith({
+      relativePath: 'src/lib/data.ts',
+      symbols: [
+        { name: 'LINKS', kind: 'variable', initializer: `[{ href: "/a" }]`, snippet: `export const LINKS = [{ href: "/a" }];` },
+        { name: 'reset', kind: 'arrow-function', callsSymbols: [], snippet: `LINKS = [];` },
+      ],
+    } as never));
+    expect(effects.map((e) => e.symbolName)).to.deep.equal(['reset']);
+  });
 });

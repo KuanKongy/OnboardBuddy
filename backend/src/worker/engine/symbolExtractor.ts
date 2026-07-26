@@ -12,6 +12,8 @@ import type {
   ConstructorInfo,
   EnumMember,
   RouteRegistration,
+  UiRouteDeclaration,
+  SocketHandler,
 } from '../types/analysis.js';
 import {
   ParsedSourceFile,
@@ -56,6 +58,24 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
   // not the ambiguous sub-router path ("GET /").
   const mounts = extractRouterMounts(sourceFile, ctx);
 
+  // UI routes declared in a router config — the only source of a page's real
+  // path, and of pages that live outside a conventional pages/ directory.
+  const uiRoutes = extractUiRouteDeclarations(sourceFile);
+
+  // Socket.IO events. Passed `symbols` for the same reason routes are: inline
+  // handlers need synthesized symbol nodes so workflow tracing has a body to
+  // trace from.
+  const socketHandlers = extractSocketHandlers(sourceFile, relativePath, ctx, symbols);
+
+  // Handlers declared INSIDE another function's body. Runs last so it sees
+  // every top-level name already taken and cannot shadow one.
+  symbols.push(...extractNestedFunctions(sourceFile, filePath, ctx, symbols));
+
+  // A symbol can be exported by a later statement rather than an inline
+  // modifier; only this pass sees both halves, so it runs before anything
+  // downstream reads `exported`.
+  reconcileExports(symbols, exports);
+
   // Stamp stable keys (repo-local, '/'-separated) on every symbol.
   for (const sym of symbols) {
     sym.stableKey = symbolKey(normalizePath(relativePath), sym.name);
@@ -69,6 +89,8 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
     exports,
     ...(routes.length > 0 ? { routeRegistrations: routes } : {}),
     ...(mounts.length > 0 ? { routerMounts: mounts } : {}),
+    ...(uiRoutes.length > 0 ? { uiRouteDeclarations: uiRoutes } : {}),
+    ...(socketHandlers.length > 0 ? { socketHandlers } : {}),
     hasParseErrors: parsed.hasErrors,
     parseErrors: parsed.errors,
   };
@@ -85,12 +107,14 @@ export function extractFileAnalysis(parsed: ParsedSourceFile, rootPath: string):
 
       case ts.SyntaxKind.ExportAssignment: {
         const exportAssign = node as ts.ExportAssignment;
+        const local = defaultExportLocalName(exportAssign.expression);
         exports.push({
           fromFile: filePath,
           namedExports: [],
           isReExport: false,
           isDefault: true,
           expression: exportAssign.expression.getText(sourceFile),
+          ...(local ? { defaultLocalName: local } : {}),
         });
         break;
       }
@@ -183,9 +207,14 @@ function extractExportDeclaration(node: ts.ExportDeclaration, filePath: string):
     : undefined;
 
   const named: string[] = [];
+  const locals: string[] = [];
   if (node.exportClause && ts.isNamedExports(node.exportClause)) {
     for (const el of node.exportClause.elements) {
       named.push(el.name.text);
+      // `export { load as loadUser }` — propertyName is the local declaration,
+      // name is the public alias. Without the local name, reconciliation looks
+      // up "loadUser" and finds nothing.
+      locals.push((el.propertyName ?? el.name).text);
     }
   }
 
@@ -194,7 +223,406 @@ function extractExportDeclaration(node: ts.ExportDeclaration, filePath: string):
     namedExports: named,
     isReExport,
     sourceSpecifier,
+    ...(locals.length > 0 ? { localBindings: locals } : {}),
   };
+}
+
+/** Matches a bare JS identifier — anything else names no single declaration. */
+const BARE_IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+
+// ─── Socket.IO event handlers ─────────────────────────────────────────────────
+
+/**
+ * Socket.IO event handlers, which for a realtime app are the entire
+ * interaction surface. Skribbl registers eleven of them
+ * (`create-room`, `draw-ops`, `chat-message`, …) and previously produced one
+ * workflow, from a `/health` route.
+ *
+ * `.on` is far too common to match on its own — `process.on`, `emitter.on` and
+ * every EventEmitter in the repo would qualify. So the anchor is
+ * `X.on('connection'|'connect', cb)`. Both names are the server's own
+ * documented spelling for the same event, and a repo that writes the alias
+ * (Multiplayer-Tetris does) had its entire server protocol invisible.
+ *
+ * The alias alone would be far too loose — `redis.on('connect')`,
+ * `db.on('connect')` and every client library in the fleet fire one — so the
+ * anchor is qualified STRUCTURALLY rather than by name: the callback's first
+ * parameter must be used as a bidirectional channel inside the body
+ * (`p.on(` / `p.emit(` / `p.join(`). A client's connect callback takes no
+ * parameter at all, and a pool's hands back a client nobody subscribes to, so
+ * both fall out without naming a single package. Only `.on` calls **lexically
+ * inside that callback**, on that same parameter, are then treated as events.
+ * Nothing here needs to know whether the file imports socket.io (Skribbl's
+ * handlers.js does not — it takes `io` as a parameter).
+ */
+/** Server-side spellings of the same connection event; `connect` is an alias. */
+const CONNECTION_EVENTS = new Set(['connection', 'connect']);
+
+/** Methods that only a two-way channel offers — a plain result object has none. */
+const CHANNEL_METHODS = new Set(['on', 'emit', 'join']);
+
+/** True for a callback written at the registration site, whose body we can read. */
+function isInlineFunction(node: ts.Expression): node is ts.ArrowFunction | ts.FunctionExpression {
+  return ts.isArrowFunction(node) || ts.isFunctionExpression(node);
+}
+
+/**
+ * The callback's first parameter, IF the body uses it as a two-way channel.
+ * That is what a connection handler receives and what a client library's
+ * connect event does not hand back — the structural difference between
+ * `io.on('connect', socket => socket.on(…))` and `redis.on('connect', () => …)`,
+ * with no package name anywhere in the rule.
+ */
+function socketParameterOf(handler: ts.Expression): string | null {
+  if (!isInlineFunction(handler)) return null;
+  const first = handler.parameters[0]?.name;
+  if (!first || !ts.isIdentifier(first)) return null;
+  const name = first.text;
+  let used = false;
+  const walk = (n: ts.Node): void => {
+    if (used) return;
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      CHANNEL_METHODS.has(n.expression.name.text) &&
+      ts.isIdentifier(n.expression.expression) &&
+      n.expression.expression.text === name
+    ) {
+      used = true;
+      return;
+    }
+    ts.forEachChild(n, walk);
+  };
+  walk(handler.body);
+  return used ? name : null;
+}
+
+function extractSocketHandlers(
+  sourceFile: ts.SourceFile,
+  relativePath: string,
+  ctx: ExtractCtx,
+  symbols: SymbolInfo[],
+): SocketHandler[] {
+  const handlers: SocketHandler[] = [];
+  const usedNames = new Set(symbols.map((s) => s.name));
+  const normalizedPath = normalizePath(relativePath);
+
+  /** `<recv>.on('<event>', <handler>)` — the shape shared by both levels. */
+  const asOnCall = (node: ts.Node): { recv: string; event: string; handler: ts.Expression } | null => {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return null;
+    if (node.expression.name.text !== 'on' || node.arguments.length < 2) return null;
+    const first = node.arguments[0];
+    const handler = node.arguments[node.arguments.length - 1];
+    if (!first || !handler || !ts.isStringLiteralLike(first)) return null;
+    return { recv: node.expression.expression.getText(sourceFile), event: first.text, handler };
+  };
+
+  /** Records the handler, synthesizing a symbol for an inline function body. */
+  const record = (event: string, handler: ts.Expression, callNode: ts.Node, isConnection: boolean): void => {
+    const line = sourceFile.getLineAndCharacterOfPosition(callNode.getStart(sourceFile)).line + 1;
+
+    if (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler)) {
+      let name = `on ${event}`;
+      for (let i = 2; usedNames.has(name); i++) name = `on ${event} (${i})`;
+      usedNames.add(name);
+      const params = extractParameters(handler.parameters, sourceFile);
+      const calls = extractCallSymbols(handler.body, sourceFile);
+      const resolvedCalls = extractResolvedCalls(handler.body, sourceFile, ctx);
+      const signature = buildSignature(params, 'void');
+      symbols.push({
+        name,
+        kind: 'arrow-function',
+        filePath: sourceFile.fileName,
+        ...getNodeLocation(callNode, sourceFile),
+        exported: false,
+        isDefault: false,
+        signature,
+        parameters: params,
+        returnType: 'void',
+        isAsync: hasModifier(handler, ts.SyntaxKind.AsyncKeyword),
+        ...(calls.length > 0 ? { callsSymbols: calls } : {}),
+        ...(resolvedCalls.length > 0 ? { resolvedCalls } : {}),
+        signatureHash: sha256(`on ${event}${signature}`),
+        bodyHash: hashBody(handler.getText(sourceFile)),
+        snippet: snippetOf(callNode, sourceFile),
+        isTrivial: false,
+      });
+      handlers.push({ event, handlerSymbolName: name, handlerRelativePath: normalizedPath, isConnection, line });
+      return;
+    }
+
+    if (ts.isIdentifier(handler) || ts.isPropertyAccessExpression(handler)) {
+      const target = ctx.checker ? resolveCallTarget(handler, ctx.checker, ctx.rootPath) : null;
+      handlers.push({
+        event,
+        ...(target ? {
+          handlerSymbolName: target.targetName,
+          handlerRelativePath: target.targetRelativePath,
+          ...(target.targetParentName ? { handlerParentName: target.targetParentName } : {}),
+        } : {}),
+        isConnection,
+        line,
+      });
+      return;
+    }
+
+    handlers.push({ event, isConnection, line });
+  };
+
+  function visit(node: ts.Node): void {
+    const call = asOnCall(node);
+    if (call && CONNECTION_EVENTS.has(call.event)) {
+      // The callback must show a channel. A handler passed BY REFERENCE has no
+      // body here to show one, so it is admitted on the reserved spelling
+      // alone — which is the only name a client library never uses.
+      const socketName = socketParameterOf(call.handler);
+      const isSocketServer =
+        socketName !== null || (call.event === 'connection' && !isInlineFunction(call.handler));
+      if (isSocketServer) {
+        record(call.event, call.handler, node, true);
+
+        // Treat only the bound parameter's own `.on` calls as events. Anything
+        // else inside the callback stays untouched.
+        if (socketName) {
+          const walkInner = (inner: ts.Node): void => {
+            const evt = asOnCall(inner);
+            // 'disconnect' is a lifecycle event, not a client action, but it
+            // still runs cleanup with real side effects — keep it.
+            if (evt && evt.recv === socketName && !CONNECTION_EVENTS.has(evt.event)) {
+              record(evt.event, evt.handler, inner, false);
+            }
+            ts.forEachChild(inner, walkInner);
+          };
+          walkInner((call.handler as ts.ArrowFunction | ts.FunctionExpression).body);
+        }
+        return; // inner `.on`s already handled
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return handlers;
+}
+
+// ─── UI route declarations ────────────────────────────────────────────────────
+
+/** '/app' + 'settings' -> '/app/settings'; tolerates either side's slashes. */
+function joinUiPath(prefix: string, segment: string): string {
+  if (segment.startsWith('/')) return segment.replace(/\/{2,}/g, '/');
+  const joined = `${prefix}/${segment}`.replace(/\/{2,}/g, '/');
+  return joined.length > 1 && joined.endsWith('/') ? joined.slice(0, -1) : joined || '/';
+}
+
+/**
+ * UI routes declared in a router config. Two shapes cover React Router,
+ * TanStack Router and Vue Router:
+ *
+ *   <Route path="/projects/:id" element={<ProjectPage />} />
+ *   createBrowserRouter([{ path: '/projects/:id', element: <ProjectPage /> }])
+ *
+ * Nested routes are parent-joined, so a child declared as `path="settings"`
+ * under `path="/app"` is recorded as `/app/settings` rather than the relative
+ * fragment, which on its own is not a navigable address.
+ *
+ * Only a bare component reference yields `componentName`: inline JSX bodies
+ * (`element={<div>…</div>}`) name no declaration, so they record the path
+ * alone rather than inventing a symbol.
+ */
+function extractUiRouteDeclarations(sourceFile: ts.SourceFile): UiRouteDeclaration[] {
+  const routes: UiRouteDeclaration[] = [];
+  const lineOf = (node: ts.Node): number =>
+    sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+
+  /** The component a route's `element`/`Component` slot renders, if it names one. */
+  const componentOf = (expr: ts.Expression | undefined): string | undefined => {
+    if (!expr) return undefined;
+    let node: ts.Node = expr;
+    if (ts.isJsxExpression(node)) {
+      if (!node.expression) return undefined;
+      node = node.expression;
+    }
+    if (ts.isJsxElement(node)) node = node.openingElement;
+    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+      const tag = node.tagName.getText(sourceFile);
+      // Lowercase tags are host elements (`<div>`), not page components.
+      return /^[A-Z]/.test(tag) ? tag.split('.').pop() : undefined;
+    }
+    if (ts.isIdentifier(node)) return node.text;
+    return undefined;
+  };
+
+  /** `<Route path="…" element={…}>` — attribute lookup, string or expression. */
+  const jsxAttr = (
+    el: ts.JsxSelfClosingElement | ts.JsxOpeningElement,
+    name: string,
+  ): ts.Expression | undefined => {
+    for (const prop of el.attributes.properties) {
+      if (!ts.isJsxAttribute(prop) || prop.name.getText(sourceFile) !== name) continue;
+      const init = prop.initializer;
+      if (!init) return undefined;
+      if (ts.isStringLiteral(init)) return init;
+      if (ts.isJsxExpression(init)) return init.expression;
+    }
+    return undefined;
+  };
+
+  const isRouteTag = (el: ts.JsxSelfClosingElement | ts.JsxOpeningElement): boolean =>
+    /(^|\.)Route$/.test(el.tagName.getText(sourceFile));
+
+  function visitJsx(node: ts.Node, prefix: string): void {
+    let childPrefix = prefix;
+
+    const opening = ts.isJsxElement(node)
+      ? node.openingElement
+      : ts.isJsxSelfClosingElement(node)
+        ? node
+        : null;
+
+    if (opening && isRouteTag(opening)) {
+      const pathExpr = jsxAttr(opening, 'path');
+      const declared = pathExpr && ts.isStringLiteralLike(pathExpr) ? pathExpr.text : undefined;
+      if (declared !== undefined) {
+        const full = joinUiPath(prefix, declared);
+        const component = componentOf(
+          jsxAttr(opening, 'element') ?? jsxAttr(opening, 'Component') ?? jsxAttr(opening, 'component'),
+        );
+        routes.push({ routePath: full, ...(component ? { componentName: component } : {}), line: lineOf(opening) });
+        childPrefix = full;
+      }
+    }
+
+    ts.forEachChild(node, (child) => visitJsx(child, childPrefix));
+  }
+
+  /** `{ path: '…', element: <X/>, children: [...] }` route objects. */
+  function visitRouteObject(obj: ts.ObjectLiteralExpression, prefix: string): boolean {
+    let declared: string | undefined;
+    let component: ts.Expression | undefined;
+    let children: ts.Expression | undefined;
+
+    for (const prop of obj.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue;
+      const key =
+        ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name) ? prop.name.text : undefined;
+      if (key === 'path' && ts.isStringLiteralLike(prop.initializer)) declared = prop.initializer.text;
+      else if (key === 'element' || key === 'Component' || key === 'component') component = prop.initializer;
+      else if (key === 'children') children = prop.initializer;
+    }
+
+    // A `path` alone is not a route — plenty of config objects have one. The
+    // element/children slot is what makes this a router entry.
+    if (declared === undefined || (!component && !children)) return false;
+
+    const full = joinUiPath(prefix, declared);
+    const name = componentOf(component);
+    routes.push({ routePath: full, ...(name ? { componentName: name } : {}), line: lineOf(obj) });
+
+    if (children && ts.isArrayLiteralExpression(children)) {
+      for (const el of children.elements) {
+        if (ts.isObjectLiteralExpression(el)) visitRouteObject(el, full);
+      }
+    }
+    return true;
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isObjectLiteralExpression(node) && visitRouteObject(node, '')) return; // children handled
+    ts.forEachChild(node, visit);
+  }
+
+  visitJsx(sourceFile, '');
+  visit(sourceFile);
+  return routes;
+}
+
+/**
+ * The local declaration a default-export expression points at, if any.
+ *
+ *   export default Index               → "Index"
+ *   export default memo(Index)         → "Index"   (an HOC-wrapped page is still that page)
+ *   export default React.memo(Index)   → "Index"
+ *   export default { a, b }            → null
+ *   export default makeThing(a, b)     → null      (two args name no single declaration)
+ *
+ * Deliberately conservative: guessing here would mark private helpers as
+ * public API and inflate the ranker's `exportedSurface` signal.
+ */
+function defaultExportLocalName(expr: ts.Expression): string | null {
+  let node: ts.Node = expr;
+  for (let depth = 0; depth < 4; depth++) {
+    if (ts.isIdentifier(node)) return node.text;
+    if (ts.isCallExpression(node) && node.arguments.length === 1 && node.arguments[0]) {
+      node = node.arguments[0];
+      continue;
+    }
+    if (
+      ts.isParenthesizedExpression(node) ||
+      ts.isAsExpression(node) ||
+      ts.isSatisfiesExpression(node) ||
+      ts.isNonNullExpression(node)
+    ) {
+      node = node.expression;
+      continue;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Marks symbols exported by a *separate statement* rather than an inline
+ * modifier. `isExported()` (astParser.ts) reads only `ts.getModifiers()`, so
+ * these three equally-public declarations disagreed:
+ *
+ *   export default function Index() {}          // exported: true
+ *   const Index = () => {}; export default Index;   // exported: FALSE
+ *   function load() {}      export { load };        // exported: FALSE
+ *
+ * `entrypointDetector` gates `ui_route`, `cli_command` and `event_handler` on
+ * `s.exported`, and `candidateRanker` scores an `exportedSurface` signal — so
+ * the modifier-only reading made an entire `src/pages/` directory invisible in
+ * a project written with the second style while an identically-laid-out
+ * project using the first style reported every page.
+ *
+ * Re-exports (`export { x } from './y'`) are skipped on purpose: that name
+ * belongs to another module, and a local symbol sharing it is a different
+ * declaration.
+ */
+function reconcileExports(symbols: SymbolInfo[], exports: ExportRecord[]): void {
+  if (symbols.length === 0 || exports.length === 0) return;
+
+  const byName = new Map<string, SymbolInfo[]>();
+  for (const sym of symbols) {
+    const bucket = byName.get(sym.name);
+    if (bucket) bucket.push(sym);
+    else byName.set(sym.name, [sym]);
+  }
+
+  const mark = (name: string, asDefault: boolean): void => {
+    for (const sym of byName.get(name) ?? []) {
+      sym.exported = true;
+      if (asDefault) sym.isDefault = true;
+    }
+  };
+
+  for (const rec of exports) {
+    if (rec.isReExport) continue;
+
+    // `localBindings` is absent on records built before this field existed and
+    // on `export *`; falling back to the public names is right for the
+    // unaliased case, which is the overwhelming majority.
+    const locals = rec.localBindings ?? rec.namedExports;
+    locals.forEach((local, i) => {
+      // `export { Index as default }` is a default export spelled the long way.
+      mark(local, rec.namedExports[i] === 'default');
+    });
+
+    const defaultLocal =
+      rec.defaultLocalName ??
+      (rec.expression && BARE_IDENTIFIER.test(rec.expression) ? rec.expression : undefined);
+    if (rec.isDefault && defaultLocal) mark(defaultLocal, true);
+  }
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -271,6 +699,49 @@ function snippetOf(node: ts.Node, sf: ts.SourceFile): string {
 }
 
 /**
+ * An identifier sitting in VALUE position, where whatever receives it decides
+ * when to run it: a call argument, an object-literal property value, or a JSX
+ * expression. Deliberately positional — it asks where the name appears, never
+ * what it is spelled.
+ */
+function isDeferredInvocation(id: ts.Identifier): boolean {
+  const parent = id.parent as ts.Node | undefined;
+  if (!parent) return false;
+  // The name half of `a.b`, a declaration's own name, or an import clause are
+  // not uses of a value.
+  if (ts.isPropertyAccessExpression(parent) && parent.name === id) return false;
+  if (ts.isCallExpression(parent) || ts.isNewExpression(parent)) {
+    // The callee itself is already handled as a call.
+    return parent.expression !== id && (parent.arguments ?? []).some((a) => a === id);
+  }
+  if (ts.isPropertyAssignment(parent)) return parent.initializer === id;
+  if (ts.isShorthandPropertyAssignment(parent)) return parent.name === id;
+  if (ts.isJsxExpression(parent)) return parent.expression === id;
+  return false;
+}
+
+/**
+ * Whether the identifier names a repo-local FUNCTION. Anything else in value
+ * position is data being moved around, and an edge to it would say the flow
+ * continues where it does not.
+ */
+function namesLocalFunction(id: ts.Identifier, checker: ts.TypeChecker): boolean {
+  let sym = checker.getSymbolAtLocation(id);
+  if (!sym) return false;
+  if (sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+  const decl = sym.declarations?.[0];
+  if (!decl) return false;
+  if (ts.isFunctionDeclaration(decl) || ts.isMethodDeclaration(decl)) return true;
+  if (
+    (ts.isVariableDeclaration(decl) || ts.isPropertyAssignment(decl) || ts.isPropertyDeclaration(decl)) &&
+    decl.initializer
+  ) {
+    return ts.isArrowFunction(decl.initializer) || ts.isFunctionExpression(decl.initializer);
+  }
+  return false;
+}
+
+/**
  * Resolves each CallExpression's callee through the TypeChecker to a
  * repo-local declaration. External/library targets return no entry — they
  * become `external` handling elsewhere, never guessed edges.
@@ -305,6 +776,15 @@ function extractResolvedCalls(
       if (ts.isIdentifier(tag) && /^[A-Z]/.test(tag.text)) {
         record(tag, tag.text);
       }
+    }
+    // A function handed over by NAME is still called, just not here. The
+    // call-expression walk above sees only what this body invokes itself, so a
+    // body whose whole job is to hand its effect to something else — an
+    // argument, an option-object field, a JSX prop — recorded no edge at all
+    // and the flow ended at the hand-off. Function-valued only: passing a
+    // constant is data, not control.
+    if (ts.isIdentifier(node) && isDeferredInvocation(node) && namesLocalFunction(node, checker!)) {
+      record(node, node.text);
     }
     ts.forEachChild(node, visit);
   }
@@ -829,6 +1309,188 @@ function extractVariableStatement(
   }
 
   return results;
+}
+
+// ─── Nested function expressions ─────────────────────────────────────────────
+
+/**
+ * Handlers emitted per container. A rendering unit routinely declares three to
+ * six callbacks; past that a container is either very large — in which case its
+ * graph value is the container, not its twentieth closure — or generated. Eight
+ * keeps the ordinary case complete while bounding a 500-line component to a
+ * constant, and it already exceeds what anything downstream can consume: UI
+ * action detection admits at most four handlers per FILE, so the ninth could
+ * never surface as an entrypoint anyway.
+ */
+const MAX_NESTED_FUNCTIONS_PER_CONTAINER = 8;
+
+/**
+ * Function expressions bound to a `const`/`let` INSIDE another function's body.
+ *
+ * `function AddItemForm() { const handleSubmit = async (e) => { … } }` is the
+ * dominant shape for "the thing a user actually does" in any codebase that
+ * keeps callbacks next to the markup that installs them. The walk used to stop
+ * at the container, so the handler was never a symbol: no effect could be
+ * attributed to it, no entrypoint could seed on it, and such a repo measured as
+ * a list of pages with nothing happening inside them.
+ *
+ * The rule is structural — it names no framework, directory or verb. A nested
+ * binding is emitted when BOTH hold:
+ *   1. the name is referenced elsewhere in the container, i.e. the function is
+ *      handed to something (a prop, an argument, a sibling) that will invoke
+ *      it. An unreferenced closure is dead code.
+ *   2. its body performs a call or an assignment, so it CAN reach an effect. A
+ *      body that only shapes a value is presentation, and presentation is not
+ *      a workflow.
+ *
+ * Emitted as `Container.inner` with key `path#Container.inner` — the shape
+ * class members already use, and the reason two `handleSubmit`s in one file
+ * cannot collapse onto one node.
+ */
+function extractNestedFunctions(
+  sf: ts.SourceFile,
+  filePath: string,
+  ctx: ExtractCtx,
+  existing: SymbolInfo[],
+): SymbolInfo[] {
+  const usedNames = new Set(existing.map((s) => s.name));
+  const out: SymbolInfo[] = [];
+
+  for (const container of topLevelFunctionContainers(sf)) {
+    let emitted = 0;
+    for (const decl of nestedFunctionBindings(container.body)) {
+      if (emitted >= MAX_NESTED_FUNCTIONS_PER_CONTAINER) break;
+      const declName = decl.name as ts.Identifier;
+      const fn = decl.initializer as ts.ArrowFunction | ts.FunctionExpression;
+      if (!isReferencedWithin(container.body, declName)) continue;
+      if (!performsWork(fn.body)) continue;
+
+      let name = `${container.name}.${declName.text}`;
+      for (let i = 2; usedNames.has(name); i++) name = `${container.name}.${declName.text} (${i})`;
+      usedNames.add(name);
+
+      const params = extractParameters(fn.parameters, sf);
+      const retType = fn.type?.getText(sf) ?? decl.type?.getText(sf) ?? 'void';
+      const calls = extractCallSymbols(fn.body, sf);
+      const resolvedCalls = extractResolvedCalls(fn.body, sf, ctx);
+      const signature = buildSignature(params, retType);
+      out.push({
+        name,
+        kind: 'arrow-function',
+        filePath,
+        ...getNodeLocation(decl, sf),
+        exported: false,
+        isDefault: false,
+        containerName: container.name,
+        signature,
+        parameters: params,
+        returnType: retType,
+        isAsync: hasModifier(fn, ts.SyntaxKind.AsyncKeyword),
+        ...(calls.length > 0 ? { callsSymbols: calls } : {}),
+        ...(resolvedCalls.length > 0 ? { resolvedCalls } : {}),
+        signatureHash: sha256(`${name}${signature}`),
+        bodyHash: hashBody(decl.getText(sf)),
+        snippet: snippetOf(decl, sf),
+        isTrivial: isTrivialBody(fn.body, calls.length),
+      });
+      emitted++;
+    }
+  }
+
+  return out;
+}
+
+/**
+ * Top-level function declarations and function-valued bindings, with the block
+ * a nested handler could live in. An expression-bodied arrow cannot declare
+ * one, so only block bodies are containers.
+ */
+function topLevelFunctionContainers(sf: ts.SourceFile): Array<{ name: string; body: ts.Block }> {
+  const containers: Array<{ name: string; body: ts.Block }> = [];
+  for (const statement of sf.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name && statement.body) {
+      containers.push({ name: statement.name.text, body: statement.body });
+      continue;
+    }
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const decl of statement.declarationList.declarations) {
+      const init = decl.initializer;
+      if (!ts.isIdentifier(decl.name) || !init) continue;
+      if (!ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) continue;
+      if (ts.isBlock(init.body)) containers.push({ name: decl.name.text, body: init.body });
+    }
+  }
+  return containers;
+}
+
+/**
+ * `const f = () => …` bindings at any depth inside a container body, in source
+ * order. Depth is deliberately unbounded: a callback registered from inside
+ * another callback is still the handler a person triggers, and the per-container
+ * cap — not the nesting level — is what bounds the output.
+ */
+function nestedFunctionBindings(body: ts.Block): ts.VariableDeclaration[] {
+  const found: ts.VariableDeclaration[] = [];
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+    ) {
+      found.push(node);
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(body);
+  return found;
+}
+
+/**
+ * True when the binding's name occurs in the container somewhere other than its
+ * own declaration. Member names (`obj.handleSubmit`) are skipped — those name
+ * somebody else's property, not this binding.
+ */
+function isReferencedWithin(body: ts.Block, declName: ts.Identifier): boolean {
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(node)) {
+      visit(node.expression);
+      return;
+    }
+    if (ts.isIdentifier(node)) {
+      if (node !== declName && node.text === declName.text) found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return found;
+}
+
+/** A body that calls something or assigns something — the precondition for reaching any effect. */
+function performsWork(body: ts.Node | undefined): boolean {
+  if (!body) return false;
+  let works = false;
+  const visit = (node: ts.Node): void => {
+    if (works) return;
+    if (ts.isCallExpression(node) || ts.isNewExpression(node) || ts.isAwaitExpression(node)) {
+      works = true;
+      return;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    ) {
+      works = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return works;
 }
 
 function extractEnum(

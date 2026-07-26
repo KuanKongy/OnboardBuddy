@@ -70,11 +70,17 @@ describe("GET /api/projects/:id/onboarding", () => {
         };
       }
       if (text.includes("file_count") && text.includes("FROM analysis_snapshots")) {
+        // Deliberately three different numbers, in the ratio real snapshots
+        // show: 240 files in scope, 191 of them source in a supported
+        // language, 194 actually parsed (the extra 3 are config .ts files,
+        // parsed but not categorised as source). The old fixture set
+        // in-scope == supported, which hid the distinction the endpoint now
+        // has to keep straight.
         return {
           rows: [{
-            created_at: "2026-07-16T15:40:00Z", file_count: 240, symbol_count: 1305,
-            workflow_count: 66,
-            language_inventory: { supportedFileCount: 240, unsupportedFileCount: 49 },
+            created_at: "2026-07-16T15:40:00Z", file_count: 240, parsed_file_count: 194,
+            symbol_count: 1305, workflow_count: 66,
+            language_inventory: { supportedFileCount: 191, unsupportedFileCount: 49 },
           }],
         };
       }
@@ -185,13 +191,26 @@ describe("GET /api/projects/:id/onboarding", () => {
       snapshotCreatedAt: "2026-07-16T15:40:00Z",
       tutorialCount: 4,
     });
+    // `parsed` is the honest coverage figure and must NOT be `inScope`: the
+    // old response reported in-scope files as "analyzed", overstating real
+    // coverage by up to 9x on audited projects.
     expect(res.body.package.coverage.files).to.deep.equal({
-      analyzed: 240, unsupported: 49, cited: 31,
+      parsed: 194, supported: 191, inScope: 240, unsupported: 49, cited: 31,
     });
     expect(res.body.package.coverage.symbols).to.deep.equal({ total: 1305, cited: 47 });
     expect(res.body.package.coverage.workflows).to.deep.equal({ total: 66, covered: 16 });
-    expect(res.body.package.coverage.rankingSignals).to.be.an("array").that.is.not.empty;
-    expect(res.body.package.coverage.rankingSignals[0]).to.have.keys(["signal", "weight"]);
+    // The ranking claim ships its own derivation: the formula, every signal
+    // with its real weight, and what the scale means. The strip used to send
+    // bare signal/weight pairs and let the frontend narrate them.
+    const ranking = res.body.package.coverage.rankingProvenance;
+    expect(ranking.available).to.equal(true);
+    expect(ranking.formula).to.contain("snapshot maximum");
+    expect(ranking.inputs).to.be.an("array").with.length(9);
+    expect(ranking.inputs[0]).to.include({ key: "workflowParticipation", weight: 0.2 });
+    expect(ranking.inputs[0].label).to.be.a("string").that.is.not.empty;
+    // Weights are served, never restated in the UI, so they cannot drift.
+    const total = ranking.inputs.reduce((sum: number, i: { weight: number }) => sum + i.weight, 0);
+    expect(total).to.be.closeTo(1, 1e-9);
   });
 });
 
@@ -228,6 +247,20 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
           rows: [{
             id: PKG, role: "general", analyzed_commit: "9f4d168", branch: "main",
             created_at: "2026-07-17T01:00:00Z", semantic_depth: "standard", privacy_mode: "full_ai",
+            snapshot_budget_usage: { llm_calls: 258, input_tokens: 20, output_tokens: 9, estimated_cost_usd: 3.4 },
+            budget_overrides: {},
+          }],
+        };
+      }
+      // The generation job that built this package, with the per-run budget
+      // baseline the enforcer metered from. Must precede the models route:
+      // this query also names ai_generation_runs (in a subquery).
+      if (text.includes("budgetBaseline")) {
+        return {
+          rows: [{
+            id: "job-gen-1",
+            budget_baseline: { llm_calls: 240, input_tokens: 10, output_tokens: 5, estimated_cost_usd: 3 },
+            llm_calls: 18,
           }],
         };
       }
@@ -270,6 +303,13 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
     expect(res.body.package).to.deep.include({
       id: PKG, role: "general", analyzedCommit: "9f4d168",
       semanticDepth: "standard", privacyMode: "full_ai",
+    });
+    // Budget is reported per run against the cap, with the snapshot's
+    // lifetime totals beside it — a package built on an already-expensive
+    // snapshot must not read as "over budget".
+    expect(res.body.budget).to.deep.equal({
+      capLlmCalls: 300, usedThisRun: 18, remaining: 282,
+      lifetimeLlmCalls: 258, lifetimeCostUsd: 3.4, jobId: "job-gen-1",
     });
     expect(res.body.models).to.have.length(1);
     expect(res.body.models[0]).to.deep.include({

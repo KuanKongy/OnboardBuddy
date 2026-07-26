@@ -193,7 +193,9 @@ function composeUpWorkflow(topology: RuntimeTopology): ExtractedWorkflow {
     entrypoint: configEntrypoint(p),
     steps,
     importanceScore: 2 + services.length * 0.1,
-    externalDependencies: [],
+    tier: 'supporting',
+  rankingReasons: ['developer/CI command, not a user-facing flow'],
+  externalDependencies: [],
     metadata: { config_flow: 'compose_up', compose_path: p },
   };
 }
@@ -216,7 +218,9 @@ function composeTestWorkflow(topology: RuntimeTopology): ExtractedWorkflow {
     entrypoint: configEntrypoint(p),
     steps,
     importanceScore: 1.8,
-    externalDependencies: [],
+    tier: 'supporting',
+  rankingReasons: ['developer/CI command, not a user-facing flow'],
+  externalDependencies: [],
     metadata: { config_flow: 'compose_test', compose_path: p },
   };
 }
@@ -241,7 +245,9 @@ function ciWorkflow(pipeline: CiPipeline): ExtractedWorkflow | null {
     entrypoint: configEntrypoint(p),
     steps,
     importanceScore: 1.5,
-    externalDependencies: [],
+    tier: 'supporting',
+  rankingReasons: ['developer/CI command, not a user-facing flow'],
+  externalDependencies: [],
     metadata: { config_flow: 'ci_pipeline', ci_path: p },
   };
 }

@@ -85,27 +85,73 @@ describe('workflowExtractor (call-graph traversal)', () => {
     expect(login.triggerType).to.contain('HTTP');
   });
 
+  /**
+   * Purpose used to carry a domain phrase from a seven-row table keyed on path
+   * and symbol substrings — this product's own vocabulary, stamped onto every
+   * repo analysed. A student club's marketing site was told its About page
+   * existed for "onboarding generation" (`src/components/sections/`), its Team
+   * page for "project management", and `Toaster` for "repository analysis"
+   * (`/ast/` inside to·ast·er). The subject now comes from the flow's own
+   * evidence or it is absent.
+   */
+  it('names only what the flow itself reaches, never a product-domain phrase', () => {
+    const login = workflows.find((w) => w.stableKey.endsWith(':loginHandler'))!;
+    // `sessions` is this fixture's own table, from its own migration.
+    expect(login.purpose).to.contain('on sessions');
+
+    const domainPhrases = [
+      'onboarding generation', 'project management', 'repository analysis',
+      'github integration', 'authentication', 'configuration', '(ui)',
+    ];
+    for (const wf of workflows) {
+      for (const phrase of domainPhrases) {
+        expect(wf.purpose.toLowerCase(), `"${wf.purpose}" must not assert a domain`).to.not.contain(phrase);
+      }
+    }
+  });
+
+  it('says nothing about a subject when the flow reaches no named resource', () => {
+    const logout = workflows.find((w) => w.stableKey.endsWith(':logoutHandler'))!;
+    expect(logout.purpose).to.not.contain(' on ');
+    expect(logout.purpose).to.not.contain(' against ');
+  });
+
   it('sorts workflows by importance score descending', () => {
     for (let i = 1; i < workflows.length; i++) {
       expect(workflows[i]!.importanceScore).to.be.at.most(workflows[i - 1]!.importanceScore);
     }
   });
 
-  it('never invents workflows when no trace reaches an effect (mixed fixture)', async () => {
+  it('never claims effects it did not trace (mixed fixture)', async () => {
+    // Previously this asserted the list was EMPTY. Dropping these hid real
+    // entry points: a repo with forty routes and no traceable effects reported
+    // no workflows at all, which reads as "this system does nothing". They are
+    // listed now — but as `surface`, explicitly labelled as having no traced
+    // effects. The honesty guarantee is that nothing is *invented*, not that
+    // nothing is shown.
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const mixedWorkflows = extractWorkflows({ graph, entrypoints, sideEffects });
-    expect(mixedWorkflows).to.deep.equal([]);
+
+    for (const wf of mixedWorkflows) {
+      expect(wf.tier, `${wf.title} should be surface`).to.equal('surface');
+      const effectKinds = wf.steps.map((s) => s.stepKind)
+        .filter((k) => ['data_read', 'data_write', 'async_work', 'side_effect'].includes(k));
+      expect(effectKinds, `${wf.title} must not claim effects`).to.deep.equal([]);
+    }
   });
 
-  it('records dead-ends instead of silently dropping traces (honesty rule)', async () => {
+  it('records dead-ends alongside the surface entries they describe (honesty rule)', async () => {
     const { graph, entrypoints, sideEffects } = await buildFixtureGraph(MIXED_DIR);
     const { workflows: mixedWorkflows, deadEnds } = extractWorkflowsDetailed({ graph, entrypoints, sideEffects });
-    expect(mixedWorkflows).to.deep.equal([]);
+
     expect(deadEnds.length, 'dead ends recorded').to.be.greaterThan(0);
     for (const de of deadEnds) {
       expect(de.reason).to.be.oneOf(['no_calls_traced', 'no_effects_reached']);
       expect(de.entrypoint).to.be.a('string').and.not.equal('');
     }
+    // Listing the entry point and recording why its trace died are no longer
+    // mutually exclusive — the trust panel keeps its input either way.
+    expect(mixedWorkflows.every((w) => w.tier === 'surface')).to.equal(true);
   });
 
   it('seeds bare-reference queue consumers at the referenced handler (SUMMARY-consumer regression)', () => {
@@ -127,6 +173,20 @@ describe('workflowExtractor (call-graph traversal)', () => {
 
     const logout = workflows.find((w) => w.stableKey.endsWith(':supabaseLogoutHandler'));
     expect(logout, 'supabase logout workflow').to.exist;
+  });
+
+  it('tiers an identity-SDK login as core: authentication state IS state', () => {
+    // Contract change. The test above only guaranteed these workflows EXIST;
+    // their tier was `supporting`, because effect accounting counted rows,
+    // jobs and outbound calls and nothing else. That put every login and
+    // signup below read-only endpoints in the rail and out of reach of the
+    // tutorial selector, which is silent — the flows are still listed, just
+    // mis-ranked — so it is pinned here.
+    const login = workflows.find((w) => w.stableKey.endsWith(':supabaseLoginHandler'))!;
+    expect(login.tier, 'a user-triggered flow whose effect is auth state is core').to.equal('core');
+    expect(login.rankingReasons.join(' ')).to.contain('changes who is signed in');
+    expect(login.rankingReasons.join(' '), 'must not claim it traced no effects')
+      .to.not.contain('no side effects traced');
   });
 
   it('traces queue-consumer registrations into pipeline workflows (audit P2 §15)', () => {

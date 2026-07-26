@@ -105,5 +105,19 @@ export interface RunHistoryEntry {
     input_tokens: number;
     output_tokens: number;
   };
+  /** The cap this run was measured against, plus lifetime totals for the
+   * snapshot it wrote to. Budgets are enforced per run; the snapshot's
+   * counters keep accumulating as the cost record. */
+  budget: RunBudget;
   sections: { generated: string[]; cached: string[] };
+}
+
+export interface RunBudget {
+  capLlmCalls: number;
+  /** null on runs that predate per-run metering — see `note`. */
+  usedThisRun: number | null;
+  remaining: number | null;
+  lifetimeLlmCalls: number;
+  lifetimeCostUsd: number;
+  note?: string;
 }

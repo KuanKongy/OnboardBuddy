@@ -1,5 +1,5 @@
-import { AlertTriangle, GitBranch, Loader2, RefreshCw, Save, Shield, Sparkles, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Loader2, RefreshCw, Save, Shield, Sparkles, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -26,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
+import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 export const PRIVACY_MODES = [
   { key: "full_ai", label: "Full AI", hint: "Code snippets + facts go to the LLM — best quality." },
@@ -86,7 +87,7 @@ export function ProjectSettingsPage() {
   const navigate = useNavigate();
 
   const [ignoredPaths, setIgnoredPaths] = useState("");
-  const [defaultRole, setDefaultRole] = useState("general");
+  const [defaultRole, setDefaultRole] = useState<string>(FALLBACK_ROLE);
   const [privacyMode, setPrivacyMode] = useState("full_ai");
   const [analysisDepth, setAnalysisDepth] = useState("standard");
   const [analysisModel, setAnalysisModel] = useState(DEFAULT_ANALYSIS_MODEL);
@@ -109,11 +110,16 @@ export function ProjectSettingsPage() {
   const [keyInfo, setKeyInfo] = useState<{ exists: boolean; created_by?: string | null; updated_at?: string } | null>(null);
   const [keyInput, setKeyInput] = useState("");
   const [keySaving, setKeySaving] = useState(false);
+  const [keySaved, setKeySaved] = useState("");
 
   // Ranking weights
   const [weightRoles, setWeightRoles] = useState<RoleWeights[] | null>(null);
   const [weightRole, setWeightRole] = useState("backend");
   const [weightsSaving, setWeightsSaving] = useState(false);
+  // Confirmation for the weight mutations. Saving used to await, refetch and
+  // return with nothing changing on screen, so success and failure looked
+  // identical (audit §20.3 SILENT-MUTATION).
+  const [weightsSaved, setWeightsSaved] = useState("");
   const errorRef = useRef<HTMLDivElement>(null);
   const radioRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -145,11 +151,20 @@ export function ProjectSettingsPage() {
     if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [error]);
 
+  // Slider state lives here, not in `project.settings`, so the footer Cancel
+  // (which only refetched settings) left moved sliders moved — the user could
+  // neither confirm a save nor undo one (audit §20.3). Cancel now reloads this
+  // too, which is the only thing that actually reverts them.
+  const loadWeights = useCallback(() => {
+    if (!id) return;
+    apiFetch(`/projects/${id}/ranking-weights`).then((data) => setWeightRoles(data.roles)).catch(() => {});
+  }, [id]);
+
   useEffect(() => {
     if (!id) return;
     apiFetch(`/projects/${id}/llm-key`).then((data) => setKeyInfo(data.key)).catch(() => {});
-    apiFetch(`/projects/${id}/ranking-weights`).then((data) => setWeightRoles(data.roles)).catch(() => {});
-  }, [id]);
+    loadWeights();
+  }, [id, loadWeights]);
 
   async function handleSave() {
     setSaving(true);
@@ -194,6 +209,7 @@ export function ProjectSettingsPage() {
     if (!keyInput.trim()) return;
     setKeySaving(true);
     setError("");
+    setKeySaved("");
     try {
       await apiFetch(`/projects/${id}/llm-key`, {
         method: "PUT",
@@ -202,6 +218,8 @@ export function ProjectSettingsPage() {
       setKeyInput("");
       const data = await apiFetch(`/projects/${id}/llm-key`);
       setKeyInfo(data.key);
+      setKeySaved("Key saved.");
+      setTimeout(() => setKeySaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to save key");
     } finally {
@@ -211,9 +229,12 @@ export function ProjectSettingsPage() {
 
   async function handleRemoveKey() {
     setKeySaving(true);
+    setKeySaved("");
     try {
       await apiFetch(`/projects/${id}/llm-key`, { method: "DELETE" });
       setKeyInfo({ exists: false });
+      setKeySaved("Key removed — the server key is used again.");
+      setTimeout(() => setKeySaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to remove key");
     } finally {
@@ -232,6 +253,8 @@ export function ProjectSettingsPage() {
   async function handleSaveWeights() {
     if (!activeWeights) return;
     setWeightsSaving(true);
+    setWeightsSaved("");
+    setError("");
     try {
       await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, {
         method: "PUT",
@@ -239,6 +262,8 @@ export function ProjectSettingsPage() {
       });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
+      setWeightsSaved(`Saved — ${weightRole} scores re-projected.`);
+      setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to save weights");
     } finally {
@@ -248,10 +273,14 @@ export function ProjectSettingsPage() {
 
   async function handleRevertWeights() {
     setWeightsSaving(true);
+    setWeightsSaved("");
+    setError("");
     try {
       await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, { method: "DELETE" });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
+      setWeightsSaved(`Reverted — ${weightRole} is back on the built-in defaults.`);
+      setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to revert weights");
     } finally {
@@ -292,20 +321,17 @@ export function ProjectSettingsPage() {
       <div className="grid grid-cols-1 items-start gap-3">
         <Card>
           <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Repository &amp; branch</h3>
-            <div className="space-y-1.5">
-              <div>
-                <Label className="text-[0.6875rem] text-muted-foreground">Repository</Label>
-                <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
-              </div>
-              <div>
-                <Label className="text-[0.6875rem] text-muted-foreground">Branch</Label>
-                <div className="flex items-center gap-1 text-xs text-foreground">
-                  <GitBranch className="h-3 w-3 text-muted-foreground" />
-                  {project.branch}
-                </div>
-              </div>
-            </div>
+            <h3 className="mb-2 text-xs font-medium text-foreground">Repository</h3>
+            <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
+            {/* Owner feedback N1: branch used to be listed here as if it were a
+                project-level setting. It is not — every run picks its own
+                branch and commit in the Analyze dialog, and each package is
+                pinned to the one it was built from. Showing a single "Branch"
+                value on a settings page implied it applied to everything. */}
+            <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+              Branch and commit are chosen per analysis run — see the branch/commit chooser
+              in the sidebar and the Analyze dialog.
+            </p>
           </CardContent>
         </Card>
 
@@ -317,11 +343,9 @@ export function ProjectSettingsPage() {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="backend">Backend</SelectItem>
-                <SelectItem value="frontend">Frontend</SelectItem>
-                <SelectItem value="devops">DevOps</SelectItem>
-                <SelectItem value="qa">QA</SelectItem>
-                <SelectItem value="general">General</SelectItem>
+                {ROLE_OPTIONS.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </CardContent>
@@ -543,6 +567,11 @@ export function ProjectSettingsPage() {
             ) : (
               <p className="text-xs text-muted-foreground">No project key — the server key is used.</p>
             )}
+            {/* Same silent-mutation class as Save weights: PUT/DELETE fired and
+                the page said nothing either way (audit §20.3). */}
+            {keySaved && (
+              <p role="status" aria-live="polite" className="mt-1.5 text-[0.6875rem] text-success">{keySaved}</p>
+            )}
           </CardContent>
         </Card>
 
@@ -597,8 +626,13 @@ export function ProjectSettingsPage() {
                     </p>
                   );
                 })()}
-                {canEdit && (
-                  <div className="flex justify-end gap-2 pt-1">
+                {canEdit ? (
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                    {/* The only signal that a save happened: the request used
+                        to fire and nothing on the page changed. */}
+                    <p role="status" aria-live="polite" className="mr-auto text-[0.6875rem] text-success">
+                      {weightsSaved}
+                    </p>
                     <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
                       Revert to defaults
                     </Button>
@@ -606,6 +640,15 @@ export function ProjectSettingsPage() {
                       {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}
                     </Button>
                   </div>
+                ) : (
+                  // "Adjust weights" on a graph node sends developers here,
+                  // where every slider is disabled and both buttons are gone,
+                  // with nothing saying why (audit §20.1 dead end).
+                  <p className="pt-1 text-[0.6875rem] text-muted-foreground">
+                    Read-only for your tier — these are the weights your criticality scores are
+                    computed with. Only owners and admins can change them; ask one of them if a
+                    signal is weighted wrong for your work.
+                  </p>
                 )}
               </div>
             )}
@@ -682,7 +725,21 @@ export function ProjectSettingsPage() {
 
       {canEdit && (
         <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          <Button variant="outline" size="sm" onClick={() => refetch()}>Cancel</Button>
+          {/* Cancel used to refetch settings only, so moved ranking sliders —
+              which live in `weightRoles`, not in settings — stayed moved. */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              refetch();
+              loadWeights();
+              setKeyInput("");
+              setWeightsSaved("");
+              setKeySaved("");
+            }}
+          >
+            Cancel
+          </Button>
           <Button size="sm" onClick={handleSave} disabled={saving}>
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
             {saved ? "Saved!" : "Save changes"}

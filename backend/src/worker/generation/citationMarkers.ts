@@ -22,6 +22,67 @@ const PAREN_GROUP = new RegExp(
   'g',
 );
 
+/**
+ * `(r1:backend/src/worker/semantic/semanticPipeline.ts:36)` — a REAL alias
+ * glued to the locator it points at.
+ *
+ * Measured live on `OnboardBuddy/architecture_deep`: all three
+ * decision→consequence bullets cite this way, because the prompt hands the
+ * model `decisionNotes[].where` as `"<file>:<line>"` right next to the alias
+ * and the model concatenates the two. `PAREN_GROUP` needs the closing paren
+ * immediately after the ref, so every one of them shipped verbatim — three
+ * dead `r1:`/`r5:` labels pointing at a numbering the reader never sees, with
+ * `resolved: 0, dropped: []` recorded as if the section had cited nothing at
+ * all.
+ *
+ * Resolved: the marker replaces the whole thing (the chip already resolves to
+ * that file and line). Unresolved: the alias goes and the locator STAYS —
+ * `path.ts:36` is something a reader can follow, and deleting it would turn a
+ * followable claim into a bare assertion.
+ *
+ * Runs AFTER `PAREN_GROUP` so `(r1, r3)` is consumed as a ref list first and
+ * never reaches this as "alias r1 plus the text r3".
+ */
+const ALIAS_WITH_LOCATOR = new RegExp(
+  String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?\[?([rR]\d+)\]?\s*:\s*([^)\n]{2,160}?)\s*\)`,
+  'g',
+);
+
+/**
+ * Alias shapes the pipeline NEVER mints, in citation position.
+ *
+ * `sectionGenerator.ts` issues `r1…rN` and nothing else, so `(r_evidence)` —
+ * cited three times by `FloowForge/traced_flows` — is a hallucinated label.
+ * It matched no rewrite rule, so it shipped, and nothing counted it: the
+ * section read as though it carried receipts while pointing at an id that
+ * never existed.
+ *
+ * `UBCPSS/architecture_deep` found the third shape, and it is the worst one:
+ * `(r142772a7287cf939)` — the letter `r` welded to the untrusted-data FENCE
+ * NONCE. Twice, in the disclosure paragraph. `[rR]\d+` matches `r142772` and
+ * then hits `a`, so the whole thing sailed through as prose and the run
+ * recorded `dropped: []`. A pipeline-internal nonce is the last string that
+ * should reach a reader.
+ *
+ * Deliberately narrow, because this DELETES text and a wrong deletion mangles
+ * a sentence. Three qualifying shapes: `r`/`receipt` + `_`/`:` + a word;
+ * `r-` + a digit; or `r` + a digit + at least six more alphanumerics. Nothing
+ * else. That covers every hallucination seen (`r_evidence`, `receipt_1`,
+ * `r:2`, `r-3`, `r142772a7287cf939`) and cannot reach the English and code
+ * parentheticals that live in this corpus — `(r squared)`, `(r1cm)`,
+ * `(runId)`, `(req.body)`, `(r-value)`, `(read-only)` all fail it.
+ */
+const UNKNOWN_REF = String.raw`[rR](?:eceipt)?(?:[_:][A-Za-z0-9][\w:.-]{0,39}|-\d[\w.-]{0,39}|\d[0-9A-Za-z]{6,})`;
+// The bracket branch is guarded on both sides: `[[receipt:<uuid>]]` — the
+// marker this module EMITS — is `[receipt:…]` inside one more bracket, and an
+// unguarded rule ate every citation it had just resolved.
+const UNKNOWN_ALIAS_GROUP = new RegExp(
+  String.raw`\(\s*(?:[rR]eceipts?\s*:?\s*)?\[?(${UNKNOWN_REF})\]?\s*\)` +
+    `|` +
+    String.raw`(?<!\[)\[(${UNKNOWN_REF})\](?!\])`,
+  'g',
+);
+
 /** A whole bullet/line that is ONLY a receipt reference ("- Receipt: [r3]"). */
 const REF_ONLY_LINE = new RegExp(
   String.raw`^\s*[-*]?\s*[rR]eceipts?\s*:?\s*\[?(${REF_LIST})\]?\s*$`,
@@ -46,6 +107,15 @@ export interface RewriteResult {
   resolved: string[];
   /** Aliases dropped: unknown alias, or receipt not used/persisted. */
   dropped: string[];
+  /**
+   * Alias-shaped labels the pipeline could never have minted (`r_evidence`),
+   * removed from the prose. Distinct from `dropped`, which is a well-formed
+   * `rN` whose receipt was simply not used: a non-zero count here means the
+   * model INVENTED a citation, which is a grounding failure rather than a
+   * bookkeeping one, and it belongs in `generation_context` where the audit
+   * can find it.
+   */
+  unknownAliases: string[];
 }
 
 function splitRefs(list: string): string[] {
@@ -64,6 +134,7 @@ export function rewriteInlineCitations(
 ): RewriteResult {
   const resolved: string[] = [];
   const dropped: string[] = [];
+  const unknownAliases: string[] = [];
 
   const markersFor = (refList: string): string =>
     splitRefs(refList)
@@ -120,29 +191,45 @@ export function rewriteInlineCitations(
       continue;
     }
 
-    const replaced = line.replace(
-      PAREN_GROUP,
-      (_m, parenList: string | undefined, bracketList: string | undefined) => {
-        const markers = markersFor((parenList ?? bracketList)!);
-        return markers ? ` ${markers}` : '';
-      },
-    );
+    const replaced = line
+      .replace(
+        PAREN_GROUP,
+        (_m, parenList: string | undefined, bracketList: string | undefined) => {
+          const markers = markersFor((parenList ?? bracketList)!);
+          return markers ? ` ${markers}` : '';
+        },
+      )
+      // `(r1:path.ts:36)` — resolve to the chip, or keep the locator alone.
+      .replace(ALIAS_WITH_LOCATOR, (_m, alias: string, locator: string) => {
+        const markers = markersFor(alias);
+        return markers ? ` ${markers}` : ` (${locator})`;
+      })
+      // Whatever still looks like a citation cannot be one: the alias space is
+      // exactly r1…rN and everything in it has been consumed above.
+      .replace(UNKNOWN_ALIAS_GROUP, (_m, paren: string | undefined, bracket: string | undefined) => {
+        unknownAliases.push((paren ?? bracket)!.toLowerCase());
+        return '';
+      });
     // Tidy doubled spaces left by removals — inside the line only, never
     // touching leading indentation (nested lists depend on it).
     const indent = replaced.match(/^[ \t]*/)![0];
-    kept.push(
+    const tidied =
       indent +
-        replaced
-          .slice(indent.length)
-          // Dropped citations inside inline code leave empty `` husks.
-          .replace(/`\s*`/g, '')
-          .replace(/[ \t]+([.,;:)])/g, '$1')
-          .replace(/[ \t]{2,}/g, ' ')
-          .trimEnd(),
-    );
+      replaced
+        .slice(indent.length)
+        // Dropped citations inside inline code leave empty `` husks.
+        .replace(/`\s*`/g, '')
+        .replace(/[ \t]+([.,;:)])/g, '$1')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trimEnd();
+    // A bullet whose only content WAS the invented alias ("- Receipt: [r_x]")
+    // is now a label with nothing behind it — drop the line, same as the
+    // resolvable form does above.
+    if (/^\s*[-*]?\s*[rR]eceipts?\s*:?\s*$/.test(tidied)) continue;
+    kept.push(tidied);
   }
 
-  return { content: kept.join('\n').trim(), resolved, dropped };
+  return { content: kept.join('\n').trim(), resolved, dropped, unknownAliases };
 }
 
 /**
@@ -276,5 +363,6 @@ export function rewriteQaUuidCitations(markdown: string, usedReceiptIds: Set<str
         .trimEnd()
     );
   });
-  return { content: rewritten.join('\n').trim(), resolved, dropped };
+  // Q&A cites raw UUIDs, so there is no alias namespace to hallucinate inside.
+  return { content: rewritten.join('\n').trim(), resolved, dropped, unknownAliases: [] };
 }

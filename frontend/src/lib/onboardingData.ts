@@ -1,4 +1,5 @@
 import { apiFetch } from "@/lib/api";
+import { FALLBACK_ROLE, isDeveloperRole, type DeveloperRole } from "@/lib/roles";
 import type { OnboardingPackage, PackageCard, SectionId } from "@/types/onboarding";
 
 /** Shelf order for the 12 Diátaxis sections (chapter order). */
@@ -56,28 +57,45 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: string; blurb?: string; ids:
  * Role reading order (the plan's "reading order ≠ shelf order"): journeys
  * interleave modes — a new joiner does something on day one, then studies.
  * Roles reorder emphasis; content is identical.
+ *
+ * Typed by `DeveloperRole` so a new role cannot be added to the union without
+ * an order to read it in, and `general` is one key among five rather than a
+ * hardcoded fallback (doc/REWORK_PLAN.md Phase 10). Every column is a
+ * permutation of the same 12 sections — nothing is hidden from any role; a
+ * role that drops a section from its rail would be a role that never learns
+ * it exists.
  */
-export const ROLE_READING_ORDER: Record<string, readonly SectionId[]> = {
+export const ROLE_READING_ORDER: Record<DeveloperRole, readonly SectionId[]> = {
+  // The superset reader: orient, run it, then study in shelf order.
   general: [
     "big-picture", "setup-run", "concepts", "traced-flows", "first-change",
     "code-map", "common-tasks", "architecture-deep", "capabilities",
     "routes-jobs", "data-model", "guardrails-ops",
   ],
+  // Route table and schema are day-one lookups for someone adding an endpoint,
+  // so they come before the wider architecture reading.
   backend: [
     "big-picture", "setup-run", "concepts", "traced-flows", "first-change",
     "code-map", "routes-jobs", "data-model", "common-tasks", "architecture-deep",
     "capabilities", "guardrails-ops",
   ],
+  // Flows before vocabulary: a UI developer meets the system through a page
+  // that already works. `routes-jobs` moves up to 8th (general has it 10th) —
+  // it is the contract their components call, not a reference-shelf lookup.
   frontend: [
     "big-picture", "setup-run", "traced-flows", "concepts", "first-change",
-    "code-map", "common-tasks", "capabilities", "architecture-deep",
-    "routes-jobs", "data-model", "guardrails-ops",
+    "code-map", "common-tasks", "routes-jobs", "capabilities",
+    "architecture-deep", "data-model", "guardrails-ops",
   ],
+  // Guardrails third: an operator's first question is what can be turned off
+  // and what it costs, and topology comes before any single flow.
   devops: [
     "big-picture", "setup-run", "guardrails-ops", "concepts", "architecture-deep",
     "traced-flows", "routes-jobs", "first-change", "code-map", "common-tasks",
     "capabilities", "data-model",
   ],
+  // Recipes third: the test-writing recipe is the fastest route to a first
+  // useful contribution, and the traced flows are the surfaces to cover.
   qa: [
     "big-picture", "setup-run", "common-tasks", "traced-flows", "first-change",
     "concepts", "routes-jobs", "code-map", "capabilities", "architecture-deep",
@@ -101,13 +119,68 @@ export const SECTION_WHY: Partial<Record<SectionId, string>> = {
   "guardrails-ops": "Budgets, kill switches, env config — before you operate it.",
 };
 
-export const ROLES = [
-  { key: "backend", label: "Backend Developer" },
-  { key: "frontend", label: "Frontend Developer" },
-  { key: "devops", label: "DevOps Engineer" },
-  { key: "qa", label: "QA Engineer" },
-  { key: "general", label: "General" },
-];
+/**
+ * Per-role overlay on `SECTION_WHY` — the copywriting half of role
+ * differentiation (doc/ROLE_DIFFERENTIATION_PLAN.md: "Role belongs in *order*
+ * … and in per-role `SECTION_WHY` overlay strings").
+ *
+ * Deliberately an overlay and not a full table: sections are shared, cached
+ * artifacts, so the only thing a role may change about a section is why THIS
+ * reader is being sent to it. A role overrides a line only where its reason
+ * genuinely differs from the general one; everything else falls through, so
+ * there is exactly one copy of every sentence a role does not need to change.
+ */
+export const ROLE_SECTION_WHY: Partial<Record<DeveloperRole, Partial<Record<SectionId, string>>>> = {
+  backend: {
+    "routes-jobs": "Every endpoint and queue you will extend — the surface you own.",
+    "data-model": "The tables your handlers write, and the constraints that will reject you.",
+    "traced-flows": "Where a request becomes a job and a job becomes rows.",
+    "code-map": "The handlers, workers and services you will open first.",
+    "guardrails-ops": "The budgets and kill switches your code has to respect.",
+  },
+  frontend: {
+    "routes-jobs": "The API surface your components call — payloads, methods, mounted paths.",
+    "capabilities": "What users can do, and which screen delivers each one.",
+    "traced-flows": "What happens after your click, all the way to the write.",
+    "code-map": "The pages, components and hooks you will open first.",
+    "data-model": "The shapes behind the JSON your views render.",
+  },
+  devops: {
+    "guardrails-ops": "Budgets, kill switches, secrets and env config — your first read, not your last.",
+    "setup-run": "The services, ports and env this repo actually needs to boot.",
+    "architecture-deep": "Process topology and boundaries — what runs where, and what crosses.",
+    "routes-jobs": "The queues and workers you will scale, and the routes you will front.",
+    "code-map": "The config, compose and pipeline files that decide how it runs.",
+  },
+  qa: {
+    "common-tasks": "The repo's own test recipes — the pattern to copy, not invent.",
+    "traced-flows": "The end-to-end paths worth covering, with their effect steps named.",
+    "first-change": "Your first change is a test: the missing assertion on a real flow.",
+    "routes-jobs": "Every endpoint that needs a case, in one table.",
+    "capabilities": "What the product promises — the acceptance criteria behind each promise.",
+  },
+};
+
+/**
+ * The role's reading order, falling back to the superset role.
+ *
+ * `pkg.role` arrives from the API as a plain string, so indexing the record
+ * with it directly is an implicit `any` — which then leaked into every
+ * callback over the result (5 `noImplicitAny` errors at the one call site).
+ * `isDeveloperRole` narrows it against the one role list.
+ */
+export function readingOrderFor(role: string | null | undefined): readonly SectionId[] {
+  return ROLE_READING_ORDER[isDeveloperRole(role) ? role : FALLBACK_ROLE];
+}
+
+/**
+ * The role's line for a section, falling back to the shared one — the
+ * `SECTION_WHY` overlay resolved for one reader.
+ */
+export function sectionWhy(sectionId: SectionId, role: string | null | undefined): string | undefined {
+  const overlay = isDeveloperRole(role) ? ROLE_SECTION_WHY[role]?.[sectionId] : undefined;
+  return overlay ?? SECTION_WHY[sectionId];
+}
 
 export async function fetchOnboardingPackage(
   projectId: string,

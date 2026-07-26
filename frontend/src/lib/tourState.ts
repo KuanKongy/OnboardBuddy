@@ -12,6 +12,10 @@ const TOUR_PREFIXES = {
   project: "onboardbuddy:project-tour-dismissed",
   onboardingLifecycle: "onboardbuddy:onboarding-tour-dismissed",
   onboardingReader: "onboardbuddy:reader-tour-dismissed",
+  // The import wizard kept this key privately and browser-globally, so it was
+  // the one tour still carrying bug #49: a genuinely new account on a browser
+  // that had ever dismissed it never saw it again.
+  import: "onboardbuddy:import-tour-dismissed",
 } as const;
 
 export type TourName = keyof typeof TOUR_PREFIXES;

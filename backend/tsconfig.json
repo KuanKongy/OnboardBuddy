@@ -9,5 +9,16 @@
     "lib": ["ES2022"]
   },
   "include": ["src"],
-  "exclude": ["dist", "node_modules", "test", "src/**/__tests__"]
+  "exclude": [
+    "dist",
+    "node_modules",
+    "test",
+    "src/**/__tests__",
+    // Analysis INPUTS, not shipped code — deliberately written in other
+    // projects' styles (JSX router configs, extensionless imports) so the
+    // parser is exercised against them. Tests read them from `src` by path,
+    // never from `dist`, so compiling them only produced dead output and made
+    // the build fail on code it was never supposed to own.
+    "src/worker/fixtures"
+  ]
 }

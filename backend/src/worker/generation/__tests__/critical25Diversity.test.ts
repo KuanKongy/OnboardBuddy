@@ -52,6 +52,33 @@ describe('critical25 area diversity cap', () => {
     expect(picked).to.have.length(3); // ceil(12*.25)=3, all from the only area
   });
 
+  /**
+   * UBCPSS shipped a Critical 25% that was half bare `interface` declarations
+   * from one types file. The floor is RELATIVE: declarations lose to anything
+   * behavioural, but a types-only package is a legitimate repo and there the
+   * interfaces are the content, so they must still fill the slice.
+   */
+  it('defers declaration-only targets, then backfills with them when nothing behavioural is left', () => {
+    const decl = (key: string, score: number) => ({ ...t(key, score), behavioral: false });
+    const mixed = critical25([
+      decl('src/lib/types.ts#A', 0.9), decl('src/lib/types.ts#B', 0.88),
+      t('src/a/run.ts#run', 0.4), t('src/b/handle.ts#handle', 0.3),
+      t('src/c/send.ts#send', 0.2), t('src/d/save.ts#save', 0.1),
+      t('src/e/load.ts#load', 0.05), t('src/f/emit.ts#emit', 0.04),
+    ]).get('symbol')!;
+    expect(mixed.map((p) => p.stableKey)).to.deep.equal(
+      // take = max(3, ceil(8*.25)) = 3, and all three come from behind the
+      // two top-scoring declarations.
+      ['src/a/run.ts#run', 'src/b/handle.ts#handle', 'src/c/send.ts#send'],
+    );
+
+    const typesOnly = critical25([
+      decl('src/types/a.ts#A', 0.9), decl('src/types/b.ts#B', 0.8),
+      decl('src/types/c.ts#C', 0.7), decl('src/types/d.ts#D', 0.6),
+    ]).get('symbol')!;
+    expect(typesOnly.map((p) => p.score)).to.deep.equal([0.9, 0.8, 0.7]);
+  });
+
   it('leaves workflow/cluster target types untouched', () => {
     const targets = [
       t('wf:a', 0.9, 'workflow'),

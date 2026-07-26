@@ -1,6 +1,6 @@
 import type { EvidenceGraph, EvidenceNode, EvidenceEdgeType } from '../types/analysis.js';
 import type { DetectedEntrypoint } from './entrypointDetector.js';
-import type { DetectedSideEffect } from './sideEffectDetector.js';
+import { normalizeQueueToken, type DetectedSideEffect } from './sideEffectDetector.js';
 import { query } from '../../lib/db.js';
 
 /**
@@ -41,6 +41,11 @@ export interface WorkflowStep {
   };
 }
 
+export type WorkflowTier = 'core' | 'supporting' | 'surface';
+
+/** Sort order for tiers; lower comes first. */
+export const TIER_RANK: Record<WorkflowTier, number> = { core: 0, supporting: 1, surface: 2 };
+
 export interface ExtractedWorkflow {
   title: string;
   triggerType: string;
@@ -49,8 +54,17 @@ export interface ExtractedWorkflow {
   confidence: 'high' | 'medium' | 'low';
   entrypoint: DetectedEntrypoint;
   steps: WorkflowStep[];
-  /** Raw ordering hint only — real ranking is criticality_scores rows. */
+  /**
+   * Where this sits in the list. `core` is a flow a person triggers that
+   * changes state; `supporting` is everything else that reaches an effect;
+   * `surface` is an entry point with no traced effects — an endpoint or page
+   * that is real but whose flow could not be followed.
+   */
+  tier: WorkflowTier;
+  /** Ordering within a tier — see `rankWorkflow`. */
   importanceScore: number;
+  /** Plain-language reasons behind the score, shown in the UI. */
+  rankingReasons: string[];
   externalDependencies: string[];
   /** Extra persisted metadata (journey membership, unknown-only flags, …). */
   metadata?: Record<string, unknown>;
@@ -78,6 +92,24 @@ export interface WorkflowExtraction {
 
 const MAX_DEPTH = 8;
 const MAX_STEPS = 20;
+/**
+ * Steps held back for continuations that actually arrive somewhere.
+ *
+ * The walk is depth-first in source order, so the first branch out of a
+ * handler gets to spend the whole budget before any sibling is tried. Where
+ * that branch is wide and inert — validation, shaping, formatting — the trace
+ * hits the cap inside it and the sibling holding the effect is never visited:
+ * CourseInsights' `POST /query` filled all twenty steps with validators and
+ * stopped one hop short of the persister that is the point of the endpoint,
+ * reporting a flow that touches nothing.
+ *
+ * Raising the cap only moves the cliff and costs a step on every trace in the
+ * fleet. Instead the last quarter of the budget is reserved: once it is
+ * reached, only edges that can still arrive at an effect are followed. A
+ * branch that cannot reach one adds shaping detail, and shaping detail is
+ * exactly what a trace should give up to keep what the flow DOES.
+ */
+const EFFECT_RESERVE = Math.ceil(MAX_STEPS / 4);
 
 /** Edge types a request-flow trace follows (spec traversal set). */
 const TRAVERSAL_EDGES: ReadonlySet<EvidenceEdgeType> = new Set([
@@ -116,14 +148,18 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     for (const seed of seedsForEntrypoint(ep, ctx)) {
       const result = trace(ep, seed, ctx);
       if (!result) continue;
-      if ('deadEnd' in result) {
+      // A surface-tier trace now yields BOTH a workflow (so the endpoint is
+      // listed) and a dead-end record (so the trust panel still reports that
+      // nothing could be followed from it). Record the dead-end first, then
+      // fall through — the two are no longer mutually exclusive.
+      if (result.deadEnd) {
         const key = `${result.deadEnd.entrypoint}:${result.deadEnd.seedName}`;
         if (recordableDeadEnd(ep) && !seenDeadEnds.has(key)) {
           seenDeadEnds.add(key);
           deadEnds.push(result.deadEnd);
         }
-        continue;
       }
+      if (!('workflow' in result)) continue;
       const wf = result.workflow;
       if (seenKeys.has(wf.stableKey)) continue;
       seenKeys.add(wf.stableKey);
@@ -131,13 +167,192 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
     }
   }
 
-  // Score ties: an AST-detected route (`PUT /dataset/:id/:kind`) beats a
-  // convention-guessed seed over the same steps — it carries the real
-  // method + route pattern, so it survives duplicate suppression.
+  // A flow on the far side of an async hand-off from something a person
+  // triggers is part of a user-initiated path. Done here, after every trace
+  // exists, because the link is between two workflows and neither can see the
+  // other while it is being built.
+  for (const [wf, handoff] of handoffContext(workflows, ctx)) applyHandoffContext(wf, handoff);
+
+  // Tier first, then score. Score ties break toward an AST-detected route
+  // (`PUT /dataset/:id/:kind`) over a convention-guessed seed across the same
+  // steps — it carries the real method and pattern, so it is the one that
+  // should survive duplicate suppression.
   const kept = suppressNearDuplicates(workflows.sort((a, b) =>
-    b.importanceScore - a.importanceScore
+    TIER_RANK[a.tier] - TIER_RANK[b.tier]
+    || b.importanceScore - a.importanceScore
     || Number(Boolean(b.entrypoint.routePattern)) - Number(Boolean(a.entrypoint.routePattern))));
   return { workflows: kept, deadEnds };
+}
+
+// ─── Async hand-off reachability ─────────────────────────────────────────────
+//
+// A queue consumer is, by construction, not triggered by a user — so under the
+// old rule `userTriggered && persists -> core`, NO background worker could ever
+// be a core flow no matter how much of the system it owned. Measured on this
+// tool's own repository: `Queue consumer: ANALYSIS_QUEUE` and
+// `Queue consumer: SUMMARY_QUEUE` — clone, parse, every analysis phase, persist,
+// then the whole generation run — both tiered `supporting`, while a settings
+// `DELETE /…/ranking-weights/:role` was the top-ranked core flow. The same shape
+// holds wherever the product happens on the async side.
+//
+// The fix is reachability, not a special case: a consumer whose registration
+// token something user-triggered publishes is ON a user-initiated path, and it
+// is tier-eligible for that reason alone. A consumer nobody publishes to — a
+// cron janitor, a queue fed only by an external system — stays `supporting`,
+// which is the correct answer for it.
+//
+// The token contract is the one `journeyComposer` already established for its
+// `async_token` boundaries (BullMQ queue names, job names, socket events and
+// pub/sub channels all normalize the same way), so the two agree on what a
+// hand-off is.
+
+/** Tokens that identify nothing — every repo publishes some of them. */
+const HANDOFF_TOKEN_STOPLIST = new Set([
+  'main', 'default', 'message', 'data', 'error', 'connect', 'disconnect',
+]);
+const MIN_HANDOFF_TOKEN_LENGTH = 3;
+
+function admissibleHandoffToken(token: string): boolean {
+  return token.length >= MIN_HANDOFF_TOKEN_LENGTH && !HANDOFF_TOKEN_STOPLIST.has(token);
+}
+
+/**
+ * `<receiver>.add('<job>'` / `socket.emit('<event>'` — both captures are token
+ * candidates. The receiver matters most: a BullMQ producer writes
+ * `getAnalysisQueue().add('analyze_repository', …)`, where the literal is the
+ * JOB name and only the receiver carries the QUEUE the consumer registered on.
+ */
+const HANDOFF_PUBLISH_RE =
+  /([A-Za-z_$][\w$]*)\s*(?:\(\s*\))?\s*\.\s*(?:add|emit|publish|send|xAdd|xadd|lPush|rPush|lpush|rpush)\s*\(\s*(?:['"`]([\w:.\-/]{2,64})['"`])?/g;
+
+/**
+ * Tokens a consumer registration answers to. A registration may namespace
+ * itself (`socket:draw-ops`); the producing side writes the bare name, so both
+ * forms are admitted.
+ */
+function registrationTokens(routePattern: string): string[] {
+  if (!routePattern) return [];
+  const forms = [routePattern];
+  const colon = routePattern.indexOf(':');
+  if (colon > 0) forms.push(routePattern.slice(colon + 1));
+  return [...new Set(forms.map(normalizeQueueToken).filter(admissibleHandoffToken))];
+}
+
+/** Hand-off tokens a flow publishes, from its own steps' effects and bytes. */
+function publishedHandoffTokens(wf: ExtractedWorkflow, ctx: TraversalContext): string[] {
+  const tokens = new Set<string>();
+  const add = (raw: string | undefined): void => {
+    if (!raw) return;
+    const token = normalizeQueueToken(raw);
+    if (admissibleHandoffToken(token)) tokens.add(token);
+  };
+  for (const step of wf.steps) {
+    for (const effect of ctx.effectsByKey.get(step.nodeStableKey) ?? []) {
+      if (effect.kind !== 'message_publish') continue;
+      add(effect.queueHint);
+      add(effect.target);
+    }
+    // The enqueue may carry no `message_publish` row at all — a `queue_enqueue`
+    // behaviour signal is enough to make the step `async_work` — so the bytes
+    // are read directly rather than only through the effect table.
+    const snippet = ctx.nodesByKey.get(step.nodeStableKey)?.snippet;
+    if (!snippet) continue;
+    for (const m of snippet.matchAll(HANDOFF_PUBLISH_RE)) { add(m[1]); add(m[2]); }
+  }
+  return [...tokens];
+}
+
+/**
+ * The hand-off graph, as a `HandoffContext` per affected workflow.
+ *
+ * `reachedFromUser` is closed transitively, so a pipeline whose second stage is
+ * fed by its first (`analyze` enqueues `summary`) carries the whole chain.
+ * Flows a person already triggers directly are not marked — they were
+ * user-triggered before any of this — but they still receive their inbound
+ * count, which is how a socket handler several pages call is distinguished from
+ * one that only one page calls.
+ */
+function handoffContext(
+  workflows: ExtractedWorkflow[],
+  ctx: TraversalContext,
+): Array<[ExtractedWorkflow, HandoffContext]> {
+  const byToken = new Map<string, Set<string>>();
+  for (const wf of workflows) {
+    const kind = wf.entrypoint.kind;
+    if (kind !== 'message_consumer' && kind !== 'event_handler') continue;
+    for (const token of registrationTokens(wf.entrypoint.routePattern ?? '')) {
+      const list = byToken.get(token);
+      if (list) list.add(wf.stableKey);
+      else byToken.set(token, new Set([wf.stableKey]));
+    }
+  }
+  // A token two consumers answer to cannot say which one continues the flow.
+  // No edge is formed rather than the wrong one — same guard the composer uses.
+  const consumerByToken = new Map<string, string>();
+  for (const [token, keys] of byToken) {
+    if (keys.size === 1) consumerByToken.set(token, [...keys][0]!);
+  }
+  if (consumerByToken.size === 0) return [];
+
+  const seeds: string[] = [];
+  const publishesTo = new Map<string, string[]>();
+  const inboundFrom = new Map<string, Set<string>>();
+  for (const wf of workflows) {
+    if (USER_TRIGGERED.has(wf.entrypoint.kind)) seeds.push(wf.stableKey);
+    const targets = [...new Set(publishedHandoffTokens(wf, ctx)
+      .map((t) => consumerByToken.get(t))
+      .filter((k): k is string => k !== undefined && k !== wf.stableKey))];
+    if (targets.length === 0) continue;
+    publishesTo.set(wf.stableKey, targets);
+    for (const target of targets) {
+      const from = inboundFrom.get(target);
+      if (from) from.add(wf.stableKey);
+      else inboundFrom.set(target, new Set([wf.stableKey]));
+    }
+  }
+  if (publishesTo.size === 0) return [];
+
+  const visited = new Set(seeds);
+  const reached = new Set<string>();
+  const frontier = [...seeds];
+  for (let i = 0; i < frontier.length; i++) {
+    for (const next of publishesTo.get(frontier[i]!) ?? []) {
+      if (visited.has(next)) continue;
+      visited.add(next);
+      reached.add(next);
+      frontier.push(next);
+    }
+  }
+
+  const out: Array<[ExtractedWorkflow, HandoffContext]> = [];
+  for (const wf of workflows) {
+    const inbound = inboundFrom.get(wf.stableKey)?.size ?? 0;
+    const reachedFromUser = reached.has(wf.stableKey);
+    if (inbound === 0 && !reachedFromUser) continue;
+    out.push([wf, { reachedFromUser, inboundHandoffs: inbound }]);
+  }
+  return out;
+}
+
+/** Re-tier and re-score a flow in light of what the system hands to it. */
+function applyHandoffContext(wf: ExtractedWorkflow, handoff: HandoffContext): void {
+  const ranked = rankWorkflow(
+    wf.entrypoint,
+    wf.steps,
+    wf.tier === 'surface',
+    wf.metadata?.unknown_effects_only === true,
+    handoff,
+  );
+  wf.tier = ranked.tier;
+  wf.importanceScore = ranked.score;
+  wf.rankingReasons = ranked.reasons;
+  wf.metadata = {
+    ...(wf.metadata ?? {}),
+    tier: ranked.tier,
+    ranking_reasons: ranked.reasons,
+    ...(handoff.reachedFromUser ? { reached_from_user_trigger: true } : {}),
+    ...(handoff.inboundHandoffs ? { inbound_handoffs: handoff.inboundHandoffs } : {}),
+  };
 }
 
 /**
@@ -146,7 +361,7 @@ export function extractWorkflowsDetailed(input: ExtractWorkflowsInput): Workflow
  * file seed dying quietly is expected, not an extraction failure.
  */
 function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
-  if (ep.kind === 'ui_route' || ep.kind === 'export') return false;
+  if (ep.kind === 'ui_route' || ep.kind === 'ui_action' || ep.kind === 'export') return false;
   if (ep.kind === 'http_route') return Boolean(ep.routePattern);
   return true;
 }
@@ -159,6 +374,11 @@ function recordableDeadEnd(ep: DetectedEntrypoint): boolean {
 function suppressNearDuplicates(sorted: ExtractedWorkflow[]): ExtractedWorkflow[] {
   const kept: Array<{ wf: ExtractedWorkflow; keys: Set<string> }> = [];
   for (const wf of sorted) {
+    // Surface entries are an inventory of entry points, not traces. Two routes
+    // can legitimately share a handler, and a one-step entry overlaps
+    // everything by definition — suppressing them would delete real endpoints
+    // from the list this tier exists to provide.
+    if (wf.tier === 'surface') { kept.push({ wf, keys: new Set() }); continue; }
     const keys = new Set(wf.steps.map((s) => s.nodeStableKey));
     const isDuplicate = kept.some(({ keys: otherKeys }) => {
       let shared = 0;
@@ -180,6 +400,12 @@ interface TraversalContext {
   contained: Map<string, string[]>;
   /** Side effects by symbol stable key (class methods fall back to class). */
   effectsByKey: Map<string, DetectedSideEffect[]>;
+  /**
+   * Keys from which a traversal path still ARRIVES at something that does
+   * anything. Computed once per snapshot by a reverse sweep from every
+   * effect-bearing node, so the trace can ask the question for free.
+   */
+  effectReaching: Set<string>;
 }
 
 function buildTraversalContext(input: ExtractWorkflowsInput): TraversalContext {
@@ -201,7 +427,43 @@ function buildTraversalContext(input: ExtractWorkflowsInput): TraversalContext {
     effectsByKey.set(key, [...(effectsByKey.get(key) ?? []), se]);
   }
 
-  return { nodesByKey, outgoing, contained, effectsByKey };
+  const ctx: TraversalContext = { nodesByKey, outgoing, contained, effectsByKey, effectReaching: new Set() };
+  ctx.effectReaching = computeEffectReaching(ctx);
+  return ctx;
+}
+
+/**
+ * Reverse sweep from every node that does something, over the same edges the
+ * trace follows. Linear in nodes+edges and run once, which is what makes it
+ * affordable to consult on every edge of every trace.
+ */
+function computeEffectReaching(ctx: TraversalContext): Set<string> {
+  const incoming = new Map<string, string[]>();
+  for (const [sourceKey, edges] of ctx.outgoing) {
+    for (const e of edges) {
+      const prev = incoming.get(e.targetKey);
+      if (prev) prev.push(sourceKey);
+      else incoming.set(e.targetKey, [sourceKey]);
+    }
+  }
+
+  const reaching = new Set<string>();
+  const frontier: string[] = [];
+  for (const [key, node] of ctx.nodesByKey) {
+    // A schema node is the effect itself — the trace ends on it with a data
+    // step — and everything else is judged by the same test the trace uses.
+    if (node.type !== 'schema' && !hasEffect(node, ctx)) continue;
+    reaching.add(key);
+    frontier.push(key);
+  }
+  for (let i = 0; i < frontier.length; i++) {
+    for (const sourceKey of incoming.get(frontier[i]!) ?? []) {
+      if (reaching.has(sourceKey)) continue;
+      reaching.add(sourceKey);
+      frontier.push(sourceKey);
+    }
+  }
+  return reaching;
 }
 
 /**
@@ -263,7 +525,7 @@ function trace(
   ep: DetectedEntrypoint,
   seed: EvidenceNode,
   ctx: TraversalContext,
-): { workflow: ExtractedWorkflow } | { deadEnd: TraceDeadEnd } | null {
+): { workflow: ExtractedWorkflow; deadEnd?: TraceDeadEnd } | { deadEnd: TraceDeadEnd } | null {
   const steps: WorkflowStep[] = [];
   const visited = new Set<string>();
   const externals: string[] = [];
@@ -354,26 +616,31 @@ function trace(
     if (!isSeed && signals.includes('response_output')) return;
 
     for (const edge of ctx.outgoing.get(key) ?? []) {
+      // Spend the reserve on paths that arrive somewhere — see EFFECT_RESERVE.
+      // Checked per edge, so the guard bites the moment the budget gets short
+      // no matter how deep in a barren subtree the trace happens to be.
+      if (MAX_STEPS - steps.length <= EFFECT_RESERVE && !ctx.effectReaching.has(edge.targetKey)) continue;
       visit(edge.targetKey, depth + 1);
     }
   };
 
   visit(seed.stableKey, 0);
 
-  // A trigger with a response but nothing else is honest; a trigger alone,
-  // or a trace that never reaches an effect/output, is not a workflow — but
-  // under the honesty rule its death is recorded, never silent.
-  if (steps.length < 2 || effectCount === 0) {
-    return {
-      deadEnd: {
+  // A trigger that never reaches an effect is not a *flow*, but it is still a
+  // real entry point into the system: an endpoint you can call, a page you can
+  // open. Dropping those made the Workflows tab claim a repo had one workflow
+  // when it had forty routes, so they are kept and tiered as `surface`
+  // instead. The dead-end record rides along unchanged for the trust panel.
+  const isSurface = steps.length < 2 || effectCount === 0;
+  const deadEnd: TraceDeadEnd | undefined = isSurface
+    ? {
         entrypoint: `${ep.kind}${ep.method ? ` ${ep.method}` : ''}${ep.routePattern ? ` ${ep.routePattern}` : ''}`,
         seedName: seed.name,
         filePath: seed.filePath ?? ep.filePath,
         stepCount: steps.length,
         reason: steps.length < 2 ? 'no_calls_traced' : 'no_effects_reached',
-      },
-    };
-  }
+      }
+    : undefined;
 
   // Express handlers respond after their callees run; make that explicit.
   // Tagged syntheticReturn: it re-references the seed node, and rendering it
@@ -386,30 +653,170 @@ function trace(
   const sideEffectSteps = steps.filter((s) =>
     s.stepKind === 'data_read' || s.stepKind === 'data_write' || s.stepKind === 'async_work' || s.stepKind === 'side_effect').length;
 
-  // UI-route traces rarely reach real effects and mostly re-walk shared
-  // components — rank them below server flows of the same size.
-  const uiPenalty = ep.kind === 'ui_route' ? 0.5 : 1;
-
   // Kept alive only by unknown_external fallbacks: honest, but low-trust —
   // confidence is capped and the flag rides along for the trust panel.
   const unknownOnly = knownEffectCount === 0;
+  const { tier, score, reasons } = rankWorkflow(ep, steps, isSurface, unknownOnly);
 
   return {
     workflow: {
       title: workflowTitle(ep, seed),
       triggerType: ep.kind === 'http_route' ? `HTTP ${ep.method ?? 'handler'}`
-        : ep.kind === 'ui_route' ? 'UI page' : ep.kind,
+        : ep.kind === 'ui_route' ? 'UI page'
+        : ep.kind === 'ui_action' ? 'UI action' : ep.kind,
       purpose: classifyPurpose(ep, seed, steps, ctx),
       stableKey: `wf:${ep.nodeStableKey}:${seed.name}`,
       confidence: unknownOnly ? 'low'
         : steps.length >= 4 && sideEffectSteps > 0 ? 'high' : steps.length >= 3 ? 'medium' : 'low',
       entrypoint: ep,
       steps,
-      importanceScore: (steps.length * 0.1 + sideEffectSteps * 0.2) * uiPenalty * (unknownOnly ? 0.5 : 1),
+      tier,
+      importanceScore: score,
+      rankingReasons: reasons,
       externalDependencies: externals,
-      ...(unknownOnly ? { metadata: { unknown_effects_only: true } } : {}),
+      metadata: {
+        ...(unknownOnly ? { unknown_effects_only: true } : {}),
+        tier,
+        ranking_reasons: reasons,
+      },
     },
+    ...(deadEnd ? { deadEnd } : {}),
   };
+}
+
+/** Effects that mean the flow changed something outside itself. */
+const PERSISTENT_STEP_KINDS = new Set(['data_write', 'async_work', 'side_effect']);
+/**
+ * Authentication is state.
+ *
+ * `PERSISTENT_STEP_KINDS` counts rows, jobs and outbound calls, and nothing
+ * else — so a login handler whose entire job is `supabase.auth.signInWith…`
+ * or `jwt.sign` measured as a flow that changes NOTHING. Every auth route in
+ * every repo therefore tiered `supporting`, sat below read-only endpoints in
+ * the rail, and never reached the tutorial selector: a reviewer opening the
+ * product saw `GET /installations` tutorialized while login was absent.
+ *
+ * What a login changes is who the caller IS — a session, a token, a cookie —
+ * which is exactly the state a newcomer needs to watch change. It is counted
+ * here as a state change; `PERSISTENT_STEP_KINDS` stays as it was for the
+ * places that mean *stored* state specifically (the "changes stored state"
+ * reason below).
+ */
+const STATE_CHANGING_STEP_KINDS = new Set([...PERSISTENT_STEP_KINDS, 'auth_guard']);
+/** Entry points a person triggers, as opposed to the system triggering itself. */
+const USER_TRIGGERED = new Set(['http_route', 'ui_route', 'ui_action', 'event_handler']);
+/**
+ * What the rest of the system hands to a flow. Both facts are about the flow's
+ * PLACE in the system rather than its own body, so neither can be known while
+ * it is being traced; they are supplied by `extractWorkflowsDetailed` once
+ * every trace exists.
+ *
+ * Both participate in scoring. `reachedFromUser` runs through the
+ * `userTriggered` term that already existed; `inboundHandoffs` is its own
+ * bounded term — see `rankWorkflow`. An earlier revision recorded
+ * `inboundHandoffs` at zero weight pending a fleet re-measurement; that
+ * measurement has since been done across every analysable repo, so the term
+ * is live.
+ */
+export interface HandoffContext {
+  /**
+   * This flow sits on the far side of an async hand-off from something a person
+   * triggers. It counts as user-triggered because a user did start it — the
+   * path simply crosses a queue on the way.
+   */
+  reachedFromUser?: boolean;
+  /** How many distinct flows publish the token this flow is registered on. */
+  inboundHandoffs?: number;
+}
+
+/**
+ * Where a flow belongs in the list, and how high within its tier.
+ *
+ * The old score was `(steps * 0.1 + effectSteps * 0.2)`, which is a length
+ * measurement wearing an importance label: a 20-step trace through shared
+ * helpers outranked a 4-step login every time, so the top of the list was
+ * whatever happened to trace deepest rather than whatever mattered.
+ *
+ * What actually distinguishes an important flow is BREADTH — how many
+ * different kinds of thing it does — plus whether a person triggers it and
+ * whether it changes state. Length past a point is evidence of a trace that
+ * wandered, so it is penalised rather than rewarded.
+ *
+ * Capability membership and git churn are deliberately absent: neither exists
+ * yet at extraction time. They are applied as ordering signals in the API
+ * layer, where they do.
+ */
+export function rankWorkflow(
+  ep: DetectedEntrypoint,
+  steps: WorkflowStep[],
+  isSurface: boolean,
+  unknownOnly: boolean,
+  /** What the rest of the system hands to this flow — see `handoffContext`. */
+  handoff: HandoffContext = {},
+): { tier: WorkflowTier; score: number; reasons: string[] } {
+  const reachedFromUser = handoff.reachedFromUser === true;
+  const reasons: string[] = [];
+  const kinds = new Set(steps.map((s) => s.stepKind));
+  const distinctEffects = [...kinds].filter((k) => STATE_CHANGING_STEP_KINDS.has(k) || k === 'data_read').length;
+  const persists = [...kinds].some((k) => PERSISTENT_STEP_KINDS.has(k));
+  // Passing through somebody else's guard and BEING the thing that signs the
+  // caller in are different facts. The second is this flow's own effect —
+  // an `auth_call` detected in the handler's own body, surfaced as a
+  // synthetic seed effect step — and it is what makes a login a core flow.
+  const authSteps = steps.filter((s) => s.stepKind === 'auth_guard');
+  const changesAuthState = authSteps.some((s) => s.metadata?.syntheticSeedEffect === true);
+  const guarded = authSteps.length > 0;
+  const directlyTriggered = USER_TRIGGERED.has(ep.kind);
+  const userTriggered = directlyTriggered || reachedFromUser;
+
+  if (isSurface) {
+    // Ordered among themselves so a real declared route sorts above a
+    // convention-guessed file seed.
+    const score = (ep.routePattern ? 0.2 : 0) + (userTriggered ? 0.1 : 0);
+    return { tier: 'surface', score, reasons: ['no side effects traced from this entry point'] };
+  }
+
+  let score = 0;
+  if (userTriggered) {
+    score += 0.25;
+    reasons.push(directlyTriggered ? 'triggered by a user' : 'runs on a path a user starts, across an async hand-off');
+  }
+  if (persists) { score += 0.25; reasons.push('changes stored state'); }
+  if (changesAuthState) { score += 0.25; reasons.push('changes who is signed in'); }
+  else if (guarded) { score += 0.15; reasons.push('runs behind an auth check'); }
+  if (distinctEffects > 0) {
+    score += Math.min(distinctEffects, 4) * 0.08;
+    reasons.push(`${distinctEffects} kind${distinctEffects === 1 ? '' : 's'} of side effect`);
+  }
+  if (ep.routePattern) score += 0.05;
+  // A tie-break, NOT the old blanket `uiPenalty = 0.5`. That halved every UI
+  // flow, so a page that writes to the database ranked below a server route
+  // that did the same thing — a server-centric bias in a list that is supposed
+  // to be ordered by importance to a user. The concern behind it (UI traces
+  // wander through shared components) is now handled where it belongs: such a
+  // trace reaches no effect, so it lands in `surface`. This small prior only
+  // decides otherwise-identical flows, preferring the side that implements the
+  // effect over the side that delegates to it.
+  // Same tie-break, same reason: prefer the side that implements the effect
+  // over the side that merely contains it. A handler wired to an interaction is
+  // where the action happens; the page it sits on only hosts it.
+  if (ep.kind === 'http_route' || ep.kind === 'ui_action') score += 0.03;
+
+  // A trace that keeps going has usually wandered into shared utilities
+  // rather than found more meaning. Bounded so a genuinely long flow is
+  // demoted, not erased.
+  const overLength = Math.max(0, steps.length - 8);
+  if (overLength > 0) {
+    score -= Math.min(0.2, overLength * 0.02);
+    reasons.push(`${steps.length} steps — long traces drift into shared code`);
+  }
+  if (unknownOnly) {
+    score *= 0.6;
+    reasons.push('effects inferred, not resolved');
+  }
+
+  const tier: WorkflowTier = userTriggered && (persists || changesAuthState) ? 'core' : 'supporting';
+  return { tier, score: Math.max(0, Math.round(score * 10000) / 10000), reasons };
 }
 
 // ─── Step classification ─────────────────────────────────────────────────────
@@ -447,6 +854,10 @@ function classifyStep(node: EvidenceNode, effects: DetectedSideEffect[], signals
   if (effectKinds.has('database_write') || signals.includes('database_write')) return 'data_write';
   if (effectKinds.has('message_publish') || signals.includes('queue_enqueue')) return 'async_work';
   if (effectKinds.has('auth_call')) return 'auth_guard';
+  // Before the generic `side_effect` fallback: a read is not a state change,
+  // and `side_effect` counts as one — classifying reads there would tier every
+  // read-only view as a flow that changes something.
+  if (effectKinds.has('database_read')) return 'data_read';
   if (effectKinds.size > 0 || signals.includes('http_request') || signals.includes('filesystem')) return 'side_effect';
   if (signals.includes('auth_check') || AUTH_NAME.test(node.name)) return 'auth_guard';
   if (signals.includes('database_read')) return 'data_read';
@@ -485,7 +896,7 @@ function describeStep(
     case 'data_write':
       return `Persists data (${effectLabel('database_write') || 'database write'}) in ${where}`;
     case 'data_read':
-      return `Reads data in ${where}`;
+      return `Reads data (${effectLabel('database_read') || 'database read'}) in ${where}`;
     case 'async_work':
       return `Enqueues async work (${effectLabel('message_publish') || 'queue job'}) in ${where}`;
     case 'side_effect':
@@ -497,31 +908,125 @@ function describeStep(
   }
 }
 
+/**
+ * Callback prefixes that carry no meaning of their own, and the bare callback
+ * names left with nothing once they are stripped. Both lists are about the
+ * SHAPE of a callback name, not about any domain: `handleSubmit` says the same
+ * thing in every codebase ever written, which is why it needs its object
+ * supplied from somewhere else.
+ */
+const CALLBACK_PREFIX = /^(?:handle|on)(?=[A-Z])/;
+const CONTENTLESS_ACTION = /^(?:submit|click|change|press|key\w*|input|select|blur|focus|drag|drop|mouse\w*|touch\w*|action|event|it|this)$/i;
+
+/** `handleCreateSet` -> `Create set`; `onDrop` -> `Drop`; `Form.handleSubmit` -> `Submit`. */
+function humanizeAction(symbolName: string): string {
+  // A member name (`Container.handleAddItem`, `Class.save`) already states its
+  // owner, and the title states the owner separately — say it once.
+  const member = symbolName.slice(symbolName.lastIndexOf('.') + 1);
+  const stripped = member.replace(CALLBACK_PREFIX, '');
+  const words = stripped
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+  if (!words) return '';
+  return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
+}
+
+/**
+ * What a UI action DOES, in the repo's own words.
+ *
+ * `Page: FlashcardsView` names a place; `Create set — CreateFlashcardSet`
+ * names an action, and an action is what a newcomer is looking for. The verb
+ * comes from the handler symbol the author wrote and the object from the
+ * component it lives in, so nothing is invented and no vocabulary is assumed.
+ * When the handler name is pure callback boilerplate the component carries the
+ * whole title rather than shipping a workflow called "Submit".
+ */
+function uiActionTitle(seed: EvidenceNode, ep: DetectedEntrypoint): string {
+  const container = (ep.filePath.split('/').pop() ?? ep.filePath).replace(/\.[jt]sx?$/, '');
+  const action = humanizeAction(seed.name);
+  if (!action || CONTENTLESS_ACTION.test(action.replace(/\s+/g, ''))) {
+    return `Action: ${container}`;
+  }
+  // When the handler and the file say the same thing, saying it twice is noise.
+  if (action.replace(/\s+/g, '').toLowerCase() === container.replace(/[^A-Za-z0-9]/g, '').toLowerCase()) {
+    return action;
+  }
+  return `${action} — ${container}`;
+}
+
 function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {
   if (ep.kind === 'http_route') {
     return `${ep.method ?? 'HTTP'} ${ep.routePattern ?? seed.name}`;
   }
+  if (ep.kind === 'ui_action') return uiActionTitle(seed, ep);
   if (ep.kind === 'ui_route') return `Page: ${seed.name}`;
   if (ep.kind === 'message_consumer') return `Queue consumer: ${ep.routePattern ?? seed.name}`;
   return `${ep.kind.replace(/_/g, ' ')}: ${seed.name}`;
 }
 
-/** Deterministic purpose from trigger + purpose signals + effect summary. */
+/**
+ * Effect kinds whose `target` names a stored resource rather than a remote one.
+ * Kept apart from the service kinds below so the sentence can say "on X" for a
+ * table and "against Y" for a service without guessing which it is looking at.
+ */
+const RESOURCE_EFFECT_KINDS = new Set<DetectedSideEffect['kind']>([
+  'database_read', 'database_write', 'cache_write', 'file_write',
+]);
+/** Effect kinds whose `target` names something outside this process. */
+const SERVICE_EFFECT_KINDS = new Set<DetectedSideEffect['kind']>([
+  'http_call', 'external_service', 'message_publish', 'email_send', 'auth_call', 'process_exec',
+]);
+/** Two nouns is a subject; five is a dump. */
+const MAX_PURPOSE_SUBJECTS = 2;
+
+/**
+ * What this flow acts ON, in the analysed repo's own words.
+ *
+ * Only three sources, all of them evidence recorded against THIS flow's own
+ * steps: a schema node the trace ended on, the `target` of a data effect
+ * detected on one of its steps, and the `target` of an outbound-call effect.
+ * Nothing is inferred from a file path or a symbol name.
+ *
+ * This replaces a domain phrase table that keyed `sections/`, `packages/`,
+ * `team` and the letters `ast` onto sentences describing THIS product, and so
+ * told a student club's marketing site that its About page existed for
+ * "onboarding generation" (see `behaviorSignals.ts`). A repo with no such
+ * evidence now gets no subject clause at all, which is the honest answer: the
+ * flow was traced, and nothing it reaches has a name we read from the code.
+ */
+function purposeSubject(steps: WorkflowStep[], ctx: TraversalContext): { on: string[]; against: string[] } {
+  const on: string[] = [];
+  const against: string[] = [];
+  const push = (list: string[], value: string | undefined | null): void => {
+    const name = (value ?? '').trim();
+    if (!name || name.length > 40 || list.includes(name) || list.length >= MAX_PURPOSE_SUBJECTS) return;
+    list.push(name);
+  };
+  // Written resources first: a table a flow writes identifies it far better
+  // than one of the four it reads on the way there.
+  for (const wantWrite of [true, false]) {
+    for (const step of steps) {
+      if (wantWrite !== (step.stepKind === 'data_write')) continue;
+      const node = ctx.nodesByKey.get(step.nodeStableKey);
+      if (node?.type === 'schema') push(on, node.name);
+      for (const effect of ctx.effectsByKey.get(step.nodeStableKey) ?? []) {
+        if (!effect.target) continue;
+        if (RESOURCE_EFFECT_KINDS.has(effect.kind)) push(on, effect.target);
+        else if (SERVICE_EFFECT_KINDS.has(effect.kind)) push(against, effect.target);
+      }
+    }
+  }
+  return { on, against: against.filter((s) => !on.includes(s)) };
+}
+
+/** Deterministic purpose: trigger + what the flow's own evidence names + outcomes. */
 function classifyPurpose(
   ep: DetectedEntrypoint,
   seed: EvidenceNode,
   steps: WorkflowStep[],
   ctx: TraversalContext,
 ): string {
-  const purposeCounts = new Map<string, number>();
-  for (const step of steps) {
-    const node = ctx.nodesByKey.get(step.nodeStableKey);
-    const purposes = node?.metadata.purposeSignals;
-    if (!Array.isArray(purposes)) continue;
-    for (const p of purposes as string[]) purposeCounts.set(p, (purposeCounts.get(p) ?? 0) + 1);
-  }
-  const domain = [...purposeCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-
   const outcomes: string[] = [];
   if (steps.some((s) => s.stepKind === 'data_write')) outcomes.push('writes data');
   else if (steps.some((s) => s.stepKind === 'data_read')) outcomes.push('reads data');
@@ -531,8 +1036,13 @@ function classifyPurpose(
   const trigger = ep.kind === 'http_route'
     ? `Handles ${ep.method ?? 'HTTP'} ${ep.routePattern ?? `requests via ${seed.name}`}`
     : `Handles ${ep.kind.replace(/_/g, ' ')} via ${seed.name}`;
-  const domainPart = domain ? ` (${domain.replace(/_/g, ' ')})` : '';
-  return outcomes.length > 0 ? `${trigger}${domainPart}: ${outcomes.join(', ')}` : `${trigger}${domainPart}`;
+
+  const { on, against } = purposeSubject(steps, ctx);
+  const subject = [
+    on.length > 0 ? ` on ${on.join(', ')}` : '',
+    against.length > 0 ? ` against ${against.join(', ')}` : '',
+  ].join('');
+  return outcomes.length > 0 ? `${trigger}${subject}: ${outcomes.join(', ')}` : `${trigger}${subject}`;
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
@@ -557,10 +1067,15 @@ export async function persistWorkflows(
        RETURNING id`,
       [snapshotId, wf.title, wf.triggerType, wf.purpose, wf.confidence, wf.stableKey,
        entrypointIdMap?.get(wf.entrypoint) ?? null,
+       // tier/reasons written from the top-level fields rather than trusting
+       // each producer's metadata bag — journeys and config flows set the
+       // fields but build their own metadata.
        JSON.stringify({
          importance_score: wf.importanceScore,
          external_dependencies: wf.externalDependencies,
          ...(wf.metadata ?? {}),
+         tier: wf.tier,
+         ranking_reasons: wf.rankingReasons,
        })],
     );
 

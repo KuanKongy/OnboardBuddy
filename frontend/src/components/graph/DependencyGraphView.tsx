@@ -1,33 +1,31 @@
-import { useMemo } from "react";
-import ReactFlow, {
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  Panel,
-  ReactFlowProvider,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from "reactflow";
+import { useMemo, type MutableRefObject } from "react";
+import { MarkerType, Panel, type Edge, type Node, type NodeProps, type Viewport } from "reactflow";
 import "reactflow/dist/style.css";
+import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
 import { GraphLegend } from "@/components/graph/GraphLegend";
-import { ViewportFocus } from "@/components/graph/ViewportFocus";
+import type { FocusMode } from "@/components/graph/ViewportFocus";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
 import { useIsDarkMode } from "@/hooks/useIsDarkMode";
+import type { GraphDrill } from "@/hooks/useGraphDrill";
 import type { PositionedNode } from "@/lib/graphLayout";
 import { inferNodeType } from "@/lib/graphNodeType";
 import type { GraphEdge } from "@/types/graph";
 
-// Wraps ModuleNode with an entry-point marker rather than editing
-// ModuleNode.tsx directly (that file is owned by a parallel change).
+/**
+ * Wraps ModuleNode with an entry-point marker.
+ *
+ * The marker used to carry a tooltip reading "Entry point". Owner E2/H1: a
+ * hover popup that only names what the badge already means is noise on a graph
+ * node, so the badge now carries an `aria-label` (announced, no popup) and the
+ * legend below the canvas is where entry points are explained.
+ */
 function EntryAwareModuleNode(props: NodeProps<ModuleNodeData>) {
   return (
     <div className="relative">
       {props.data.isEntryPoint && (
         <span
-          title="Entry point"
+          aria-label="Entry point"
           className="absolute -left-1.5 -top-1.5 z-10 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[0.5rem] font-bold text-primary-foreground shadow"
         >
           ▶
@@ -53,7 +51,7 @@ interface DependencyGraphViewProps {
   onToggleKind?: (kind: string) => void;
   /** True when the caller already knows a node should be focused on this
    * mount (e.g. a `?focus=` deep link) — suppresses React Flow's own
-   * declarative initial `fitView` so `ViewportFocus` is the sole viewport
+   * declarative `fitView` so `ViewportFocus` is the sole viewport
    * writer on arrival. Without this, both fire around the same
    * measurement-ready moment and whichever lands last wins, which is
    * exactly why a redirect into this graph used to center/zoom
@@ -67,6 +65,22 @@ interface DependencyGraphViewProps {
    * of racing an imperative `fitView()` call against React Flow's own
    * internal position-store sync. */
   refitSignal?: string | number;
+  /** Returns true when this node opens a level below — see GraphCanvas. */
+  onDrillInto?: (nodeId: string) => boolean;
+  drill?: GraphDrill;
+  /** `frame` only while resolving a `?focus=` deep link. */
+  focusMode?: FocusMode;
+  restoreViewport?: { x: number; y: number; zoom: number } | null;
+  viewportRef?: MutableRefObject<(() => Viewport) | null>;
+  /**
+   * Floor for the initial fit. VISUAL QA M4 #3: a level with more boxes than
+   * the viewport can hold gets fitted to ~0.03 zoom, which renders a 13px
+   * label at 3px — a canvas that technically shows everything and can be read
+   * nowhere. A floor makes the level overflow and scroll instead.
+   */
+  minZoom?: number;
+  /** See `MINIMAP_MIN_NODES` — under it the minimap only covers the canvas. */
+  showMiniMap?: boolean;
 }
 
 export function DependencyGraphView({
@@ -79,13 +93,22 @@ export function DependencyGraphView({
   onToggleKind,
   suppressInitialFit = false,
   refitSignal,
+  onDrillInto,
+  drill,
+  focusMode,
+  restoreViewport,
+  viewportRef,
+  minZoom,
+  showMiniMap,
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
 
-  // Legend shows only kinds that actually occur on this canvas.
+  // Legend shows only kinds that actually occur on this canvas. A class node's
+  // id carries a `#Symbol` suffix, so the file it belongs to is what the kind
+  // is inferred from.
   const nodeKindById = useMemo(
-    () => new Map(nodes.map((n) => [n.id, inferNodeType(n.id, n.metadata.exportedSymbols).type])),
+    () => new Map(nodes.map((n) => [n.id, inferNodeType(n.filePath ?? n.id, n.metadata.exportedSymbols).type])),
     [nodes],
   );
   const presentKinds = useMemo(() => [...new Set(nodeKindById.values())], [nodeKindById]);
@@ -113,12 +136,19 @@ export function DependencyGraphView({
           data: {
             label: node.label,
             kind: node.kind,
-            filePath: node.id,
+            filePath: node.filePath ?? node.id,
             exportedSymbols: node.metadata.exportedSymbols,
             importCount: node.metadata.importCount,
             externalImportCount: node.metadata.externalImportCount ?? 0,
             dependentCount: node.metadata.dependentCount,
-            symbolCount: node.metadata.exportedSymbols.length,
+            // The exported-name list double-counts re-exports and misses
+            // file-local declarations; the server's count is the real one.
+            symbolCount: node.metadata.symbolCount ?? node.metadata.exportedSymbols.length,
+            summary: node.metadata.summary ?? null,
+            role: node.metadata.role ?? null,
+            fileCount: node.metadata.fileCount,
+            groupNoun: node.metadata.groupNoun,
+            internalImportCount: node.metadata.internalImportCount,
             isEntryPoint: entryPointSet.has(node.id),
             selected: node.id === selectedNodeId,
             dimmed: neighborIds !== null && !neighborIds.has(node.id),
@@ -147,6 +177,7 @@ export function DependencyGraphView({
           }
         }
 
+        const stroke = isActive ? "var(--primary)" : "var(--border)";
         return {
           id: edge.id,
           source: edge.source,
@@ -157,66 +188,49 @@ export function DependencyGraphView({
           labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },
           labelBgPadding: [4, 3] as [number, number],
           labelBgBorderRadius: 3,
+          // AUDIT C2 / UX §9.1: "the legend says an edge means the source
+          // imports the target — direction is the whole semantic and is not
+          // encoded at all". Both ends were identical dots.
+          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: stroke },
           style: {
             opacity: endpointHidden ? 0.03 : neighborIds === null || isActive ? 1 : 0.1,
             strokeWidth: isActive ? 2 : 1,
-            stroke: isActive ? "var(--primary)" : "var(--border)",
+            stroke,
           },
         };
       }),
     [edges, neighborIds, selectedNodeId, isDark, nodeKindById, hiddenKinds],
   );
 
+  // The legend is a sibling of the canvas, not a `<Panel>` inside it: a panel
+  // lives in the same rectangle `fitView` fills with nodes, so at default zoom
+  // it covered graph content on every project measured (VISUAL QA M4 #9).
+  // Outside the node area it cannot occlude the node area at any zoom.
   return (
-    <ReactFlowProvider>
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={nodeTypes}
-        nodesDraggable={false}
-        onNodeClick={(_, node) => onSelectNode(node.id)}
-        onSelectionChange={({ nodes: selectedNodes }) => {
-          // Keyboard selection (Tab focuses a node, Enter/Space selects it)
-          // never fires onNodeClick, only this — so it's the path that
-          // covers Tab/Enter. It also fires for mouse clicks (alongside
-          // onNodeClick above), which is harmless: the setter is idempotent
-          // for a given id. Deselection stays on onPaneClick below; an
-          // empty selection here can also mean "nothing has been clicked
-          // in the canvas yet" (e.g. right after a deep-link selection), so
-          // it's ignored rather than clobbering the current selection.
-          if (selectedNodes.length > 0) onSelectNode(selectedNodes[0]!.id);
-        }}
-        onPaneClick={() => onSelectNode(null)}
-        fitView={!suppressInitialFit}
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.05}
-        proOptions={{ hideAttribution: true }}
-        key={refitSignal}
-      >
-        <ViewportFocus selectedNodeId={selectedNodeId} ownsInitialFit={suppressInitialFit} />
-
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={20}
-          size={1}
-          color={isDark ? "oklch(0.28 0.02 264)" : "oklch(0.8 0.01 265)"}
-        />
-        <Controls className="!bg-card !border-border [&_button]:!bg-card [&_button]:!border-border [&_button]:!text-muted-foreground [&_button:hover]:!bg-accent [&_button_svg]:!fill-current" />
-
-        <MiniMap
-          pannable
-          zoomable
-          className="!bg-card !border-border"
-          nodeColor={isDark ? "oklch(0.3 0.02 264)" : "oklch(0.85 0.008 265)"}
-          maskColor={isDark ? "oklch(0.17 0.015 264 / 0.7)" : "oklch(0.95 0.005 265 / 0.7)"}
-        />
-        <Panel position="top-left">
-          <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
-        </Panel>
-        <Panel position="bottom-center">
-          <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
-        </Panel>
-      </ReactFlow>
-    </ReactFlowProvider>
+    <div className="flex h-full w-full flex-col">
+      <div className="min-h-0 flex-1">
+        <GraphCanvas
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={nodeTypes}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={onSelectNode}
+          onDrillInto={onDrillInto}
+          drill={drill}
+          focusMode={focusMode}
+          suppressInitialFit={suppressInitialFit}
+          refitSignal={refitSignal}
+          restoreViewport={restoreViewport}
+          viewportRef={viewportRef}
+          {...(showMiniMap !== undefined ? { showMiniMap } : {})}
+          {...(minZoom !== undefined ? { minZoom, fitMinZoom: minZoom } : {})}
+        >
+          <Panel position="bottom-center">
+            <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
+          </Panel>
+        </GraphCanvas>
+      </div>
+      <GraphLegend presentKinds={presentKinds} hiddenKinds={hiddenKinds} onToggleKind={onToggleKind} />
+    </div>
   );
 }

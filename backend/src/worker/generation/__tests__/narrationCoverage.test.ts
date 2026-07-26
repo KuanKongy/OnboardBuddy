@@ -187,11 +187,15 @@ describe('decision-comment extraction (the "no decision→consequence" miss)', (
 describe('architecture_deep — the gate that forces decision→consequence prose', () => {
   const spec = SECTION_SPECS.architecture_deep;
   const det = {
+    // `clusters` is now the BOUNDED list the prompt was handed, so the gate can
+    // only ever demand what was asked for. It used to be every cluster in the
+    // snapshot with the check re-filtering by file count, which is how a
+    // 9-component repo got told to cover nine and wrote past its output budget.
     clusters: [
-      { label: 'API Routes', file_count: 12 },
-      { label: 'Worker Pipeline', file_count: 30 },
-      { label: 'Tiny Helper', file_count: 1 },
+      { label: 'API Routes' },
+      { label: 'Worker Pipeline' },
     ],
+    otherClusters: ['Tiny Helper'],
     decisionNotes: [
       { where: 'docker-compose.yml:9', rationale: 'transaction-mode pooler; clients multiplex' },
       { where: 'lib/queue.ts:20', rationale: 'queue suffix per developer so a stale worker cannot eat this run' },
@@ -216,18 +220,82 @@ describe('architecture_deep — the gate that forces decision→consequence pros
     expect(issues.join(' ')).to.include('0 of 3');
   });
 
+  /** The same prose, now citing — which is the section's other half. */
+  const cited = (markdown: string): string =>
+    markdown
+      .replace('enqueues jobs.', 'enqueues jobs (r3).')
+      .replace('writes results.', 'writes results (r7).');
+
   it('passes once decisions are stated in the required form', () => {
     const withDecisions = structureOnly.replace(
       'Holds 12 files. Receives HTTP requests and enqueues jobs.',
-      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock.',
+      'Holds 12 files. Transaction-mode pooler ⇒ no session state ⇒ every lock is a row lock (r3).',
     ).replace(
       'Holds 30 files. Consumes jobs and writes results.',
       [
-        'Holds 30 files. Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs.',
+        'Holds 30 files. Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs (r7).',
         'Content-addressed records ⇒ an unchanged file never re-runs the model.',
       ].join(' '),
     );
     expect(spec.completenessCheck!(withDecisions, det)).to.deep.equal([]);
+  });
+
+  // Measured on the stored corpus before this gate existed: SEVEN of eleven
+  // architecture_deep sections shipped with no receipt marker, no `rN` alias
+  // and no file:line anywhere in 3,000-4,900 characters — and every one passed
+  // this check, because it counted headings and arrows and nothing else.
+  it('fails a section that cites nothing at all — the citation desert', () => {
+    const issues = spec.completenessCheck!(structureOnly, det);
+    expect(issues.join(' ')).to.include('cites NOTHING');
+  });
+
+  it('fails when the decisions cite but the component subsections do not', () => {
+    // The live OnboardBuddy shape: cited decision bullets above component
+    // subsections that name no file the reader can open.
+    const decisionsOnly = [
+      '## How a request flows',
+      'A request enters API Routes and is handed to Worker Pipeline.',
+      '## Why it is built this way',
+      '- Transaction-mode pooler ⇒ no session state, so every lock is a row lock (r3).',
+      '- Per-developer queue suffix ⇒ a stale worker cannot consume this run\'s jobs (r3).',
+      '- Content-addressed records ⇒ an unchanged file never re-runs the model (r3).',
+      '## API Routes',
+      'Receives HTTP requests, validates the scope and enqueues an analysis job.',
+      '## Worker Pipeline',
+      'Consumes jobs, walks the repository and writes snapshot rows back.',
+      '## Tensions to know about',
+      'The queue module has the highest fan-in.',
+    ].join('\n');
+    const issues = spec.completenessCheck!(decisionsOnly, det);
+    // The desert complaint is gone — citations exist — but the components the
+    // reader cannot open a file of are named.
+    expect(issues.join(' ')).to.not.include('cites NOTHING');
+    expect(issues.join(' ')).to.include('2 of 2 component subsections cite nothing');
+    expect(issues.join(' ')).to.include('Worker Pipeline');
+  });
+
+  it('accepts a bare file:line locator as a citation, and the post-rewrite marker form', () => {
+    // Cached rows are re-judged against today's rules, and by then the aliases
+    // are already `[[receipt:uuid]]` markers — a check that knew only `(rN)`
+    // would reject every cached section and regenerate the package on hash luck.
+    const locators = structureOnly
+      .replace('enqueues jobs.', 'enqueues jobs — see src/api/routes/projects.ts:41.')
+      .replace('writes results.', 'writes results [[receipt:3f2a1b4c-1234-4abc-9def-0123456789ab]].');
+    const issues = spec.completenessCheck!(locators, { ...det, decisionNotes: [] });
+    expect(issues.join(' ')).to.not.include('cites NOTHING');
+    expect(issues.join(' ')).to.not.include('cite nothing');
+  });
+
+  it('never demands a receipt for the "purpose not established" escape hatch', () => {
+    // That one-liner is an answer the prompt explicitly asks for when a
+    // component's purpose is only inferable from its kind. Gating it on a
+    // receipt would force the model to invent evidence for the one thing it
+    // just said it has none of.
+    const oneLiner = cited(structureOnly).replace(
+      'Holds 30 files. Consumes jobs and writes results (r7).',
+      'Worker Pipeline — purpose not established from the code; see the Dependencies tab.',
+    );
+    expect(spec.completenessCheck!(oneLiner, { ...det, decisionNotes: [] }).join(' ')).to.not.include('cite nothing');
   });
 
   it('does not demand decisions when no rationale was extracted — never invent one', () => {
@@ -252,8 +320,9 @@ describe('architecture_deep — the gate that forces decision→consequence pros
     expect(spec.completenessCheck!(noTensions, det).join(' ')).to.include('Tensions');
   });
 
-  it('does not require a subsection for a cluster too small to deserve one', () => {
-    // "Tiny Helper" has 1 file; the instructions scope subsections to >2 files.
+  it('does not require a subsection for a cluster the prompt was told to leave out', () => {
+    // "Tiny Helper" is in `otherClusters`, not `clusters` — the section names it
+    // in one line and gives it no subsection, so the gate must not ask for one.
     expect(spec.completenessCheck!(structureOnly, det).join(' ')).to.not.include('Tiny Helper');
   });
 });

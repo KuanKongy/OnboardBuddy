@@ -1,6 +1,6 @@
 import { Check, ChevronsUpDown, GitBranch, Package as PackageIcon, Star } from "lucide-react";
 import { usePackages } from "@/contexts/PackagesContext";
-import { ROLES } from "@/lib/onboardingData";
+import { roleTitle } from "@/lib/roles";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,13 +28,9 @@ const STATUS_DOT: Record<string, string> = {
   failed: "bg-danger",
 };
 
-function roleLabel(role: string): string {
-  return ROLES.find((r) => r.key === role)?.label ?? role;
-}
-
 function packageLine(pkg: PackageCard): string {
   const scope = pkg.path_prefix ? `${pkg.path_prefix}/` : pkg.scope_name || "whole repo";
-  return `${pkg.branch}@${pkg.analyzed_commit.slice(0, 7)} · ${scope} · ${roleLabel(pkg.role)}`;
+  return `${pkg.branch}@${pkg.analyzed_commit.slice(0, 7)} · ${scope} · ${roleTitle(pkg.role)}`;
 }
 
 export function PackageSelector() {
@@ -74,7 +70,7 @@ export function PackageSelector() {
                     )}
                   </span>
                   <span className="block truncate text-[0.625rem] text-muted-foreground">
-                    {selectedPackage.path_prefix ? `${selectedPackage.path_prefix}/` : "whole repo"} · {roleLabel(selectedPackage.role)}
+                    {selectedPackage.path_prefix ? `${selectedPackage.path_prefix}/` : "whole repo"} · {roleTitle(selectedPackage.role)}
                   </span>
                 </>
               ) : (
@@ -99,6 +95,7 @@ export function PackageSelector() {
             ) : (
               <button
                 className="rounded p-0.5 text-muted-foreground/50 hover:text-warning"
+                aria-label="Make 'latest analysis' your default package"
                 title="Make 'latest' your default"
                 onPointerDown={(e) => e.stopPropagation()}
                 onPointerUp={(e) => e.stopPropagation()}
@@ -131,6 +128,7 @@ export function PackageSelector() {
               ) : (
                 <button
                   className="rounded p-0.5 text-muted-foreground/50 hover:text-warning"
+                  aria-label={`Make ${packageLine(pkg)} your default package`}
                   title="Make this your default package"
                   onPointerDown={(e) => e.stopPropagation()}
                   onPointerUp={(e) => e.stopPropagation()}

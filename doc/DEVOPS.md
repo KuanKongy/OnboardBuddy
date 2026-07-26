@@ -178,9 +178,11 @@ per-call bound, ~65k max output).
   (~30–120 tok/s depending on upstream): keep per-call output ≤ ~7k tokens
   so a slow upstream costs ≤ ~2 min, not 9.
 - **Concurrency:** `LLM_MAX_CONCURRENCY` (per AiClient, default 12, env 28)
-  is the provider-pressure knob; per-pass `mapLimit`s feed it. `PG_POOL_MAX`
-  (worker 20) caps concurrent statements — the transaction-mode pooler
-  multiplexes, so it sizes per process, not per user.
+  is the provider-pressure knob; per-pass `mapLimit`s feed it. It is **per
+  running job**, not global — `WORKER_CONCURRENCY` runs multiply it, and
+  OpenRouter limits are per key. `PG_POOL_MAX` (worker 30) caps concurrent
+  statements — the transaction-mode pooler multiplexes, so it sizes per
+  process, not per user.
 - **Slow-upstream guards:** every provider attempt has a hard deadline
   (`LLM_REQUEST_TIMEOUT_MS`, default 240s) and chat requests ask OpenRouter
   to route by `provider.sort` (`OPENROUTER_PROVIDER_SORT`, default
@@ -229,9 +231,10 @@ Upstash Redis cost:
 | Env var | Default | Description |
 |---|---|---|
 | `WORKER_POLL_INTERVAL_MS` | `30000` | BullMQ `drainDelay`: how long to wait between idle polls. Jobs still picked up instantly via ZSET signal. |
-| `WORKER_CONCURRENCY` | `2` | Max parallel jobs per worker process |
-| `LLM_MAX_CONCURRENCY` | `6` | Parallel AI calls per run (per `AiClient` semaphore) |
-| `SECTION_CONCURRENCY` | `4` | Package sections generated in parallel per run |
+| `WORKER_CONCURRENCY` | `4` | Max parallel **analysis** runs per worker process |
+| `SUMMARY_CONCURRENCY` | `4` | Max parallel **package generations** per worker process (same process — `worker/index.ts` imports `summaryWorker.js`) |
+| `LLM_MAX_CONCURRENCY` | `12` | Parallel AI calls per run (per `AiClient` semaphore — **per job, not global**) |
+| `SECTION_CONCURRENCY` | `12` | Package sections generated in parallel within one generation job |
 
 **Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
 to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
@@ -261,12 +264,22 @@ Two URLs, two jobs:
 | `DATABASE_URL` | `6543` (transaction) | All application traffic (API + workers) |
 | `DIRECT_DATABASE_URL` | `5432` (session) | DDL only: `psql -f` migrations and manual `ALTER`s |
 
-Per-process `PG_POOL_MAX` (default 10, `backend/src/lib/db.ts`) now sizes for
-the process's own fan-out, not a shared cap: `10` for the API and `10` per
-worker replica are good defaults. Under heavy parallel load the failure mode is
-no longer `EMAXCONNSESSION` but pooler queue wait (slow queries) — if that
-shows up, raise `default_pool_size` in Supabase (Settings → Database →
-Connection pooling).
+Per-process `PG_POOL_MAX` (default 30, `backend/src/lib/db.ts`) sizes for the
+process's own fan-out, not a shared cap: `10` for the API, `30` per worker
+replica (both pinned in `docker-compose.yml`, which **overrides**
+`backend/.env`). The 30 budgets ~6 connections per concurrent job across
+`WORKER_CONCURRENCY` analyses + `SUMMARY_CONCURRENCY` generations — full
+arithmetic in the `db.ts` header comment.
+
+`connectionTimeoutMillis` is **30s**, not 5s. At 5s, two concurrent analyses
+both died with `timeout exceeded when trying to connect`: the 28-wide semantic
+`mapLimit` saturated a 10-slot pool and the short acquire cap turned ordinary
+queueing into failed runs. Statements are short bulk writes and no code path
+holds a client while awaiting another, so waiting is always the right answer.
+
+Under heavy parallel load the failure mode is pooler queue wait (slow queries),
+not `EMAXCONNSESSION` — if that shows up, raise `default_pool_size` in Supabase
+(Settings → Database → Connection pooling) before raising `PG_POOL_MAX`.
 
 ### 9. Scaling workers (parallel analyses)
 
@@ -280,11 +293,20 @@ docker compose up -d --scale backend-worker=3
 BullMQ distributes jobs across replicas; per-job heartbeats, checkpoints, and
 the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 
-- Total parallel **jobs** = replicas × `WORKER_CONCURRENCY`.
+- Total parallel **analyses** = replicas × `WORKER_CONCURRENCY` (4 per replica
+  by default); package generations scale separately via `SUMMARY_CONCURRENCY`.
 - Total parallel **AI calls** ≈ replicas × `WORKER_CONCURRENCY` ×
-  `LLM_MAX_CONCURRENCY` — keep this under your OpenRouter/OpenAI rate limits.
-- Prefer more replicas over a higher `WORKER_CONCURRENCY`: repo parsing is
+  `LLM_MAX_CONCURRENCY` — the `AiClient` semaphore is per job, there is **no
+  global cross-run LLM limiter**, and OpenRouter's spend/rate limits are per
+  key. 4 concurrent semantic phases therefore multiply burst spend ~4×; keep
+  the product under your key's limits.
+- Total pooler **client slots** = API (10) + replicas × `PG_POOL_MAX` (30).
+  Supavisor allows ~200 per project, so ~4 replicas is the practical ceiling
+  before you also need a bigger `default_pool_size`.
+- Prefer more replicas over a much higher `WORKER_CONCURRENCY`: repo parsing is
   CPU/RAM-heavy per job, and replicas isolate failures.
+- Verify a live N-way run with `backend/tmp/concurrency-test.mts` (see its
+  header for the exact command).
 
 ---
 

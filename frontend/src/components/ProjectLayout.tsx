@@ -1,7 +1,6 @@
 import {
   BookOpen,
   Boxes,
-  GitBranch,
   HelpCircle,
   Keyboard,
   LayoutDashboard,
@@ -22,7 +21,6 @@ import { PackagesProvider, usePackages } from "@/contexts/PackagesContext";
 import { PackageSelector } from "@/components/PackageSelector";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -77,11 +75,16 @@ const projectNavItems = [
     description: "Traced request flows from entry point to side effects.",
   },
   {
-    to: "walkthrough",
+    // The route used to be `/walkthrough` while the label said "Tutorials",
+    // so every link a reader copied said one thing and every tab said another.
+    // The path now matches the label; `alias` keeps the old path routed and
+    // keeps this item highlighted when someone follows an old link.
+    to: "tutorials",
+    alias: "walkthrough",
     label: "Tutorials",
     icon: Route,
     end: false,
-    description: "Step-by-step code walkthroughs of real flows, with snippets and explanations.",
+    description: "Runnable procedures built from this repo: each step is a command or an edit, with what you should see and how to check it.",
   },
   {
     to: "team",
@@ -147,9 +150,9 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
     body: "Real request flows traced from entry points to side effects — the fastest way to see how a feature actually executes.",
   },
   {
-    target: "nav-walkthrough",
+    target: "nav-tutorials",
     title: "Tutorials",
-    body: "Step-by-step walkthroughs of real flows: the actual code at each step with an explanation. No slides, no invented examples.",
+    body: "Procedures you run against this repo, not essays about it: every step is a command or an edit, with the result you should see and a way to check it. Built only where the evidence supports one.",
   },
   {
     target: "nav-team",
@@ -173,26 +176,29 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
   return (
     <SidebarShell>
       <div className="px-3 py-3">
-        <Link
-          to="/dashboard"
-          onClick={() => setOpen(false)}
-          className="mb-2 flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
-          title="Back to main dashboard"
-        >
-          <LogoMark className="h-7 w-7" />
-          <LogoWordmark />
-        </Link>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Link
+              to="/dashboard"
+              onClick={() => setOpen(false)}
+              className="mb-2 flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
+            >
+              <LogoMark className="h-7 w-7" />
+              <LogoWordmark />
+            </Link>
+          </TooltipTrigger>
+          <TooltipContent side="right">Back to main dashboard</TooltipContent>
+        </Tooltip>
         {loading ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
         ) : project ? (
+          // Owner feedback M2: the repo name and the branch badge that used to
+          // sit here are both already stated by the package chooser below
+          // (`branch@commit · scope · role`) and by the Overview header, where
+          // the repo name is now a real link to GitHub (M1). Two restatements
+          // of the same two strings, one of them carrying a tooltip that only
+          // repeated the label it was attached to (H1), were redundant chrome.
           <div>
-            <h2 className="truncate text-sm font-semibold text-foreground" title={`${project.repo_owner}/${project.repo_name}`}>
-              {project.repo_owner}/{project.repo_name}
-            </h2>
-            <Badge variant="outline" className="mt-1 gap-1 text-xs" title="Default branch for new analysis runs">
-              <GitBranch className="h-2.5 w-2.5" />
-              {project.branch}
-            </Badge>
             {activeJobs.length > 0 && (() => {
               const job = activeJobs[0]!;
               const progress = pipelineProgress(job);
@@ -230,7 +236,10 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
           // and pass a plain string instead.
           const isActive = item.end
             ? pathname.replace(/\/$/, "") === to.replace(/\/$/, "")
-            : pathname.startsWith(to);
+            : pathname.startsWith(to) ||
+              ("alias" in item && typeof item.alias === "string"
+                ? pathname.startsWith(`/projects/${id}/${item.alias}`)
+                : false);
           return (
             <Tooltip key={item.to}>
               <TooltipTrigger asChild>
@@ -260,20 +269,26 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
       </div>
       <div className="px-2 pt-1.5">
         <button
+          type="button"
           onClick={onStartTour}
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <HelpCircle className="h-3.5 w-3.5" />
           Take a tour
         </button>
-        <button
-          onClick={onShowShortcuts}
-          title="Also opens with ?"
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <Keyboard className="h-3.5 w-3.5" />
-          Keyboard shortcuts
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onShowShortcuts}
+              className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            >
+              <Keyboard className="h-3.5 w-3.5" />
+              Keyboard shortcuts
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">Also opens with ?</TooltipContent>
+        </Tooltip>
         <Link
           to="/help"
           onClick={() => setOpen(false)}

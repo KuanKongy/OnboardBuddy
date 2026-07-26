@@ -1,0 +1,30 @@
+{
+  "repo": "KuanKongy/OnboardBuddy",
+  "clone": "https://github.com/KuanKongy/OnboardBuddy.git",
+  "shape": "TypeScript monorepo: Express API, BullMQ worker, React frontend, Supabase Postgres schema, docker-compose topology.",
+  "whyThisShape": "The home-field repo — the only fixture with a schema, a queue, a worker, a compose topology and a real journey graph, which is to say the only one whose shape every prompt in sectionSpecs.ts was written against. Its score is the CEILING: any property this repo cannot meet, no repo can. A large gap between this row and the others is the definition of prompt over-fitting.",
+  "labeledOn": "2026-07-25",
+  "labeledFrom": "This repository. Domain nouns are the highest-degree tables in backend/supabase/migrations/001_initial_schema.sql, the same ranking mustDefineStems() uses.",
+  "expectShape": {
+    "entrypointKinds": { "mustInclude": ["http_route", "ui_route"] },
+    "httpRoutesAtLeast": 5,
+    "uiRoutesAtLeast": 3
+  },
+  "domainNouns": ["snapshot", "receipt", "workflow", "cluster", "package", "section", "capability", "entrypoint"],
+  "mustDisclose": [],
+  "budgetsMeasuredOn": "2026-07-25, snapshot fee353b0 (12 sections, 14 clusters, 8 capabilities, 227/268 files parsed). measured: domainNouns=7/8 · cited=55.6% · narrationErrors=21 · levelErrors=3 · sectionsWithGaps=2/12",
+  "budgets": {
+    "minDomainNounsInPackage": 7,
+    "minCitedShare": 0.5,
+    "maxNarrationErrors": 30,
+    "maxLevelErrors": 6,
+    "minSectionsDisclosingGaps": 2
+  },
+  "knownGaps": [
+    "This repo is the CEILING and it shows: 21 narration errors here against 53 on FloowForge, the same generator and the same prompts. The gap between this row and the others is the over-fitting measurement.",
+    "It is also the WORST on disclosure — 2 of 12 sections name anything the analysis could not determine, against 6 of 12 on MasterPokedex. The repo the prompts were tuned on is the one where the model feels least need to admit a limit.",
+    "All 6 architecture_deep inventory findings are the same sentence shape repeated per cluster ('It has 9 files.', 'It consists of 3 files.') — a template the prompt's 'state its real file count' instruction produces when there is nothing else to say about a cluster.",
+    "The analysed fork (KuanKongy/OnboardBuddy) lags org main, so its section list and worker structure can differ from the code in this working tree.",
+    "Analysis failed once at 98% with a Postgres 'canceling statement due to statement timeout' during record embedding, and succeeded on a plain retry. The largest fixture is the one that stresses the shared pooler."
+  ]
+}

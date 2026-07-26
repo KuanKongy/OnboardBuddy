@@ -13,7 +13,7 @@ import type { DetectedEntrypoint } from './entrypointDetector.js';
 import type { DetectedSideEffect } from './sideEffectDetector.js';
 import type { DocsIngestResult } from './docsIngester.js';
 import { symbolKey, externalKey, normalizePath } from './stableKeys.js';
-import { deriveBehaviorSignals, derivePurposeSignals } from './behaviorSignals.js';
+import { deriveBehaviorSignals } from './behaviorSignals.js';
 import { schemaTableIndex } from './configScanner.js';
 import { collectPathAliases, resolveAlias, type CollectedAliases } from './tsconfigPaths.js';
 
@@ -91,9 +91,14 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     const isTest = record?.category === 'test';
     const fileTrust = isTest ? 'tests' : 'code';
 
+    // Deduped: since export reconciliation back-patches `exported` onto
+    // symbols named in an `export { … }` clause, the two halves now overlap
+    // and a plain concat would double-count the module's public surface.
     const exportedSymbols = [
-      ...fa.exports.flatMap((e) => e.namedExports),
-      ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ...new Set([
+        ...fa.exports.flatMap((e) => e.namedExports),
+        ...fa.symbols.filter((s) => s.exported).map((s) => s.name),
+      ]),
     ];
 
     addNode({
@@ -116,7 +121,17 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     for (const sym of fa.symbols) {
       const symKey = sym.stableKey ?? symbolKey(relPath, sym.name);
       addNode(symbolNode(symKey, sym, relPath, fileTrust));
-      addEdge({ sourceKey: relPath, targetKey: symKey, type: 'contains', confidence: 'high', metadata: {} });
+      // A handler declared inside another function hangs off its container, not
+      // off the file — exactly as a method hangs off its class. Keeping it out
+      // of the file's `contains` list is what stops it from competing with the
+      // file's top-level symbols when an entrypoint has to guess its seed.
+      addEdge({
+        sourceKey: sym.containerName ? symbolKey(relPath, sym.containerName) : relPath,
+        targetKey: symKey,
+        type: 'contains',
+        confidence: 'high',
+        metadata: {},
+      });
 
       // Class methods become their own nodes under `path#Class.method`.
       if (sym.kind === 'class' && sym.methods) {
@@ -312,25 +327,28 @@ export function buildEvidenceGraph(input: BuildEvidenceGraphInput): EvidenceGrap
     }
   }
 
-  // ── 8. Behavior/purpose signals stamped into symbol metadata ──────────────
-  const stampSignals = (key: string, source: Parameters<typeof deriveBehaviorSignals>[0], relPath: string, name: string): void => {
+  // ── 8. Behavior signals stamped into symbol metadata ──────────────────────
+  //
+  // Mechanism only. The companion `purposeSignals` stamp is gone with the
+  // domain phrase table that produced it (`behaviorSignals.ts`): it named what
+  // a product was FOR from a path substring, which is a claim no substring can
+  // support on a repo we have never seen.
+  const stampSignals = (key: string, source: Parameters<typeof deriveBehaviorSignals>[0]): void => {
     const node = nodes.get(key);
     if (!node) return;
     const behavior = deriveBehaviorSignals(source);
-    const purpose = derivePurposeSignals(relPath, { name });
     if (behavior.length > 0) node.metadata.behaviorSignals = behavior;
-    if (purpose.length > 0) node.metadata.purposeSignals = purpose;
   };
   for (const fa of input.fileAnalyses) {
     const relPath = normalizePath(fa.relativePath);
     for (const sym of fa.symbols) {
-      stampSignals(sym.stableKey ?? symbolKey(relPath, sym.name), sym, relPath, sym.name);
+      stampSignals(sym.stableKey ?? symbolKey(relPath, sym.name), sym);
       // Method nodes carry their own calls/snippet — signal them individually
       // so workflow traces classify `Server.echo` by what echo does, not by
       // what the whole class does.
       if (sym.kind === 'class' && sym.methods) {
         for (const m of sym.methods) {
-          stampSignals(symbolKey(relPath, m.name, sym.name), m, relPath, m.name);
+          stampSignals(symbolKey(relPath, m.name, sym.name), m);
         }
       }
     }
@@ -358,6 +376,7 @@ function symbolNode(stableKey: string, sym: SymbolInfo, relPath: string, trust: 
       ...(sym.returnType ? { returnType: sym.returnType } : {}),
       ...(sym.parameters ? { params: sym.parameters.map((p) => p.name) } : {}),
       ...(sym.jsDoc ? { jsdoc: sym.jsDoc.slice(0, 2000) } : {}),
+      ...(sym.containerName ? { container: sym.containerName } : {}),
       isTrivial: sym.isTrivial ?? false,
       isDefault: sym.isDefault,
     },
@@ -446,6 +465,14 @@ function resolveImport(
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
+//
+// Deliberately NOT wrapped in withStatementTimeoutRetry, and it would be a bug
+// to add it here: both functions below execute inside the caller's open
+// transaction (worker/index.ts, "Persisting results"). A statement timeout
+// aborts that transaction, so every command after it — including a retry of the
+// same statement — fails with 25P02 "current transaction is aborted". The 57014
+// guard for this work lives one level up, around the whole BEGIN…COMMIT, where
+// ROLLBACK makes a second pass meaningful.
 
 const INSERT_CHUNK = 200;
 
