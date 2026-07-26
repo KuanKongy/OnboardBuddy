@@ -318,6 +318,30 @@ export function ImportPage() {
                   Building the analysis preview — scanning files and estimating cost…
                 </div>
               )}
+              {/*
+                * Always-visible scope notice. The preflight card below states the
+                * real per-repository numbers, but it only appears after the user
+                * presses "Preview first" — and the person most likely to skip it is
+                * exactly the one who needs to know we parse two languages. Stating
+                * the limit before analysis starts is the honest default.
+                */}
+              {!preview && (
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground">What gets analysed</p>
+                  <p className="mt-1 leading-relaxed">
+                    TypeScript and JavaScript are parsed all the way down — symbols, call graph,
+                    entry points, side effects. Everything else in the repository (other languages,
+                    docs, config, SQL, scripts) is read and cited as evidence, but is not parsed into
+                    a call graph, so a repository whose core logic is in another language produces a
+                    thinner handbook and says so.
+                  </p>
+                  <p className="mt-1.5 leading-relaxed">
+                    <span className="font-medium text-foreground">Preview first</span> reports this
+                    repository&rsquo;s actual numbers — how many files we cannot parse, and the
+                    estimated cost — before anything runs.
+                  </p>
+                </div>
+              )}
               {preview && <PreflightPreviewCard preview={preview} />}
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

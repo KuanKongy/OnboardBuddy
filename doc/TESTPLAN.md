@@ -43,15 +43,15 @@ The table is the quickest way to see what is covered where:
   AREA                                                  PASSED   FAILED  SKIPPED    RESULT
   ────────────────────────────────────────────────────────────────────────────────────────
   Backend · security (hostile input)                        83        0        0      PASS
-  Backend · analysis pipeline                              245        0        0      PASS
-  Backend · AI, caching & model routing                     89        0        0      PASS
-  Backend · document generation                            167        0        0      PASS
-  Backend · API & auth (HTTP)                              156        0        0      PASS
-  Backend · unit (libs, queue, crypto)                      19        0        0      PASS
-  Frontend · unit (components, pages, safe rendering)      147        0        0      PASS
-  E2E · Playwright (browser)                                 0        0       68   SKIPPED
+  Backend · analysis pipeline                              276        0        0      PASS
+  Backend · AI, caching & model routing                    100        0        0      PASS
+  Backend · document generation                            188        0        0      PASS
+  Backend · API & auth (HTTP)                              149        0        0      PASS
+  Backend · unit (libs, queue, crypto)                      23        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      164        0        0      PASS
+  E2E · Playwright (browser)                                 0        0        9   SKIPPED
   ────────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                                                    906        0       68      PASS
+  TOTAL                                                    984        0        9      PASS
 ```
 
 Every number is parsed from the runners' own machine-readable output, not written down anywhere — see
@@ -74,7 +74,7 @@ Nothing else is required — no `.env`, no cloud accounts, no running app. First
 > non-zero if a defence regresses, so it doubles as a CI gate. Output is committed at
 > [SECURITY_TEST_EVIDENCE.md](./SECURITY_TEST_EVIDENCE.md).
 
-What all 906 tests cover and why: [TESTING.md](./TESTING.md).
+What all 984 tests cover and why: [TESTING.md](./TESTING.md).
 
 ---
 
