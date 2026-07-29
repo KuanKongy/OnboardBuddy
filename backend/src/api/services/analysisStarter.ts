@@ -8,8 +8,10 @@
  * COMMIT via enqueueAnalysisRun.
  */
 
+import { query } from "../../lib/db.js";
 import { getAnalysisQueue } from "../../lib/queue.js";
 import type { AnalysisJobData } from "../../lib/queue.js";
+import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 
 /** Minimal transactional client surface (pg PoolClient or a test fake). */
 export interface TxClient {
@@ -93,11 +95,94 @@ export async function prepareAnalysisRun(client: TxClient, opts: PrepareRunOpts)
   return { ok: true, jobId: row.id, jobStatus: row.status, jobType };
 }
 
+/**
+ * Bug #69(1): reconcile a job row whose queue submission never landed.
+ *
+ * Submission happens AFTER the transaction commits, so a Redis outage leaves a
+ * committed `queued` row that no worker will ever see: the project is pinned to
+ * 'analyzing', the UI polls "waiting for worker" forever, and every retry is
+ * rejected by the per-tuple concurrency guard as "already being analyzed" — the
+ * guard doing its job on a phantom. The worker's orphan sweep cannot rescue it
+ * either; that sweep only claims rows already `running`, because a dead
+ * heartbeat is its only liveness signal and a never-started job has none.
+ *
+ * So the producer owns this one. The row is failed with the reason, which frees
+ * the tuple immediately and turns an indefinite hang into a visible, retryable
+ * error. Guarded on `status = 'queued'` so a worker that DID pick the job up
+ * despite the error (an ack lost on the way back) is never stomped mid-run.
+ */
+export async function failUnsubmittedJob(jobId: string, projectId: string, err: unknown): Promise<void> {
+  const reason = err instanceof Error ? err.message : String(err);
+  const message = `Could not submit this run to the job queue (${reason.slice(0, 160)}). Nothing was started — press Analyze again.`;
+  try {
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'failed', current_step = 'Failed', error_message = $2, finished_at = NOW(),
+           step_log = step_log || jsonb_build_array(jsonb_build_object(
+             'step', 'Failed: queue submission', 'pct', 0, 'ts', NOW()))
+       WHERE id = $1 AND status = 'queued'`,
+      [jobId, message],
+    );
+    // The route set projects.status='analyzing' inside the transaction; with
+    // nothing queued, the card would claim an analysis that does not exist.
+    await recomputeProjectStatus(projectId);
+  } catch (cleanupErr) {
+    // Losing the database too is not a reason to swallow the original error.
+    console.error(
+      `[analysisStarter] could not fail unsubmitted job ${jobId}:`,
+      cleanupErr instanceof Error ? cleanupErr.message : cleanupErr,
+    );
+  }
+}
+
+/**
+ * Seam for the reconciliation test. A real `Queue.add` against an unreachable
+ * Redis does not reject — ioredis reconnects forever by design (lib/queue.ts
+ * `RESILIENCE`) — so the only way to assert the failure path is to substitute
+ * the publish. Mirrors `__setQueryForTests` in lib/db.ts.
+ */
+type QueuePublish = (name: string, data: AnalysisJobData, opts: Record<string, unknown>) => Promise<unknown>;
+let publishOverride: QueuePublish | null = null;
+export function __setQueuePublishForTests(fn: QueuePublish | null): void {
+  publishOverride = fn;
+}
+
+async function publish(name: string, data: AnalysisJobData, opts: Record<string, unknown>): Promise<void> {
+  if (publishOverride) {
+    await publishOverride(name, data, opts);
+    return;
+  }
+  await getAnalysisQueue().add(name, data, opts);
+}
+
 /** Publish a prepared job to the analysis queue — call AFTER the transaction commits. */
 export async function enqueueAnalysisRun(jobId: string, data: AnalysisJobData): Promise<void> {
-  await getAnalysisQueue().add("analyze_scope", data, {
-    jobId,
-    attempts: 2,
-    backoff: { type: "fixed", delay: 5000 },
-  });
+  try {
+    await publish("analyze_scope", data, {
+      jobId,
+      attempts: 2,
+      backoff: { type: "fixed", delay: 5000 },
+    });
+  } catch (err) {
+    await failUnsubmittedJob(jobId, data.projectId, err);
+    throw err;
+  }
+}
+
+/**
+ * Same reconciliation for a preflight submission. Preflight rows are not
+ * covered by the concurrency guard, but a stuck one still leaves the import
+ * wizard's "Preview first" spinning until its own 3-minute client timeout.
+ */
+export async function enqueuePreflightRun(jobId: string, data: AnalysisJobData): Promise<void> {
+  try {
+    await publish("preflight", data, {
+      jobId,
+      attempts: 2,
+      backoff: { type: "fixed", delay: 5000 },
+    });
+  } catch (err) {
+    await failUnsubmittedJob(jobId, data.projectId, err);
+    throw err;
+  }
 }

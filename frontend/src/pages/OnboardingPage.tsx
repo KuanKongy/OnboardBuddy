@@ -32,7 +32,11 @@ import { SidebarToggle } from "@/components/SidebarShell";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
+// This one call bypasses `apiFetch` because it needs the raw Response (blob
+// download), so it composes the API origin itself — from runtime config, not
+// from a build-time constant.
+import { runtimeConfig } from "@/lib/runtimeConfig";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
 import { useProgress } from "@/lib/useProgress";
 import {
@@ -668,7 +672,9 @@ export function SectionView({
             // the whole package — but neither said which, so one word
             // described two populations. Each number now names its scope.
             label={`${section.unknowns!.length} known gap${section.unknowns!.length === 1 ? "" : "s"} in this section${
-              gapGroups.length < section.unknowns!.length ? ` · ${gapGroups.length} kinds` : ""
+              gapGroups.length < section.unknowns!.length
+                ? ` · ${gapGroups.length} kind${gapGroups.length === 1 ? "" : "s"}`
+                : ""
             }`}
             icon={<HelpCircle className="h-3 w-3 shrink-0" aria-hidden />}
           />
@@ -870,12 +876,31 @@ export function OnboardingPage() {
   const { user } = useAuth();
   const [receiptModal, setReceiptModal] = useState<SourceReceipt | null>(null);
   const fetchAbortRef = useRef<AbortController | null>(null);
-  const [pkgFetchError, setPkgFetchError] = useState(false);
+  // Bug #68: three distinct states the reader used to collapse into one.
+  // `pkgError` holds the failure message (null = no failure); `pkgLoading` is
+  // true until the first fetch of the CURRENT selection resolves. Without the
+  // second one the "No package — Generate" pane painted for a beat on every
+  // load and every package switch, because `pkg` starts null.
+  const [pkgError, setPkgError] = useState<{ message: string; gone: boolean } | null>(null);
+  const [pkgLoading, setPkgLoading] = useState(true);
+  // Bug #22: the live "sections are landing" poll gave up silently. These two
+  // make giving up visible and undoable — `livePollAttempt` re-arms the effect.
+  const [livePollStalled, setLivePollStalled] = useState(false);
+  const [livePollAttempt, setLivePollAttempt] = useState(0);
   const generateRolePollRef = useRef<number | null>(null);
+  // Bug #68 (4): the regenerate-section poll was a local `setInterval` handle,
+  // so navigating away mid-regeneration left it firing every 4s for the full
+  // two-minute timeout, against an unmounted component.
+  const regenPollRef = useRef<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [provenanceOpen, setProvenanceOpen] = useState(false);
-  const { items: progressItems, loaded: progressLoaded, save: saveProgress } = useProgress(id);
+  const {
+    items: progressItems,
+    loaded: progressLoaded,
+    loadError: progressLoadError,
+    save: saveProgress,
+  } = useProgress(id);
 
   // Per-user read tracking (any tier): which sections of THIS package this
   // member has marked as read. Lives in user_progress.position — the same
@@ -921,10 +946,25 @@ export function OnboardingPage() {
     fetchAbortRef.current?.abort();
     const controller = new AbortController();
     fetchAbortRef.current = controller;
-    setPkgFetchError(false);
+    setPkgError(null);
+    setPkgLoading(true);
     fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
       .then((data) => { if (!controller.signal.aborted) setPkg(data); })
-      .catch(() => { if (!controller.signal.aborted) setPkgFetchError(true); });
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        // A pinned `?package=` that 404s is a genuinely gone package, not a
+        // transient fault — retrying it forever cannot help, so that case
+        // gets its own copy and sends the reader back to the package list.
+        const gone = err instanceof ApiError && err.status === 404;
+        setPkgError({
+          message: err instanceof Error ? err.message : "Failed to load this package",
+          gone,
+        });
+        // Do not leave stale content from a previous selection on screen
+        // under an error banner that describes a different package.
+        setPkg(null);
+      })
+      .finally(() => { if (!controller.signal.aborted) setPkgLoading(false); });
   }, [id, selectedRole, selectedPackageParam, view]);
 
   useEffect(() => {
@@ -960,28 +1000,47 @@ export function OnboardingPage() {
     setGenerating(project?.status === "analyzing");
   }, [project?.status]);
 
-  // Ensure the generate-role poll (handleGenerateRole, below) never keeps
+  // Ensure the generate-role and regenerate-section polls (below) never keep
   // running after unmount.
   useEffect(() => () => {
     if (generateRolePollRef.current) window.clearInterval(generateRolePollRef.current);
+    if (regenPollRef.current) window.clearInterval(regenPollRef.current);
   }, []);
 
   // Sections persist one by one while the package is generating — poll so
   // they appear as they land instead of only after the whole run finishes.
+  //
+  // Bug #22: this poll's ancestor (the per-role status poll) carried a bare
+  // `.catch(() => {})`, so a poll that could no longer reach the server went
+  // on running forever, reporting nothing. The contract now is the one the
+  // bug asked for — *show an error or stop polling* — and it does both, but
+  // only after the failure is real: a single dropped tick is normal mid-run,
+  // so one failure is ignored and the sections on screen are left alone.
+  // Three consecutive failures stop the interval and say so, with a retry.
+  // Nothing here ever clears `pkg`: this poll must not be able to invent an
+  // empty state (#68). The failure that matters on first paint is `loadPkg`'s.
   useEffect(() => {
     if (!id || view !== "reader") return;
     if (pkg?.status !== "generating" && !generating) return;
+    let consecutiveFailures = 0;
     const timer = window.setInterval(() => {
       fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
         .then((data) => {
-          if (!data) return;
+          consecutiveFailures = 0;
+          setLivePollStalled(false);
           setPkg(data);
           if (data.status !== "generating" && data.status !== "missing") loadCards();
         })
-        .catch(() => {});
+        .catch(() => {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= 3) {
+            window.clearInterval(timer);
+            setLivePollStalled(true);
+          }
+        });
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [id, view, selectedRole, selectedPackageParam, pkg?.status, generating]);
+  }, [id, view, selectedRole, selectedPackageParam, pkg?.status, generating, livePollAttempt]);
 
   // First visit to the package grid: auto-run the "How packages work" tour —
   // but only after the project-level tour was dismissed, so two spotlight
@@ -1000,6 +1059,11 @@ export function OnboardingPage() {
   }
 
   const canManage = project?.permission_tier === "owner" || project?.permission_tier === "admin";
+  // Bug #68: `isMissing` still means "nothing to render" for the chrome that
+  // needs a package, but it is no longer the same thing as "no package
+  // exists". The content pane below picks apart the three reasons it can be
+  // true — still loading, the request failed, or the package really is absent
+  // — and only the last one offers the billed Generate button.
   const isMissing = !pkg || pkg.status === "missing";
   const sections = isMissing ? [] : pkg.sections;
   const activeSection = sections.find((s) => s.id === activeSectionId);
@@ -1125,15 +1189,23 @@ export function OnboardingPage() {
       if (data.job?.id) registerSessionJob(data.job.id, { navigateOnDone: false });
       const started = Date.now();
       generateRolePollRef.current = window.setInterval(async () => {
-        const polled = await fetchOnboardingPackage(id, { role: selectedRole });
+        // `fetchOnboardingPackage` rejects now (bug #68), and an async
+        // setInterval callback that throws is an unhandled rejection, not a
+        // caught error — a blip mid-generation would kill the poll without
+        // stopping it. A failed tick is ignored; the timeout still fires.
+        let polled: OnboardingPackage | null = null;
+        try {
+          polled = await fetchOnboardingPackage(id, { role: selectedRole });
+        } catch { /* transient — the next tick retries */ }
         const timedOut = Date.now() - started > 300_000;
-        const landed = polled && polled.status !== "missing";
+        const landed = polled !== null && polled.status !== "missing";
         if (landed || timedOut) {
           if (generateRolePollRef.current) window.clearInterval(generateRolePollRef.current);
           generateRolePollRef.current = null;
           setGenerating(false);
           if (landed) {
             setPkg(polled);
+            setPkgError(null);
             // Pin the reader to the package that just landed — and make it the
             // sidebar selection too, or the M3 sync effect below would treat
             // the URL as drifting from the chooser and put it straight back.
@@ -1162,16 +1234,27 @@ export function OnboardingPage() {
       // Poll until the regenerated section lands (worker replaces the row).
       const oldId = activeSection.sectionId;
       const started = Date.now();
-      const poll = window.setInterval(async () => {
-        const data = await fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole });
+      // Held in a ref (not a local) so the unmount effect above can clear it —
+      // bug #68 (4): navigating away used to leave this firing for two minutes.
+      if (regenPollRef.current) window.clearInterval(regenPollRef.current);
+      const stop = () => {
+        if (regenPollRef.current) window.clearInterval(regenPollRef.current);
+        regenPollRef.current = null;
+      };
+      regenPollRef.current = window.setInterval(async () => {
+        let data: OnboardingPackage | null = null;
+        try {
+          data = await fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole });
+        } catch { /* transient — the next tick retries; the timeout still fires */ }
         const fresh = data?.sections.find((s) => s.id === activeSectionId);
-        if (fresh && fresh.sectionId !== oldId) {
-          window.clearInterval(poll);
+        if (data && fresh && fresh.sectionId !== oldId) {
+          stop();
           setRegenerating(false);
-          if (data) setPkg(data);
+          setPkg(data);
+          setPkgError(null);
           loadCards();
         } else if (Date.now() - started > 120_000) {
-          window.clearInterval(poll);
+          stop();
           setRegenerating(false);
           setActionError("Regeneration is taking longer than expected — the section will replace itself when the worker finishes. Check the Overview page for job status.");
         }
@@ -1191,8 +1274,12 @@ export function OnboardingPage() {
         method: "PATCH",
         body: JSON.stringify({ review_status: newStatus }),
       });
-      fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
-        .then((data) => { if (data) setPkg(data); });
+      // The PATCH succeeded; this refetch only picks up the new badge. If it
+      // fails, say so instead of leaving an unhandled rejection and a stale
+      // review state that looks like the toggle did nothing (bug #68).
+      await fetchOnboardingPackage(id, { packageId: selectedPackageParam, role: selectedRole })
+        .then((data) => { setPkg(data); })
+        .catch(() => setActionError("Review status saved, but the page could not be refreshed. Reload to see it."));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to update review status");
     }
@@ -1207,7 +1294,7 @@ export function OnboardingPage() {
         ? `package_id=${encodeURIComponent(selectedPackageParam)}`
         : `role=${encodeURIComponent(selectedRole)}`;
       const response = await fetch(
-        `${import.meta.env.VITE_API_URL}/projects/${id}/onboarding/export?${exportQs}`,
+        `${runtimeConfig.apiUrl}/projects/${id}/onboarding/export?${exportQs}`,
         {
           headers: {
             Authorization: `Bearer ${(await (await import("@/lib/supabase")).supabase.auth.getSession()).data.session?.access_token}`,
@@ -1560,20 +1647,37 @@ export function OnboardingPage() {
               {/* Personal progress for everyone else — the tour's "track what
                   you've read" was previously only true for owners/admins. */}
               {!canManage && activeSection && (
-                <Button
-                  size="xs"
-                  variant={isSectionRead ? "secondary" : "outline"}
-                  data-tour="reader-review"
-                  disabled={readSections === null}
-                  className={cn(
-                    "gap-1.5",
-                    isSectionRead && "border-success/40 bg-success-soft text-success",
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
+                      <Button
+                        size="xs"
+                        variant={isSectionRead ? "secondary" : "outline"}
+                        data-tour="reader-review"
+                        disabled={readSections === null}
+                        className={cn(
+                          "gap-1.5",
+                          isSectionRead && "border-success/40 bg-success-soft text-success",
+                        )}
+                        onClick={handleToggleRead}
+                      >
+                        {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                        {isSectionRead ? "Read" : "Mark as read"}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {/* Bug #68: the control is disabled because the progress
+                      fetch failed, not because the feature is unavailable —
+                      and it stays disabled on purpose, since writing marks
+                      against a history we could not read would erase it. */}
+                  {progressLoadError && (
+                    <TooltipContent side="bottom" className="max-w-xs text-left">
+                      Your reading progress couldn&apos;t be loaded, so marks are paused for this
+                      visit — saving now would overwrite the sections you have already read.
+                      Reload the page to try again.
+                    </TooltipContent>
                   )}
-                  onClick={handleToggleRead}
-                >
-                  {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                  {isSectionRead ? "Read" : "Mark as read"}
-                </Button>
+                </Tooltip>
               )}
               {/* E8: the emphasis used to be inverted — "Mark as read" (a
                   progress checkbox) wore the only primary ring in the top bar
@@ -1759,7 +1863,31 @@ export function OnboardingPage() {
         </div>
       )}
 
-      {!isMissing && pkg.status === "generating" && (
+      {/* Bug #22: when the live poll gives up, say so where it was reporting
+          progress. The generation itself is unaffected — only this page's
+          view of it stopped updating, which is exactly the distinction the
+          silent catch destroyed. */}
+      {!isMissing && pkg.status === "generating" && livePollStalled && (
+        <div
+          className="flex items-center justify-between gap-3 border-b border-warning/40 bg-warning-soft px-5 py-2 text-xs text-warning"
+          role="alert"
+        >
+          <span>
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            Live updates stopped — the last three checks couldn&apos;t reach the server. Generation
+            is still running; this page just stopped following it.
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            className="shrink-0 gap-1.5 border-warning/50 text-warning hover:bg-warning-soft"
+            onClick={() => { setLivePollStalled(false); setLivePollAttempt((n) => n + 1); loadPkg(); }}
+          >
+            <RefreshCw className="h-3 w-3" /> Resume updates
+          </Button>
+        </div>
+      )}
+      {!isMissing && pkg.status === "generating" && !livePollStalled && (
         <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Generating — sections appear here as each one finishes ({sections.length}/{SECTION_NAV_ORDER.length} so far).
@@ -1931,19 +2059,50 @@ export function OnboardingPage() {
         <div ref={readerScrollRef} className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
           <div className="mx-auto max-w-3xl">
             {isMissing ? (
-              pkgFetchError ? (
-                <div className="flex flex-col items-center justify-center py-24 text-center">
+              // Bug #68, the expensive one. Order matters: loading first (so
+              // the empty state never flashes before the first response),
+              // then the failure, and only then real absence. Nothing but the
+              // last branch may show a button that starts a billed run.
+              pkgLoading ? (
+                <div
+                  className="flex flex-col items-center justify-center py-24 text-center"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                  <p className="mt-3 text-xs text-muted-foreground">Loading this package…</p>
+                </div>
+              ) : pkgError ? (
+                <div className="flex flex-col items-center justify-center py-24 text-center" role="alert">
                   <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-danger-soft">
                     <AlertTriangle className="h-6 w-6 text-danger" />
                   </div>
-                  <h2 className="text-sm font-semibold text-foreground">Couldn't load this package</h2>
+                  <h2 className="text-sm font-semibold text-foreground">
+                    {pkgError.gone ? "This package no longer exists" : "Couldn't load this package"}
+                  </h2>
                   <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                    Something went wrong fetching this package. This may be a transient issue —
-                    try again before generating a new one.
+                    {pkgError.gone
+                      ? "The package this link points to has been deleted or replaced. Pick another one from the package list — nothing has been generated or charged."
+                      : "This is a failure to load it, not a sign that it is missing. Your existing package is untouched — retry before generating anything, so you are not charged for a package you already have."}
                   </p>
-                  <Button size="sm" variant="outline" className="mt-4 gap-1.5" onClick={loadPkg}>
-                    <RefreshCw className="h-3.5 w-3.5" /> Retry
-                  </Button>
+                  <p className="mt-2 max-w-sm break-words text-[0.6875rem] text-muted-foreground/80">
+                    {pkgError.message}
+                  </p>
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    {!pkgError.gone && (
+                      <Button size="sm" variant="outline" className="gap-1.5" onClick={loadPkg}>
+                        <RefreshCw className="h-3.5 w-3.5" /> Retry
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={pkgError.gone ? "default" : "ghost"}
+                      className="gap-1.5"
+                      onClick={() => setParams({ view: null, package: null })}
+                    >
+                      <BookOpen className="h-3.5 w-3.5" /> Back to packages
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center py-24 text-center">

@@ -104,6 +104,11 @@ const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> =
   'google/gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
   'deepseek/deepseek-v4-flash': { input: 0.09, output: 0.18 },
   'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
+  // Embedding models bill input only. Both are listed because M4 and M5
+  // snapshots coexist for the whole milestone, so the run history shows rows
+  // priced at both — the tier row alone would misprice whichever is not it.
+  'perplexity/pplx-embed-v1-4b': { input: 0.03, output: 0 },
+  'text-embedding-3-small': { input: 0.02, output: 0 },
 };
 
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {

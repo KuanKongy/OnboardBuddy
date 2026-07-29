@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
+import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
+import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { resolveForRequest } from "../services/packageResolver.js";
 
@@ -262,6 +264,122 @@ function presentStep(row: Record<string, unknown>, receiptById: Map<string, unkn
     receipts: (receiptIds ?? []).map((id) => receiptById.get(id)).filter(Boolean),
   };
 }
+
+/**
+ * Bug #36 — regenerate ONE tutorial.
+ *
+ * The mirror of `POST /onboarding/sections/:sectionId/regenerate`, including
+ * its two rules: a STALE artifact rebuilds against the newest complete snapshot
+ * of its scope (not the snapshot that made it stale), and there is no
+ * privacy-mode gate — under `ai_disabled` the worker rebuilds the walkthrough
+ * deterministically, because the skeleton comes from the trace and only the
+ * prose comes from a model.
+ *
+ * Schema note (doc/DEVOPS.md, M5 freeze): `analysis_jobs.job_type` is a
+ * CHECK-constrained enum and M5 adds no migrations, so this rides the existing
+ * `regenerate_section` type. What distinguishes it is `checkpoint.tutorialKey`
+ * — the same jsonb the section flow already uses for `sectionType` — and the
+ * `tutorialStableKey` field on the queue payload.
+ */
+tutorialsRouter.post("/:tutorialId/regenerate", requireProjectAccess("owner", "admin"), async (req, res) => {
+  try {
+    const projectId = String(req.params.id);
+    const { tutorialId } = req.params;
+    const userId = req.user!.id;
+
+    const row = (await query(
+      `SELECT t.stable_key, t.title, t.status, t.snapshot_id, t.package_id,
+              op.role, op.scope_id, op.branch AS package_branch
+       FROM tutorials t
+       JOIN onboarding_packages op ON op.id = t.package_id
+       WHERE t.id = $1 AND op.project_id = $2`,
+      [tutorialId, projectId],
+    )).rows[0] as
+      | { stable_key: string; title: string; status: string; snapshot_id: string;
+          package_id: string; role: string | null; scope_id: string; package_branch: string | null }
+      | undefined;
+    if (!row) {
+      res.status(404).json({ error: "Tutorial not found" });
+      return;
+    }
+
+    // Same rule as a stale section: rebuild against the newest analyzed code,
+    // not the snapshot that made this stale in the first place.
+    let targetSnapshotId = row.snapshot_id;
+    if (row.status === "stale") {
+      const latest = await query(
+        `SELECT id FROM analysis_snapshots s
+         WHERE scope_id = $1 AND status = 'complete'
+         ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+        [row.scope_id, row.package_branch],
+      );
+      targetSnapshotId = (latest.rows[0] as { id: string } | undefined)?.id ?? row.snapshot_id;
+    }
+
+    // A second click while the first job is still queued would pay twice for
+    // the same rebuild and race two writers onto one (package, stable_key) row.
+    const active = await query(
+      `SELECT id FROM analysis_jobs
+       WHERE project_id = $1 AND job_type = 'regenerate_section'
+         AND status IN ('queued', 'running')
+         AND checkpoint->>'tutorialKey' = $2
+       LIMIT 1`,
+      [projectId, row.stable_key],
+    );
+    if (active.rows.length > 0) {
+      res.status(409).json({
+        error: "This tutorial is already being regenerated",
+        active_job_id: (active.rows[0] as { id: string }).id,
+      });
+      return;
+    }
+
+    const jobId = ((await query(
+      `INSERT INTO analysis_jobs
+         (project_id, snapshot_id, requested_by, job_type, role, status, current_step, branch, checkpoint)
+       VALUES ($1, $2, $3, 'regenerate_section', $4, 'queued', 'Waiting for worker', $5, $6::jsonb)
+       RETURNING id`,
+      [projectId, targetSnapshotId, userId, row.role ?? "general", row.package_branch,
+       // `tutorialKey` (not `sectionType`) is what the run-history label and the
+       // duplicate guard above read.
+       JSON.stringify({ tutorialKey: row.stable_key, tutorialTitle: row.title })],
+    )).rows[0] as { id: string }).id;
+
+    try {
+      await getSummaryQueue().add("regenerate_tutorial", {
+        jobId,
+        snapshotId: targetSnapshotId,
+        projectId,
+        triggeredBy: userId,
+        role: row.role ?? "general",
+        branch: row.package_branch ?? undefined,
+        tutorialStableKey: row.stable_key,
+        packageId: row.package_id,
+      } satisfies SummaryJobData, {
+        attempts: 2,
+        backoff: { type: "fixed", delay: 3000 },
+        removeOnComplete: { count: 10 },
+        removeOnFail: { count: 10 },
+      });
+    } catch (err) {
+      // Bug #69(1) applies here too: a submission that throws must not leave
+      // the row 'queued' forever behind the duplicate guard above.
+      await query(
+        `UPDATE analysis_jobs
+         SET status = 'failed', current_step = 'Failed', finished_at = NOW(),
+             error_message = 'Could not submit this regeneration to the job queue. Nothing was started — try again.'
+         WHERE id = $1 AND status = 'queued'`,
+        [jobId],
+      ).catch(() => {});
+      throw err;
+    }
+
+    res.status(202).json({ job: { id: jobId, status: "queued", tutorial_id: tutorialId } });
+  } catch (err) {
+    console.error("Regenerate tutorial error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 tutorialsRouter.get("/:tutorialId", requireProjectAccess(), async (req, res) => {
   try {

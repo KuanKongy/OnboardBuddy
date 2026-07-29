@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
@@ -54,21 +55,99 @@ function base64url(buf: Buffer): string {
 }
 
 /**
+ * The GitHub App is not usable with the configuration this process was given.
+ *
+ * A distinct type because it is an operator error, not a GitHub failure and
+ * not the caller's fault: routes turn it into one clear, actionable message
+ * instead of the generic 500 that a raw ENOENT produced (bug #3).
+ */
+export class GitHubAppConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GitHubAppConfigError";
+  }
+}
+
+/**
  * The App's RS256 private key: `GITHUB_APP_PRIVATE_KEY` (full PEM contents —
  * the option for hosts without file mounts, e.g. Railway; `\n`-escaped
  * newlines are normalized) wins over `GITHUB_APP_PRIVATE_KEY_PATH` (a .pem
  * file, the local-dev default).
+ *
+ * Every failure here names the two environment variables, the path that was
+ * actually tried and the working directory it was resolved against — the
+ * relative default (`./github-app.pem`) means "wrong cwd" and "no such file"
+ * look identical from the outside, and the worker image sets its WORKDIR to
+ * /app/backend for exactly that reason. The bind mount in docker-compose also
+ * makes a *directory* appear at the mount point when the host file is missing,
+ * so EISDIR is a first-class case, not an oddity.
  */
-function loadAppPrivateKey(): string {
+export function loadAppPrivateKey(): string {
   const inline = process.env.GITHUB_APP_PRIVATE_KEY;
   if (inline && inline.trim() !== "") {
     return inline.replace(/\\n/g, "\n");
   }
-  return fs.readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8");
+
+  const keyPath = process.env.GITHUB_APP_PRIVATE_KEY_PATH;
+  if (!keyPath || keyPath.trim() === "") {
+    throw new GitHubAppConfigError(
+      "GitHub App private key is not configured: set GITHUB_APP_PRIVATE_KEY (the full PEM contents) " +
+        "or GITHUB_APP_PRIVATE_KEY_PATH (a path to the .pem file).",
+    );
+  }
+
+  const resolved = path.resolve(keyPath);
+  let pem: string;
+  try {
+    pem = fs.readFileSync(resolved, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    const detail =
+      code === "ENOENT" ? "no such file"
+      : code === "EISDIR" ? "that path is a directory — a docker bind mount creates one when the host file is missing"
+      : code === "EACCES" ? "permission denied"
+      : (err as Error).message;
+    throw new GitHubAppConfigError(
+      `GitHub App private key could not be read from GITHUB_APP_PRIVATE_KEY_PATH="${keyPath}" ` +
+        `(resolved to ${resolved} from working directory ${process.cwd()}): ${detail}. ` +
+        "Put the .pem there, or set GITHUB_APP_PRIVATE_KEY to its contents instead.",
+    );
+  }
+
+  if (!pem.includes("PRIVATE KEY")) {
+    throw new GitHubAppConfigError(
+      `GitHub App private key at ${resolved} is not a PEM private key (no "PRIVATE KEY" header). ` +
+        "Re-download it from the GitHub App settings page.",
+    );
+  }
+
+  return pem;
+}
+
+/**
+ * Whether the App is configured well enough to sign a JWT — for a boot-time
+ * log line, so a misconfiguration is visible before the first request rather
+ * than as a failed import.
+ */
+export function checkGitHubAppConfig(): { ok: true } | { ok: false; reason: string } {
+  if (!process.env.GITHUB_APP_ID) {
+    return { ok: false, reason: "GITHUB_APP_ID is not set" };
+  }
+  try {
+    loadAppPrivateKey();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: (err as Error).message };
+  }
 }
 
 export function createAppJwt(): string {
-  const appId = process.env.GITHUB_APP_ID!;
+  const appId = process.env.GITHUB_APP_ID;
+  if (!appId) {
+    throw new GitHubAppConfigError(
+      "GitHub App is not configured: GITHUB_APP_ID is not set.",
+    );
+  }
   const privateKey = loadAppPrivateKey();
 
   const now = Math.floor(Date.now() / 1000);
@@ -79,10 +158,18 @@ export function createAppJwt(): string {
   const payloadB64 = base64url(Buffer.from(JSON.stringify(payload)));
   const signingInput = `${headerB64}.${payloadB64}`;
 
-  const signature = crypto
-    .createSign("RSA-SHA256")
-    .update(signingInput)
-    .sign(privateKey);
+  let signature: Buffer;
+  try {
+    signature = crypto.createSign("RSA-SHA256").update(signingInput).sign(privateKey);
+  } catch (err) {
+    // OpenSSL's "error:1E08010C:DECODER routines::unsupported" is what a
+    // truncated or wrong-format key looks like from here; on its own it tells
+    // an operator nothing about which file to go and fix.
+    throw new GitHubAppConfigError(
+      `GitHub App private key is present but unusable for RS256 signing: ${(err as Error).message}. ` +
+        "Check that GITHUB_APP_PRIVATE_KEY / GITHUB_APP_PRIVATE_KEY_PATH holds the complete .pem GitHub issued.",
+    );
+  }
 
   return `${signingInput}.${base64url(signature)}`;
 }
@@ -274,43 +361,90 @@ export async function listUserInstallations(
   return data.installations;
 }
 
-export async function listInstallationRepos(installationToken: string): Promise<Repo[]> {
-  const res = await fetch(`${GITHUB_API}/installation/repositories?per_page=100`, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
+/**
+ * Bug #67(2) — "large accounts cannot find their repository".
+ *
+ * The repo listing asked for one page of 100 and the branch listing took the
+ * API's default of 30, with no pagination in either. On an org installed on 250
+ * repositories the picker silently ended at 100 and the other 150 simply did
+ * not exist — no error, no "showing 100 of 250", nothing to explain it. That is
+ * a hard blocker for exactly the org-scale teams this product targets.
+ *
+ * `MAX_LIST_PAGES` bounds the walk so a pathological account cannot hang an
+ * import request: 20 pages of 100 is 2000 repositories or branches. Reaching it
+ * is reported by the caller-visible `truncated` flag rather than being swallowed
+ * — the failure mode being fixed here is precisely a silent cut.
+ */
+const LIST_PAGE_SIZE = 100;
+const MAX_LIST_PAGES = 20;
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+/**
+ * Walks a paginated GitHub collection to exhaustion. `extract` exists because
+ * the two endpoints disagree on shape: `/installation/repositories` wraps its
+ * page in `{ repositories: [...] }` while `/branches` returns a bare array.
+ *
+ * Termination is on a short page (fewer than `per_page` items), which is the
+ * documented end-of-collection signal and does not need the Link header.
+ */
+async function fetchAllPages<T>(
+  url: (page: number) => string,
+  token: string,
+  extract: (body: unknown) => T[],
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  for (let page = 1; page <= MAX_LIST_PAGES; page++) {
+    const res = await fetch(url(page), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`GitHub API error (${res.status}): ${body}`);
+    }
+    const batch = extract(await res.json());
+    items.push(...batch);
+    if (batch.length < LIST_PAGE_SIZE) return { items, truncated: false };
   }
+  // Never silent: the defect being fixed is a list that ended without saying so.
+  console.warn(
+    `[github] list hit the ${MAX_LIST_PAGES}-page ceiling at ${items.length} items — ${url(1).split("?")[0]}`,
+  );
+  return { items, truncated: true };
+}
 
-  const data = (await res.json()) as { repositories: Repo[] };
-  return data.repositories;
+/**
+ * Every repository the installation can see, across all pages.
+ *
+ * `truncated` is true only at the `MAX_LIST_PAGES` ceiling — the picker says so
+ * rather than pretending the list is complete.
+ */
+export async function listInstallationRepos(
+  installationToken: string,
+): Promise<Repo[] & { truncated?: boolean }> {
+  const { items, truncated } = await fetchAllPages<Repo>(
+    (page) => `${GITHUB_API}/installation/repositories?per_page=${LIST_PAGE_SIZE}&page=${page}`,
+    installationToken,
+    (body) => (body as { repositories?: Repo[] }).repositories ?? [],
+  );
+  // Attached rather than returned as a tuple so every existing caller (the
+  // route, the webhook matcher) keeps treating this as a plain array.
+  return Object.assign(items, { truncated });
 }
 
 export async function listBranches(
   token: string,
   owner: string,
   repo: string,
-): Promise<Branch[]> {
-  const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/branches`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
-  }
-
-  return (await res.json()) as Branch[];
+): Promise<Branch[] & { truncated?: boolean }> {
+  const { items, truncated } = await fetchAllPages<Branch>(
+    (page) => `${GITHUB_API}/repos/${owner}/${repo}/branches?per_page=${LIST_PAGE_SIZE}&page=${page}`,
+    token,
+    (body) => (Array.isArray(body) ? (body as Branch[]) : []),
+  );
+  return Object.assign(items, { truncated });
 }
 
 /** Repo metadata — used to default a new project's branch to the repo default. */

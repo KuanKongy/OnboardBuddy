@@ -278,7 +278,7 @@ async function main() {
     const res = await fetch('http://localhost:5173/');
     const csp = res.headers.get('content-security-policy');
     record('5e-dev-csp', 'GET http://localhost:5173/ (Vite dev server)', res.status,
-      csp ? `UNEXPECTED CSP present in dev: ${csp}` : 'no CSP header — expected; dev-only observation, CSP is an nginx-layer, production-image control (frontend/security-headers.conf)');
+      csp ? `UNEXPECTED CSP present in dev: ${csp}` : 'no CSP header — expected; dev-only observation, CSP is an nginx-layer, production-image control (frontend/security-headers.conf.template)');
   }
   {
     const bigArray = Array.from({ length: 250 }, (_, i) => `path-${i}`);

@@ -274,6 +274,17 @@ export function WorkflowsPage() {
     () => searchParams.get("workflow") ?? "",
   );
   const [detail, setDetail] = useState<WalkthroughResponse | null>(null);
+  /**
+   * Bug #68 / UI_VERIFY_M4 #13: the steps fetch used to write the SAME
+   * `error` state as the list fetch. Two consequences, both reproduced live:
+   * the rail is gated on `!error`, so one failed steps call deleted the whole
+   * workflow list from the page; and the banner it left behind read "The
+   * workflow list could not be loaded" — blaming the request that had
+   * succeeded. The steps failure is now scoped to the canvas that failed.
+   */
+  const [stepsError, setStepsError] = useState("");
+  /** Bumped by the canvas Retry — re-running the effect needs a changed dep. */
+  const [stepsReload, setStepsReload] = useState(0);
   const [loadingList, setLoadingList] = useState(true);
   const [loadingGraph, setLoadingGraph] = useState(false);
   const [error, setError] = useState("");
@@ -320,14 +331,18 @@ export function WorkflowsPage() {
     // means the list is in a working state, so a stale banner shouldn't
     // keep showing above it.
     setError("");
+    setStepsError("");
     setSelectedNodeId(null);
     // The walkthrough route, not the folded workflow graph: it serves one row
     // per step, which is the number the rail beside this canvas advertises.
     apiFetch(`/projects/${id}/workflows/${encodeURIComponent(selectedWorkflowId)}/walkthrough`)
-      .then((res) => setDetail(res as WalkthroughResponse))
-      .catch(() => setError("Failed to load workflow steps"))
+      .then((res) => { setDetail(res as WalkthroughResponse); setStepsError(""); })
+      .catch((err: unknown) => {
+        setDetail(null);
+        setStepsError(err instanceof Error ? err.message : "Failed to load this workflow's steps");
+      })
       .finally(() => setLoadingGraph(false));
-  }, [id, selectedWorkflowId]);
+  }, [id, selectedWorkflowId, stepsReload]);
 
   const steps = useMemo(
     () => (detail?.steps ?? []).map(normalizeStep),
@@ -772,6 +787,33 @@ export function WorkflowsPage() {
               {loadingGraph && (
                 <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
                   <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                </div>
+              )}
+              {/* Scoped to this canvas: the rail beside it keeps working, so
+                  the reader can pick another flow instead of losing the tab. */}
+              {!loadingGraph && stepsError && (
+                <div
+                  className="absolute inset-0 z-10 flex items-center justify-center bg-background/90 p-6"
+                  role="alert"
+                >
+                  <div className="max-w-sm text-center">
+                    <AlertTriangle className="mx-auto mb-2 h-5 w-5 text-danger" />
+                    <p className="text-sm font-medium text-foreground">Couldn&apos;t load this flow&apos;s steps</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      The request failed — this flow&apos;s steps were not fetched. It is not a flow
+                      without steps.
+                    </p>
+                    <p className="mt-1 break-words text-[0.6875rem] text-muted-foreground/80">{stepsError}</p>
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      className="mt-3"
+                      onClick={() => setStepsReload((n) => n + 1)}
+                    >
+                      <RefreshCw className="mr-1 h-3 w-3" />
+                      Retry
+                    </Button>
+                  </div>
                 </div>
               )}
               {untraceable && (

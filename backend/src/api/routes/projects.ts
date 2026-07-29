@@ -2,13 +2,14 @@ import { Router } from "express";
 import type { PoolClient } from "pg";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { parseInstallationId } from "../lib/installationId.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
 import { getRepo, isValidGitRef } from "../../lib/github.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
-import { enqueueAnalysisRun, prepareAnalysisRun } from "../services/analysisStarter.js";
+import { enqueueAnalysisRun, enqueuePreflightRun, failUnsubmittedJob, prepareAnalysisRun } from "../services/analysisStarter.js";
 import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
@@ -18,6 +19,90 @@ const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
 function normalizeScopePath(path: string): string {
   return path.trim().replace(/^\/+|\/+$/g, "");
 }
+
+/**
+ * Every column `PUT /:id/settings` may write, with the check that guards it
+ * (bug #9). The map is the allowlist: the handler iterates over these entries
+ * and reads the matching key out of the body, so an unlisted key is not
+ * ignored by accident — it is unreachable, and the column names in the
+ * statement are literals from this file rather than anything a caller sent.
+ *
+ * `validate` returns the 400 message, or null when the value is acceptable.
+ * Adding a setting means adding one entry here; there is nowhere else to
+ * forget.
+ */
+interface SettingSpec {
+  validate: (value: unknown) => string | null;
+  /** Only for jsonb columns, which pg needs as a string. */
+  serialize?: (value: unknown) => unknown;
+}
+
+const BUDGET_KEYS = ['max_files', 'max_symbols_to_llm', 'max_llm_calls', 'max_input_tokens', 'max_runtime_ms'];
+const MODEL_TIERS = ['cheap', 'strong', 'embedding'];
+const FAILURE_BEHAVIORS = ['retry', 'degrade', 'pause', 'fail'];
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function oneOf(allowed: readonly string[], label: string) {
+  return (value: unknown): string | null =>
+    typeof value === 'string' && allowed.includes(value) ? null : `Invalid ${label}`;
+}
+
+const WRITABLE_SETTINGS: Record<string, SettingSpec> = {
+  ignored_paths: {
+    validate: (v) =>
+      Array.isArray(v) && v.length <= 200 && v.every((p) => typeof p === 'string' && p.length <= 400)
+        ? null
+        : "invalid ignored_paths",
+  },
+  privacy_mode: { validate: oneOf(['full_ai', 'facts_only_ai', 'ai_disabled'], 'privacy_mode') },
+  analysis_depth: { validate: oneOf(VALID_DEPTHS, 'analysis_depth') },
+  default_developer_role: { validate: oneOf(VALID_ROLES, 'default_developer_role') },
+  file_limit: {
+    validate: (v) => (Number.isInteger(v) && (v as number) > 0 ? null : "file_limit must be a positive integer"),
+  },
+  loc_limit: {
+    validate: (v) => (Number.isInteger(v) && (v as number) > 0 ? null : "loc_limit must be a positive integer"),
+  },
+  budget_overrides: {
+    validate: (v) =>
+      isPlainObject(v) &&
+      Object.entries(v).every(
+        ([k, n]) => BUDGET_KEYS.includes(k) && typeof n === 'number' && Number.isFinite(n) && n > 0,
+      )
+        ? null
+        : `budget_overrides must map ${BUDGET_KEYS.join('/')} to positive numbers`,
+    serialize: (v) => JSON.stringify(v),
+  },
+  budget_stop_behavior: { validate: oneOf(['fail', 'pause', 'degrade'], 'budget_stop_behavior') },
+  model_failure_behavior: {
+    validate: (v) =>
+      isPlainObject(v) &&
+      Object.entries(v).every(
+        ([tier, list]) => MODEL_TIERS.includes(tier) && Array.isArray(list) && list.length > 0 &&
+          list.every((b) => typeof b === 'string' && FAILURE_BEHAVIORS.includes(b)),
+      )
+        ? null
+        : "model_failure_behavior must map tiers to lists of retry/degrade/pause/fail",
+    serialize: (v) => JSON.stringify(v),
+  },
+  model_tier_overrides: {
+    validate: (v) =>
+      isPlainObject(v) &&
+      Object.entries(v).every(
+        ([tier, list]) => MODEL_TIERS.includes(tier) && Array.isArray(list) && list.length > 0 &&
+          list.every((m) => typeof m === 'string' && m.length > 0),
+      )
+        ? null
+        : "model_tier_overrides must map tiers to non-empty model-name lists",
+    serialize: (v) => JSON.stringify(v),
+  },
+  auto_reanalyze_on_push: {
+    validate: (v) => (typeof v === 'boolean' ? null : "auto_reanalyze_on_push must be a boolean"),
+  },
+};
 
 export const projectsRouter = Router();
 
@@ -137,11 +222,17 @@ projectsRouter.post("/", async (req, res) => {
     }
 
     const role = default_developer_role ?? "general";
-    const installationId = Number(github_installation_id);
-    if (!installationId || Number.isNaN(installationId)) {
-      res.status(400).json({ error: "github_installation_id must be a valid installation ID" });
+    // Bug #8: same guard, same root cause as the /github routes. Load-bearing
+    // here because the INSERT below persists the *raw* string into a text
+    // column while the ownership check uses the parsed number — `Number()`
+    // accepting "0x2329" as 9001 would store an id the webhook's string
+    // comparison can never match again.
+    const parsedInstallationId = parseInstallationId(github_installation_id);
+    if (!parsedInstallationId.ok) {
+      res.status(400).json({ error: "github_installation_id must be a positive integer" });
       return;
     }
+    const installationId = parsedInstallationId.value;
 
     const allowedInstallation = await userCanAccessInstallation(userId, installationId);
     if (!allowedInstallation) {
@@ -300,133 +391,32 @@ projectsRouter.put("/:id/default-package", requireProjectAccess(), async (req, r
 projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const projectId = req.params.id;
-    const {
-      ignored_paths, privacy_mode, analysis_depth, default_developer_role, file_limit, loc_limit,
-      budget_overrides, budget_stop_behavior, model_failure_behavior, model_tier_overrides,
-      auto_reanalyze_on_push,
-    } = req.body as {
-        ignored_paths?: string[];
-        privacy_mode?: string;
-        analysis_depth?: string;
-        default_developer_role?: string;
-        file_limit?: number;
-        loc_limit?: number;
-        budget_overrides?: Record<string, unknown>;
-        budget_stop_behavior?: string;
-        model_failure_behavior?: Record<string, unknown>;
-        model_tier_overrides?: Record<string, unknown>;
-        auto_reanalyze_on_push?: boolean;
-      };
+    const body = (req.body ?? {}) as Record<string, unknown>;
 
-    if (
-      ignored_paths !== undefined &&
-      (!Array.isArray(ignored_paths) ||
-        ignored_paths.length > 200 ||
-        ignored_paths.some((p) => typeof p !== 'string' || p.length > 400))
-    ) {
-      res.status(400).json({ error: "invalid ignored_paths" });
-      return;
-    }
-
-    if (privacy_mode !== undefined && !['full_ai', 'facts_only_ai', 'ai_disabled'].includes(privacy_mode)) {
-      res.status(400).json({ error: "Invalid privacy_mode" });
-      return;
-    }
-    if (auto_reanalyze_on_push !== undefined && typeof auto_reanalyze_on_push !== 'boolean') {
-      res.status(400).json({ error: "auto_reanalyze_on_push must be a boolean" });
-      return;
-    }
-    if (analysis_depth !== undefined && !['cheap', 'standard', 'full'].includes(analysis_depth)) {
-      res.status(400).json({ error: "Invalid analysis_depth" });
-      return;
-    }
-    if (budget_stop_behavior !== undefined && !['fail', 'pause', 'degrade'].includes(budget_stop_behavior)) {
-      res.status(400).json({ error: "Invalid budget_stop_behavior" });
-      return;
-    }
-    const BUDGET_KEYS = ['max_files', 'max_symbols_to_llm', 'max_llm_calls', 'max_input_tokens', 'max_runtime_ms'];
-    if (budget_overrides !== undefined) {
-      const invalid = budget_overrides === null || typeof budget_overrides !== 'object' || Array.isArray(budget_overrides) ||
-        Object.entries(budget_overrides).some(
-          ([k, v]) => !BUDGET_KEYS.includes(k) || typeof v !== 'number' || !Number.isFinite(v) || v <= 0,
-        );
-      if (invalid) {
-        res.status(400).json({ error: `budget_overrides must map ${BUDGET_KEYS.join('/')} to positive numbers` });
-        return;
-      }
-    }
-    const TIERS = ['cheap', 'strong', 'embedding'];
-    if (model_failure_behavior !== undefined) {
-      const BEHAVIORS = ['retry', 'degrade', 'pause', 'fail'];
-      const invalid = model_failure_behavior === null || typeof model_failure_behavior !== 'object' || Array.isArray(model_failure_behavior) ||
-        Object.entries(model_failure_behavior).some(
-          ([tier, list]) => !TIERS.includes(tier) || !Array.isArray(list) || list.length === 0 ||
-            list.some((b) => typeof b !== 'string' || !BEHAVIORS.includes(b)),
-        );
-      if (invalid) {
-        res.status(400).json({ error: "model_failure_behavior must map tiers to lists of retry/degrade/pause/fail" });
-        return;
-      }
-    }
-    if (model_tier_overrides !== undefined) {
-      const invalid = model_tier_overrides === null || typeof model_tier_overrides !== 'object' || Array.isArray(model_tier_overrides) ||
-        Object.entries(model_tier_overrides).some(
-          ([tier, list]) => !TIERS.includes(tier) || !Array.isArray(list) || list.length === 0 ||
-            list.some((m) => typeof m !== 'string' || m.length === 0),
-        );
-      if (invalid) {
-        res.status(400).json({ error: "model_tier_overrides must map tiers to non-empty model-name lists" });
-        return;
-      }
-    }
-
+    // Bug #9: this used to be a run of hand-written `if (field !== undefined)`
+    // blocks — one to destructure, one to validate, one to append a SET clause
+    // — and the safety of the statement depended on every future field
+    // repeating all three correctly. WRITABLE_SETTINGS is now the single
+    // definition: the loop below walks THIS map, never the request body, so a
+    // key that is not listed here cannot reach the SQL under any input, and a
+    // new setting is one entry rather than three edits in three places.
     const setClauses: string[] = [];
     const values: unknown[] = [projectId];
-    let paramIndex = 2;
 
-    if (ignored_paths !== undefined) {
-      setClauses.push(`ignored_paths = $${paramIndex++}`);
-      values.push(ignored_paths);
-    }
-    if (privacy_mode !== undefined) {
-      setClauses.push(`privacy_mode = $${paramIndex++}`);
-      values.push(privacy_mode);
-    }
-    if (analysis_depth !== undefined) {
-      setClauses.push(`analysis_depth = $${paramIndex++}`);
-      values.push(analysis_depth);
-    }
-    if (default_developer_role !== undefined) {
-      setClauses.push(`default_developer_role = $${paramIndex++}`);
-      values.push(default_developer_role);
-    }
-    if (file_limit !== undefined) {
-      setClauses.push(`file_limit = $${paramIndex++}`);
-      values.push(file_limit);
-    }
-    if (loc_limit !== undefined) {
-      setClauses.push(`loc_limit = $${paramIndex++}`);
-      values.push(loc_limit);
-    }
-    if (budget_overrides !== undefined) {
-      setClauses.push(`budget_overrides = $${paramIndex++}`);
-      values.push(JSON.stringify(budget_overrides));
-    }
-    if (budget_stop_behavior !== undefined) {
-      setClauses.push(`budget_stop_behavior = $${paramIndex++}`);
-      values.push(budget_stop_behavior);
-    }
-    if (model_failure_behavior !== undefined) {
-      setClauses.push(`model_failure_behavior = $${paramIndex++}`);
-      values.push(JSON.stringify(model_failure_behavior));
-    }
-    if (model_tier_overrides !== undefined) {
-      setClauses.push(`model_tier_overrides = $${paramIndex++}`);
-      values.push(JSON.stringify(model_tier_overrides));
-    }
-    if (auto_reanalyze_on_push !== undefined) {
-      setClauses.push(`auto_reanalyze_on_push = $${paramIndex++}`);
-      values.push(auto_reanalyze_on_push);
+    for (const [field, spec] of Object.entries(WRITABLE_SETTINGS)) {
+      const value = body[field];
+      if (value === undefined) continue;
+
+      const problem = spec.validate(value);
+      if (problem) {
+        res.status(400).json({ error: problem });
+        return;
+      }
+
+      // `field` is a key of the literal map above, so it is a compile-time
+      // constant string — the only interpolation in the statement.
+      setClauses.push(`${field} = $${values.length + 1}`);
+      values.push(spec.serialize ? spec.serialize(value) : value);
     }
 
     if (setClauses.length === 0) {
@@ -677,6 +667,11 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
               aj.snapshot_id, aj.role, aj.branch AS requested_branch, aj.commit_hash AS requested_commit,
               aj.semantic_depth AS requested_depth, aj.created_at, aj.started_at, aj.finished_at,
               aj.attempt, aj.step_log, aj.checkpoint->>'sectionType' AS section_type,
+              -- Bug #36: a single-tutorial regeneration rides the same
+              -- 'regenerate_section' job type (the enum is CHECK-constrained
+              -- and M5 freezes the schema), so the history row is told apart
+              -- by which checkpoint key is present.
+              aj.checkpoint->>'tutorialTitle' AS tutorial_title,
               CASE WHEN aj.finished_at IS NOT NULL AND aj.started_at IS NOT NULL
                    THEN (EXTRACT(EPOCH FROM (aj.finished_at - aj.started_at)) * 1000)::bigint
                    ELSE NULL END AS duration_ms,
@@ -734,6 +729,7 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
       error_message: r.error_message,
       snapshot_id: r.snapshot_id,
       section_type: r.section_type ?? null,
+      tutorial_title: r.tutorial_title ?? null,
       config: {
         branch: (r.snapshot_branch as string | null) ?? (r.requested_branch as string | null),
         commit: (r.snapshot_commit as string | null) ?? (r.requested_commit as string | null),
@@ -904,42 +900,50 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("ow
       [jobId],
     );
 
-    if (row.job_type === "generate_package") {
-      if (!row.snapshot_id) {
-        res.status(409).json({ error: "This generation has no snapshot to resume against" });
-        return;
+    // Bug #69(1): the row was just moved back to 'queued'. If the submission
+    // below throws, it stays there forever and the tuple guard above rejects
+    // every further attempt — so a failed submission fails the row instead.
+    try {
+      if (row.job_type === "generate_package") {
+        if (!row.snapshot_id) {
+          res.status(409).json({ error: "This generation has no snapshot to resume against" });
+          return;
+        }
+        await getSummaryQueue().add(`generate_summary_${row.role ?? "general"}`, {
+          jobId,
+          snapshotId: row.snapshot_id,
+          projectId,
+          triggeredBy: req.user!.id,
+          role: row.role ?? undefined,
+          branch: row.branch ?? undefined,
+        } satisfies SummaryJobData, {
+          attempts: 2,
+          backoff: { type: "fixed", delay: 3000 },
+          removeOnComplete: { count: 10 },
+          removeOnFail: { count: 10 },
+        });
+      } else {
+        await query(`UPDATE projects SET status = 'analyzing' WHERE id = $1`, [projectId]);
+        await getAnalysisQueue().add("analyze_scope", {
+          jobId,
+          projectId,
+          scopeId: row.scope_id ?? undefined,
+          // Resume the exact commit that was being analyzed, not a moved branch head.
+          commit: row.snapshot_commit ?? row.commit_hash ?? undefined,
+          branch: row.branch ?? undefined,
+          depth: (row.semantic_depth ?? undefined) as AnalysisJobData["depth"],
+          role: row.role ?? undefined,
+          // A resume must actually finish the interrupted pipeline — never
+          // short-circuit onto the possibly half-semantic existing snapshot.
+          force: true,
+        } satisfies AnalysisJobData, {
+          attempts: 2,
+          backoff: { type: "fixed", delay: 5000 },
+        });
       }
-      await getSummaryQueue().add(`generate_summary_${row.role ?? "general"}`, {
-        jobId,
-        snapshotId: row.snapshot_id,
-        projectId,
-        triggeredBy: req.user!.id,
-        role: row.role ?? undefined,
-        branch: row.branch ?? undefined,
-      } satisfies SummaryJobData, {
-        attempts: 2,
-        backoff: { type: "fixed", delay: 3000 },
-        removeOnComplete: { count: 10 },
-        removeOnFail: { count: 10 },
-      });
-    } else {
-      await query(`UPDATE projects SET status = 'analyzing' WHERE id = $1`, [projectId]);
-      await getAnalysisQueue().add("analyze_scope", {
-        jobId,
-        projectId,
-        scopeId: row.scope_id ?? undefined,
-        // Resume the exact commit that was being analyzed, not a moved branch head.
-        commit: row.snapshot_commit ?? row.commit_hash ?? undefined,
-        branch: row.branch ?? undefined,
-        depth: (row.semantic_depth ?? undefined) as AnalysisJobData["depth"],
-        role: row.role ?? undefined,
-        // A resume must actually finish the interrupted pipeline — never
-        // short-circuit onto the possibly half-semantic existing snapshot.
-        force: true,
-      } satisfies AnalysisJobData, {
-        attempts: 2,
-        backoff: { type: "fixed", delay: 5000 },
-      });
+    } catch (enqueueErr) {
+      await failUnsubmittedJob(jobId, projectId, enqueueErr);
+      throw enqueueErr;
     }
 
     res.status(202).json({ job: { id: jobId, status: "queued" } });
@@ -1120,7 +1124,9 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
     );
     const dbJobId: string = jobResult.rows[0].id;
 
-    await getAnalysisQueue().add('preflight', {
+    // Bug #69(1): a submission that throws must not leave the row 'queued'
+    // forever — enqueuePreflightRun fails it with the reason.
+    await enqueuePreflightRun(dbJobId, {
       jobId: dbJobId,
       projectId,
       task: 'preflight',
@@ -1128,11 +1134,7 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
       branch,
       commit,
       depth: depth as AnalysisJobData['depth'],
-    } satisfies AnalysisJobData, {
-      jobId: dbJobId,
-      attempts: 2,
-      backoff: { type: 'fixed', delay: 5000 },
-    });
+    } satisfies AnalysisJobData);
 
     res.status(202).json({ preflight: { id: dbJobId, status: jobResult.rows[0].status } });
   } catch (err) {

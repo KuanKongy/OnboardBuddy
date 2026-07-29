@@ -215,7 +215,7 @@ say();
 // 6. transport layer
 say('## 6. Transport layer (measured separately, in a browser)');
 say();
-say('The CSP shipped in `frontend/security-headers.conf` was verified against the');
+say('The CSP shipped in `frontend/security-headers.conf.template` was verified against the');
 say('real production bundle served through the real nginx config. Results:');
 say();
 say('| Probe | Result |');

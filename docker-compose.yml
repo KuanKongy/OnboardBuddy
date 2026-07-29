@@ -24,6 +24,11 @@ services:
       dockerfile: backend/Dockerfile.worker
     env_file:
       - backend/.env
+    # Graceful shutdown needs room: on SIGTERM the worker stops taking new jobs
+    # and finishes what it holds (WORKER_SHUTDOWN_GRACE_MS, default 25s). At
+    # Docker's 10s default the container was SIGKILLed mid-drain, which is the
+    # orphaning this is meant to prevent. Must stay > the app-level grace.
+    stop_grace_period: 30s
     environment:
       # Per-replica knobs (see doc/DEVOPS.md "Scaling workers"). These override
       # backend/.env — a compose `environment:` entry always wins over
@@ -47,6 +52,17 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    # Same frontend/.env the setup instructions already ask for — but read at
+    # CONTAINER START now, not baked into the image by Vite at build time
+    # (issue #73, doc/DEVOPS.md "Runtime configuration"). The startup script
+    # turns VITE_API_URL / VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY into
+    # /config.js and into the CSP's connect-src. Two consequences worth
+    # knowing: editing frontend/.env now takes effect on `docker compose up -d
+    # frontend` with no --build, and the same image can serve a Railway
+    # deployment. Nothing else in this file is published to the browser — the
+    # script reads exactly those three names.
+    env_file:
+      - frontend/.env
     ports:
       - "5173:80"
     depends_on:

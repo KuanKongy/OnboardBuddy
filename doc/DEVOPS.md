@@ -264,6 +264,40 @@ Upstash Redis cost:
 | `SUMMARY_CONCURRENCY` | `4` | Max parallel **package generations** per worker process (same process — `worker/index.ts` imports `summaryWorker.js`) |
 | `LLM_MAX_CONCURRENCY` | `12` | Parallel AI calls per run (per `AiClient` semaphore — **per job, not global**) |
 | `SECTION_CONCURRENCY` | `12` | Package sections generated in parallel within one generation job |
+| `WORKER_SHUTDOWN_GRACE_MS` | `25000` | On SIGTERM: stop taking new jobs, finish the current ones, then exit. Must stay **under** the orchestrator's stop grace (`docker-compose.yml` sets `stop_grace_period: 30s`) or the drain is SIGKILLed mid-way |
+| `JOB_RECOVERY_MAX_ATTEMPTS` | `2` | Times one job row may be automatically re-queued after a worker restart before it is failed for good |
+
+#### Restart resilience (why a deploy no longer kills in-flight runs)
+
+Any container recreate used to orphan every running analysis: the reconciler
+marked them `failed` and a human had to notice and press Analyze… again. Two
+mechanisms now cover it, in `backend/src/worker/jobRecovery.ts` and
+`backend/src/worker/shutdown.ts`:
+
+1. **Recovery sweep** — on boot and every 120s in *every* replica, a job stuck
+   `running` with a heartbeat older than 3 minutes is claimed by one atomic
+   `UPDATE` and put back on its queue **on the same `analysis_jobs` row**, so
+   phase checkpoints, the budget baseline and the content-addressed record
+   cache all still apply. Analysis re-queues carry `force: true` for the same
+   reason `POST /resume` does — otherwise the snapshot-reuse short-circuit sees
+   the optimistic `complete` written at 46% and skips the six phases after it.
+2. **Bounded, durable attempts** — a dead heartbeat cannot tell "SIGKILLed by a
+   deploy" from "crashes on this repository", so recovery is capped. The count
+   lives in `analysis_jobs.checkpoint->'recovery'->>'attempts'` (existing jsonb
+   column, no schema change) and is incremented by the claim itself, before the
+   job goes back on the queue. BullMQ's `attemptsMade` resets on re-enqueue and
+   cannot bound this. `preflight` and `regenerate_section` are never
+   auto-recovered — the same two types `POST /resume` refuses.
+3. **Graceful shutdown** — SIGTERM closes both workers so they stop fetching and
+   finish what they hold. If the grace period expires the runs are abandoned
+   (a cold analysis takes minutes; no orchestrator waits that long), their rows
+   are explicitly aged into the recovery window, and the process exits `1` so
+   the platform log shows the drain did not complete. The replacement container
+   re-queues them on its boot sweep.
+
+`backend/Dockerfile.worker` runs `node` **directly** rather than through
+`npm run`: as PID 1, npm's signal forwarding is unreliable and the kernel drops
+default-action signals to PID 1 entirely, so SIGTERM never reached the handler.
 
 **Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
 to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
@@ -625,8 +659,11 @@ differences:
   has no file mounts, so the path variable can't work; the variable editor
   accepts multi-line values — paste the PEM as is). Leave
   `GITHUB_APP_PRIVATE_KEY_PATH` unset.
-- `CORS_ORIGIN` = `https://<frontend-domain>.up.railway.app` (without it the
-  API only accepts requests from `http://localhost:5173`).
+- `CORS_ORIGIN` = `https://<frontend-domain>.up.railway.app`. **Required** —
+  with `NODE_ENV=production` the API refuses to start without it rather than
+  falling back to `http://localhost:5173`, which would block the deployed
+  frontend while letting any local page call production (bug #15). Accepts a
+  comma-separated list if the deployment serves more than one origin.
 - `FRONTEND_URL` = the same frontend origin (GitHub App OAuth/setup redirects
   land there).
 - `GITHUB_WEBHOOK_SECRET` = see the webhook section above.
@@ -636,14 +673,19 @@ differences:
 `FRONTEND_URL`, and `GITHUB_WEBHOOK_SECRET` (it serves no HTTP). It DOES need
 `GITHUB_APP_PRIVATE_KEY` (it downloads repo zipballs).
 
-**`frontend`** — Vite bakes env vars into the static bundle **at build
-time**; Railway exposes service variables during the image build, so set:
+**`frontend`** — read at **container start**, not baked into the image (see
+"Runtime configuration" below). Set exactly these three, and nothing else:
 
 - `VITE_API_URL` = `https://<api-domain>.up.railway.app/api`
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` = same values as local.
 
-Changing any `VITE_*` variable requires a redeploy (rebuild) to take effect —
-they are not read at runtime.
+Changing any of them takes effect on a **restart** — no rebuild. Nothing else
+you put in this service's variables reaches the browser; the startup script
+publishes those three names only.
+
+> The API domain must exist before the frontend can be pointed at it, but not
+> before it can be *built*. Deploy `api`, generate its domain, then set
+> `VITE_API_URL` on `frontend` and restart it.
 
 ### 3. Point the external services at the deployment
 
@@ -657,10 +699,79 @@ they are not read at runtime.
 ### 4. Smoke test
 
 1. `https://<api-domain>.up.railway.app/api/health` → 200.
-2. Open the frontend domain → sign in → import a repo → run an analysis
+2. `https://<frontend-domain>.up.railway.app/config.js` → shows the three
+   values the container booted with. This is the fastest way to tell a
+   configuration problem from an application problem.
+3. Open the frontend domain → sign in → import a repo → run an analysis
    (exercises Supabase, GitHub App, Upstash, and the worker in one pass).
-3. Browser devtools → Network: API calls must go to the Railway API domain
-   (if they hit localhost, `VITE_API_URL` wasn't set at build time).
+4. Browser devtools → Network: API calls must go to the Railway API domain. If
+   the page instead shows "OnboardBuddy is not configured", the named variable
+   is missing or malformed on the frontend service — check the deploy logs for
+   the `[onboardbuddy-config]` lines, fix the variable, restart.
+
+---
+
+## Runtime configuration (how the frontend learns its API origin)
+
+Vite inlines `import.meta.env.VITE_*` into the JavaScript **at build time**, and
+the production image is nginx serving that static bundle. Until M5 that meant
+one image could only ever talk to one API origin — `localhost:3000` — which made
+a hosted deploy impossible, because Railway's `*.up.railway.app` API hostname
+only exists *after* the image does (issue #73). It is also why the CSP had to
+name localhost explicitly.
+
+Configuration is now read when the container starts:
+
+| Piece | Where |
+|---|---|
+| Startup script | `frontend/docker-entrypoint.d/10-onboardbuddy-runtime-config.sh` |
+| What it writes | `/usr/share/nginx/html/config.js` and `/etc/nginx/security-headers.conf` |
+| CSP template | `frontend/security-headers.conf.template` |
+| What the app reads | `frontend/src/lib/runtimeConfig.ts` |
+
+The nginx image runs every executable `/docker-entrypoint.d/*.sh` before nginx
+starts. The script reads `VITE_API_URL`, `VITE_SUPABASE_URL` and
+`VITE_SUPABASE_ANON_KEY` from the environment and emits:
+
+```js
+window.__ONBOARDBUDDY_CONFIG__ = { apiUrl: "…", supabaseUrl: "…", supabaseAnonKey: "…" };
+```
+
+`index.html` loads that as a plain synchronous same-origin script *before* the
+app module, so the values are present on the app's first line — no boot fetch,
+no round trip to the API, no 404 to handle. nginx serves it `no-store`, so a
+copy can never outlive the deployment that produced it.
+
+Things worth knowing:
+
+- **Only those three names are ever published.** The script uses an explicit
+  allow-list, not an `env | grep ^VITE_` scan, so a secret that lands in the
+  frontend service's variables cannot end up in a world-readable file. All three
+  values are public by design anyway — the anon key is the RLS-gated publishable
+  key and ships in every browser session.
+- **`connect-src` is derived from the same values.** `'self'` + the API origin
+  (dropped when `VITE_API_URL` is a same-origin path) + the Supabase origin and
+  its `wss:` counterpart. That removed the hardcoded `http://localhost:3000` and
+  *tightened* the policy: it now names one Supabase project instead of
+  `https://*.supabase.co`.
+- **Values are validated, and a bad one is not fatal.** Anything that isn't a
+  plausible URL or key is logged (without echoing the value) and dropped. The
+  app then renders a page naming the missing variable and where to set it,
+  instead of a blank screen or a crash-looping container.
+- **The image carries no baked origin.** `frontend/Dockerfile` deletes
+  `frontend/.env` before `vite build`, so there is nothing to silently fall back
+  to. You can verify: `docker run --rm --entrypoint sh <image> -c
+  "grep -rl 'localhost:3000' /usr/share/nginx/html || echo clean"`.
+- **Local `npm run dev` is unchanged.** With no `/config.js` global present the
+  app falls back to `import.meta.env.VITE_*` from `frontend/.env`, exactly as
+  before. The committed `frontend/public/config.js` is an empty placeholder that
+  exists only so the dev server has a file to serve.
+
+Local Docker Compose works the same way, from the same file the setup
+instructions already ask for: `docker-compose.yml` passes `frontend/.env` to the
+frontend service as `env_file`. Reviewer instructions are unchanged. One small
+bonus — editing `frontend/.env` now takes effect with `docker compose up -d
+frontend`, with no `--build`.
 
 ---
 

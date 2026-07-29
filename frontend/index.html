@@ -6,6 +6,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>OnboardBuddy</title>
     <!--
+      Deployment configuration (API origin, Supabase project + anon key). In a
+      container this file is regenerated from the environment at startup, which
+      is what lets one image serve any API origin (issue #73); locally it is the
+      empty placeholder from public/ and the app reads frontend/.env instead.
+
+      Classic, synchronous, same-origin script element: it executes before the
+      deferred module below, so the values are there on the app's first line —
+      no boot fetch, no round trip, and nothing to inline (the CSP stays
+      `script-src 'self'`). See frontend/src/lib/runtimeConfig.ts.
+    -->
+    <script src="/config.js"></script>
+    <!--
       Theme/font-size bootstrap. External and synchronous: it must run before
       first paint, and keeping it out of the HTML is what lets the CSP be
       `script-src 'self'` with no 'unsafe-inline' and no hash to maintain

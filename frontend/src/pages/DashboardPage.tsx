@@ -8,9 +8,10 @@ import {
   Mail,
   Package,
   Plus,
+  RefreshCw,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { PageHeader } from "@/components/PageHeader";
@@ -152,21 +153,37 @@ export function DashboardPage() {
   // Real event feed (every run + package across projects), kept fresh while
   // the dashboard is open so in-progress runs tick over to completed.
   const [activity, setActivity] = useState<ActivityItem[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    const load = () =>
+  // Bug #68: a rejected fetch left `activity` at `[]` and the feed said "No
+  // activity yet — it appears once your first repository is imported and
+  // analyzed", telling an established user their whole history was empty.
+  // The empty copy now requires a load that actually succeeded
+  // (`activityLoaded`); a failed refresh of an already-populated feed leaves
+  // what is on screen alone rather than replacing it with a banner.
+  const [activityError, setActivityError] = useState(false);
+  const [activityLoaded, setActivityLoaded] = useState(false);
+  const loadActivity = useCallback(
+    (signal?: { cancelled: boolean }) =>
       apiFetch("/projects/activity")
         .then((data: { activity: ActivityItem[] }) => {
-          if (!cancelled) setActivity(data.activity);
+          if (signal?.cancelled) return;
+          setActivity(data.activity);
+          setActivityError(false);
+          setActivityLoaded(true);
         })
-        .catch(() => {});
-    load();
-    const timer = window.setInterval(load, 30_000);
+        .catch(() => {
+          if (!signal?.cancelled) setActivityError(true);
+        }),
+    [],
+  );
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void loadActivity(signal);
+    const timer = window.setInterval(() => void loadActivity(signal), 30_000);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [loadActivity]);
 
   // First-run tour: auto-start once the dashboard has finished its initial
   // load (never spotlight loading skeletons) and THIS account hasn't seen it.
@@ -331,10 +348,31 @@ export function DashboardPage() {
               <h2 className="mb-2 text-sm font-semibold text-foreground">Recent activity</h2>
               <Card>
                 <CardContent className="p-2">
-                  {activity.length === 0 && (
+                  {activity.length === 0 && activityError && (
+                    <div className="px-2 py-8 text-center" role="alert">
+                      <AlertTriangle className="mx-auto mb-2 h-4 w-4 text-danger" />
+                      <p className="text-xs text-muted-foreground">
+                        Couldn't load recent activity. This is a failed request, not an empty history.
+                      </p>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="mt-2 gap-1.5"
+                        onClick={() => void loadActivity()}
+                      >
+                        <RefreshCw className="h-3 w-3" /> Retry
+                      </Button>
+                    </div>
+                  )}
+                  {activity.length === 0 && !activityError && activityLoaded && (
                     <p className="px-2 py-8 text-center text-xs text-muted-foreground">
                       No activity yet — it appears once your first repository is imported and analyzed.
                     </p>
+                  )}
+                  {activity.length === 0 && !activityError && !activityLoaded && (
+                    <div className="flex justify-center px-2 py-8" role="status" aria-label="Loading recent activity">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
                   )}
                   <ul className="max-h-[26rem] divide-y divide-border overflow-y-auto">
                     {activity.map((item) => {

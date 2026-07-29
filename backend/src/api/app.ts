@@ -4,6 +4,46 @@ import type { Request, Response, NextFunction } from "express";
 import { apiRouter } from "./routes/index.js";
 import { githubWebhookRouter } from "./routes/githubWebhook.js";
 
+const DEV_ORIGIN = "http://localhost:5173";
+
+/**
+ * Which origins the browser may call this API from (bug #15).
+ *
+ * The old expression was `process.env.CORS_ORIGIN ?? "http://localhost:5173"`,
+ * which is the wrong shape for a deployed service in both directions: a
+ * missing variable silently allowed a localhost page to talk to production
+ * while blocking the real frontend, and the failure showed up as a CORS error
+ * in someone's browser console rather than as a deployment problem. Now the
+ * variable is *required* in production — the process refuses to start with a
+ * message naming what to set — and only a development run falls back, out
+ * loud.
+ *
+ * Comma-separated values are accepted so a deployment can serve its platform
+ * domain and a custom domain at once without a second variable.
+ */
+export function resolveCorsOrigins(env: NodeJS.ProcessEnv = process.env): string[] {
+  const origins = (env.CORS_ORIGIN ?? "")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+
+  if (origins.length > 0) return origins;
+
+  if (env.NODE_ENV === "production") {
+    throw new Error(
+      "CORS_ORIGIN is required in production: set it to the frontend origin " +
+        '(e.g. CORS_ORIGIN="https://onboardbuddy.example.com", or a comma-separated list). ' +
+        "Refusing to start with a localhost default, which would block the real frontend " +
+        "and allow a local page to call this API.",
+    );
+  }
+
+  if (env.NODE_ENV !== "test") {
+    console.warn(`[app] CORS_ORIGIN is not set — allowing ${DEV_ORIGIN} only (development default).`);
+  }
+  return [DEV_ORIGIN];
+}
+
 export function createApp() {
   const app = express();
 
@@ -12,7 +52,7 @@ export function createApp() {
   // `credentials: true` was dead weight a cross-site page cannot exploit.
   app.use(
     cors({
-      origin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
+      origin: resolveCorsOrigins(),
     }),
   );
   // GitHub webhook needs the RAW request bytes for HMAC signature

@@ -46,7 +46,8 @@ export interface AskInput {
   snapshotId?: string;
   /** Test seams. */
   provider?: AiProvider;
-  embedQuery?: (text: string) => Promise<number[]>;
+  /** Second arg is the snapshot's detected embedding model (retrievalService). */
+  embedQuery?: (text: string, model: string) => Promise<number[]>;
 }
 
 export interface AskAnswer {

@@ -8,11 +8,11 @@ import 'dotenv/config';
 
 dns.setDefaultResultOrder('ipv4first');
 
-import { Worker, Job, Queue } from 'bullmq';
+import { Worker, Job } from 'bullmq';
 import { startQueueWatchdog } from '../lib/queueWatchdog.js';
-import { ANALYSIS_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
+import { ANALYSIS_QUEUE, connection, getAnalysisQueue, getSummaryQueue } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
-import './summaryWorker.js';
+import { getSummaryWorker, stopSummaryWatchdog } from './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken, getRepo } from '../lib/github.js';
 import { assertZipEntriesStayInside } from './zipSafety.js';
 import { runAnalysis } from './engine/analysisRunner.js';
@@ -53,6 +53,15 @@ import { withStatementTimeoutRetry } from '../lib/pgRetry.js';
 import { envInt } from '../lib/env.js';
 import { recomputeProjectStatus } from '../lib/projectStatus.js';
 import { markSnapshotFailed } from './runStatus.js';
+import {
+  MAX_RECOVERY_ATTEMPTS,
+  markInFlightJobsAbandoned,
+  reconcileOrphanedJobs,
+  trackInFlightJob,
+  type OrphanedJob,
+} from './jobRecovery.js';
+import { drainWorkers } from './shutdown.js';
+import { recordJobFailure } from './retryPolicy.js';
 
 const execFileAsync = promisify(execFile);
 // The worker image (Dockerfile.worker, alpine) ships BusyBox `unzip` on PATH —
@@ -206,10 +215,11 @@ async function processPreflightJob(job: Job<AnalysisJobData>): Promise<void> {
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await query(
-      `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW() WHERE id = $2`,
-      [message, jobId],
-    );
+    // Bug #69(2): same rule as the analysis job — a preflight that can still be
+    // redelivered goes back to 'queued', so the client's preview poll keeps
+    // waiting instead of being told the preview failed while a retry is
+    // pending. `usePreflight` polls on job status, so this is what it reads.
+    await recordJobFailure(job, jobId, err, message);
     throw err;
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -239,19 +249,37 @@ async function enqueueSummaryGeneration(opts: {
      opts.branch ?? null, opts.commitHash ?? null, opts.scopeId ?? null],
   );
   const summaryJobId = (result.rows[0] as { id: string }).id;
-  await getSummaryQueue().add('generate_summary', {
-    jobId: summaryJobId,
-    snapshotId: opts.snapshotId,
-    projectId: opts.projectId,
-    triggeredBy: opts.requestedBy,
-    role: opts.role ?? undefined,
-    branch: opts.branch ?? undefined,
-  } satisfies SummaryJobData, {
-    attempts: 2,
-    backoff: { type: 'fixed', delay: 3000 },
-    removeOnComplete: { count: 10 },
-    removeOnFail: { count: 10 },
-  });
+  try {
+    await getSummaryQueue().add('generate_summary', {
+      jobId: summaryJobId,
+      snapshotId: opts.snapshotId,
+      projectId: opts.projectId,
+      triggeredBy: opts.requestedBy,
+      role: opts.role ?? undefined,
+      branch: opts.branch ?? undefined,
+    } satisfies SummaryJobData, {
+      attempts: 2,
+      backoff: { type: 'fixed', delay: 3000 },
+      removeOnComplete: { count: 10 },
+      removeOnFail: { count: 10 },
+    });
+  } catch (err) {
+    // Bug #69(1), third site. The row above is committed before the submission,
+    // so an unreachable queue leaves a 'queued' generate_package that no worker
+    // will ever see — the overview polls "waiting for worker" forever and
+    // `recomputeProjectStatus` keeps the project on 'analyzing' because of it.
+    // Failing the row here is what turns that into a visible, retryable state
+    // (the Resume button re-queues this exact row).
+    const reason = err instanceof Error ? err.message : String(err);
+    await query(
+      `UPDATE analysis_jobs
+       SET status = 'failed', current_step = 'Failed', finished_at = NOW(),
+           error_message = $2
+       WHERE id = $1 AND status = 'queued'`,
+      [summaryJobId, `Could not submit package generation to the job queue (${reason.slice(0, 160)}). Use Resume, or Generate again.`],
+    ).catch(() => {});
+    throw err;
+  }
   return summaryJobId;
 }
 
@@ -283,7 +311,11 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
 
   // 1. Look up project + settings + scope. Branch and depth are per-run
   //    choices (job.data) falling back to project defaults.
-  await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
+  // GREATEST, not assignment: a run recovered after a worker restart is a
+  // NEW BullMQ job whose attemptsMade is back at 0, and the displayed attempt
+  // count (frontend `AnalysisJob.attempt`) must not walk backwards to 1 on
+  // what is really the third try.
+  await query(`UPDATE analysis_jobs SET attempt = GREATEST(attempt, $2) WHERE id = $1`, [jobId, job.attemptsMade + 1]);
   await updateStep('Loading project', 5);
   const project = await loadProject(projectId);
   const { user_id, branch, ignored_paths, file_limit, analysis_depth, privacy_mode } = {
@@ -384,10 +416,17 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         // Webhook runs set autoGenerate=false: an already-analyzed commit
         // (e.g. a redelivered push) must not silently pay for a package.
         if (job.data.autoGenerate !== false) {
+          // Contained: this analysis job is already 'complete' and that is
+          // true. A failed generation submission fails its OWN row (see
+          // enqueueSummaryGeneration) and must not drag a finished analysis
+          // — or its snapshot — back to 'failed'.
           await enqueueSummaryGeneration({
             projectId, snapshotId: existing.id, requestedBy: requester,
             role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
-          });
+          }).catch((err) => console.error(
+            `[worker] could not queue package generation for ${projectId}:`,
+            err instanceof Error ? err.message : err,
+          ));
         }
         await recomputeProjectStatus(projectId);
         return;
@@ -877,10 +916,16 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     // paying for a full package rebuild. ai_disabled projects get a
     // deterministic (LLM-free) package — the summary worker picks the path.
     if (!isIncremental) {
+      // Same containment as the reuse path above: the analysis is genuinely
+      // complete by this point, so a queue failure here is the generation's
+      // failure, not this run's.
       await enqueueSummaryGeneration({
         projectId, snapshotId, requestedBy: requester,
         role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
-      });
+      }).catch((err) => console.error(
+        `[worker] could not queue package generation for ${projectId}:`,
+        err instanceof Error ? err.message : err,
+      ));
     }
     // After the enqueue: a queued generation keeps the project 'analyzing'.
     await recomputeProjectStatus(projectId);
@@ -892,12 +937,10 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       return;
     }
     const message = err instanceof Error ? err.message : String(err);
-    await query(
-      `UPDATE analysis_jobs SET status = 'failed', current_step = 'Failed', error_message = $1, finished_at = NOW(),
-           step_log = step_log || $3::jsonb
-       WHERE id = $2`,
-      [message, jobId, JSON.stringify([{ step: `Failed: ${message.slice(0, 100)}`, pct: 0, ts: new Date().toISOString() }])],
-    );
+    // Bug #69(2): 'failed' only on the last attempt. On an earlier one the row
+    // goes back to 'queued' so the redelivery can actually run — writing
+    // 'failed' here is what made the configured retry a no-op.
+    await recordJobFailure(job, jobId, err, message);
     // Bug #75: make the snapshot status truthful. A run that did not reach
     // phase 13 leaves 'failed' behind, never the 'complete' the persistence
     // step wrote at 46%. Scoped to the snapshot THIS run persisted — the
@@ -919,10 +962,17 @@ function createAnalysisWorker(): Worker<AnalysisJobData> {
   const w = new Worker<AnalysisJobData>(
     ANALYSIS_QUEUE,
     async (job: Job<AnalysisJobData>) => {
-      if (job.data.task === 'preflight') {
-        await processPreflightJob(job);
-      } else {
-        await processAnalysisJob(job);
+      // Registered for the shutdown handoff: if the drain grace period
+      // expires we know exactly which DB rows we abandoned (jobRecovery.ts).
+      const release = trackInFlightJob(job.data.jobId);
+      try {
+        if (job.data.task === 'preflight') {
+          await processPreflightJob(job);
+        } else {
+          await processAnalysisJob(job);
+        }
+      } finally {
+        release();
       }
     },
     {
@@ -973,12 +1023,16 @@ process.on('uncaughtException', (err) => {
 // Dead-consumer self-heal: two consecutive waiting-with-no-active samples
 // mean this consumer is deaf (the post-restart quirk) — close and recreate
 // it in-process instead of waiting for a human `docker restart`.
-const analysisQueueForWatchdog = new Queue(ANALYSIS_QUEUE, { connection });
-startQueueWatchdog({
+//
+// One Queue handle serves both the sampling here and the recovery re-enqueue
+// below: every BullMQ Queue opens its own Redis connection, and Upstash bills
+// per command.
+const analysisQueue = getAnalysisQueue();
+const stopAnalysisWatchdog = startQueueWatchdog({
   queueName: ANALYSIS_QUEUE,
   sample: async () => ({
-    waiting: await analysisQueueForWatchdog.getWaitingCount(),
-    active: await analysisQueueForWatchdog.getActiveCount(),
+    waiting: await analysisQueue.getWaitingCount(),
+    active: await analysisQueue.getActiveCount(),
   }),
   recreate: async () => {
     await worker.close().catch(() => {});
@@ -986,51 +1040,122 @@ startQueueWatchdog({
   },
 });
 
-/** Job types that own their snapshot's status (generation jobs never do). */
-const ANALYSIS_JOB_TYPES = new Set(['analyze_scope', 'incremental_update']);
+// ─── Orphan recovery ─────────────────────────────────────────────────────────
+// A DB job stuck 'running' whose worker died (deploy, crash, lost Redis
+// connection) used to be marked 'failed' and left for a human to notice and
+// press Analyze… again. It is now RE-QUEUED on the same row, bounded by a
+// durable attempt counter so a poison job cannot loop. Policy, SQL and the
+// reasoning live in jobRecovery.ts; this file only supplies the enqueues.
+//
+// Runs on boot AND every 120s in every replica: a run orphaned mid-milestone
+// is picked up by a live sibling within one sweep, not at the next boot.
 
-/**
- * Orphan reconciliation: a DB job stuck 'running' whose worker died (restart,
- * crash, lost Redis connection) would show a progress bar over nothing,
- * forever. Heartbeats stamp every ~15s, so 3 minutes of silence means the
- * run is dead — mark it honestly and free the project for a retry.
- */
-async function reconcileOrphanedJobs(): Promise<void> {
-  try {
-    const orphans = (await query(
-      `UPDATE analysis_jobs
-       SET status = 'failed', finished_at = NOW(),
-           error_message = 'Worker lost this run (restart or crash). Completed phases are checkpointed — run Analyze… again to resume from cache.'
-       WHERE status = 'running'
-         AND COALESCE(last_heartbeat_at, started_at, created_at) < NOW() - INTERVAL '3 minutes'
-       RETURNING id, project_id, snapshot_id, job_type`,
-    )).rows as Array<{ id: string; project_id: string; snapshot_id: string | null; job_type: string }>;
-    for (const row of orphans) {
-      // Bug #75, crash variant: an ANALYSIS that died mid-pipeline leaves the
-      // snapshot on the optimistic 'complete' the persistence step wrote at
-      // 46%, so the reconciler has to correct that too — 'running'/'pending'
-      // alone never matched the real case. Restricted to analysis job types on
-      // purpose: an orphaned generate_package job points at a snapshot whose
-      // analysis genuinely finished, and failing it would be the same lie in
-      // the other direction. 'paused' is left alone (resumable, not dead).
-      if (row.snapshot_id && ANALYSIS_JOB_TYPES.has(row.job_type)) {
-        await query(
-          `UPDATE analysis_snapshots SET status = 'failed'
-           WHERE id = $1 AND status IN ('running', 'pending', 'complete')`,
-          [row.snapshot_id],
-        ).catch(() => {});
-      }
-      await recomputeProjectStatus(row.project_id).catch(() => {});
-      console.warn(`[worker] reconciled orphaned job ${row.id} (no heartbeat for 3+ minutes)`);
-    }
-  } catch (err) {
-    console.error('[worker] orphan reconciliation failed:', err instanceof Error ? err.message : err);
+/** Re-queue options: no BullMQ-level retries on top of the recovery bound. */
+const RECOVERY_ENQUEUE_OPTS = {
+  attempts: 1,
+  removeOnComplete: { count: 10 },
+  removeOnFail: { count: 10 },
+} as const;
+
+const recoveryDeps = {
+  requeueAnalysis: async (job: OrphanedJob) => {
+    await analysisQueue.add('analyze_scope', {
+      jobId: job.id,
+      projectId: job.project_id,
+      scopeId: job.scope_id ?? undefined,
+      // The exact commit that was being analyzed, not a moved branch head
+      // (stamped on the row at step 2b as soon as the zipball resolves).
+      commit: job.commit_hash ?? undefined,
+      branch: job.branch ?? undefined,
+      depth: (job.semantic_depth ?? undefined) as AnalysisJobData['depth'],
+      role: job.role ?? undefined,
+      // Same rule as POST /resume: a recovery must FINISH the interrupted
+      // pipeline. Without force, the snapshot-reuse short-circuit would see
+      // the optimistic 'complete' written at 46% and declare the run done
+      // with six phases never executed.
+      force: true,
+    } satisfies AnalysisJobData, RECOVERY_ENQUEUE_OPTS);
+  },
+  requeueGeneration: async (job: OrphanedJob) => {
+    if (!job.snapshot_id) throw new Error('generation job has no snapshot to resume against');
+    await getSummaryQueue().add('generate_summary', {
+      jobId: job.id,
+      snapshotId: job.snapshot_id,
+      projectId: job.project_id,
+      triggeredBy: job.requested_by,
+      role: job.role ?? undefined,
+      branch: job.branch ?? undefined,
+    } satisfies SummaryJobData, RECOVERY_ENQUEUE_OPTS);
+  },
+};
+
+void reconcileOrphanedJobs(recoveryDeps);
+const reconcileTimer = setInterval(() => void reconcileOrphanedJobs(recoveryDeps), 120_000);
+
+// ─── Graceful shutdown ───────────────────────────────────────────────────────
+// A planned deploy should DRAIN, not orphan. On SIGTERM the workers stop
+// fetching new jobs and finish what they hold, bounded by
+// WORKER_SHUTDOWN_GRACE_MS (default 25s — must fit inside the orchestrator's
+// own stop grace, see docker-compose.yml `stop_grace_period`).
+//
+// When the grace period expires the run is genuinely abandoned (a cold
+// analysis takes minutes; nothing waits that long). We then hand the still
+// in-flight rows to the recovery sweep explicitly, so the replacement
+// container re-queues them on its boot sweep instead of after three minutes
+// of heartbeat silence, and exit non-zero so the platform log says the drain
+// did not complete.
+const SHUTDOWN_GRACE_MS = envInt('WORKER_SHUTDOWN_GRACE_MS', 25_000);
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) {
+    console.warn(`[worker] ${signal} again during shutdown — exiting now`);
+    process.exit(1);
   }
+  shuttingDown = true;
+  console.log(`[worker] ${signal} received — draining (grace ${SHUTDOWN_GRACE_MS}ms, `
+    + `recovery cap ${MAX_RECOVERY_ATTEMPTS} attempts)`);
+  // Stop the periodic sweeps first: a reconcile racing our own shutdown could
+  // claim rows this process is about to abandon anyway.
+  clearInterval(reconcileTimer);
+  stopAnalysisWatchdog();
+  stopSummaryWatchdog();
+
+  const { drained } = await drainWorkers({
+    workers: [worker, getSummaryWorker()],
+    graceMs: SHUTDOWN_GRACE_MS,
+  });
+
+  if (drained) {
+    console.log('[worker] all in-flight jobs finished — clean shutdown');
+    await Promise.race([pool.end().catch(() => {}), new Promise((r) => setTimeout(r, 3_000))]);
+    process.exit(0);
+  }
+
+  const handed = await markInFlightJobsAbandoned().catch(() => 0);
+  console.warn(`[worker] grace period expired — ${handed} in-flight run(s) abandoned and `
+    + 'handed to the recovery sweep (they will be re-queued, not lost)');
+  // Exit IMMEDIATELY, with no pool drain: the abandoned jobs are still alive in
+  // this process and their 15s heartbeat would re-stamp the rows we just aged,
+  // pushing recovery back out to the full 3-minute timeout. Non-zero so the
+  // platform log records that the drain did not complete.
+  process.exit(1);
 }
-void reconcileOrphanedJobs();
-setInterval(() => void reconcileOrphanedJobs(), 120_000);
+
+// A throw inside shutdown would otherwise be swallowed by the keep-alive
+// unhandledRejection guard above and leave the container hanging until the
+// orchestrator SIGKILLs it.
+const onSignal = (signal: string) => {
+  shutdown(signal).catch((err) => {
+    console.error('[worker] shutdown failed:', err instanceof Error ? err.stack : err);
+    process.exit(1);
+  });
+};
+process.on('SIGTERM', () => onSignal('SIGTERM'));
+process.on('SIGINT', () => onSignal('SIGINT'));
 
 console.log(
   `[worker] listening on queue "${ANALYSIS_QUEUE}" ` +
-  `(concurrency=${envInt('WORKER_CONCURRENCY', 4)}, pgPoolMax=${envInt('PG_POOL_MAX', 30)})`,
+  `(concurrency=${envInt('WORKER_CONCURRENCY', 4)}, pgPoolMax=${envInt('PG_POOL_MAX', 30)}, ` +
+  `shutdownGrace=${SHUTDOWN_GRACE_MS}ms)`,
 );

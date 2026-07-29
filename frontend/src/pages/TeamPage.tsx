@@ -1,5 +1,5 @@
-import { CalendarDays, FileCheck2, Github, Loader2, Mail, Trash2, UserPlus, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, CalendarDays, FileCheck2, Github, Loader2, Mail, RefreshCw, Trash2, UserPlus, X } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
@@ -92,6 +92,7 @@ export function TeamPage() {
   const { id } = useParams<{ id: string }>();
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<PendingInvitation[]>([]);
+  const [invitationsError, setInvitationsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -121,12 +122,22 @@ export function TeamPage() {
   }, [id]);
 
   // Pending invitations are only actionable by owner/admin.
-  useEffect(() => {
+  //
+  // Bug #68: this used to swallow its rejection and "leave invitations empty",
+  // which hides the whole section — so a failed fetch looks exactly like
+  // "nobody is waiting". An admin acting on that re-invites someone who
+  // already has a pending invitation.
+  const loadInvitations = useCallback(() => {
     if (!id || !canManage) return;
     apiFetch(`/projects/${id}/members/invitations`)
-      .then((data: { invitations: PendingInvitation[] }) => setInvitations(data.invitations))
-      .catch(() => {/* non-critical: leave invitations empty */});
+      .then((data: { invitations: PendingInvitation[] }) => {
+        setInvitations(data.invitations);
+        setInvitationsError(false);
+      })
+      .catch(() => setInvitationsError(true));
   }, [id, canManage]);
+
+  useEffect(() => { loadInvitations(); }, [loadInvitations]);
 
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
@@ -402,8 +413,24 @@ export function TeamPage() {
         </div>
       )}
 
+      {canManage && invitationsError && (
+        <div
+          className="mt-5 flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
+          role="alert"
+        >
+          <p className="text-xs text-danger">
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            Couldn&apos;t load pending invitations. Don&apos;t re-invite anyone until this loads —
+            there may already be an invitation waiting.
+          </p>
+          <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadInvitations}>
+            <RefreshCw className="h-3 w-3" /> Retry
+          </Button>
+        </div>
+      )}
+
       {/* Pending invitations (owner/admin) */}
-      {canManage && invitations.length > 0 && (
+      {canManage && !invitationsError && invitations.length > 0 && (
         <div className="mt-5">
           <h2 className="mb-2 text-xs font-medium text-muted-foreground">
             Pending invitations · {invitations.length}

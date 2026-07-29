@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
+import { INVITABLE_TIERS, isDeveloperRole, isInvitableTier } from "../lib/permissionTiers.js";
 
 export const invitationsRouter = Router();
 
@@ -107,10 +108,30 @@ invitationsRouter.post("/:invitationId/accept", async (req, res) => {
       return;
     }
 
+    // The tier is re-checked on the way *out* of the table, not only on the
+    // way in (#66): rows written before the invitation route whitelisted its
+    // input can still be sitting here pending, and this is the statement that
+    // turns one into real permissions. An owner invitation can no longer be
+    // redeemed at all — ownership moves by transfer.
+    if (!isInvitableTier(invitation.permission_tier)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({
+        error: `This invitation grants an unsupported permission tier (${invitation.permission_tier}). Ask an admin to re-send it as one of: ${INVITABLE_TIERS.join(", ")}.`,
+      });
+      return;
+    }
+
     const role = invitation.developer_role ?? developer_role;
     if (!role) {
       await client.query("ROLLBACK");
       res.status(400).json({ error: "developer_role is required" });
+      return;
+    }
+    // A role the schema does not allow would otherwise fail on the CHECK
+    // constraint and surface as a 500 for what is a bad request body.
+    if (!isDeveloperRole(role)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Invalid developer_role" });
       return;
     }
 

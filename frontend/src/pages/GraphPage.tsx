@@ -36,6 +36,17 @@ const VIEWS: { key: GraphView; label: string }[] = [
   { key: "classes", label: "Classes & interfaces" },
 ];
 
+/**
+ * How long the search box waits after the last keystroke before re-filtering.
+ *
+ * AUDIT / bug #70(2): every keystroke re-ran the whole pipeline — filter,
+ * edge cap, dagre layout — for a query the user was still in the middle of
+ * typing. On a 200-node level that is a full re-layout per character. Long
+ * enough to swallow a burst of typing, short enough that the result still
+ * feels immediate.
+ */
+const SEARCH_DEBOUNCE_MS = 200;
+
 /** The directory a cluster node stands for (`cluster:src/lib` → `src/lib`). */
 function clusterDirectory(nodeId: string): string {
   return nodeId.slice("cluster:".length);
@@ -65,6 +76,10 @@ export function GraphPage() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Two states, deliberately. `searchInput` is what the box shows (it has to
+  // echo every keystroke immediately or typing feels broken); `search` is the
+  // settled query everything expensive keys off. See SEARCH_DEBOUNCE_MS.
+  const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
   const [allEdges, setAllEdges] = useState(false);
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set());
@@ -299,6 +314,17 @@ export function GraphPage() {
       weight: (e as { weight?: number }).weight ?? 1,
     }));
   }, [data]);
+
+  useEffect(() => {
+    // Clearing is not typing: the X button and an emptied box should snap back
+    // to the whole level rather than sit on a stale filter for 200ms.
+    if (searchInput === "") {
+      setSearch("");
+      return;
+    }
+    const timer = window.setTimeout(() => setSearch(searchInput), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
 
   const filteredNodeIds = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -692,8 +718,8 @@ export function GraphPage() {
           )}
 
           <GraphToolbar
-            search={search}
-            onSearchChange={setSearch}
+            search={searchInput}
+            onSearchChange={setSearchInput}
             matchCount={visibleNodes.length}
             totalCount={nodes.length}
             noun={levelUnit}
@@ -726,7 +752,22 @@ export function GraphPage() {
                 suppressInitialFit={hasFocusTarget}
                 hiddenKinds={hiddenKinds}
                 onToggleKind={toggleKind}
-                refitSignal={`${direction}:${fullscreen}`}
+                /*
+                 * Bug #70(2): "search updates the count but not the camera".
+                 * Confirmed live — a query showing "2 / 60 files" left the
+                 * canvas completely blank, because filtering re-runs the dagre
+                 * layout and the two survivors were placed somewhere the
+                 * current viewport does not cover. The count said they were
+                 * there; the screen said search was broken.
+                 *
+                 * The settled query joins the refit signal, which is exactly
+                 * what this prop is for ("bumped when node positions change
+                 * without the selection changing"): React Flow remounts and
+                 * its own declarative fitView frames the filtered set. Keyed
+                 * off the DEBOUNCED value, so it fits once per query rather
+                 * than once per keystroke.
+                 */
+                refitSignal={`${direction}:${fullscreen}:${search}`}
                 showMiniMap={positionedNodes.length >= MINIMAP_MIN_NODES}
                 drill={drill}
                 focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}

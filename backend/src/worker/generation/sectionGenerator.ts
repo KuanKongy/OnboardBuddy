@@ -159,8 +159,11 @@ export interface GenerateSectionParams {
   privacyMode: 'full_ai' | 'facts_only_ai';
   commitHash: string;
   deps: SectionDeps;
-  /** Injectable for tests; passed through to the retrieval service. */
-  embedQuery?: (text: string) => Promise<number[]>;
+  /**
+   * Injectable for tests; passed through to the retrieval service, which
+   * supplies the snapshot's detected embedding model as the second arg.
+   */
+  embedQuery?: (text: string, model: string) => Promise<number[]>;
 }
 
 export interface GenerateSectionResult {

@@ -3,6 +3,7 @@ import {
   GitBranch,
   Loader2,
   Rocket,
+  Search,
   Shield,
   Sparkles,
   X,
@@ -53,6 +54,17 @@ interface Branch {
   name: string;
 }
 
+/**
+ * Above this many options the picker gets a type-to-filter box. Below it the
+ * list already fits on screen and a search field is just chrome.
+ */
+const TYPEAHEAD_MIN_OPTIONS = 8;
+
+/** Case-insensitive substring match — the same rule the graph search uses. */
+function matchesFilter(haystack: string, needle: string): boolean {
+  return haystack.toLowerCase().includes(needle.trim().toLowerCase());
+}
+
 /** First-visit walkthrough of the configure step (wizard step 2). */
 const IMPORT_TOUR_STEPS: TourStep[] = [
   {
@@ -84,6 +96,18 @@ export function ImportPage() {
   const [analyzeConfig, setAnalyzeConfig] = useState<AnalyzeConfig>(DEFAULT_ANALYZE_CONFIG);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(createdProjectId ?? "");
+  /**
+   * Bug #67(1): the oversized-repo acknowledgment.
+   *
+   * `PreflightPreviewCard` renders a CONTROLLED checkbox — with no `acknowledged`
+   * / `onAcknowledgedChange` passed, `checked` was pinned to false and the
+   * onChange handler was `undefined`, so the box could not be ticked at all.
+   * Start analysis was gated only on `startingAnalysis`, so the warning was
+   * silently bypassed on the one flow where oversized-repo costs matter most:
+   * a new user's very first run. AnalyzeDialog does this correctly and is the
+   * reference; this now matches it.
+   */
+  const [confirmed, setConfirmed] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
 
   const [installUrl, setInstallUrl] = useState("");
@@ -106,6 +130,18 @@ export function ImportPage() {
 
   const [strandedProjectId, setStrandedProjectId] = useState<string | null>(null);
   const [developerRole, setDeveloperRole] = useState<string>(FALLBACK_ROLE);
+
+  /**
+   * Bug #67(2), the client half. Pagination (lib/github.ts) makes every repo
+   * and branch REACH the picker; a 250-item dropdown then makes them
+   * unfindable a second way. These filter the options as you type.
+   *
+   * Shown only above `TYPEAHEAD_MIN_OPTIONS`, so the common case — a personal
+   * account with four repositories — is not given a search box for a list that
+   * fits on screen.
+   */
+  const [repoFilter, setRepoFilter] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
 
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
@@ -148,6 +184,9 @@ export function ImportPage() {
     setReposLoading(true);
     setSelectedRepo("");
     setSelectedBranch("");
+    // A filter from the previous account would hide the new one's repos.
+    setRepoFilter("");
+    setBranchFilter("");
     apiFetch(`/github/repos?installation_id=${selectedInstallation}`)
       .then((data: { repos: Repo[] }) => setRepos(data.repos))
       .catch((err) => {
@@ -165,6 +204,7 @@ export function ImportPage() {
     if (!repo || !selectedInstallation) return;
     setBranchesLoading(true);
     setSelectedBranch("");
+    setBranchFilter("");
     apiFetch(
       `/github/repos/${repo.owner}/${repo.name}/branches?installation_id=${selectedInstallation}`,
     )
@@ -207,6 +247,15 @@ export function ImportPage() {
 
   const repo = repos.find((r) => r.full_name === selectedRepo);
   const canCreate = selectedInstallation && selectedRepo && selectedBranch;
+
+  // The selected option always stays in its own list: filtering it out would
+  // leave the trigger showing a value the dropdown claims does not exist.
+  const visibleRepos = repos.filter(
+    (r) => r.full_name === selectedRepo || matchesFilter(r.full_name, repoFilter),
+  );
+  const visibleBranches = branches.filter(
+    (b) => b.name === selectedBranch || matchesFilter(b.name, branchFilter),
+  );
 
   async function handleCreate() {
     if (!repo) return;
@@ -263,8 +312,25 @@ export function ImportPage() {
     if (user) dismissTour("import", user.id);
   }
 
+  /** Invalidate the preview AND the acknowledgment it belonged to. */
+  function setAnalyzeConfigChanged() {
+    resetPreflight();
+    setConfirmed(false);
+  }
+
+  /**
+   * Bug #67(1): the gate itself, matching AnalyzeDialog. Only bites once a
+   * preview exists and says confirmations are required — the preview is what
+   * computes the thresholds, so there is nothing to acknowledge before one.
+   */
+  const needsAcknowledgment = preview !== null && preview.confirmationsRequired.length > 0;
+  const startBlocked = startingAnalysis || (needsAcknowledgment && !confirmed);
+
   async function handleStartAnalysis() {
     if (!createdProjectId) return;
+    // Defence in depth: the button is disabled, but a keyboard/programmatic
+    // activation must not be able to slip past a gate about spending money.
+    if (needsAcknowledgment && !confirmed) return;
     setStartingAnalysis(true);
     setError("");
     try {
@@ -307,7 +373,11 @@ export function ImportPage() {
                   config={analyzeConfig}
                   onChange={(c) => {
                     setAnalyzeConfig(c);
-                    resetPreflight();
+                    // The preview describes ONE exact configuration, so the
+                    // acknowledgment does too. Carrying a tick from a cheap
+                    // `backend/` scope over to a whole-repo full-depth run
+                    // would be the same bypass by another route.
+                    setAnalyzeConfigChanged();
                   }}
                 />
               </div>
@@ -342,7 +412,13 @@ export function ImportPage() {
                   </p>
                 </div>
               )}
-              {preview && <PreflightPreviewCard preview={preview} />}
+              {preview && (
+                <PreflightPreviewCard
+                  preview={preview}
+                  acknowledged={confirmed}
+                  onAcknowledgedChange={setConfirmed}
+                />
+              )}
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${createdProjectId}`)}>
@@ -360,7 +436,7 @@ export function ImportPage() {
                     Preview first
                   </Button>
                 )}
-                <Button size="sm" data-tour="import-start" onClick={handleStartAnalysis} disabled={startingAnalysis}>
+                <Button size="sm" data-tour="import-start" onClick={handleStartAnalysis} disabled={startBlocked}>
                   {startingAnalysis ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
                   Start analysis
                 </Button>
@@ -439,7 +515,7 @@ export function ImportPage() {
               ) : (
                 <>
                   <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]">
+                    <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="GitHub account">
                       <SelectValue placeholder="Select account" />
                     </SelectTrigger>
                     <SelectContent>
@@ -491,18 +567,40 @@ export function ImportPage() {
                     <Loader2 className="h-3 w-3 animate-spin" /> Loading...
                   </div>
                 ) : (
-                  <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]">
-                      <SelectValue placeholder="Select repository" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {repos.map((r) => (
-                        <SelectItem key={r.full_name} value={r.full_name}>
-                          {r.full_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <>
+                    {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={repoFilter}
+                          onChange={(e) => setRepoFilter(e.target.value)}
+                          placeholder={`Filter ${repos.length} repositories…`}
+                          aria-label="Filter repositories"
+                          className="h-8 pl-8 text-[0.8125rem]"
+                        />
+                      </div>
+                    )}
+                    <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Repository">
+                        <SelectValue placeholder="Select repository" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {visibleRepos.map((r) => (
+                          <SelectItem key={r.full_name} value={r.full_name}>
+                            {r.full_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
+                      <p className="text-[0.6875rem] text-muted-foreground">
+                        {repoFilter.trim()
+                          ? `${visibleRepos.length} of ${repos.length} match "${repoFilter.trim()}"`
+                          : `${repos.length} repositories available`}
+                        {visibleRepos.length === 0 && " — no match. Check the App is installed on it."}
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -516,19 +614,33 @@ export function ImportPage() {
                     <Loader2 className="h-3 w-3 animate-spin" /> Loading...
                   </div>
                 ) : (
-                  <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]">
-                      <SelectValue placeholder="Select branch" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {branches.map((b) => (
-                        <SelectItem key={b.name} value={b.name}>
-                          <GitBranch className="mr-1 inline h-3 w-3" />
-                          {b.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <>
+                    {branches.length >= TYPEAHEAD_MIN_OPTIONS && (
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={branchFilter}
+                          onChange={(e) => setBranchFilter(e.target.value)}
+                          placeholder={`Filter ${branches.length} branches…`}
+                          aria-label="Filter branches"
+                          className="h-8 pl-8 text-[0.8125rem]"
+                        />
+                      </div>
+                    )}
+                    <Select value={selectedBranch} onValueChange={setSelectedBranch}>
+                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Branch">
+                        <SelectValue placeholder="Select branch" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {visibleBranches.map((b) => (
+                          <SelectItem key={b.name} value={b.name}>
+                            <GitBranch className="mr-1 inline h-3 w-3" />
+                            {b.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </>
                 )}
               </div>
             )}
@@ -538,7 +650,7 @@ export function ImportPage() {
               <div className="space-y-1">
                 <Label className="text-xs">Role</Label>
                 <Select value={developerRole} onValueChange={setDeveloperRole}>
-                  <SelectTrigger className="h-8 text-[0.8125rem]">
+                  <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Role">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

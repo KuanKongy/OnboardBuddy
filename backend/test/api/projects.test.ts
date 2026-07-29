@@ -183,4 +183,80 @@ describe("PUT /api/projects/:id/settings", () => {
     expect(res.status).to.equal(400);
     expect(res.body.error).to.include("auto_reanalyze_on_push");
   });
+
+  // Bug #9: the SET clauses were assembled by hand, field by field. The
+  // handler now walks the allowlist rather than the request body, so a key
+  // the allowlist does not name cannot appear in the statement — whatever it
+  // is called, and whatever it contains.
+  it("builds the UPDATE from the allowlist, never from the request body", async () => {
+    installTestAuth();
+    let updateSql = "";
+    let updateParams: unknown[] = [];
+    mockQuery((text, params) => {
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: "22222222-2222-2222-2222-222222222222",
+            user_id: "11111111-1111-1111-1111-111111111111",
+            permission_tier: "owner",
+            developer_role: "backend",
+            default_package_id: null,
+          }],
+        };
+      }
+      if (text.includes("UPDATE project_settings")) {
+        updateSql = text;
+        updateParams = (params ?? []) as unknown[];
+        return { rows: [{ project_id: "22222222-2222-2222-2222-222222222222" }] };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .put("/api/projects/22222222-2222-2222-2222-222222222222/settings")
+      .set(authHeader())
+      .send({
+        privacy_mode: "facts_only_ai",
+        // None of these are settings. One is a real column on another table,
+        // one is an injection attempt, one is a plausible-looking typo.
+        permission_tier: "owner",
+        "privacy_mode = 'full_ai', ignored_paths": ["x"],
+        privacyMode: "full_ai",
+      });
+
+    expect(res.status).to.equal(200);
+    expect(updateSql).to.include("privacy_mode = $2");
+    expect(updateParams).to.deep.equal(["22222222-2222-2222-2222-222222222222", "facts_only_ai"]);
+    expect(updateSql).to.not.include("permission_tier");
+    expect(updateSql).to.not.include("full_ai");
+    expect(updateSql).to.not.include("privacyMode");
+  });
+
+  it("answers an unknown-only body with 400 rather than an empty UPDATE", async () => {
+    installTestAuth();
+    let updated = false;
+    mockQuery((text) => {
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: "22222222-2222-2222-2222-222222222222",
+            user_id: "11111111-1111-1111-1111-111111111111",
+            permission_tier: "owner",
+            developer_role: "backend",
+            default_package_id: null,
+          }],
+        };
+      }
+      if (text.includes("UPDATE project_settings")) updated = true;
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .put("/api/projects/22222222-2222-2222-2222-222222222222/settings")
+      .set(authHeader())
+      .send({ not_a_setting: true });
+
+    expect(res.status).to.equal(400);
+    expect(updated).to.equal(false);
+  });
 });

@@ -80,6 +80,35 @@ interface RoleWeights {
   customized: boolean;
 }
 
+/** One row of GET /projects/:id/llm-key's `usage_by_key_source`. Postgres
+ *  returns bigint/numeric aggregates as strings, so every figure is coerced
+ *  before it is summed — string `+` here would concatenate the bill. */
+interface KeyUsageRow {
+  key_source: string;
+  calls: number | string;
+  input_tokens: number | string;
+  output_tokens: number | string;
+  estimated_cost_usd: number | string;
+}
+
+const KEY_SOURCE_LABEL: Record<string, string> = {
+  server: "Server key",
+  project: "Project key",
+};
+
+/** Every key source added up — the project's whole AI bill. */
+function totalKeyUsage(rows: KeyUsageRow[]) {
+  return rows.reduce(
+    (acc, r) => ({
+      calls: acc.calls + Number(r.calls ?? 0),
+      inputTokens: acc.inputTokens + Number(r.input_tokens ?? 0),
+      outputTokens: acc.outputTokens + Number(r.output_tokens ?? 0),
+      costUsd: acc.costUsd + Number(r.estimated_cost_usd ?? 0),
+    }),
+    { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 },
+  );
+}
+
 export function ProjectSettingsPage() {
   const { project, refetch } = useProject();
   const { registerSessionJob } = usePackages();
@@ -108,12 +137,17 @@ export function ProjectSettingsPage() {
 
   // BYO LLM key
   const [keyInfo, setKeyInfo] = useState<{ exists: boolean; created_by?: string | null; updated_at?: string } | null>(null);
+  // Project-wide AI spend, split by which key paid for it. Run history shows
+  // one run at a time, so this is the only place the whole bill is visible.
+  const [keyUsage, setKeyUsage] = useState<KeyUsageRow[]>([]);
+  const [keyInfoError, setKeyInfoError] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [keySaving, setKeySaving] = useState(false);
   const [keySaved, setKeySaved] = useState("");
 
   // Ranking weights
   const [weightRoles, setWeightRoles] = useState<RoleWeights[] | null>(null);
+  const [weightsError, setWeightsError] = useState(false);
   const [weightRole, setWeightRole] = useState("backend");
   const [weightsSaving, setWeightsSaving] = useState(false);
   // Confirmation for the weight mutations. Saving used to await, refetch and
@@ -155,16 +189,33 @@ export function ProjectSettingsPage() {
   // (which only refetched settings) left moved sliders moved — the user could
   // neither confirm a save nor undo one (audit §20.3). Cancel now reloads this
   // too, which is the only thing that actually reverts them.
+  // Bug #68: both of these swallowed their rejections, so a failed load was
+  // indistinguishable from a real answer — an empty role dropdown with no
+  // sliders read as "this project has no ranking weights", and a failed
+  // key lookup rendered the "paste a key" form, telling a team whose key IS
+  // configured that it is not. Both now say which of the two happened.
   const loadWeights = useCallback(() => {
     if (!id) return;
-    apiFetch(`/projects/${id}/ranking-weights`).then((data) => setWeightRoles(data.roles)).catch(() => {});
+    apiFetch(`/projects/${id}/ranking-weights`)
+      .then((data) => { setWeightRoles(data.roles); setWeightsError(false); })
+      .catch(() => setWeightsError(true));
+  }, [id]);
+
+  const loadKeyInfo = useCallback(() => {
+    if (!id) return;
+    apiFetch(`/projects/${id}/llm-key`)
+      .then((data) => {
+        setKeyInfo(data.key);
+        setKeyUsage(Array.isArray(data.usage_by_key_source) ? data.usage_by_key_source : []);
+        setKeyInfoError(false);
+      })
+      .catch(() => setKeyInfoError(true));
   }, [id]);
 
   useEffect(() => {
-    if (!id) return;
-    apiFetch(`/projects/${id}/llm-key`).then((data) => setKeyInfo(data.key)).catch(() => {});
+    loadKeyInfo();
     loadWeights();
-  }, [id, loadWeights]);
+  }, [loadKeyInfo, loadWeights]);
 
   async function handleSave() {
     setSaving(true);
@@ -300,6 +351,8 @@ export function ProjectSettingsPage() {
   }
 
   if (!project) return null;
+
+  const spend = totalKeyUsage(keyUsage);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -495,6 +548,43 @@ export function ProjectSettingsPage() {
               ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
               Live spend shows in the analysis status.
             </p>
+
+            {/* The caps above are per run, and run history reports one run at
+                a time — so "what has this project cost" had no answer anywhere
+                in the product. Read-only: it is a record, not a setting. */}
+            <div className="mt-3 border-t border-border pt-2">
+              <h4 className="text-xs font-medium text-foreground">Total AI spend on this project</h4>
+              {keyUsage.length === 0 ? (
+                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                  No completed AI calls recorded yet.
+                </p>
+              ) : (
+                <>
+                  <p className="mt-0.5 text-[0.8125rem] tabular-nums text-foreground">
+                    ${spend.costUsd.toFixed(4)}
+                    <span className="text-[0.6875rem] text-muted-foreground">
+                      {" · "}{spend.calls.toLocaleString()} AI calls
+                      {" · "}{spend.inputTokens.toLocaleString()} in / {spend.outputTokens.toLocaleString()} out tokens
+                    </span>
+                  </p>
+                  {/* Which key paid matters: a team's own key and the server's
+                      are two different bills, and only this split says which. */}
+                  {keyUsage.length > 1 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {keyUsage.map((row) => (
+                        <li key={row.key_source} className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                          {KEY_SOURCE_LABEL[row.key_source] ?? row.key_source}: ${Number(row.estimated_cost_usd ?? 0).toFixed(4)}
+                          {" · "}{Number(row.calls ?? 0).toLocaleString()} calls
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                    Across every completed AI call on this project's snapshots, all runs included.
+                  </p>
+                </>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -539,7 +629,21 @@ export function ProjectSettingsPage() {
               Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
               shown again, and usage is visible to the whole team.
             </p>
-            {keyInfo?.exists ? (
+            {keyInfoError ? (
+              <div
+                className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
+                role="alert"
+              >
+                <p className="text-xs text-danger">
+                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                  Couldn&apos;t check whether a key is configured. Don&apos;t add one until this
+                  loads — you could overwrite a key the team is already using.
+                </p>
+                <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadKeyInfo}>
+                  <RefreshCw className="h-3 w-3" /> Retry
+                </Button>
+              </div>
+            ) : keyInfo?.exists ? (
               <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
                 <p className="text-xs text-success">
                   Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""} — all AI calls use it.
@@ -587,14 +691,30 @@ export function ProjectSettingsPage() {
               How much each signal counts toward "critical for this role". Changes apply instantly —
               scores are re-projected, never re-analyzed.
             </p>
-            <Select value={weightRole} onValueChange={setWeightRole}>
-              <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {(weightRoles ?? []).map((r) => (
-                  <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {weightsError ? (
+              <div
+                className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
+                role="alert"
+              >
+                <p className="text-xs text-danger">
+                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                  Couldn&apos;t load ranking weights. The saved weights are unchanged — this is a
+                  failed request, not a project without them.
+                </p>
+                <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadWeights}>
+                  <RefreshCw className="h-3 w-3" /> Retry
+                </Button>
+              </div>
+            ) : (
+              <Select value={weightRole} onValueChange={setWeightRole}>
+                <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {(weightRoles ?? []).map((r) => (
+                    <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             {activeWeights && (
               <div className="space-y-2">
                 {WEIGHT_VIEWS.map((view) => (

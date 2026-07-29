@@ -58,7 +58,7 @@ Supabase access tokens verified via JWKS at `{SUPABASE_URL}/auth/v1/.well-known/
 
 Extracts `Bearer` token from `Authorization`, verifies JWT, sets `req.user = { id, email }`. Returns `401` if missing, invalid, or expired.
 
-**Public routes (no Bearer token):** `GET /api/health`, `POST /api/auth/signup`, `POST /api/auth/login`
+**Public routes (no Bearer token):** `GET /api/health`, `POST /api/auth/login` (rate limited)
 
 The frontend stores `session.access_token` from login and sends it on every other API call. That token is a Supabase JWT — not a GitHub token.
 
@@ -131,24 +131,29 @@ Errors: none expected
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/auth/signup` | No | Create account (email confirmed immediately) |
-| POST | `/auth/login` | No | Sign in; returns JWT access token |
+| POST | `/auth/login` | No | Sign in; returns JWT access token (rate limited) |
 | POST | `/auth/logout` | Yes | Invalidate current session |
 | GET | `/auth/me` | Yes | Profile + whether GitHub App is connected |
+| DELETE | `/auth/account` | Yes | Permanently delete the account and its data |
 
-#### POST /auth/signup
-
-Creates a new OnboardBuddy user via Supabase admin API. Does not return a session — client must call login afterward.
-
-Input: `{ email, password }` → 201 `{ user: { id, email } }`  
-Errors: 400 — email or password missing · 409 — email already registered · 422 — Supabase rejected the input · 500 — server failure
+**There is no `POST /auth/signup`.** It was removed in M5 (bug #66): an
+unauthenticated caller could create an *email-confirmed* account for any
+address, bypassing the confirmation email that real sign-up sends — and since
+invitations are matched on email address, that let an attacker pre-register a
+victim's address and accept invitations meant for them. Sign-up happens in the
+browser against Supabase (`supabase.auth.signUp`), which is the only path the
+product ever used.
 
 #### POST /auth/login
 
 Authenticates with email and password. Returns a Supabase JWT; the frontend stores `session.access_token` and sends it as `Authorization: Bearer …` on all protected routes.
 
+Throttled in memory (`backend/src/api/middleware/authRateLimit.ts`): 10 attempts
+per 15 minutes per address+email, and 60 per 15 minutes per address. Both windows
+answer 429 with `Retry-After`.
+
 Input: `{ email, password }` → 200 `{ user: { id, email }, session: { access_token } }`  
-Errors: 400 — email or password missing · 401 — wrong email or password · 500 — server failure
+Errors: 400 — email or password missing · 401 — wrong email or password · 429 — too many attempts · 500 — server failure
 
 #### POST /auth/logout
 
@@ -387,8 +392,12 @@ Errors: 401 — not authenticated · 403 — not a member · 500 — server fail
 
 Sends a pending invitation to join the project with the given permission tier and optional developer role.
 
+`permission_tier` must be `admin` or `developer`. **Owner is not invitable** — a
+project has one owner and it changes by transfer, never by invite (bug #66); the
+accept endpoint re-checks the tier for the same reason.
+
 Input: `{ email, permission_tier, developer_role? }` → 201 `{ invitation }`  
-Errors: 400 — email or permission_tier missing · 401 — not authenticated · 403 — not owner/admin · 409 — pending invite already exists for email · 500 — server failure
+Errors: 400 — email or permission_tier missing, tier not admin/developer, or unknown developer_role · 401 — not authenticated · 403 — not owner/admin · 409 — pending invite already exists for email · 500 — server failure
 
 #### PATCH /members/invitations/:invitationId
 
@@ -482,8 +491,13 @@ Errors: 401 — not authenticated · 403 — not a member · 500 — server fail
 
 Returns source receipts (file paths, line ranges, snippets) backing a section's claims.
 
+The section is resolved through its package and must belong to the project in
+the path; a section id from another project is a 404, not another tenant's
+source (bug #65). The same rule applies to `PATCH …/review` and
+`GET /workflows/:workflowId/walkthrough`.
+
 Input: no body → 200 `{ receipts: [{ file_path, symbol_name, line_start, line_end, snippet, ... }] }`  
-Errors: 401 — not authenticated · 403 — not a member · 500 — server failure
+Errors: 401 — not authenticated · 403 — not a member · 404 — no such section in this project · 500 — server failure
 
 #### GET /onboarding/validate
 
@@ -578,5 +592,5 @@ Failures return `{ "error": "message" }`. GitHub token refresh failure also incl
 | `TOKEN_ENCRYPTION_KEY` | 64-char hex AES key |
 | `GITHUB_INSTALL_STATE_SECRET` | OAuth state HMAC secret |
 | `FRONTEND_URL` | OAuth redirect base |
-| `CORS_ORIGIN` | Allowed browser origin |
+| `CORS_ORIGIN` | Allowed browser origin(s), comma-separated; required when `NODE_ENV=production` |
 | `PORT` | Server port (default 3000) |

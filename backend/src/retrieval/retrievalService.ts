@@ -14,6 +14,7 @@
 
 import { query } from '../lib/db.js';
 import { assertAiAllowed } from '../worker/ai/privacy.js';
+import { defaultTierModels } from '../worker/ai/modelTiers.js';
 import { embedText } from '../worker/engine/embeddingService.js';
 import { capReceiptSpan } from '../worker/engine/receiptSpan.js';
 import type { ViewType } from '../worker/semantic/embeddingViews.js';
@@ -87,8 +88,13 @@ export interface RetrieveInput {
   maxReceipts?: number;
   /** Callers merge their section-specific deterministic queries here. */
   deterministicContext?: Record<string, unknown>;
-  /** Injectable for tests; defaults to the embeddings endpoint. */
-  embedQuery?: (text: string) => Promise<number[]>;
+  /**
+   * Injectable for tests; defaults to the embeddings endpoint. Receives the
+   * model this snapshot's vectors were written with, so an injected impl
+   * cannot accidentally answer in a different vector space than the seeds
+   * SQL filters for.
+   */
+  embedQuery?: (text: string, model: string) => Promise<number[]>;
 }
 
 // Evidence budgets sized for the 1M-context tier (latency overhaul Track
@@ -143,13 +149,26 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
   const maxReceipts = input.maxReceipts ?? DEFAULTS.maxReceipts;
   const unknowns: EvidenceBundleV2['unknowns'] = [];
 
-  const [meta, queryVector] = await Promise.all([
+  // Which model wrote THIS snapshot's vectors decides both how the query is
+  // embedded and which rows it may be compared against (see
+  // resolveSnapshotEmbeddingModel). Detection is cached, so this is a real
+  // query only once per snapshot per 5 minutes.
+  const [meta, detectedModel] = await Promise.all([
     loadSnapshotMeta(input.snapshotId),
-    (input.embedQuery ?? embedText)(input.task),
+    resolveSnapshotEmbeddingModel(input.snapshotId),
   ]);
+  const embeddingModel = detectedModel ?? defaultTierModels().embedding[0]!;
+  const queryVector = await (input.embedQuery ?? embedText)(input.task, embeddingModel);
   const vectorLiteral = `[${queryVector.join(',')}]`;
 
   // 2. vector seed per view (one SQL pass over the requested views)
+  //
+  // The `e.model = $5` predicate is not an optimization: two models' vectors
+  // coexist in this table for the whole of M5 (M4 keeps writing
+  // text-embedding-3-small rows against the same database), and cosine
+  // distance between vectors from different models is noise that outranks
+  // genuine matches. It is always present — never conditional on detection
+  // finding rows — because "no filter" is precisely the corrupt case.
   const seeds = (await query(
     `SELECT ssr.stable_key, ssr.node_id, sr.id AS record_id, sr.summary, sr.record_level,
             sr.confidence, sr.record, sr.receipt_ids, e.view_type,
@@ -157,13 +176,16 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
      FROM embeddings e
      JOIN semantic_records sr ON sr.id = e.record_id
      JOIN snapshot_semantic_records ssr ON ssr.record_id = sr.id AND ssr.snapshot_id = $2
-     WHERE e.view_type = ANY($3) AND sr.status = 'usable'
+     WHERE e.view_type = ANY($3) AND sr.status = 'usable' AND e.model = $5
      ORDER BY e.embedding <=> $1::vector
      LIMIT $4`,
-    [vectorLiteral, input.snapshotId, views, kPerView * views.length],
+    [vectorLiteral, input.snapshotId, views, kPerView * views.length, embeddingModel],
   )).rows as SeedRow[];
   if (seeds.length === 0) {
-    unknowns.push({ kind: 'no_semantic_matches', detail: `no embeddings matched views [${views.join(', ')}]` });
+    unknowns.push({
+      kind: 'no_semantic_matches',
+      detail: `no ${embeddingModel} embeddings matched views [${views.join(', ')}]`,
+    });
   }
 
   // Dedupe seeds by stable_key, best similarity wins.
@@ -349,6 +371,72 @@ export async function retrieve(input: RetrieveInput): Promise<EvidenceBundleV2> 
       stateUnknownsExplicitly: true,
     },
   };
+}
+
+/** Detection is per snapshot and snapshots are immutable once analyzed. */
+const EMBEDDING_MODEL_CACHE_TTL_MS = 5 * 60_000;
+/**
+ * Long-lived API processes serve many snapshots; the entries are tiny but the
+ * map is unbounded without this, so it is dropped wholesale past a size that
+ * no realistic working set reaches (re-detection costs one indexed query).
+ */
+const EMBEDDING_MODEL_CACHE_MAX = 512;
+const embeddingModelCache = new Map<string, { model: string | null; atMs: number }>();
+
+/** Test seam + cache reset. */
+export function __resetEmbeddingModelCacheForTests(): void {
+  embeddingModelCache.clear();
+}
+
+/**
+ * Which embedding model this snapshot's vectors were actually written with,
+ * or null when it has none yet.
+ *
+ * M5 flips EMBEDDINGS_MODEL to an OpenRouter model while the M4 build keeps
+ * writing text-embedding-3-small rows into the same (frozen) schema, so the
+ * configured model is NOT a reliable answer for a snapshot analyzed earlier:
+ * asking a 3-small snapshot with a pplx query vector returns confident
+ * nonsense rather than an error. The stored rows are the ground truth.
+ *
+ * Ties (a snapshot re-embedded mid-flip, both models present) resolve toward
+ * the configured model — that is the space the fresh rows are in and the one
+ * a re-analysis will complete — then toward the larger row count, then by
+ * name so the choice is deterministic across processes.
+ *
+ * A cached null (snapshot with no vectors yet) is harmless: the caller then
+ * falls back to the configured model, which is exactly what an analysis in
+ * flight is writing.
+ *
+ * Known gap: "configured" here is the env default (defaultTierModels()); a
+ * project-level model_tier_overrides.embedding is not visible from retrieval.
+ * It only matters for a snapshot holding BOTH models' rows, where the
+ * majority-count rule then decides.
+ */
+export async function resolveSnapshotEmbeddingModel(snapshotId: string): Promise<string | null> {
+  const now = Date.now();
+  const hit = embeddingModelCache.get(snapshotId);
+  if (hit && now - hit.atMs < EMBEDDING_MODEL_CACHE_TTL_MS) return hit.model;
+
+  const rows = (await query(
+    `SELECT e.model, COUNT(*) AS n
+     FROM embeddings e
+     JOIN snapshot_semantic_records ssr ON ssr.record_id = e.record_id
+     WHERE ssr.snapshot_id = $1
+     GROUP BY e.model`,
+    [snapshotId],
+  )).rows as Array<{ model: string; n: string | number }>;
+
+  const configured = defaultTierModels().embedding[0]!;
+  let model: string | null = null;
+  if (rows.length > 0) {
+    model = rows.some((r) => r.model === configured)
+      ? configured
+      : [...rows].sort((a, b) => Number(b.n) - Number(a.n) || a.model.localeCompare(b.model))[0]!.model;
+  }
+
+  if (embeddingModelCache.size >= EMBEDDING_MODEL_CACHE_MAX) embeddingModelCache.clear();
+  embeddingModelCache.set(snapshotId, { model, atMs: now });
+  return model;
 }
 
 async function loadSnapshotMeta(snapshotId: string): Promise<{ repo: EvidenceBundleV2['repo']; scope: EvidenceBundleV2['scope'] }> {

@@ -5,9 +5,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 
 /**
  * The one panel for an analysis run: every pipeline step in order with its
- * status, start/finish times and key numbers, the live current step under
- * the running phase, and the spend line — replaces the separate live
- * activity block, "Pipeline phases & spend" accordion and step history.
+ * status, start/finish times and key numbers, and the live current step under
+ * the running phase — replaces the separate live activity block, "Pipeline
+ * phases & spend" accordion and step history.
+ *
+ * Spend is deliberately absent: this panel is scoped to a SNAPSHOT, so any
+ * total it showed was every run's, sitting inside one run's row. Per-run cost
+ * belongs to the run-history row, the project total to Project Settings.
  */
 
 interface PhaseRow {
@@ -30,8 +34,9 @@ interface StepLogEntry {
   ts: string;
 }
 
-/** Pipeline order + labels; phases the backend hasn't reached yet render as upcoming. */
-const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = [
+/** Pipeline order + labels; phases the backend hasn't reached yet render as upcoming.
+ *  Exported so a partial run's own step list names its steps identically. */
+export const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = [
   { key: "ingest", label: "Download & inventory", desc: "Clones the repo and inventories files — nothing is sent to any AI" },
   { key: "parse", label: "Parse code (AST)", desc: "Builds a syntax tree per file to extract symbols deterministically" },
   { key: "graph", label: "Build evidence graph", desc: "Links imports, calls and dependencies into an evidence graph" },
@@ -50,7 +55,7 @@ const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = [
   { key: "validation", label: "Validate citations", desc: "Verifies every citation still points at real code" },
 ];
 
-function StatusIcon({ status }: { status: string }) {
+export function StatusIcon({ status }: { status: string }) {
   if (status === "complete") return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
   if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />;
   if (status === "failed") return <XCircle className="h-3.5 w-3.5 text-danger" />;
@@ -152,7 +157,6 @@ export function AnalysisRunPanel({
 
   const phaseByKey = new Map((data?.phases ?? []).map((p) => [p.phase, p]));
   const havePhases = (data?.phases ?? []).length > 0;
-  const budget = (data?.snapshot?.budget_usage ?? {}) as Record<string, unknown>;
 
   return (
     <div className="rounded-md border border-border bg-muted/25">
@@ -235,23 +239,6 @@ export function AnalysisRunPanel({
           <p className="py-1 text-[0.71875rem] text-muted-foreground">No run recorded yet for this snapshot.</p>
         )}
       </div>
-
-      {/* These counters are the SNAPSHOT's, accumulated across every run on
-          this (scope, commit) — not this run's. Budgets cap one run; the
-          per-run figure lives on the run-history row. Labelling it honestly
-          is the difference between "we're over budget" and "this commit has
-          cost this much so far". */}
-      {(typeof budget.llm_calls === "number" || typeof budget.estimated_cost_usd === "number") && (
-        <p
-          className="border-t border-border/60 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground"
-          title="Total across every run on this snapshot. Budget caps apply per run — see the run history for this run's usage."
-        >
-          Lifetime spend on this snapshot: {typeof budget.llm_calls === "number" ? `${budget.llm_calls} AI calls` : ""}
-          {typeof budget.input_tokens === "number" ? ` · ${Number(budget.input_tokens).toLocaleString()} input tokens` : ""}
-          {typeof budget.output_tokens === "number" ? ` · ${Number(budget.output_tokens).toLocaleString()} output tokens` : ""}
-          {typeof budget.estimated_cost_usd === "number" ? ` · ~$${Number(budget.estimated_cost_usd).toFixed(4)}` : ""}
-        </p>
-      )}
 
       {stepLog.length > 0 && havePhases && (
         <details className="border-t border-border/60 px-3 py-1.5">

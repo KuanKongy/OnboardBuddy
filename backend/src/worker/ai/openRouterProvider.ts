@@ -23,11 +23,18 @@ import {
   isRetryableStatus,
 } from './provider.js';
 import { validateAgainstSchema, extractJson } from './jsonSchemaValidator.js';
+import { EMBEDDING_DIMENSIONS, postProcessVector, profileForModel } from './embeddingProfiles.js';
 
 type FetchImpl = typeof fetch;
 
 export interface OpenRouterProviderOptions {
   baseUrl?: string;
+  /**
+   * Overrides the OpenAI-shaped embeddings base URL (test injection).
+   * OpenRouter-routed models ignore it: their base URL comes from the
+   * profile, so a test can point one path at a fake without silently
+   * redirecting the other.
+   */
   embeddingsBaseUrl?: string;
   fetchImpl?: FetchImpl;
 }
@@ -38,21 +45,22 @@ interface ChatCompletionResponse {
 }
 
 interface EmbeddingResponse {
-  data?: Array<{ embedding: number[]; index: number }>;
+  // `embedding` is deliberately unknown: an upstream that ignores
+  // encoding_format answers with base64 strings or int8 arrays, and the
+  // wrong shape must fail at the validation below, not inside pgvector.
+  data?: Array<{ embedding: unknown; index: number }>;
   usage?: { prompt_tokens?: number; total_tokens?: number };
 }
-
-const EMBEDDING_DIMENSIONS = 1536;
 
 export class OpenRouterProvider implements AiProvider {
   readonly id = 'openrouter';
   private readonly baseUrl: string;
-  private readonly embeddingsBaseUrl: string;
+  private readonly embeddingsBaseUrlOverride: string | undefined;
   private readonly fetchImpl: FetchImpl;
 
   constructor(options: OpenRouterProviderOptions = {}) {
     this.baseUrl = options.baseUrl ?? process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1';
-    this.embeddingsBaseUrl = options.embeddingsBaseUrl ?? process.env.EMBEDDINGS_BASE_URL ?? 'https://api.openai.com/v1';
+    this.embeddingsBaseUrlOverride = options.embeddingsBaseUrl;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -109,15 +117,39 @@ export class OpenRouterProvider implements AiProvider {
 
   async embed(inputs: string[], model: string, opts: ProviderCallOptions): Promise<{ vectors: number[][]; usage: TokenUsage }> {
     if (inputs.length === 0) return { vectors: [], usage: { inputTokens: 0, outputTokens: 0 } };
-    const data = await this.post<EmbeddingResponse>(
-      `${this.embeddingsBaseUrl}/embeddings`,
-      { model, input: inputs, dimensions: EMBEDDING_DIMENSIONS },
-      opts,
-    );
-    const vectors = (data.data ?? []).sort((a, b) => a.index - b.index).map((d) => d.embedding);
-    if (vectors.length !== inputs.length) {
-      throw new ProviderError(`embedding API returned ${vectors.length} vectors for ${inputs.length} inputs`, null, false);
+    // The model id decides the whole wire shape (ai/embeddingProfiles.ts):
+    // OpenAI-direct models keep the `dimensions` body M4 sent, OpenRouter
+    // models get ZDR routing prefs and an explicit float encoding instead.
+    const profile = profileForModel(model);
+    const baseUrl = (profile.id === 'openai' ? this.embeddingsBaseUrlOverride : undefined) ?? profile.baseUrl;
+    const providerPrefs = profile.sendProviderPrefs ? openRouterProviderPrefs() : {};
+    const body: Record<string, unknown> = {
+      model,
+      input: inputs,
+      ...(profile.sendDimensions ? { dimensions: EMBEDDING_DIMENSIONS } : {}),
+      ...(profile.sendEncodingFormat ? { encoding_format: 'float' } : {}),
+      ...(Object.keys(providerPrefs).length > 0 ? { provider: providerPrefs } : {}),
+    };
+    const data = await this.post<EmbeddingResponse>(`${baseUrl}/embeddings`, body, opts);
+
+    const ordered = (data.data ?? []).sort((a, b) => a.index - b.index);
+    if (ordered.length !== inputs.length) {
+      throw new ProviderError(`embedding API returned ${ordered.length} vectors for ${inputs.length} inputs`, null, false);
     }
+    const vectors = ordered.map((row, i) => {
+      // Anything other than plain finite floats here means the upstream
+      // ignored encoding_format (base64 strings, int8 arrays). Retrying gets
+      // the same answer, so name the cause once and fail non-retryably —
+      // silently storing it would be a table of NaN rows.
+      if (!isFiniteNumberArray(row.embedding)) {
+        throw new ProviderError(
+          `embedding API returned a non-float vector at index ${i} for ${model} (encoding_format 'float' not honoured): ${describeEmbedding(row.embedding)}`,
+          null,
+          false,
+        );
+      }
+      return postProcessVector(row.embedding, profile);
+    });
     return {
       vectors,
       usage: { inputTokens: data.usage?.prompt_tokens ?? data.usage?.total_tokens ?? 0, outputTokens: 0 },
@@ -127,24 +159,7 @@ export class OpenRouterProvider implements AiProvider {
   // ── internals ──────────────────────────────────────────────────────────────
 
   private chatBody(req: CompletionRequest): Record<string, unknown> {
-    // OpenRouter routes each model to one of several upstreams; measured
-    // decode on the default route varied 12–124 tok/s for the same model.
-    // 'throughput' asks OpenRouter to prefer the fastest upstream. Set
-    // OPENROUTER_PROVIDER_SORT="" to disable (e.g. non-OpenRouter base URL).
-    // Privacy filter (user decision 2026-07-24): route ONLY to Zero Data
-    // Retention endpoints — OpenRouter enforces `zdr: true` server-side
-    // (verified live: all three rotation models route under it; gemini →
-    // Google, deepseek → Novita, scout → Groq). data_collection 'deny'
-    // rides along as belt-and-braces. Set OPENROUTER_ZDR=false /
-    // OPENROUTER_DATA_COLLECTION="" to loosen.
-    const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
-    const zdr = (process.env.OPENROUTER_ZDR ?? 'true') !== 'false';
-    const dataCollection = process.env.OPENROUTER_DATA_COLLECTION ?? 'deny';
-    const providerPrefs = {
-      ...(sort ? { sort } : {}),
-      ...(zdr ? { zdr: true } : {}),
-      ...(dataCollection ? { data_collection: dataCollection } : {}),
-    };
+    const providerPrefs = openRouterProviderPrefs();
     return {
       model: req.model,
       messages: req.messages,
@@ -228,6 +243,48 @@ export class OpenRouterProvider implements AiProvider {
     }
     return (await res.json()) as T;
   }
+}
+
+/**
+ * OpenRouter `provider` routing block, shared by chat and embeddings.
+ *
+ * OpenRouter routes each model to one of several upstreams; measured decode
+ * on the default route varied 12–124 tok/s for the same model. 'throughput'
+ * asks OpenRouter to prefer the fastest upstream. Set
+ * OPENROUTER_PROVIDER_SORT="" to disable (e.g. non-OpenRouter base URL, or
+ * if the /embeddings route rejects `sort`).
+ * Privacy filter (user decision 2026-07-24): route ONLY to Zero Data
+ * Retention endpoints — OpenRouter enforces `zdr: true` server-side
+ * (verified live: all three rotation models route under it; gemini →
+ * Google, deepseek → Novita, scout → Groq). data_collection 'deny' rides
+ * along as belt-and-braces. Set OPENROUTER_ZDR=false /
+ * OPENROUTER_DATA_COLLECTION="" to loosen.
+ *
+ * Exported so the embeddings path gets the same privacy guarantees from the
+ * same env knobs — a second copy of this logic is exactly how one route ends
+ * up quietly leaving ZDR behind.
+ */
+export function openRouterProviderPrefs(): Record<string, unknown> {
+  const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
+  const zdr = (process.env.OPENROUTER_ZDR ?? 'true') !== 'false';
+  const dataCollection = process.env.OPENROUTER_DATA_COLLECTION ?? 'deny';
+  return {
+    ...(sort ? { sort } : {}),
+    ...(zdr ? { zdr: true } : {}),
+    ...(dataCollection ? { data_collection: dataCollection } : {}),
+  };
+}
+
+function isFiniteNumberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every((n) => typeof n === 'number' && Number.isFinite(n));
+}
+
+/** Enough of the bad value to identify the encoding, never the whole vector. */
+function describeEmbedding(value: unknown): string {
+  if (typeof value === 'string') return `string of length ${value.length}`;
+  if (!Array.isArray(value)) return value === null ? 'null' : typeof value;
+  const offender = value.find((v) => typeof v !== 'number' || !Number.isFinite(v));
+  return `array[${value.length}] containing a ${typeof offender} (${String(offender).slice(0, 40)})`;
 }
 
 /** A 4xx complaining about response_format/json_schema means the model can't do strict schemas. */
