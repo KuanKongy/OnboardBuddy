@@ -6,6 +6,7 @@
 
 import { query } from '../../lib/db.js';
 import { decrypt } from '../../lib/encryption.js';
+import { profileForModel } from './embeddingProfiles.js';
 
 export type KeySource = 'server' | 'project';
 
@@ -36,9 +37,20 @@ export async function resolveApiKey(projectId: string, provider = 'openrouter'):
   return { apiKey: serverKey, keySource: 'server' };
 }
 
-/** Embeddings go to the embeddings endpoint with its own (server) key. */
-export function resolveEmbeddingsKey(): ResolvedKey {
-  const key = process.env.EMBEDDINGS_API_KEY ?? process.env.OPENROUTER_API_KEY;
+/**
+ * Embeddings go to the embeddings endpoint with its own (server) key.
+ *
+ * The preference order flips with the model's profile because both keys are
+ * usually set at once: EMBEDDINGS_API_KEY holds an OpenAI key on every
+ * deployment that predates the OpenRouter switch, and sending an OpenAI key
+ * to openrouter.ai is a guaranteed 401 for the whole embedding phase. Callers
+ * that omit `model` keep the historical order.
+ */
+export function resolveEmbeddingsKey(model?: string): ResolvedKey {
+  const preferOpenRouter = model !== undefined && profileForModel(model).keyPreference === 'openrouter';
+  const key = preferOpenRouter
+    ? process.env.OPENROUTER_API_KEY ?? process.env.EMBEDDINGS_API_KEY
+    : process.env.EMBEDDINGS_API_KEY ?? process.env.OPENROUTER_API_KEY;
   if (!key) throw new Error('No embeddings API key: set EMBEDDINGS_API_KEY or OPENROUTER_API_KEY');
   return { apiKey: key, keySource: 'server' };
 }

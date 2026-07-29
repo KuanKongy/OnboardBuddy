@@ -22,7 +22,12 @@ describe("backend API integration (mocked auth + db)", () => {
   });
 
   it("Auth endpoints validate signup, login, logout, and current user", async () => {
-    const missingEmail = await request(app).post("/api/auth/signup").send({ password: "secret123" });
+    // `POST /auth/signup` was deleted in M5 (bug #66) — it confirmed accounts
+    // for addresses the caller did not control.
+    const signupGone = await request(app).post("/api/auth/signup").send({ email: "a@b.com", password: "secret123" });
+    expect(signupGone.status).to.equal(404);
+
+    const missingEmail = await request(app).post("/api/auth/login").send({ password: "secret123" });
     expect(missingEmail.status).to.equal(400);
 
     const missingPassword = await request(app).post("/api/auth/login").send({ email: "a@b.com" });

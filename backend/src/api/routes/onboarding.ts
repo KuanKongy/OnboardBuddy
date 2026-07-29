@@ -840,6 +840,24 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
 onboardingRouter.get("/sections/:sectionId/receipts", requireProjectAccess(), async (req, res) => {
   try {
     const { sectionId } = req.params;
+    const projectId = String(req.params.id);
+
+    // Scope the child to the project in the path before reading anything.
+    // `requireProjectAccess` proves the caller manages THIS project; it cannot
+    // prove this section belongs to it, and receipts carry source snippets —
+    // so an unscoped lookup here served another tenant's private code (#65).
+    // Same join the regenerate route above uses.
+    const ownership = await query(
+      `SELECT 1
+       FROM package_sections ps
+       JOIN onboarding_packages op ON op.id = ps.package_id
+       WHERE ps.id = $1 AND op.project_id = $2`,
+      [sectionId, projectId],
+    );
+    if (ownership.rows.length === 0) {
+      res.status(404).json({ error: "Section not found" });
+      return;
+    }
 
     const receiptsResult = await query(
       `SELECT sr.id, sr.file_path, sr.symbol_name, sr.line_start, sr.line_end,
@@ -1003,6 +1021,7 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
 onboardingRouter.patch("/sections/:sectionId/review", requireProjectAccess("owner", "admin"), async (req, res) => {
   try {
     const { sectionId } = req.params;
+    const projectId = String(req.params.id);
     const { review_status } = req.body as { review_status: string };
 
     if (!["approved", "draft"].includes(review_status)) {
@@ -1012,12 +1031,21 @@ onboardingRouter.patch("/sections/:sectionId/review", requireProjectAccess("owne
 
     const userId = req.user?.id;
 
+    // The project filter lives in the UPDATE itself rather than in a check
+    // before it, so there is no window in which the row could be written
+    // outside the tenant the caller was authorized for. Without the
+    // `onboarding_packages` join this approved (or un-approved) another
+    // team's sections and flipped their package status — the one cross-tenant
+    // WRITE of #65.
     const updateResult = await query(
-      `UPDATE package_sections
+      `UPDATE package_sections ps
        SET review_status = $1, reviewed_at = NOW(), reviewed_by = $2
-       WHERE id = $3
-       RETURNING *`,
-      [review_status, userId, sectionId],
+       FROM onboarding_packages op
+       WHERE op.id = ps.package_id
+         AND ps.id = $3
+         AND op.project_id = $4
+       RETURNING ps.*`,
+      [review_status, userId, sectionId, projectId],
     );
 
     if (updateResult.rows.length === 0) {

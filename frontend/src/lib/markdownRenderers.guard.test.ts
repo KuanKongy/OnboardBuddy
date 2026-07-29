@@ -151,7 +151,12 @@ describe("no inline script in index.html (what lets the CSP stay script-src 'sel
 });
 
 describe("the nginx CSP keeps the properties the assessment depends on", () => {
-  const conf = readFileSync(join(ROOT, "security-headers.conf"), "utf8");
+  // The template, not the rendered file: connect-src is generated per
+  // deployment at container start (issue #73). Everything asserted below is
+  // deployment-independent and therefore lives in the template verbatim; the
+  // generated part is covered by runtimeConfig.entrypoint.test.ts, which runs
+  // the real script.
+  const conf = readFileSync(join(ROOT, "security-headers.conf.template"), "utf8");
   const nginx = readFileSync(join(ROOT, "nginx.conf"), "utf8");
   const csp = conf.match(/Content-Security-Policy\s+"([^"]+)"/)?.[1] ?? "";
 
@@ -179,6 +184,15 @@ describe("the nginx CSP keeps the properties the assessment depends on", () => {
     for (const header of ["X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Permissions-Policy"]) {
       expect(conf, header).to.include(header);
     }
+  });
+
+  it("names no environment-specific origin — connect-src is generated, not written", () => {
+    // Regression guard for #73: hardcoding a host here is how the policy ended
+    // up naming http://localhost:3000, which meant the shipped image could only
+    // ever talk to one API.
+    expect(csp).to.include("connect-src __CSP_CONNECT_SRC__");
+    expect(csp).to.not.include("localhost");
+    expect(csp).to.not.include("supabase");
   });
 
   it("marks every header `always` so error responses carry them too", () => {

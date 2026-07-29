@@ -25,10 +25,17 @@ import type { PrivacyMode } from './ai/privacy.js';
 import type { SemanticDepth } from './engine/budgets.js';
 import type { DeveloperRole } from './semantic/projections.js';
 import { settlePackageStaleness } from './incrementalAnalyzer.js';
+import { trackInFlightJob } from './jobRecovery.js';
+import { recordJobFailure } from './retryPolicy.js';
 import { SECTION_SPECS, SECTION_TITLES, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
 import { generateDeterministicSection } from './generation/deterministicSectionGenerator.js';
-import { generateDeterministicTutorials, generateTutorials } from './generation/tutorialGenerator.js';
+import {
+  generateDeterministicTutorials,
+  generateTutorials,
+  regenerateOneTutorial,
+  type RegenerateOneResult,
+} from './generation/tutorialGenerator.js';
 import {
   isRunControlError,
   recordFailedSectionGap,
@@ -96,8 +103,51 @@ async function setMemberDefaultPackage(projectId: string, userId: string, packag
   }
 }
 
+/**
+ * Bug #36: terminal write for a single-tutorial regeneration, shared by the AI
+ * and ai_disabled paths.
+ *
+ * A miss is reported as a FAILED job with the reason, never as a quiet success.
+ * "Regenerate did nothing and the tutorial is still marked stale" is precisely
+ * the dead end this feature exists to remove, and the two ways it can miss —
+ * the flow is gone, or it no longer yields a procedure — are real answers about
+ * the repository that the reader is entitled to.
+ */
+async function finishTutorialRegeneration(
+  outcome: RegenerateOneResult,
+  ctx: {
+    packageId: string;
+    projectId: string;
+    /** The tutorial stable key, for the log line. */
+    jobId: string;
+    updateJob: (status: string, step: string, pct: number, errorMsg?: string) => Promise<void>;
+  },
+): Promise<void> {
+  if (!outcome.ok) {
+    const why = outcome.miss === 'workflow_gone'
+      ? 'The flow this walkthrough followed no longer exists in the latest analysis, so there is nothing to rebuild. Regenerate the package to get the current set.'
+      : `This flow no longer supports a step-by-step procedure${outcome.detail ? ` (${outcome.detail})` : ''}. The Tutorials tab lists why under "not shown".`;
+    await ctx.updateJob('failed', 'Cannot regenerate this tutorial', 100, why);
+    await recomputeProjectStatus(ctx.projectId).catch(() => {});
+    console.warn(`[summary-worker] tutorial ${ctx.jobId} not regenerated: ${outcome.miss}`);
+    return;
+  }
+  // The package leaves 'stale' once nothing stale is left in it — sections AND
+  // tutorials, which is why settlePackageStaleness had to learn about the
+  // latter (incrementalAnalyzer.ts).
+  await settlePackageStaleness(ctx.packageId);
+  await ctx.updateJob('complete', outcome.cached ? 'Tutorial unchanged (reused)' : 'Regenerated tutorial', 100);
+  await recomputeProjectStatus(ctx.projectId);
+  console.log(`[summary-worker] regenerated tutorial ${ctx.jobId} (steps=${outcome.steps}, cached=${outcome.cached === true})`);
+}
+
 async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
-  const { jobId, snapshotId, projectId, triggeredBy, role: requestedRole, sectionType: regenerateSectionType } = job.data;
+  const {
+    jobId, snapshotId, projectId, triggeredBy, role: requestedRole,
+    sectionType: regenerateSectionType,
+    // Bug #36: single-tutorial regeneration, the mirror of regenerate_section.
+    tutorialStableKey: regenerateTutorialKey,
+  } = job.data;
 
   const updateJob = async (status: string, step: string, pct: number, errorMsg?: string) => {
     const finishedAt = status === 'complete' || status === 'failed' || status === 'paused' ? new Date() : null;
@@ -134,7 +184,10 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
   let budgetRef: BudgetEnforcer | null = null;
 
   try {
-    await query(`UPDATE analysis_jobs SET attempt = $2 WHERE id = $1`, [jobId, job.attemptsMade + 1]);
+    // GREATEST, not assignment: a run recovered after a worker restart is a
+    // NEW BullMQ job whose attemptsMade is back at 0, and the attempt count
+    // the UI shows must not walk backwards on what is really the third try.
+    await query(`UPDATE analysis_jobs SET attempt = GREATEST(attempt, $2) WHERE id = $1`, [jobId, job.attemptsMade + 1]);
     await updateJob('running', 'Loading snapshot', 5);
     const snap = await loadSnapshot(snapshotId);
     const role = (requestedRole as DeveloperRole | undefined) ?? snap.role;
@@ -173,6 +226,21 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
         await settlePackageStaleness(packageId);
         await updateJob('complete', `Regenerated ${regenerateSectionType} (AI disabled)`, 100);
         await recomputeProjectStatus(projectId);
+        return;
+      }
+      // Bug #36 under ai_disabled: the walkthrough skeleton is computed from
+      // the trace, so a single tutorial still rebuilds with zero LLM calls —
+      // `ai: null` is the same switch the full deterministic path uses.
+      if (regenerateTutorialKey) {
+        await updateJob('running', `Regenerating tutorial (deterministic)`, 40);
+        const outcome = await regenerateOneTutorial({
+          ai: null, snapshotId, projectId, packageId, role,
+          commitHash: snap.commit_hash, projections: deps.projections,
+          privacyMode: 'ai_disabled',
+        }, regenerateTutorialKey);
+        await finishTutorialRegeneration(outcome, {
+          packageId, projectId, jobId: regenerateTutorialKey, updateJob,
+        });
         return;
       }
       // A package row is reused across regenerations (ON CONFLICT above), so a
@@ -270,6 +338,23 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       await updateJob('complete', `Regenerated ${regenerateSectionType}`, 100);
       await recomputeProjectStatus(projectId);
       console.log(`[summary-worker] regenerated ${regenerateSectionType} (section=${result.sectionId}, issues=${result.validation.issues.length})`);
+      return;
+    }
+
+    if (regenerateTutorialKey) {
+      // ── Bug #36: regenerate ONE tutorial, same contract as a section ──
+      // Rebuilt against the snapshot this job targets (the API points a stale
+      // tutorial at the newest complete snapshot of its scope), replacing the
+      // row in place. Everything else in the package is untouched and unpaid
+      // for — which is the entire point of per-tutorial granularity.
+      await updateJob('running', 'Regenerating tutorial', 40);
+      const outcome = await regenerateOneTutorial({
+        ai, snapshotId, projectId, packageId, role,
+        commitHash: snap.commit_hash, projections: deps.projections, privacyMode,
+      }, regenerateTutorialKey);
+      await finishTutorialRegeneration(outcome, {
+        packageId, projectId, jobId: regenerateTutorialKey, updateJob,
+      });
       return;
     }
 
@@ -504,8 +589,23 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     }
 
     const message = err instanceof Error ? err.message : String(err);
+    // Bug #69(2): 'failed' only on the LAST attempt. Writing it on the first
+    // one made this worker's own `attempts: 2` a no-op — `updateJob('running')`
+    // is guarded on `status NOT IN ('paused','failed')`, so the redelivery
+    // threw KillSwitchError on its first line and exited before doing anything.
+    // Generation is the likeliest place to meet a transient provider error, so
+    // it is also where a working retry is worth the most.
+    const { retrying } = await recordJobFailure(job, jobId, err, message)
+      .catch(() => ({ retrying: false }));
+    if (retrying) {
+      // Deliberately NOT marking the phase or the package failed: the run is
+      // going to happen again in a few seconds, and a package that flickers
+      // 'failed' between attempts is the same lie in miniature. Sections
+      // already written stay; the resume checkpoint makes the retry skip them.
+      console.warn(`[summary-worker] job ${job.id} failed (attempt ${job.attemptsMade + 1}), retrying:`, message);
+      throw err;
+    }
     await markPhase(snapshotId, 'generation', 'failed', {}, { errorMessage: message.slice(0, 500) }).catch(() => {});
-    await updateJob('failed', 'Failed', 0, message).catch(() => {});
     // Scope the failure to THIS run's package — concurrent sibling packages
     // at the same commit (other roles/branches) stay untouched.
     if (failedPackageId) {
@@ -527,7 +627,16 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
 function createSummaryWorker(): Worker<SummaryJobData> {
   const w = new Worker<SummaryJobData>(
     SUMMARY_QUEUE,
-    processSummaryJob,
+    async (job: Job<SummaryJobData>) => {
+      // Registered for the shutdown handoff (jobRecovery.ts): if the drain
+      // grace period expires we know exactly which rows we abandoned.
+      const release = trackInFlightJob(job.data.jobId);
+      try {
+        await processSummaryJob(job);
+      } finally {
+        release();
+      }
+    },
     {
       connection,
       // Parallel package generations. Its OWN knob: this worker is hosted in
@@ -563,10 +672,19 @@ function createSummaryWorker(): Worker<SummaryJobData> {
 
 export let summaryWorker = createSummaryWorker();
 
+/**
+ * The CURRENT consumer. The watchdog replaces `summaryWorker` in place, so
+ * `worker/index.ts` must resolve it at shutdown time rather than capture it
+ * at import time.
+ */
+export function getSummaryWorker(): Worker<SummaryJobData> {
+  return summaryWorker;
+}
+
 // Dead-consumer self-heal (see lib/queueWatchdog.ts): recreate the consumer
 // in-process when queued jobs sit while nothing is active.
 const summaryQueueForWatchdog = new Queue(SUMMARY_QUEUE, { connection });
-startQueueWatchdog({
+export const stopSummaryWatchdog = startQueueWatchdog({
   queueName: SUMMARY_QUEUE,
   sample: async () => ({
     waiting: await summaryQueueForWatchdog.getWaitingCount(),

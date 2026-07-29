@@ -268,6 +268,69 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
   return result;
 }
 
+/** Why a single-tutorial regeneration could not be served. */
+export type TutorialRegenerationMiss = 'workflow_gone' | 'no_longer_eligible';
+
+export interface RegenerateOneResult {
+  ok: boolean;
+  /** Set when `ok` is false — what the reader should be told. */
+  miss?: TutorialRegenerationMiss;
+  cached?: boolean;
+  steps?: number;
+  detail?: string;
+}
+
+/**
+ * Bug #36 — rebuild ONE tutorial against the current snapshot.
+ *
+ * The mirror of `regenerate_section`, and it exists for the same reason:
+ * incremental analysis flags a tutorial stale when a file its steps cite
+ * changes, and until now the only way to clear that flag was to regenerate the
+ * whole package — every section, every other tutorial, paid for again.
+ *
+ * `stableKey` is the tutorial row's own key (`tut:<workflow stable key>`).
+ * Selection is re-run rather than trusting the old row: a tutorial only exists
+ * where the evidence supports a procedure, and evidence is exactly what
+ * changed. Two honest misses come out of that and are reported rather than
+ * silently producing nothing:
+ *
+ * - `workflow_gone`     — the flow no longer exists in this snapshot.
+ * - `no_longer_eligible`— the flow is still there but no longer yields a
+ *                         procedure (its traced effect disappeared, say).
+ *
+ * The cap is deliberately NOT applied: the reader already has this tutorial and
+ * is asking for it to be refreshed, so "it lost a slot to a higher-ranked flow"
+ * is not a reason to refuse. `selectProcedures` is asked for an unbounded set
+ * and the requested key is picked out of it.
+ */
+export async function regenerateOneTutorial(
+  params: GenerateTutorialsParams,
+  stableKey: string,
+): Promise<RegenerateOneResult> {
+  const { candidates, report } = await selectProcedures({ ...params, maxTutorials: Number.MAX_SAFE_INTEGER });
+  const index = candidates.findIndex((c) => `tut:${c.workflow.stable_key}` === stableKey);
+  if (index === -1) {
+    const workflowKey = stableKey.startsWith('tut:') ? stableKey.slice(4) : stableKey;
+    const skipped = report.skipped.find((s) => s.detail === workflowKey || s.title === workflowKey);
+    const stillExists = skipped !== undefined
+      || (await query(
+        `SELECT 1 FROM workflows WHERE snapshot_id = $1 AND stable_key = $2`,
+        [params.snapshotId, workflowKey],
+      )).rows.length > 0;
+    return {
+      ok: false,
+      miss: stillExists ? 'no_longer_eligible' : 'workflow_gone',
+      detail: skipped?.reason,
+    };
+  }
+
+  const candidate = candidates[index]!;
+  // Rank 0: a single regeneration is not re-ranking the set, and passing the
+  // selection index would let this row claim a position it did not win.
+  const one = await generateOneTutorial(params, candidate, 0, report);
+  return { ok: true, cached: one.cached, steps: candidate.draft.steps.length };
+}
+
 /** Trigger family for diversity capping: trivial-read families are capped. */
 export function workflowFamily(triggerType: string): string {
   if (triggerType === 'HTTP GET') return 'read_route';

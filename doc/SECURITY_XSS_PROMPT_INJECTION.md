@@ -254,7 +254,7 @@ for each, where the original assessment was wrong, and what is still open.
 
 | ID | Fix | Where | Verified by |
 |----|-----|-------|-------------|
-| **X3** | CSP + 5 security headers, `script-src 'self'` with no `unsafe-inline`/`unsafe-eval`/hash | `frontend/security-headers.conf`, included by every `location` in `nginx.conf`; theme bootstrap moved to `public/bootstrap.js` | Live browser probes against the real production bundle (§7.2) + `markdownRenderers.guard.test.ts` |
+| **X3** | CSP + 5 security headers, `script-src 'self'` with no `unsafe-inline`/`unsafe-eval`/hash | `frontend/security-headers.conf.template`, included by every `location` in `nginx.conf`; theme bootstrap moved to `public/bootstrap.js` | Live browser probes against the real production bundle (§7.2) + `markdownRenderers.guard.test.ts` |
 | **P1** | Untrusted-data boundary: instructions in the `system` turn, repo evidence fenced in the `user` turn with a fresh 64-bit nonce per request | `worker/ai/untrustedData.ts`, wired into `sectionGenerator.ts` | `promptInjection.test.ts` layer 1; `SECURITY_TEST_EVIDENCE.md` §2 shows the real prompt |
 | **P2** | Model markdown sanitized at the single point it enters the pipeline — before validation, critique, citation rewriting, persistence and export | `worker/generation/markdownSanitizer.ts`, called in `callModel` | `markdownSanitizer.test.ts` (48 tests); `promptInjection.test.ts` layer 2 |
 | **X1** | Renderer drops `img` and off-allowlist URLs at all three markdown surfaces | `frontend/src/lib/markdownSafety.ts` → `OnboardingPage` (×2), `AskPanel` | `markdownSafety.test.tsx` renders the real config and inspects the DOM |
@@ -357,9 +357,16 @@ injection is solved":
   route). Sanitization cannot detect an omission. The mitigations here are the
   boundary, the citation validator, and the section critique; none is a
   guarantee. **A generated doc is not a security review of the repo it describes.**
-- **`connect-src` is hardcoded** to the compose topology (`localhost:3000`,
-  `*.supabase.co`). A different deployment must edit that one line; it is exact
-  rather than wildcarded on purpose.
+- **`connect-src` is generated per deployment** (M5, issue #73). It used to be
+  hardcoded to the compose topology (`localhost:3000`, `*.supabase.co`), which
+  meant a different deployment had to edit the line. The container's startup
+  script now derives it from the same `VITE_API_URL` / `VITE_SUPABASE_URL` it
+  publishes to the app — `'self'` plus the API origin plus the Supabase origin
+  and its `wss:` counterpart. Strictly tighter than before: the wildcard is
+  gone, so the policy names one Supabase project rather than every project on
+  the platform. Template: `frontend/security-headers.conf.template`; generator:
+  `frontend/docker-entrypoint.d/10-onboardbuddy-runtime-config.sh`; tests:
+  `frontend/src/lib/runtimeConfig.entrypoint.test.ts`.
 - **`style-src` still needs `'unsafe-inline'`** (React style attributes, mermaid's
   injected SVG `<style>`). Inline style cannot execute script under this policy,
   so the residual is appearance, not code execution.

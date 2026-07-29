@@ -199,6 +199,32 @@
     outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+
+  /* A tooltip must never be able to take a click.
+     ────────────────────────────────────────────
+     Bug #84 (VISUAL QA M4 #5): the Files ⇄ "Classes & interfaces" toggle on
+     Dependencies needed two presses. The first fix put `pointer-events-none`
+     on `TooltipContent`, which was the right idea on the wrong element —
+     Radix portals that content inside its own popper wrapper,
+     `[data-radix-popper-content-wrapper]`, an un-classed `position: fixed;
+     z-index: 50` div that keeps `pointer-events: auto`. So the visible box
+     was transparent to the pointer while the invisible box around it was not:
+     `document.elementFromPoint` over the toggle returned that DIV, not the
+     BUTTON, and the press only dismissed the tooltip. Verified live —
+     clicking the covered part of the toggle failed 3/3 while the uncovered
+     part of the same button succeeded first time, with the same tooltip open.
+
+     Fixed on the wrapper, and deliberately for every tooltip rather than that
+     one control: any tooltip that happens to overlap any control eats a
+     click, and this one only became reproducible because a wrapping header
+     row put the box on top of a button. Scoped with `:has()` to wrappers that
+     hold a TOOLTIP — dropdown-menu, select and the other Radix poppers share
+     this wrapper and must stay interactive. Safe app-wide: no `TooltipContent`
+     in this codebase contains anything clickable (asserted in
+     `tooltip.interactive.test.tsx`), so nothing loses a target. */
+  [data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
+    pointer-events: none;
+  }
 }
 
 @layer components {

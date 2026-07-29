@@ -317,8 +317,13 @@ githubWebhookRouter.post("/", async (req, res) => {
       }
     }
 
+    // Bug #69(1): each submission fails its own row when it throws
+    // (enqueueAnalysisRun). Keep going regardless — one unreachable-queue
+    // error must not strand the sibling scopes' rows on 'queued' forever.
     for (const { jobId, data } of enqueued) {
-      await enqueueAnalysisRun(jobId, data);
+      await enqueueAnalysisRun(jobId, data).catch((err) => {
+        console.error(`[webhook] could not queue run ${jobId}:`, err instanceof Error ? err.message : err);
+      });
     }
 
     if (enqueued.length === 0) {

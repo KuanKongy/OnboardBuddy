@@ -2,38 +2,28 @@ import { Router } from "express";
 import { supabaseAdmin } from "../../lib/supabase.js";
 import { pool, query } from "../../lib/db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { authRateLimit } from "../middleware/authRateLimit.js";
 import { deleteAccountTx, deleteAuthUser } from "../services/accountDeletion.js";
 
 export const authRouter = Router();
 
-authRouter.post("/signup", async (req, res) => {
-  try {
-    const { email, password } = req.body as { email: string; password: string };
-    if (!email || !password) {
-      res.status(400).json({ error: "Email and password are required" });
-      return;
-    }
+/**
+ * There is deliberately no `POST /signup` here (bug #66).
+ *
+ * It used to call `supabase.auth.admin.createUser({ email_confirm: true })`
+ * from an unauthenticated route, which created a *confirmed* account for any
+ * address the caller typed — a bypass of the confirmation email that the real
+ * sign-up path (the Supabase client, in the frontend) sends. Because
+ * invitations are matched on email address, that let an attacker pre-register
+ * a victim's address and then accept invitations addressed to them.
+ *
+ * Nothing in the product called it: sign-up happens client-side against
+ * Supabase. Deleting it is subtraction, not a refactor — and it takes bugs #4
+ * and #5 (no server-side email format check, password minimum mismatched with
+ * the frontend) with it, since the endpoint they described no longer exists.
+ */
 
-    const { data, error } = await supabaseAdmin.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    });
-
-    if (error) {
-      const status = error.message.includes("already") ? 409 : 422;
-      res.status(status).json({ error: error.message });
-      return;
-    }
-
-    res.status(201).json({ user: { id: data.user.id, email: data.user.email } });
-  } catch (err) {
-    console.error("Signup error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-authRouter.post("/login", async (req, res) => {
+authRouter.post("/login", ...authRateLimit, async (req, res) => {
   try {
     const { email, password } = req.body as { email: string; password: string };
     if (!email || !password) {

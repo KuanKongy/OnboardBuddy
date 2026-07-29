@@ -104,6 +104,15 @@ export interface SummaryJobData {
   /** Set for regenerate_section jobs: regenerate only this section type. */
   sectionType?: string;
   /**
+   * Bug #36: set for a single-tutorial regeneration — the `tutorials.stable_key`
+   * to rebuild (`tut:<workflow key>`). Rides the SAME `regenerate_section` job
+   * type: `analysis_jobs.job_type` is a CHECK-constrained enum and M5 freezes
+   * the schema (doc/DEVOPS.md), so the distinction lives in the job's
+   * `checkpoint` jsonb and in this field rather than in a new enum value.
+   * Mutually exclusive with `sectionType`.
+   */
+  tutorialStableKey?: string;
+  /**
    * Set for regenerate_section jobs: the existing package to regenerate
    * into. Lets a stale section be rebuilt against a newer snapshot without
    * spawning a new package for the new commit.

@@ -32,7 +32,7 @@ import { ROLE_OPTIONS, roleTitle } from "@/lib/roles";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
-import { AnalysisRunPanel } from "@/components/AnalysisRunPanel";
+import { AnalysisRunPanel, PHASE_ORDER, StatusIcon } from "@/components/AnalysisRunPanel";
 import { PackageCardView } from "@/pages/OnboardingPage";
 import type { AnalysisJob, RunHistoryEntry } from "@/types/analysis";
 
@@ -72,6 +72,10 @@ function runActionLabel(run: RunHistoryEntry): string {
       return `Generated ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
     }
     case "regenerate_section":
+      // Bug #36: a single-tutorial regeneration shares this job type (the
+      // enum is CHECK-constrained and M5 freezes the schema), so the label
+      // comes from whichever checkpoint key the run carries.
+      if (run.tutorial_title) return `Regenerated tutorial "${run.tutorial_title}"`;
       return `Regenerated section ${(run.section_type ?? run.sections.generated[0] ?? "").replace(/_/g, " ")}`.trim();
     case "preflight":
       return `Preflight preview of ${scope}`;
@@ -244,6 +248,101 @@ function RunCard({
 
 // ── Run history ───────────────────────────────────────────────────────────────
 
+/** Section and tutorial regenerations ride one job type (the enum is
+ *  CHECK-constrained); both touch a single item rather than the pipeline. */
+function isPartialRun(run: RunHistoryEntry): boolean {
+  return run.job_type === "regenerate_section";
+}
+
+const PHASE_BY_KEY = new Map(PHASE_ORDER.map((p) => [p.key, p]));
+
+/** The worker stamps citation validation at 93% and everything before it
+ *  lower (summaryWorker's `updateJob` calls), so the run row's own
+ *  progress_pct is enough to place a partial run inside its step list. */
+const VALIDATION_PCT = 93;
+
+/**
+ * The steps a regeneration ACTUALLY runs.
+ *
+ * A section regeneration validates its citations inline (`generateSection` →
+ * `validateGeneratedOutput`), so two steps are the truth. A single-tutorial
+ * regeneration has no citation pass anywhere on its path — listing one would
+ * advertise work that never happens.
+ */
+export function partialRunSteps(run: Pick<RunHistoryEntry, "tutorial_title">): Array<{ label: string; desc: string }> {
+  if (run.tutorial_title) {
+    return [{
+      label: "Generate tutorial",
+      desc: "Rebuilds this one walkthrough from the traced flow — nothing else in the package is touched or paid for",
+    }];
+  }
+  return ["generation", "validation"].map((key) => {
+    const phase = PHASE_BY_KEY.get(key)!;
+    return { label: phase.label, desc: phase.desc };
+  });
+}
+
+/** How far a partial run got, from the run row alone — its snapshot's phases
+ *  describe the analysis that built it, not this run. */
+export function partialStepStatuses(
+  run: Pick<RunHistoryEntry, "status" | "progress_pct">,
+  stepCount: number,
+): string[] {
+  if (run.status === "complete") return Array.from({ length: stepCount }, () => "complete");
+  // The guards that fail before generating anything still report 100% ("this
+  // section is from a previous layout", "this flow can't be rebuilt"), so a
+  // failed run at 100 blames the first step rather than crediting a step that
+  // never ran.
+  const active = run.status === "failed" && run.progress_pct >= 100
+    ? 0
+    : run.progress_pct >= VALIDATION_PCT
+      ? stepCount - 1
+      : 0;
+  // 'queued' has no icon of its own, and "about to run" reads as the spinner.
+  const activeStatus = run.status === "queued" ? "running" : run.status;
+  return Array.from({ length: stepCount }, (_, i) =>
+    i < active ? "complete" : i === active ? activeStatus : "pending",
+  );
+}
+
+/** The pipeline panel's phase rows, cut down to the steps this one run
+ *  performed — a regeneration's own record instead of the snapshot's. */
+function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
+  const steps = partialRunSteps(run);
+  const statuses = partialStepStatuses(run, steps.length);
+  return (
+    <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
+      <p className="mb-1.5 text-[0.65625rem] text-muted-foreground/70">
+        Steps this run performed — a regeneration replaces one item, so the rest of the pipeline never re-runs.
+      </p>
+      <ol className="space-y-0.5">
+        {steps.map((step, i) => {
+          const status = statuses[i] ?? "pending";
+          return (
+            <li key={step.label} className="flex items-center gap-2.5 py-0.5">
+              <StatusIcon status={status} />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    tabIndex={0}
+                    className={`w-44 shrink-0 cursor-help text-[0.75rem] ${status === "running" ? "font-medium text-foreground" : status === "pending" ? "text-muted-foreground/60" : "text-foreground"}`}
+                  >
+                    {step.label}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-left">{step.desc}</TooltipContent>
+              </Tooltip>
+              <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted-foreground">
+                {status === "running" ? run.current_step ?? "working…" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: string }) {
   const [open, setOpen] = useState(false);
   const hasCost = run.cost.llm_calls > 0 || run.cost.cached_calls > 0 || run.cost.estimated_cost_usd > 0;
@@ -304,25 +403,22 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           </div>
         )}
 
-        {/* Budgets cap ONE run; the snapshot's counters are the lifetime
-            record. Showing both is the only way "40 calls" means anything. */}
+        {/* Budgets cap ONE run, so this row talks about one run only. The
+            project-wide total moved to Project Settings — a lifetime figure
+            inside a single run's row was read as that run's spend. */}
         {run.job_type !== "preflight" && (
           <p className="text-[0.6875rem] text-muted-foreground">
             {run.budget.usedThisRun === null ? (
               <>
                 <span className="font-medium text-foreground">Budget:</span>{" "}
                 cap {run.budget.capLlmCalls.toLocaleString()} calls per run · usage this run not recorded
-                {run.budget.note ? ` (${run.budget.note})` : ""} ·{" "}
-                lifetime on this snapshot: {run.budget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
-                ${run.budget.lifetimeCostUsd.toFixed(4)}
+                {run.budget.note ? ` (${run.budget.note})` : ""}
               </>
             ) : (
               <>
                 <span className="font-medium text-foreground">Budget:</span>{" "}
                 {run.budget.usedThisRun.toLocaleString()} of {run.budget.capLlmCalls.toLocaleString()} calls used this run
-                {run.budget.remaining !== null && ` · ${run.budget.remaining.toLocaleString()} left`} ·{" "}
-                lifetime on this snapshot: {run.budget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
-                ${run.budget.lifetimeCostUsd.toFixed(4)}
+                {run.budget.remaining !== null && ` · ${run.budget.remaining.toLocaleString()} left`}
               </>
             )}
           </p>
@@ -347,17 +443,22 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           </div>
         )}
 
-        {/* Full pipeline phases + spend for this run's snapshot; mounts (and
-            fetches) only while this row is open. */}
-        {open && run.snapshot_id && (
-          <AnalysisRunPanel
-            projectId={projectId}
-            snapshotId={run.snapshot_id}
-            isActive={false}
-            currentStep={null}
-            stepLog={[]}
-          />
-        )}
+        {/* A full run owns its snapshot's phases, so it gets the pipeline
+            panel (mounting — and fetching — only while the row is open). A
+            regeneration does not: the panel showed it the 16 phases of the
+            analysis that had built the snapshot, i.e. someone else's work
+            billed to a run that rewrote one section. */}
+        {open && (isPartialRun(run)
+          ? <PartialRunSteps run={run} />
+          : run.snapshot_id ? (
+            <AnalysisRunPanel
+              projectId={projectId}
+              snapshotId={run.snapshot_id}
+              isActive={false}
+              currentStep={null}
+              stepLog={[]}
+            />
+          ) : null)}
       </div>
     </details>
   );
@@ -742,8 +843,6 @@ export function ProjectOverviewPage() {
                     <p className="mt-0.5 text-[0.6875rem] tabular-nums text-muted-foreground">
                       {jobBudget.usedThisRun.toLocaleString()} of {jobBudget.capLlmCalls.toLocaleString()} calls used this run
                       {jobBudget.remaining !== null && ` · ${jobBudget.remaining.toLocaleString()} left`}
-                      {" · "}lifetime on this snapshot: {jobBudget.lifetimeLlmCalls.toLocaleString()} calls,{" "}
-                      ${jobBudget.lifetimeCostUsd.toFixed(4)}
                     </p>
                   )}
                 </div>
@@ -867,8 +966,24 @@ export function ProjectOverviewPage() {
           <History className="h-3.5 w-3.5 text-muted-foreground" />
           Run history
         </h2>
-        {runsError && <p className="mb-2 text-xs text-destructive">{runsError}</p>}
-        {runs === null ? (
+        {/* Bug #68: the error line rendered ABOVE a spinner that never
+            resolved, because a failed fetch leaves `runs` at null forever.
+            The failure is now the whole state, with a retry — a spinner that
+            spins after the request already lost is worse than no spinner. */}
+        {runsError ? (
+          <div
+            className="flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-soft px-3 py-3"
+            role="alert"
+          >
+            <p className="text-xs text-danger">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+              Couldn&apos;t load run history — {runsError}
+            </p>
+            <Button size="xs" variant="outline" className="gap-1.5" onClick={loadRuns}>
+              <RefreshCw className="h-3 w-3" /> Retry
+            </Button>
+          </div>
+        ) : runs === null ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
           </div>

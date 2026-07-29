@@ -238,7 +238,7 @@ Each row is computed from section 4's output, not asserted by hand.
 
 ## 6. Transport layer (measured separately, in a browser)
 
-The CSP shipped in `frontend/security-headers.conf` was verified against the
+The CSP shipped in `frontend/security-headers.conf.template` was verified against the
 real production bundle served through the real nginx config. Results:
 
 | Probe | Result |

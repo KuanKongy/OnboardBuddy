@@ -57,31 +57,31 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 
 | # | Title | P | State | Fix status |
 |---|-------|---|-------|------------|
-| 1 | encrypt('') does not round-trip through decrypt() | P4 | Open | — |
+| 1 | encrypt('') does not round-trip through decrypt() | P4 | Closed | Fixed (M5) |
 | 2 | requireProjectAccess did not catch DB query errors | P2 | Closed | Fixed |
-| 3 | GitHub routes fail when github-app.pem is missing | P1 | Open | — |
-| 4 | Signup does not validate email format server-side | P3 | Open | — |
-| 5 | Signup password minimum mismatches frontend (6 vs 8) | P3 | Open | — |
-| 6 | ProjectContext fetchProject missing useCallback deps | P3 | Open | — |
-| 7 | apiFetch sends Content-Type on GET requests | P4 | Open | — |
-| 8 | GitHub repos rejects installation_id=0 | P3 | Open | — |
-| 9 | Project settings uses fragile dynamic SQL pattern | P2 | Open | — |
-| 10 | Project delete relies on CASCADE without verification | P3 | Open | — |
+| 3 | GitHub routes fail when github-app.pem is missing | P1 | Closed | Fixed (M5) |
+| 4 | Signup does not validate email format server-side | P3 | Closed | Absorbed by #66 (M5) — endpoint deleted |
+| 5 | Signup password minimum mismatches frontend (6 vs 8) | P3 | Closed | Absorbed by #66 (M5) — endpoint deleted |
+| 6 | ProjectContext fetchProject missing useCallback deps | P3 | Closed | Already fixed — verified with the rule (M5) |
+| 7 | apiFetch sends Content-Type on GET requests | P4 | Closed | Fixed (M5) |
+| 8 | GitHub repos rejects installation_id=0 | P3 | Closed | Fixed (M5) — filed symptom unreachable, a reachable one found in the same guard |
+| 9 | Project settings uses fragile dynamic SQL pattern | P2 | Closed | Fixed (M5) |
+| 10 | Project delete relies on CASCADE without verification | P3 | Closed | Did not reproduce — cascade verified against the live DB, now pinned by a test (M5) |
 | 11 | Team member removal uses confusing double /members/ path | P2 | Closed | Fixed (verified 2026-07-25) |
 | 12 | App.test.tsx broken after auth routing refactor | P2 | Closed | Fixed |
 | 13 | saveGithubTokenFromSession / save-token flow | P4 | Closed | Fixed |
-| 14 | InvitationsPage error persists across operations | P3 | Open | — |
-| 15 | CORS falls back to localhost when CORS_ORIGIN unset | P3 | Open | — |
+| 14 | InvitationsPage error persists across operations | P3 | Closed | Fixed (M5) |
+| 15 | CORS falls back to localhost when CORS_ORIGIN unset | P3 | Closed | Fixed (M5) |
 | 16 | Mark as Reviewed was UI-only (did not persist) | P2 | Closed | Fixed |
 | 17 | Analysis generates onboarding for all 5 roles, not just selected role | P2 | Closed | Fixed (M3) |
 | 18 | GitHub OAuth can link wrong GitHub account | P3 | Closed | Fixed |
 | 19 | Regenerate section is a UI stub | P3 | Closed | Fixed (M3) |
 | 20 | Package export was a frontend alert stub | P3 | Closed | Fixed |
 | 21 | graphBuilder did not resolve .js imports to .ts sources | P3 | Closed | Fixed |
-| 22 | OnboardingPage swallows role-status fetch errors | P4 | Open | — |
+| 22 | OnboardingPage swallows role-status fetch errors | P4 | Closed | Fixed (M5) |
 | 23 | GraphPage tests relied on DEV mock fallback | P4 | Closed | Fixed |
-| 24 | No per-route React error boundaries | P5 | Open | — |
-| 25 | graphBuilder edge tests could pass vacuously when edges empty | P5 | Open | — |
+| 24 | No per-route React error boundaries | P5 | Closed | Fixed (M5) — not Won't-Fix after all |
+| 25 | graphBuilder edge tests could pass vacuously when edges empty | P5 | Closed | Fixed (M5) |
 | 26 | Architecture tab is a placeholder stub | P3 | Closed | Fixed (M3) |
 | 27 | LLM evidence context ignores role when loading critical rankings | P3 | Closed | Fixed (M3) |
 | 28 | Incremental re-analysis helpers not wired into worker | P3 | Closed | Fixed (M3) |
@@ -92,7 +92,7 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 | 33 | DEV mock fallbacks masked real API failures | P3 | Closed | Fixed (M3) |
 | 34 | Graph layout stacked nodes / rendered a line of nodes | P2 | Closed | Fixed (M3) |
 | 35 | Inline code in onboarding markdown shows decorative backticks | P4 | Closed | Fixed (M3) |
-| 36 | Stale tutorials cannot be regenerated individually | P5 | Open | — |
+| 36 | Stale tutorials cannot be regenerated individually | P5 | Closed | Fixed (M5) |
 | 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Open | Frontend part fixed; Supabase config pending |
 | 38 | Semantic analysis extremely slow (23 min analyze + 10 min generate) and ~$2/run | P1 | Closed | Fixed (M3) |
 | 39 | Workflow extraction finds 0 workflows on real repos (alias imports + fake route entrypoints) | P1 | Closed | Fixed (M3) |
@@ -131,16 +131,26 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 
 | # | Issue | P | State | Owner | M5 batch |
 |---|-------|---|-------|-------|----------|
-| 65 | Three routes are not scoped to the project — cross-tenant reads and one write | P2 | Open | Nam | 1 |
-| 66 | The authentication surface has an unused bypass and no throttling | P2 | Open | Nam | 1 |
-| 67 | Repository import blocks large accounts and its cost safety gate is bypassable | P2 | Open | Eugene / Nam | 2 |
-| 68 | Failed requests look like empty results — one pushes toward a paid action | P2 | Open | Sahib | 3 |
-| 69 | Analysis jobs can get stuck, or fail on an error that should have been retried | P2 | Open | Nam | 2 |
-| 70 | Dependency graph reports "imported by 0" for everything; search blanks the canvas | P2 | Open | Bradley / Eugene | 3 |
+| 65 | Three routes are not scoped to the project — cross-tenant reads and one write | P2 | Closed | Nam | 1 |
+| 66 | The authentication surface has an unused bypass and no throttling | P2 | Closed | Nam | 1 |
+| 67 | Repository import blocks large accounts and its cost safety gate is bypassable | P2 | Open | Eugene / Nam | 2 — cost gate + pagination fixed; badges/refresh remain |
+| 68 | Failed requests look like empty results — one pushes toward a paid action | P2 | Closed | Sahib | 3 |
+| 69 | Analysis jobs can get stuck, or fail on an error that should have been retried | P2 | Closed | Nam | 2 — fixed |
+| 70 | Dependency graph reports "imported by 0" for everything; search blanks the canvas | P2 | Closed | Bradley / Eugene | 3 — fixed |
 | 71 | Accessibility gaps and measured contrast failures | P3 | Open | Eugene | 4 |
 | 72 | Team lifecycle is a one-way door (no email, decline, leave, or ownership transfer) | P3 | Open | Nam | 5 |
-| 73 | The frontend image only works when the browser is on the Docker host | P3 | Open | Nam | 6 |
+| 73 | The frontend image only works when the browser is on the Docker host | P3 | Closed | Fixed (M5) — runtime config.js written at container start; same image proven against three different API origins, CSP connect-src now derived not hardcoded |
 | 74 | [Tracker] Polish tail from the two end-of-M4 audits — 49 low-severity findings | P4 | Open | Eugene | 7 |
+
+#### Milestone 5 — filed and fixed in the sprint (#84–#85)
+
+Found live during the M4 verification sweep, filed retrospectively when they were fixed. (#75–#83
+are listed in the roll-up rather than a table; these two get one because they are new.)
+
+| # | Issue | P | State | Owner |
+|---|-------|---|-------|-------|
+| 84 | Files ⇄ Classes toggle needs two clicks — a tooltip's invisible popper wrapper eats the first press | P3 | Closed | Sahib |
+| 85 | Two "known gaps" numbers on one screen, neither saying what it counted | P4 | Closed | Sahib |
 
 ### What has been fixed
 
@@ -169,6 +179,7 @@ Won't-Fix bugs; the ones expected at M5 are declared in the plan below.
 | **Open** — M4 backlog | **10** | #65–#74 |
 | **Open** — M2/M3 carry-over | **12** | #1, #3–#10, #14, #15, #22 |
 | **Open** — P5 ideas, not defects | **3** | #24, #25, #36 |
+| *M5 progress against the above* | | Closed since: **#25, #36, #65, #66, #68, #69, #70**. **#67** part-done (cost gate + pagination fixed; repo badges and step-2 refresh remain). |
 | **Open** — blocked on an external service | **1** | #37 |
 | **Won't fix** | **0** | — |
 | **Total tracked** | **83** | #1–#83 |
@@ -192,6 +203,46 @@ regression risk — run control (#50), incremental staleness (#52) and receipt c
 gained a dedicated automated test during M4, so a regression now fails the suite instead of waiting to
 be found by hand.
 
+### M5 progress — frontend / UX error-state batch (2026-07-26)
+
+The table above is the end-of-M4 snapshot and is left as one. This batch closed **six** of its Open
+rows and filed **two** new bugs, both already closed. Recorded here rather than by rewriting the
+snapshot, because other M5 batches are landing against the same table concurrently.
+
+| # | Was | Now | One line |
+|---|-----|-----|----------|
+| 68 | P2 Open | **Closed** | Failure and absence separated everywhere they were conflated; the one that offered a **billed** Generate on a failed fetch is fixed at the source |
+| 22 | P4 Open | **Closed** | Named code already gone; its surviving descendant (the live poll) now reports or stops instead of failing silently forever |
+| 14 | P3 Open | **Closed** | Error banner cleared at the start of every new operation |
+| 7 | P4 Open | **Closed** | `Content-Type` only when there is a body |
+| 24 | P5 Open | **Closed** | Per-route boundaries — was on the Won't-Fix list; shipped instead |
+| 6 | P3 Open | **Closed** | **Did not reproduce** — already fixed; verified with `exhaustive-deps` at error level (0 problems), not by reading the code |
+| **84** | — | **Closed (new)** | Files ⇄ Classes two-click. The M4 fix was built on an *inferred* mechanism and did not work; the mechanism is now observed and the fix moved to the element that was actually eating the click |
+| **85** | — | **Closed (new)** | The two unlabelled gap numbers. Fixed in M4, re-verified live here and confirmed to read clearly; one pluralisation defect found and fixed |
+
+**Total tracked: 85.** Frontend suite: **192 → 213** passing (14 new specs from this batch; the rest
+of the delta is other M5 batches landing in parallel), `tsc --noEmit` and `eslint src` clean, and
+`vite build` succeeds — checked because one of these fixes is a CSS rule that only a real build
+compiles.
+
+### M5 progress — batch 8 tail: the last three M2/M3 carry-over bugs (2026-07-26)
+
+Closes the M2/M3 carry-over row of the snapshot above. Same convention as the previous section: the
+end-of-M4 table is left as a snapshot and progress is recorded here, because several M5 batches are
+editing this file at once. **All three were re-verified against running code before anything was
+changed** — two reproduced, one did not.
+
+| # | Was | Now | One line |
+|---|-----|-----|----------|
+| 1 | P4 Open | **Closed** | **Reproduced.** `decrypt()` read an empty ciphertext part as a *missing* field. Traced all three `encrypt()` call sites: `""` cannot reach any of them, so **P4 was correct and is not understated** — but the guards that prevent it are incidental, and the round-trip invariant was simply false |
+| 8 | P3 Open | **Closed** | **Reproduced** — and the filed symptom turned out unreachable (GitHub never issues installation id 0). The same `!Number(raw)` guard had a *reachable* defect: `Number()` accepts `0x2329` as 9001, which `POST /projects` would authorize as one installation and persist as another spelling, silently killing webhook re-analysis for that project |
+| 10 | P3 Open | **Closed** | **Did not reproduce.** All 12 FKs to `projects` cascade; 34 of 37 public tables are deleted transitively, the 3 survivors are user-scoped. No orphaned data, so no deletion code — a test that fails when a future table is added without a cascade, proven to fail against a probe migration |
+
+**Backend suite: 855 → 858** passing (+3: one per bug; #1 replaced a test that had encoded the bug as
+intended behaviour). `npx tsc --noEmit` clean, `npm run truth` 25/25, eslint clean on every touched
+file. **No schema change** — #10's audit was read-only against the live DB and its test asserts the
+schema rather than altering it.
+
 ---
 
 ## M5 bug plan — every Open bug resolved or closed
@@ -212,9 +263,20 @@ Won't-Fix with a stated reason. Sequenced by risk, not by number.
 
 **Expected Won't-Fix at M5 — declared now rather than discovered at the deadline:**
 
-- **#24** — per-route error boundaries. The router-level boundary plus per-page error states cover the failure modes we actually see. P5.
-- **#25** — a test that could pass vacuously on an empty edge set. Superseded: the graph tests now assert non-empty sets and exact counts.
-- **#36** — regenerating a single stale tutorial. Tutorials regenerate cheaply as a set now that the caches work, so per-tutorial granularity is not worth the surface area. P5.
+- ~~**#24** — per-route error boundaries.~~ **Withdrawn — fixed instead (2026-07-26).** The stated
+  reason ("the router-level boundary plus per-page error states cover the failure modes we actually
+  see") did not survive contact with the M4 sweep: per-page error states cover *failed requests*,
+  and the router-level boundary covers a render error by unmounting the entire application. Neither
+  covers "one tab throws, the rest of the product keeps working", which is a ~100-line component.
+- ~~**#25** — a test that could pass vacuously on an empty edge set.~~ **Not superseded — it was
+  still true, and now Closed–Fixed (2026-07-26).** The claim that "the graph tests now assert
+  non-empty sets and exact counts" was written ahead of the work and never verified: reproducing
+  bug #21 (disabling the `.js` → `.ts` branch of `resolveSpecifier`) left three graphBuilder tests
+  passing over an empty edge set. They now fail. See the entry for the measurement.
+- ~~**#36** — regenerating a single stale tutorial.~~ **Closed–Fixed (2026-07-26)** rather than
+  Won't-Fix. "Regenerate the set" is not free — it rebuilds every section too — and the tab was
+  showing a stale badge with nothing to press. Mirroring `regenerate_section` cost one route, one
+  generator entry point and one banner, with no schema change.
 - **#37** — GitHub sign-up identity conflict. Our half is fixed (the error now gets a plain-language explanation); the rest is a known limitation of the auth provider, not our code.
 - **Invitation emails** (part of **#72**) — needs an email provider we have not provisioned. The likely outcome is relabelling the action "Create invitation" with a share-the-link hint and closing the email half Won't-Fix. Decline and leave-project still ship.
 
@@ -224,16 +286,17 @@ grading.
 
 ---
 
-## [P4][Open] Bug 1: encrypt('') does not round-trip through decrypt()
+## [P4][Closed] Bug 1: encrypt('') does not round-trip through decrypt()
 
 **Bug #1**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P4 |
-| State | Open |
+| State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/lib/encryption.ts |
 
 ## Expected behavior
@@ -251,6 +314,51 @@ Call encrypt('') then decrypt(result) in a REPL or unit test.
 ## Notes
 
 Low impact — tokens never empty in production.
+
+## Reproduced (2026-07-26)
+
+Yes, exactly as filed. `encrypt("")` returns
+`d5c7cd5a9a54c410c37e2687:972eadac3b104b652a78cd50f86be8c3:` — a 24-char IV, a 32-char tag and a
+zero-length ciphertext part — and `decrypt()` on that string throws
+`Invalid encrypted string format`.
+
+## Can an empty string reach `encrypt()` in production? No — checked, not assumed
+
+The question decides the priority, so all three call sites were traced rather than reasoned about:
+
+| Call site | What stops `""` |
+|-----------|-----------------|
+| `api/routes/llmKeys.ts:98` — `encrypt(api_key.trim())` | `:82` rejects `api_key.trim().length < 8` first, so a cleared or whitespace-only BYO key is a 400 and never reaches the cipher |
+| `lib/github-connection.ts:198` — `encrypt(token.accessToken)` | `lib/github.ts:268` throws when the token response has no `access_token`, and `""` is falsy, so an empty token never becomes a `GitHubAppUserToken` |
+| `lib/github-connection.ts:200,243` — refresh tokens | Both guarded `token.refreshToken ? encrypt(...) : null`; `""` stores as `NULL` |
+
+**So P4 is right and is not understated.** What makes it worth fixing anyway is that all three
+guards are incidental — a length check written for a different reason, and two ternaries — rather
+than a stated rule that empty input is illegal. The invariant a crypto helper is supposed to offer,
+*anything `encrypt` produces, `decrypt` accepts*, was simply false, and the failure mode if it ever
+were reached is unrecoverable: `saveGithubConnection` deletes the old row before inserting the new
+one, so an undecryptable value is not a degraded read, it is a lost credential.
+
+## Fix
+
+`decrypt()` (`backend/src/lib/encryption.ts:31`) now tests for a **missing** field instead of a
+falsy one: `parts.length !== 3` plus emptiness checks on the IV and tag only. An empty ciphertext
+part is what AES-GCM over an empty plaintext *is*, not a malformed input. Chose "decrypt handles it"
+over "encrypt rejects it" — the two options the bug offers — because the same idiom is the root
+cause of #8, filed separately on the same day, and because rejecting would leave any already-stored
+empty value permanently unreadable.
+
+Authentication is unaffected and was verified, not assumed: the GCM tag covers the empty plaintext,
+so a forged tag on the `iv:tag:` form still fails with `Unsupported state or unable to authenticate
+data`. The length check also *tightens* one case — `"a:b:c:d"` used to be parsed (extra parts were
+ignored) and is now rejected.
+
+## Verification
+
+`backend/test/lib/encryption.test.ts` — the test that previously asserted the bug as intended
+behaviour (`"rejects empty string"`, with a comment explaining why it was acceptable) now asserts
+`decrypt(encrypt("")) === ""`. Nothing else in the suite exercises a zero-length plaintext, which is
+why a regression here would be silent. Full backend suite green; `npx tsc --noEmit` clean.
 
 ---
 
@@ -284,16 +392,17 @@ GET /api/projects/not-a-uuid with valid auth token.
 
 ---
 
-## [P1][Open] Bug 3: GitHub routes fail when github-app.pem is missing
+## [P1][Closed] Bug 3: GitHub routes fail when github-app.pem is missing
 
 **Bug #3**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P1 |
-| State | Open |
+| State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/lib/github.ts (createAppJwt) |
 
 ## Expected behavior
@@ -308,22 +417,59 @@ fs.readFileSync(privateKeyPath) throws ENOENT when GITHUB_APP_PRIVATE_KEY_PATH i
 
 Remove or misconfigure backend/github-app.pem → GET /api/github/installations with valid auth.
 
-## Notes
+## Reproduced (2026-07-26)
 
-Hit during local dev. Error not actionable for TAs.
+Yes. `backend/src/lib/github.ts:67` was `fs.readFileSync(process.env.GITHUB_APP_PRIVATE_KEY_PATH!, "utf8")`
+— a non-null assertion with no guard. Three different unhelpful outcomes: `ENOENT` when the file is
+absent, `TypeError [ERR_INVALID_ARG_TYPE]` when the variable is unset (`readFileSync(undefined)`), and
+`EISDIR` under Docker, because a bind mount whose host file is missing leaves a *directory* at
+`/app/backend/github-app.pem`. All three reached the route as a bare 500 with the cause only in the
+container log.
+
+## Fix
+
+`loadAppPrivateKey()` (`backend/src/lib/github.ts:75`) now throws a typed `GitHubAppConfigError`
+naming the variable, the path as written, the absolute path it resolved to, **and the working
+directory it resolved against** — the relative default `./github-app.pem` means "wrong cwd" and "no
+such file" are indistinguishable otherwise. ENOENT / EISDIR / EACCES each get their own sentence, and
+a file that is not a PEM is rejected before OpenSSL turns it into
+`error:1E08010C:DECODER routines::unsupported`. `createAppJwt()` checks `GITHUB_APP_ID` the same way
+instead of asserting it.
+
+`handleGitHubRouteError` (`backend/src/api/routes/github.ts:33`) maps that error to **503 +
+`code: "github_app_not_configured"`** with the message — a broken deployment, not a bad request.
+`GET /github/app` and `POST /github/installations/link` were routed through the same handler; they
+had their own `500` / `400`. `checkGitHubAppConfig()` runs at API boot
+(`backend/src/api/server.ts:16`) and logs one warning line, so the misconfiguration is visible before
+the first request. The process still starts: everything that is not the GitHub integration works, and
+crashing the API over one feature is worse.
+
+**Interaction with the M5 `WORKDIR` change — checked, not made worse.** `Dockerfile.worker` moved its
+`WORKDIR` to `/app/backend` because `npm run -w backend` used to set that cwd and the direct `node`
+invocation does not. `docker-compose.yml` mounts the key at `/app/backend/github-app.pem`, and the API
+image still runs via `npm run start:api -w backend` (cwd `/app/backend`), so `./github-app.pem`
+resolves to the mount in both images. The change is what *keeps* #3 from getting worse, and the new
+error message prints the cwd precisely so this class of mistake reads itself out.
+
+## Verification
+
+`backend/test/api/configFailures.test.ts` — four cases: missing file (message contains the variable
+name, the filename, the temp cwd it looked in, and "no such file"), a directory at the path, a
+non-PEM file, and neither source configured. Full backend suite green; `npx tsc --noEmit` clean.
 
 ---
 
-## [P3][Open] Bug 4: Signup does not validate email format server-side
+## [P3][Closed] Bug 4: Signup does not validate email format server-side
 
 **Bug #4**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date closed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed — absorbed by #66 (M5): the endpoint was deleted |
 | File / area | backend/src/api/routes/auth.ts |
 
 ## Expected behavior
@@ -342,18 +488,26 @@ POST /api/auth/signup with "email":"notanemail".
 
 Add regex or validator matching frontend expectations.
 
+## Closure (2026-07-26)
+
+No longer reachable: `POST /api/auth/signup` was **deleted** while fixing #66 — it created
+email-confirmed accounts for addresses the caller did not control. Sign-up happens in the browser
+against Supabase, which validates the address and sends the confirmation. There is no server-side
+signup surface left to validate. `backend/test/api/auth.test.ts` asserts the route answers 404.
+
 ---
 
-## [P3][Open] Bug 5: Signup password minimum mismatches frontend (6 vs 8)
+## [P3][Closed] Bug 5: Signup password minimum mismatches frontend (6 vs 8)
 
 **Bug #5**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date closed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed — absorbed by #66 (M5): the endpoint was deleted |
 | File / area | backend/src/api/routes/auth.ts |
 
 ## Expected behavior
@@ -372,9 +526,15 @@ POST /api/auth/signup with password "abc123" (6 chars) via curl.
 
 Align server validation with frontend minLength={8}.
 
+## Closure (2026-07-26)
+
+Same as #4: the endpoint that held the second, weaker password rule was deleted while fixing #66, so
+the two rules can no longer disagree. The browser's sign-up form and Supabase's own minimum are now
+the only policy.
+
 ---
 
-## [P3][Open] Bug 6: ProjectContext fetchProject missing useCallback deps
+## [P3][Closed] Bug 6: ProjectContext fetchProject missing useCallback deps
 
 **Bug #6**
 
@@ -383,7 +543,7 @@ Align server validation with frontend minLength={8}.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/contexts/ProjectContext.tsx |
 
 ## Expected behavior
@@ -400,11 +560,26 @@ Enable eslint-plugin-react-hooks exhaustive-deps on ProjectContext.tsx.
 
 ## Notes
 
-Wrap fetchProject in useCallback or inline fetch in effect.
+**Closed 2026-07-26 — did not reproduce; already fixed, verified rather than assumed.**
+
+`ProjectContext.tsx:58-80` already carries the prescribed fix: `fetchProject` is wrapped in
+`useCallback(..., [projectId])` and the effect depends on `[fetchProject]`, so the callback identity
+changes exactly when `projectId` does. It landed with the branch-aware-projects work (`7ca3777`),
+after this bug was filed and before anyone updated the row.
+
+Verified with the tool the repro step names rather than by reading the code. `eslint-plugin-react-hooks`
+is not a dependency of this repo (see `eslint.config.mjs` — the config has only `@typescript-eslint`),
+which is why the warning was never seen either way, so the check was run out-of-tree: plugin 5.2.0
+against this file with `react-hooks/exhaustive-deps` and `rules-of-hooks` at **error**. Result: **0
+problems**. The temporary config was deleted afterwards; nothing in the repo changed for this bug.
+
+(The same run over the files touched in this batch reports two *pre-existing* exhaustive-deps errors
+elsewhere — `DashboardPage.tsx` tour effect, `WalkthroughTab.tsx` `load` callback. Both predate this
+work and are left alone; they belong to the #74 polish tail, not here.)
 
 ---
 
-## [P4][Open] Bug 7: apiFetch sends Content-Type on GET requests
+## [P4][Closed] Bug 7: apiFetch sends Content-Type on GET requests
 
 **Bug #7**
 
@@ -413,7 +588,7 @@ Wrap fetchProject in useCallback or inline fetch in effect.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P4 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/lib/api.ts |
 
 ## Expected behavior
@@ -430,21 +605,34 @@ Inspect network tab on any GET from the app.
 
 ## Notes
 
-Most servers ignore; technically incorrect HTTP.
+**Reproduced 2026-07-26.** `api.ts:31-34` built the header map with `"Content-Type": "application/json"`
+unconditionally, before any check for a body — so every GET in the app announced a JSON payload it
+did not have.
+
+**Fixed.** The header is now spread in only when `options.body != null`, and an explicit caller
+header still overrides it (the export path sets its own). Worth more than "technically incorrect":
+`Content-Type: application/json` is the header that makes a cross-origin GET a *non-simple* request,
+so it forced a CORS preflight on every read — which matters now that the API origin is
+runtime-configurable and may not be same-origin.
+
+**Test:** `frontend/src/lib/api.test.ts` — asserts the header is absent on a bodyless GET, present on
+a POST with a body, and that a caller-supplied `Content-Type` wins. Nothing else in the app would
+notice a regression here, which is exactly why it is pinned.
 
 ---
 
-## [P3][Open] Bug 8: GitHub repos rejects installation_id=0
+## [P3][Closed] Bug 8: GitHub repos rejects installation_id=0
 
 **Bug #8**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
-| File / area | backend/src/api/routes/github.ts |
+| State | Closed — Fixed (M5 batch 8) |
+| File / area | backend/src/api/routes/github.ts, backend/src/api/routes/projects.ts |
 
 ## Expected behavior
 
@@ -462,18 +650,81 @@ GET /api/github/repos?installation_id=0 with valid auth.
 
 Use explicit NaN / integer parsing.
 
+## Reproduced (2026-07-26)
+
+Yes. `GET /api/github/repos?installation_id=0` returned
+`400 {"error":"installation_id query parameter is required"}`. The guard was
+`const installationId = Number(raw); if (!installationId || Number.isNaN(installationId))`, in
+**five** places: `routes/github.ts:188` (`POST /installations/link`), `:254` (`/repos`), `:285`
+(`/branches`), `:306` (`/commits`), and `routes/projects.ts:224` (`POST /projects`).
+
+## Can GitHub actually issue installation id 0? No — so the filed symptom is unreachable
+
+App installation ids come from a monotonic sequence starting at 1; live ones in this project are
+8-digit. Zero is never issued, so on the filed symptom alone P3 is generous and the row could have
+been closed Won't-Fix.
+
+**It was not, because the same expression has a reachable defect.** `Number()` is not an id parser,
+and the guard's second half never noticed. Measured against the running API (mocked GitHub, auth
+installed):
+
+| `installation_id` | `Number()` | Before | After |
+|---|---|---|---|
+| `0` | `0` | 400 "required" | **403** — parses fine, just is not one of yours |
+| `""` (present, blank) | `0` | 400 "required" | 400 "required" |
+| `abc` | `NaN` | 400 "required" | 400 "must be a positive integer" |
+| `0x2329` | **`9001`** | **accepted as installation 9001** | 400 |
+| `1e4` | `10000` | accepted as 10000 | 400 |
+| `" 9001 "` | `9001` | accepted as 9001 | 400 |
+| `9001.5` | `9001.5` | reached the ownership check → 403 | 400 |
+| `-9001` | `-9001` | reached the ownership check → 403 | 400 |
+| repeated param (array) | `NaN` | 400 "required" | 400 "must be a positive integer" |
+
+The `0x2329` row is the one that matters, and it is load-bearing in `POST /projects`: that handler
+authorizes with the **parsed number** but line 275 persists the **raw string** into
+`projects.github_installation_id`, a `text` column. So a project could be created against
+installation 9001 while storing the literal `"0x2329"` — and `githubWebhook.ts:224` matches
+`p.github_installation_id = $3` against the numeric string GitHub sends (`"9001"`), so that project
+would silently stop receiving push-triggered re-analysis. Nothing logs, nothing 500s; the feature
+just never fires. Constraining the format is what makes the stored and the authorized value the
+same token again, so the INSERT needed no change.
+
+## Fix
+
+`parseInstallationId()` (`backend/src/api/lib/installationId.ts`) returns
+`{ok: true, value}` or `{ok: false, reason: "absent" | "malformed"}` — the distinction the old guard
+collapsed. It requires plain decimal digits (`/^\d+$/`, or a safe non-negative integer when a JSON
+body sends a number), so every form in the table above that is not an id is rejected as one.
+`resolveInstallationId()` (`routes/github.ts:38`) wraps it for the four route handlers and answers
+400 with the message that matches the reason; it returns `null` rather than a number precisely so
+`0` cannot be re-swallowed by another falsy test at the call site. `routes/projects.ts:229` uses the
+parser directly.
+
+**`0` now parses and is answered by the authorization layer (403), not the validation layer (400)** —
+which is the actual point of the bug. Absence, malformed shape and "not yours" are three different
+answers and now get three different responses. `POST /installations/link` also stops reporting a
+missing `state` as a missing `installation_id`.
+
+## Verification
+
+`backend/test/api/github.test.ts` — one test drives `0`, `0x2329`, `9001.5`, `-9001` and `""`
+through `GET /repos` and asserts the exact status map `{0: 403, "0x2329": 400, "9001.5": 400,
+"-9001": 400, "": 400}`. Both halves are silent regressions: `0 → 400` is a status nobody reads, and
+`0x2329 → 200` looks like success. Full backend suite green; `npx tsc --noEmit` and eslint clean.
+
 ---
 
-## [P2][Open] Bug 9: Project settings uses fragile dynamic SQL pattern
+## [P2][Closed] Bug 9: Project settings uses fragile dynamic SQL pattern
 
 **Bug #9**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P2 |
-| State | Open |
+| State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/api/routes/projects.ts |
 
 ## Expected behavior
@@ -492,18 +743,47 @@ N/A — code review concern; no exploit today.
 
 Refactor to an explicit allowlist map before M3.
 
+## Reproduced (2026-07-26)
+
+The *pattern* reproduced; the vulnerability did not, exactly as filed. `PUT /:id/settings` had grown
+to eleven fields × three hand-written places each — destructure, validate, append a `SET` clause —
+133 lines in which nothing but discipline connected "this field is validated" to "this field is
+written". Two fields had already drifted: `file_limit` and `loc_limit` were destructured and written
+with **no validation at all**, so a non-numeric value reached the `not null check (> 0)` constraint
+and came back as a 500 rather than a 400. No injection was possible today because every column name
+was a literal, which is precisely the property the next added field could quietly break.
+
+## Fix
+
+`WRITABLE_SETTINGS` (`backend/src/api/routes/projects.ts:24`) is now the single definition: one entry
+per field, holding its validator and — for the jsonb columns — its serializer. The handler iterates
+**that map** and reads the matching key out of the body, so the request body can no longer contribute
+anything to the statement's text; an unlisted key is not merely ignored, it is unreachable. Column
+names are keys of a literal object, i.e. compile-time constants. Adding a setting is one entry, and
+there is nowhere left to forget the validation half. The two unvalidated numeric fields gained the
+check that matches the DB constraint (positive integer), converting that 500 into a 400. Handler body:
+133 lines → 20.
+
+## Verification
+
+`backend/test/api/projects.test.ts` — a PUT carrying `permission_tier`, a SQL-shaped key
+(`"privacy_mode = 'full_ai', ignored_paths"`) and a camelCase near-miss alongside one legitimate field
+asserts the generated statement contains `privacy_mode = $2` and nothing else, with parameters
+`[projectId, "facts_only_ai"]`; a body of unknown keys only returns 400 and executes no UPDATE.
+
 ---
 
-## [P3][Open] Bug 10: Project delete relies on CASCADE without verification
+## [P3][Closed] Bug 10: Project delete relies on CASCADE without verification
 
 **Bug #10**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date closed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed — did not reproduce; verified against the live DB and pinned (M5 batch 8) |
 | File / area | backend/src/api/routes/projects.ts + migrations |
 
 ## Expected behavior
@@ -521,6 +801,65 @@ Audit 001_initial_schema.sql FKs referencing projects.id.
 ## Notes
 
 Add explicit cleanup or migration audit before production.
+
+## Did not reproduce (2026-07-26) — no orphaned data exists
+
+The bug says orphans are *possible*; it never established whether any exist. They do not. Audited
+against the **live** database rather than the migration file, with throwaway scripts run
+`node --env-file=.env --import tsx` under `SET default_transaction_read_only = on` (deleted
+afterwards; nothing was written and no DDL was issued, per the M5 no-schema-change policy in
+[DEVOPS.md](./DEVOPS.md)).
+
+**Every foreign key pointing at `projects` cascades — 12 of 12, zero exceptions**
+(`pg_constraint.confdeltype = 'c'`): `analysis_jobs`, `analysis_scopes`, `analysis_snapshots`,
+`onboarding_packages`, `project_invitations`, `project_llm_keys`, `project_members`,
+`project_settings`, `ranking_weight_configs`, `semantic_records`, `source_receipts`,
+`user_progress`.
+
+Direct FKs are only half the question, so reachability was computed transitively over all 84 public
+foreign keys, counting a hop only when it is **both** `on delete cascade` **and** `not null` — a
+nullable cascading FK still strands its `NULL` rows. **34 of the 37 public tables are deleted**,
+including everything four hops down (`tutorial_steps` via `tutorials` via `analysis_snapshots`;
+`embeddings` via `semantic_records`; `capability_members`, `architecture_cluster_members`,
+`side_effects`, `entrypoints`).
+
+The three survivors are correct: **`users`, `github_connections`, `github_installations`** are scoped
+to a user, not a project, and must outlive any project that referenced them.
+
+The trap case was checked explicitly. Nine nullable cascading FKs exist
+(`source_receipts.record_id`, `stale_flags.package_id`, `tutorials.package_id`,
+`ai_generation_runs.package_id`, `criticality_scores.target_node_id`, and four more) — every one of
+those tables is *also* reached by a separate `not null` cascade path, so no row is stranded by the
+nullable edge. Likewise the four `on delete set null` FKs (`analysis_jobs.snapshot_id`,
+`analysis_jobs.scope_id`, `source_receipts.snapshot_id`, `project_members.default_package_id`) all
+sit on tables that are themselves deleted via `project_id`, so the `SET NULL` never outlives the row.
+
+## Fix — a test, not deletion code
+
+`DELETE FROM projects WHERE id = $1` (`backend/src/api/routes/projects.ts:493`) is correct as
+written and was left alone. Writing the explicit cleanup the bug suggests would restate the FK graph
+in application code, in the wrong order, where it would drift from the schema and be wrong silently —
+strictly worse than the constraint that is already enforced by the database on every path, including
+`psql`.
+
+The real defect is that **the guarantee is unenforced**: any table added later with a nullable FK, or
+one that omits `on delete cascade`, starts leaking rows on every project delete with no error and no
+failing request. `backend/test/lib/schemaCascade.test.ts` parses `supabase/migrations/*.sql`, runs the
+same reachability computation, and asserts that the only tables surviving a project delete are the
+three user-scoped ones. Static on purpose — it reads what a developer adding a table actually edits,
+so it runs in CI without database credentials; the parse was validated by reproducing the live
+`pg_constraint` result exactly (34 reachable / 3 not, 84 FKs).
+
+## Verification
+
+Proven to fail, not assumed to: a temporary migration adding two tables — one with
+`references public.projects(id)` and no cascade, one with a *nullable* cascading `snapshot_id` — was
+applied to the migration folder, and the test failed naming both (`future_project_notes`,
+`future_nullable_child`) before the probe was removed. It also parses the
+`alter table … add column … references …` form, which the schema already uses once
+(`project_members.default_package_id`) and which is the likeliest shape for any FK a later migration
+adds — a parser that only read `create table` would go blind exactly when this check starts to
+matter. **No schema change was made.**
 
 ---
 
@@ -626,7 +965,7 @@ Two problems in the old save-token flow:
 
 ---
 
-## [P3][Open] Bug 14: InvitationsPage error persists across operations
+## [P3][Closed] Bug 14: InvitationsPage error persists across operations
 
 **Bug #14**
 
@@ -635,7 +974,7 @@ Two problems in the old save-token flow:
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/pages/InvitationsPage.tsx |
 
 ## Expected behavior
@@ -652,20 +991,34 @@ Cause network error on accept → Click a different invitation.
 
 ## Notes
 
-Call setError('') at start of handleAccept / handleDecline.
+**Reproduced 2026-07-26.** `handleAccept` set `error` on failure and nothing ever cleared it:
+`selectInvitation` (`InvitationsPage.tsx:47`) only changed the selected id, and the next
+`handleAccept` (`:52`) went straight to `setAccepting(true)`. So a failed accept left, say, "You are
+already a member of this project" pinned above the page while the user moved to a different
+invitation — the banner then described a row that was no longer on screen, and a *successful* accept
+of the second invitation still left the first one's failure as the last thing they saw.
+
+**Fixed** as the bug prescribed, in both places that start a new operation: `setError("")` at the top
+of `handleAccept`, and in `selectInvitation`. (There is no `handleDecline` — Decline is a disabled
+control with a tooltip explaining that declining is not supported yet; that is #72's scope.)
+
+**Test:** `frontend/src/pages/InvitationsPage.test.tsx` — a failed accept, then (a) selecting the
+other invitation and (b) starting a second accept; the banner must be gone in both. A stale banner
+looks exactly like a fresh one, so this regression is silent by construction.
 
 ---
 
-## [P3][Open] Bug 15: CORS falls back to localhost when CORS_ORIGIN unset
+## [P3][Closed] Bug 15: CORS falls back to localhost when CORS_ORIGIN unset
 
 **Bug #15**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P3 |
-| State | Open |
+| State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/api/app.ts |
 
 ## Expected behavior
@@ -683,6 +1036,31 @@ Deploy without CORS_ORIGIN; browser requests from production domain blocked.
 ## Notes
 
 Log warning in production when fallback used.
+
+## Reproduced (2026-07-26)
+
+Yes — `backend/src/api/app.ts:15` was literally
+`origin: process.env.CORS_ORIGIN ?? "http://localhost:5173"`. Wrong in both directions at once: the
+deployed frontend is refused, *and* a page served from `http://localhost:5173` on any developer's
+machine is granted cross-origin access to production. The only symptom is a CORS error in an end
+user's browser console — nothing in the server log says the deployment is misconfigured.
+
+## Fix (upgraded from the original "log a warning")
+
+The filed remedy was a warning. That is no longer enough: the M5 deployment work makes the frontend
+origin runtime-configurable (#73), so a silent localhost default is now a live hole rather than a
+local-dev convenience. `resolveCorsOrigins()` (`backend/src/api/app.ts:8`) **throws in production**
+when `CORS_ORIGIN` is unset or blank, with a message naming the variable and showing the expected
+value, so the API refuses to start instead of starting wrong. Outside production it still defaults to
+`http://localhost:5173` and says so on stdout. Comma-separated origins are accepted (platform domain
+plus custom domain) and trailing slashes are trimmed, which is the other half of what a real
+deployment needs. `backend/.env.example` documents the production requirement next to the variable.
+
+## Verification
+
+`backend/test/api/configFailures.test.ts` — production + unset and production + whitespace both
+throw `/CORS_ORIGIN is required in production/`; a single origin and a comma-separated pair parse to
+the expected arrays with slashes trimmed; development still yields `["http://localhost:5173"]`.
 
 ---
 
@@ -891,7 +1269,7 @@ Run graphBuilder tests on simple fixture before fix — 9 tests skipped/failing.
 
 ---
 
-## [P4][Open] Bug 22: OnboardingPage swallows role-status fetch errors
+## [P4][Closed] Bug 22: OnboardingPage swallows role-status fetch errors
 
 **Bug #22**
 
@@ -900,7 +1278,7 @@ Run graphBuilder tests on simple fixture before fix — 9 tests skipped/failing.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P4 |
-| State | Open |
+| State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx |
 
 ## Expected behavior
@@ -917,7 +1295,31 @@ Break API during onboarding page load — no user-visible error.
 
 ## Notes
 
-Surface toast or inline error state.
+**Partly did not reproduce; the surviving half did, and is fixed. 2026-07-26.**
+
+*The literal code named in the bug is gone.* The `roleStatuses` state and its
+`apiFetch(...).catch(() => {})` were removed in the API/frontend rewiring (`c3d74fc`); per-role
+package status now comes from `PackagesContext`, which has tracked `packagesError` since the M4
+audit passes and renders a "Couldn't load your packages / Retry" pane on the cards view. So the
+*role-status* poll no longer swallows anything.
+
+*Its descendant did.* Two polls in this page still hid failures, and both are fixed:
+
+1. **The live "sections are landing" poll** (`OnboardingPage.tsx`, the 5s interval used while a
+   package is generating) had a bare `.catch(() => {})` — a poll that could no longer reach the
+   server ran forever and reported nothing. It now honours this bug's stated contract, *show an
+   error or stop polling*, and does both — but only once the failure is real. One dropped tick is
+   normal mid-run, so a single failure is ignored and the sections already on screen are left
+   untouched; **three consecutive** failures clear the interval and replace the "Generating —
+   sections appear here as each one finishes" banner with "Live updates stopped … Generation is
+   still running; this page just stopped following it" plus a **Resume updates** button. The
+   distinction matters: the generation is unaffected, only this page's view of it stopped.
+2. **The package fetch itself** swallowed every error in `onboardingData.ts` — that is #68, fixed in
+   the same batch, and it is what made a failed load on this page indistinguishable from an empty one.
+
+The one remaining `.catch(() => {})` in the page is deliberate and commented: a failed tick of the
+generating poll must not change what is rendered, because a poll that can wipe content is how you
+manufacture the false empty state #68 is about.
 
 ---
 
@@ -951,7 +1353,7 @@ Run frontend tests in production-like env without mocks.
 
 ---
 
-## [P5][Open] Bug 24: No per-route React error boundaries
+## [P5][Closed] Bug 24: No per-route React error boundaries
 
 **Bug #24**
 
@@ -960,8 +1362,8 @@ Run frontend tests in production-like env without mocks.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P5 |
-| State | Open |
-| File / area | frontend/src/App.tsx |
+| State | Closed |
+| File / area | frontend/src/App.tsx, frontend/src/components/ProjectLayout.tsx |
 
 ## Expected behavior
 
@@ -973,15 +1375,48 @@ Only top-level ErrorBoundary; one broken page can blank entire app.
 
 ## Steps to reproduce
 
-N/A — enhancement.
+N/A — enhancement. (Reproduced structurally: before this change the only boundary was the one
+wrapping `<Routes>` in `App.tsx`, so any uncaught render error replaced the entire application.)
 
 ## Notes
 
-Future: wrap project layout routes.
+**Fixed 2026-07-26** — this was on the M5 plan's "Expected Won't-Fix" list; it is cheap enough and
+the M4 sweep gave it a concrete case, so it shipped instead.
+
+**What it adds beyond the 404 route** (asked directly, since M4 added `path="*"`):
+
+The two catch **disjoint** failures and neither substitutes for the other.
+
+- `path="*"` handles a URL that **no route matches**. That is a routing decision made before any
+  page renders, and it is the fix for VISUAL QA M4 #12 — `/projects` (the real path is `/list`)
+  painting a completely blank page whose only trace was a `No routes matched location` console
+  warning. Verified present in `App.tsx` and correct: it is last, and deliberately outside
+  `ProtectedRoute` so a mistyped URL does not bounce a signed-in user to the login screen.
+- A boundary handles a route that **matched and then threw while rendering** — a malformed analysis
+  payload, an undefined field inside a `.map`, a bad selector. React's response to an uncaught render
+  error is to unmount the tree, so before this the only net was the app-level boundary: one bad graph
+  payload replaced the whole application, sidebar and all, with a full-screen "Something went wrong"
+  whose only action was a reload of the URL that had just failed.
+
+Scoping it to the routed `<Outlet />` is the actual value: the shell survives. `RouteErrorBoundary`
+(`frontend/src/components/RouteErrorBoundary.tsx`) now wraps the outlet in **both** layouts — the
+dashboard shell (`App.tsx`) and the project layout (`ProjectLayout.tsx`). A broken tab leaves the
+project sidebar, tab strip and package selector working, so the user switches tab instead of losing
+the product, and gets two recoveries the app-level boundary cannot offer: retry just this page, and
+leave for one that works. It also states that nothing was lost and no analysis was started or
+charged — the reassurance a full-screen crash cannot give.
+
+One non-obvious detail: React never resets a boundary on its own, so a page that threw once would
+keep showing its error for every later route under the same boundary. The boundary takes the
+pathname as a `resetKey` and clears on navigation.
+
+**Test:** `frontend/src/components/RouteErrorBoundary.test.tsx` — a throwing route renders the error
+*with the surrounding shell still mounted*; navigating away through that surviving shell clears it;
+and the retry button re-renders the same page.
 
 ---
 
-## [P5][Open] Bug 25: graphBuilder edge tests could pass vacuously when edges empty
+## [P5][Closed] Bug 25: graphBuilder edge tests could pass vacuously when edges empty
 
 **Bug #25**
 
@@ -990,8 +1425,8 @@ Future: wrap project layout routes.
 | Date created | 2026-06-19 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P5 |
-| State | Open |
-| File / area | backend/src/worker/engine/tests/graphBuilder.test.ts |
+| State | Closed — fixed 2026-07-26 (M5) |
+| File / area | backend/src/worker/engine/__tests__/graphBuilder.test.ts |
 
 ## Expected behavior
 
@@ -1005,9 +1440,44 @@ Before Bug 21 fix, some tests passed with 0 edges.
 
 Review tests that use graph.edges.length >= 0 style assertions.
 
-## Notes
+## Verification (2026-07-26)
 
-Partially mitigated by Bug 21 fix; keep monitoring.
+Reproduced, and measured rather than argued. `resolveSpecifier`'s NodeNext
+`.js` → `.ts` branch (`graphBuilder.ts:28`) was disabled to reproduce bug #21
+exactly — every import edge disappears at once, which is how this component
+fails in production — and the suite was re-run against the pre-fix test file.
+**Three tests passed over the empty edge set:**
+
+| Test | Why it passed on zero edges |
+|------|------------------------------|
+| `graphBuilder — edges › no duplicate edges` | `new Set([]).size === [].length` |
+| `graphBuilder — edges › each edge has weight >= 1` | the `for…of` body never ran |
+| `buildClassGraph — fixture repo › creates nodes for classes and interfaces only` | `[].every(…)` is `true` |
+
+Three stale `// SKIP (graphBuilder '.js' → '.ts' resolution)` comments were also
+still in the file, describing tests that were never actually skipped (`it`, not
+`it.skip`) and a defect closed in M3.
+
+## Fix (2026-07-26)
+
+**Rule applied:** anything that iterates or aggregates a collection first
+asserts the collection is the size it should be — exact counts, never `>= 0`.
+
+- New headline test `resolves every fixture import into an edge — the exact
+  set, no more` pins all **eight** of the fixture's intra-repo imports by
+  `(source, target)`. It catches both directions: an empty set, and a resolver
+  that starts inventing edges.
+- `no duplicate edges` and `each edge has weight >= 1` assert the length before
+  iterating; `creates nodes for classes and interfaces only` and `every node has
+  kind = module` assert non-empty before their `every`/loop.
+- The three stale SKIP comments are replaced with what they were actually
+  hiding.
+
+**Evidence the tests now fail when they should.** With the same `.js` → `.ts`
+regression applied, `graphBuilder.test.ts` goes from **3 silent passes** to
+**0**: the file reports 12 failures, including all three above, and the
+headline test's failure message is `no import edges at all — .js → .ts
+resolution is broken again`. Restored source: full suite 855 passing.
 
 ---
 
@@ -1319,7 +1789,7 @@ Fixed (2026-07-10): prose override `prose-code:before:content-none prose-code:af
 
 ---
 
-## [P5][Open] Bug 36: Stale tutorials cannot be regenerated individually
+## [P5][Closed] Bug 36: Stale tutorials cannot be regenerated individually
 
 **Bug #36**
 
@@ -1328,8 +1798,8 @@ Fixed (2026-07-10): prose override `prose-code:before:content-none prose-code:af
 | Date created | 2026-07-10 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P5 |
-| State | Open |
-| File / area | backend tutorials routes / summaryWorker |
+| State | Closed — fixed 2026-07-26 (M5) |
+| File / area | backend/src/api/routes/tutorials.ts, worker/generation/tutorialGenerator.ts, worker/summaryWorker.ts, worker/incrementalAnalyzer.ts, frontend/src/pages/WalkthroughTab.tsx |
 
 ## Expected behavior
 
@@ -1343,9 +1813,54 @@ Incremental analysis marks tutorials stale, but regeneration currently only exis
 
 Change a file on a tutorial's path → incremental re-analysis → tutorial shows stale with no regenerate button.
 
-## Notes during fixing
+## Verification (2026-07-26)
 
-Future work: mirror the regenerate_section flow for tutorials (queue job, rebuild against latest snapshot, settle package staleness including tutorials).
+Still reproduced. `incrementalAnalyzer.markStale` flags tutorials
+(`incrementalAnalyzer.ts:381`, `UPDATE tutorials SET status = 'stale'`) and
+`WalkthroughTab.tsx:673` renders a `stale` badge — but the only regeneration
+endpoint was `POST /onboarding/sections/:sectionId/regenerate`. Nothing on the
+tab could act on the badge.
+
+A second, quieter half surfaced while verifying: `settlePackageStaleness`
+(`incrementalAnalyzer.ts:406`) asked **only** about stale sections, while the
+code that SET the package flag counted sections *and* tutorials. A package whose
+only stale content was a tutorial could therefore be declared fresh by an
+unrelated section regeneration.
+
+## Fix (2026-07-26)
+
+The `regenerate_section` flow, mirrored — including both of its rules: a stale
+artifact rebuilds against the newest complete snapshot of its scope, and there
+is no privacy-mode gate (under `ai_disabled` the walkthrough skeleton still
+comes from the trace, so it rebuilds deterministically with zero LLM calls).
+
+- **`POST /projects/:id/tutorials/:tutorialId/regenerate`** (owner/admin) —
+  resolves the target snapshot, refuses a second concurrent rebuild of the same
+  key with a 409, inserts the job row, and enqueues it. A submission failure
+  fails the row rather than leaving it queued (the #69(1) rule).
+- **`regenerateOneTutorial(params, stableKey)`** — re-runs selection against the
+  new snapshot and rebuilds just that key. The tutorial **cap is deliberately
+  not applied**: the reader already has this tutorial, so "it lost a slot to a
+  higher-ranked flow" is not a reason to refuse. Two honest misses are reported
+  as a failed job with a reason instead of a silent no-op — `workflow_gone` (the
+  flow is not in this snapshot) and `no_longer_eligible` (still there, no longer
+  yields a procedure).
+- **`settlePackageStaleness`** now counts stale tutorials as well as stale
+  sections, so the settle predicate agrees with the one that sets the flag.
+- **UI** — a stale walkthrough gets the same banner + Regenerate button a stale
+  section has, with the same E10 split: the banner is ungated (the tier that
+  reads it needs to know), the action is owner/admin. The completion poll is
+  held in a ref and cleared on unmount (bug #68(4)'s lesson applied up front).
+
+**No schema change** (doc/DEVOPS.md M5 freeze). `analysis_jobs.job_type` is a
+CHECK-constrained enum, so this rides the existing `regenerate_section` type and
+is told apart by `checkpoint->>'tutorialKey'` — the same jsonb the section flow
+already uses for `sectionType`. The run-history label reads that key and prints
+`Regenerated tutorial "<title>"`.
+
+**Tests:** `backend/src/worker/generation/__tests__/tutorialRegeneration.test.ts`
+— the two miss kinds are distinguished, selection is re-run against the new
+snapshot, and both directions of the settle predicate.
 
 ---
 
@@ -2342,16 +2857,17 @@ and 3 were caught the same way.
 
 ---
 
-## [P2][Open] Bug 65: Three routes are not scoped to the project, allowing cross-tenant reads and one write
+## [P2][Closed] Bug 65: Three routes are not scoped to the project, allowing cross-tenant reads and one write
 
 **Bug #65**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15), security & UX audit |
 | Priority | P2 |
-| State | Open — Nam, M5 batch 1 |
+| State | Closed — Fixed (M5 batch 1) |
 | Area | API — onboarding sections, receipts, workflow walkthrough |
 
 ## Expected behavior
@@ -2384,18 +2900,64 @@ already does exactly this and is the reference. All three are the same shape and
 PR, each with a test asserting a 404 for a foreign child id. **First work item of M5, before any
 feature work.**
 
+## Reproduced (2026-07-26) — two of the three
+
+Each route was driven from the outside with the caller owning project A and a child id belonging to
+project B (`backend/test/api/tenantIsolation.test.ts`, against a fake database that answers any
+*unscoped* lookup with project B's row):
+
+| Route | Before the fix | Verdict |
+|-------|----------------|---------|
+| `GET …/onboarding/sections/:sectionId/receipts` | **200** with project B's `snippet`, file path and symbol summary in the body | Reproduced |
+| `PATCH …/onboarding/sections/:sectionId/review` | **200**; the `UPDATE package_sections … WHERE id = $3` ran against project B's row and the follow-up flipped project B's package status | Reproduced |
+| `GET …/workflows/:workflowId/walkthrough` | **404** | **Already fixed** |
+
+The walkthrough route was scoped during M4 in commit `00639bf` ("Recalibrated onboarding"), which
+added `JOIN analysis_snapshots s ON s.id = w.snapshot_id … AND s.project_id = $2`
+(`backend/src/api/routes/workflows.ts:145`) without updating this row. The audit finding was correct
+when written; one third of it had been quietly closed. A sweep of the remaining child-id routes found
+no others: `GET /tutorials/:tutorialId` joins through `onboarding_packages.project_id`,
+`GET /graph/workflows/:workflowId` joins through `analysis_snapshots.project_id`, and
+`GET /graph/nodes/:nodeId` is bounded by the snapshot the project resolves to.
+
+## Fix
+
+Both remaining routes now join the child to its parent package and filter on the project id from the
+path — the same shape as the regenerate route directly above them:
+
+- **Receipts** (`backend/src/api/routes/onboarding.ts:840`): an ownership `SELECT` across
+  `package_sections → onboarding_packages` runs before any receipt is read, and a section that is not
+  in this project is a 404. The check comes first rather than being folded into the receipts query so
+  that "section in another project" and "section with no receipts" stay distinguishable — the second
+  is a legitimate 200 with an empty list.
+- **Review** (`backend/src/api/routes/onboarding.ts:1020`): the filter is inside the `UPDATE`
+  (`FROM onboarding_packages op WHERE op.id = ps.package_id AND ps.id = $3 AND op.project_id = $4
+  RETURNING ps.*`) rather than in a check before it, so there is no window in which the row could be
+  written outside the tenant the caller was authorized for. The package-status recomputation that
+  follows therefore acts on a package already proven to be in this project.
+
+No schema change: both are joins over existing foreign keys.
+
+## Verification
+
+`backend/test/api/tenantIsolation.test.ts` asserts 404 for a foreign child id on all three routes,
+that the leaked snippet does not appear in the receipts response body, and — for the write — that no
+`UPDATE` was executed at all without the project id among its parameters. The three assertions fail
+against the pre-fix code (200/200/pass) and pass after.
+
 ---
 
-## [P2][Open] Bug 66: The authentication surface has an unused bypass and no throttling
+## [P2][Closed] Bug 66: The authentication surface has an unused bypass and no throttling
 
 **Bug #66**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15), security & UX audit |
 | Priority | P2 |
-| State | Open — Nam, M5 batch 1 |
+| State | Closed — Fixed (M5 batch 1) |
 | Area | API — auth routes, invitations |
 
 ## Expected behavior
@@ -2429,6 +2991,64 @@ returns 201 and the account is confirmed and loginable.
 Fix: delete the signup endpoint (it is dead code — the frontend does not use it), whitelist
 invitation tiers with a 400, and add rate limiting to the auth routes. Two divergent signup paths
 with different confirmation behaviour is the smell that surfaced this.
+
+## Reproduced (2026-07-26) — all three parts, one partially mitigated since filing
+
+1. **Signup bypass — reproduced.** `backend/src/api/routes/auth.ts:9` still called
+   `supabaseAdmin.auth.admin.createUser({ email, password, email_confirm: true })` from an
+   unauthenticated route. Confirmed dead code: no reference anywhere under `frontend/src` (the app
+   signs up through the Supabase client); the only callers were two tests and the API docs.
+2. **Invitation tier — reproduced.** `POST /members/invitations`
+   (`backend/src/api/routes/members.ts:57`) inserted `permission_tier` straight from the body, and
+   `POST /invitations/:id/accept` inserted it into `project_members` verbatim. `"owner"` was accepted
+   end to end; a typo'd tier reached the `CHECK` constraint and returned 500. The member `PATCH`
+   route two functions away already had a whitelist — the vocabulary just was not shared.
+3. **Throttling — partly landed, and the landed half does not cover this.** The `askRateLimit`
+   middleware added in M4 (`/projects/:id/ask`) is keyed on `req.user.id` and mounted after
+   `requireAuth`; it protects the billed LLM route and is structurally inapplicable to an
+   unauthenticated one, which has no user id. `POST /api/auth/login` was still unthrottled. What
+   remained was therefore: an unauthenticated-surface limiter, plus a key that is not a user id.
+
+## Fix
+
+**1 — the bypass is deleted.** No `POST /signup` exists; a comment in its place records why, so it is
+not reintroduced by someone who finds it in the docs. Sign-up is the Supabase client in the browser,
+which sends the confirmation email. This also closes **#4** and **#5**, whose subject was that
+endpoint's validation. `doc/BACKEND.md` no longer lists it as a public route.
+
+**2 — invitation tiers are whitelisted, on the way in and on the way out.**
+`backend/src/api/lib/permissionTiers.ts` holds the vocabulary once; `INVITABLE_TIERS` is
+`admin | developer`, deliberately excluding `owner` (one owner per project, changed by transfer,
+never by invite). `POST /members/invitations` rejects anything else with a 400 naming the allowed
+values, and validates `developer_role` for the same reason. `POST /invitations/:id/accept` re-checks
+the tier as it is redeemed — **pending rows written before this fix are still in the table**, and
+that endpoint is what turns one into real permissions. No schema change: this is an application-level
+allowlist over the existing `CHECK` values.
+
+**3 — the auth surface is throttled.** `backend/src/api/middleware/rateLimit.ts` generalizes the
+fixed-window limiter that `askRateLimit` already was, into a factory taking the bucket key — the ask
+limiter is now a three-line configuration of it, unchanged in behaviour.
+`backend/src/api/middleware/authRateLimit.ts` mounts two windows on `POST /auth/login`:
+
+| Window | Key | Limit | Stops |
+|--------|-----|-------|-------|
+| Per credential | client address + email | 10 / 15 min | Guessing one account's password |
+| Per address | client address | 60 / 15 min | Rotating emails to stay under the first window |
+
+Both answer 429 with `Retry-After`. The email is part of the first key on purpose: behind a shared
+address — an office NAT, or a platform proxy when `trust proxy` is not set — an address-only limiter
+would let one attacker lock every colleague out of their own account. The per-address ceiling sits
+far above human use for the same reason. Keys are attacker-supplied, so expired windows are swept
+once the map grows past 5,000 entries rather than being left to accumulate.
+
+## Verification
+
+- `backend/test/api/auth.test.ts` — `POST /api/auth/signup` answers **404**; twelve login attempts
+  against one address produce 429s from the eleventh on, with a positive `Retry-After`; a *different*
+  email from the same address is still served after the first is locked out.
+- `backend/test/api/members.test.ts` — inviting `"owner"` and inviting a typo'd tier both return 400,
+  and **no invitation row is written** in either case.
+- `backend/test/api/routes.todo.test.ts` updated to assert the signup route is gone.
 
 ---
 
@@ -2471,9 +3091,62 @@ Fix: wire the acknowledgment state and gate the button; paginate both listings t
 type-to-filter search; cross-reference existing projects to badge imported repos and link the
 conflict; and persist the created project id in the URL so step 2 survives a refresh.
 
+## Verification and fix — defects 1 and 2 (2026-07-26)
+
+**Defect 1 — the cost gate. Reproduced.** `PreflightPreviewCard` takes
+`acknowledged` / `onAcknowledgedChange` and renders a **controlled** checkbox
+(`PreflightPreview.tsx:154`). The import wizard passed neither
+(`ImportPage.tsx:345`, `<PreflightPreviewCard preview={preview} />`), so
+`checked` was pinned to `acknowledged ?? false` and `onChange` called
+`onAcknowledgedChange?.()` on `undefined` — a box that could never be ticked.
+Start analysis was `disabled={startingAnalysis}` only. `AnalyzeDialog.tsx:168`
+wires both and gates with
+`disabled={… || (preview !== null && preview.confirmationsRequired.length > 0 && !confirmed)}`
+— the reference.
+
+*Fixed:* the wizard now matches the reference exactly, plus the invalidation
+half — editing the configuration drops the acknowledgment along with the preview
+it described, so a cheap `backend/` scope's tick cannot carry over to a
+whole-repo full-depth run. `handleStartAnalysis` re-checks the gate on entry, so
+a programmatic or keyboard activation cannot slip past a disabled button.
+
+*Scope of the gate, stated plainly:* it is client-side, because
+`confirmationsRequired` is computed BY the preflight — before one runs there is
+nothing to acknowledge. The server-side guard on spend is `BudgetEnforcer`
+(`worker/ai/budgetEnforcer.ts`), which caps a run regardless of what any client
+sends. The M5 notice above the buttons already states the analysis scope before
+any preview; the gate builds on it rather than duplicating it.
+
+**Defect 2 — large accounts. Reproduced.** `listInstallationRepos`
+(`lib/github.ts:278`) fetched `?per_page=100` and returned `data.repositories`
+with no pagination; `listBranches` (`:300`) sent no `per_page` at all and took
+GitHub's default of 30. An org installed on 250 repositories saw 100, with no
+error and no partial-list notice.
+
+*Fixed:* both walk to exhaustion via a shared `fetchAllPages` helper
+(`per_page=100`, terminating on a short page), bounded at 20 pages with a
+`truncated` flag and a server-side warning so a cut list can never be silent. A
+small account still costs exactly one request. Client-side, the repo and branch
+pickers get a type-to-filter box above `TYPEAHEAD_MIN_OPTIONS` (8) with a live
+`"N of M match"` line and a no-match hint; the selected option is never filtered
+out from under the trigger.
+
+**Tests:** `backend/src/lib/__tests__/githubPagination.test.ts` (237 repos over
+3 pages, 112 branches over 2, single-page short-circuit, the 20-page ceiling
+reported as `truncated`, a 403 surfacing as an error rather than a short list)
+and `frontend/src/pages/ImportPage.test.tsx` (filter narrows 137 repos to one;
+no-match copy; the checkbox is tickable and gates Start; the tick is dropped on
+a config change; the M5 scope notice is not duplicated). Both gate tests were
+confirmed to **fail** against the pre-fix `ImportPage.tsx`.
+
+**Still open — defects 3 and 4** (Eugene, same batch): already-imported repos
+are not badged and the "project already exists" error has no link to the
+existing project; and refreshing on step 2 loses the created project because the
+wizard keeps its state in component state only.
+
 ---
 
-## [P2][Open] Bug 68: Failed requests look like empty results — and one pushes the user toward a paid action
+## [P2][Closed] Bug 68: Failed requests look like empty results — and one pushes the user toward a paid action
 
 **Bug #68**
 
@@ -2482,7 +3155,7 @@ conflict; and persist the created project id in the URL so step 2 survives a ref
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P2 |
-| State | Open — Sahib, M5 batch 3 |
+| State | Closed — Sahib, M5 batch 3 |
 | Area | Frontend data layer and error states |
 
 ## Expected behavior
@@ -2510,13 +3183,91 @@ from "there is nothing here".
 
 ## Notes
 
-Fix: return a discriminated error result instead of nothing, track loading state separately from
-emptiness, and render error-with-retry in each pane. The pattern already exists in the pages fixed
-during the M4 audit passes — this is applying it to the rest.
+**All four reproduced on 2026-07-26 and are fixed. Frontend only; no backend change was needed.**
+
+The endpoint was never ambiguous, which is what makes the original code wrong rather than merely
+lossy: a role with no package answers **200** with `{ package: { status: "missing", sections: [] } }`
+(`backend/src/api/routes/onboarding.ts:549`). Absence has its own representation. So the `null`
+returned by the swallow could only ever mean *the request failed* — and the reader rendered it as
+absence.
+
+**1 — the one that costs money.** `onboardingData.ts:189-203` was
+`try { … } catch { return null }`, with the comment *"No mock fallback: a failed load shows the
+honest missing state"*. It is the opposite of honest. Any 500, dropped connection or expired session
+painted **"No package for Backend"** + a **Generate for Backend** button — telling users the package
+they already own does not exist and inviting them to pay for a rebuild. A latent second defect made
+it worse: the page *had* a `pkgFetchError` state and a "Couldn't load this package / Retry" pane, but
+`loadPkg`'s `.catch` was unreachable because the helper never rejected — dead error-handling sitting
+behind a swallow.
+
+*Fixed:* the helper propagates. `OnboardingPage` now tracks three states, not one — `pkgLoading`,
+`pkgError`, and real absence — rendered in that order, and **only the last shows a button that starts
+a billed run**. A 404 on a pinned `?package=` is separated out again as "This package no longer
+exists" with *Back to packages* and no retry, because retrying a deleted package cannot succeed. The
+missing loading state (same bullet in the report) is the same fix: `pkg` started `null`, so the false
+empty state flashed on every load and every package switch.
+
+**2 — tutorials and workflow steps.** `WalkthroughTab.tsx` had no failure state for its detail pane.
+`openTutorial` caught into `/* list stays */`, so a failed open showed a spinner and snapped back to
+"Pick a path to read" — the click looked broken. `openWorkflow` caught into `setWfSteps([])`, which
+renders **"No steps found for this workflow"** — a server error presented as an authoritative claim
+about the repository. Both now set a `detailError` and render a shared `DetailErrorPane` with the
+message and a working **Try again**.
+
+Also fixed here, and separately confirmed live during M4 (`UI_VERIFY_M4.md` #13): on
+`WorkflowsPage.tsx` the *steps* fetch wrote the **same `error` state as the list fetch**. The rail is
+gated on `!error`, so one failed steps call deleted the entire workflow list from the page, and the
+banner it left read *"The workflow list could not be loaded"* — blaming the request that had
+succeeded. Steps failures are now a `stepsError` scoped to the canvas; the rail stays, and the reader
+can pick another flow.
+
+**3 — feeds, keys and history.** Dashboard activity caught into `[]` and rendered *"No activity yet —
+it appears once your first repository is imported and analyzed"* to established users; it now
+distinguishes never-loaded, failed and genuinely empty. `ProjectSettingsPage` swallowed both the
+`llm-key` and `ranking-weights` loads — the first rendered the "paste a key" form to a team whose key
+*is* configured (so the fix warns against adding one until it loads, or they overwrite it), the
+second rendered an empty role dropdown with no sliders. Run history on `ProjectOverviewPage` printed
+its error line **above a spinner that never resolves**, because a failed fetch leaves `runs` at
+`null` forever; the failure is now the whole state, with a retry.
+
+**4 — the leaked poll.** `handleRegenerateSection` held its `setInterval` in a local, so navigating
+away mid-regeneration left it firing every 4s for the full 120s timeout against an unmounted
+component. It is in a ref now and cleared by the same unmount effect that already covered the
+generate-role poll. The two `await`-inside-`setInterval` polls also gained try/catch: now that the
+helper rejects, an unhandled rejection would have killed the poll without stopping it.
+
+**Also found while sweeping for the same shape (not in the original report):**
+
+- **`useProgress` — the one instance that destroyed data.** A rejected progress fetch did
+  `setItems([])` and *still* flipped `loaded` to true in `finally`. The hook's own comment says
+  consumers that merge into stored positions "must wait for the initial fetch or they'd overwrite
+  history with `[]`" — a failure defeated exactly that guard, so the reader merged its read marks
+  against an empty history and wrote `readSections: []` back to the server. One failed GET silently
+  erased a member's reading progress. `loaded` is now only set on success, so merge consumers stand
+  down; the reader's disabled "Mark as read" says why.
+- **`TeamPage` pending invitations** caught into "leave invitations empty", which hides the section
+  entirely — so a failed fetch looks like *nobody is waiting*, and an admin acting on that
+  re-invites someone who already has an invitation pending.
+- **`AnalyzeConfigForm`** caught branches, commits and scopes into `[]`, and each control falls back
+  to a single default when its list is empty — so a failed request read as "one branch, no history,
+  no sub-packages" on the form that **starts a billed run**. The run is still startable on the
+  defaults; the form no longer claims the defaults are all there is.
+
+**Checked and deliberately left alone:** the drill-level loaders on `ArchitecturePage`,
+`CapabilitiesPage` and `ClassGraphSection` look like swallows (`.catch(() => {})` at the call site)
+but their `loadLevel` sets an error state *before* re-throwing, so the failure is already surfaced.
+The status/metrics polls in `ProjectCard` and `AnalysisRunPanel` keep their last good value on a
+failed tick and cannot manufacture an empty state.
+
+**Test:** `frontend/src/pages/OnboardingPage.errorstate.test.tsx` — four assertions on the expensive
+instance: the helper rejects instead of resolving `null` (the root-cause line, and this one fails if
+the swallow is restored — checked by reverting it); a rejected fetch renders an error **with a retry
+and no Generate button**; `status: "missing"` still renders the empty state **with** Generate; and
+neither paints while the first fetch is in flight.
 
 ---
 
-## [P2][Open] Bug 69: Analysis jobs can get stuck, or fail on an error that should have been retried
+## [P2][Closed] Bug 69: Analysis jobs can get stuck, or fail on an error that should have been retried
 
 **Bug #69**
 
@@ -2525,7 +3276,7 @@ during the M4 audit passes — this is applying it to the rest.
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P2 |
-| State | Open — Nam, M5 batch 2 |
+| State | Closed — fixed 2026-07-26 (M5 batch 2) |
 | Area | Worker job lifecycle |
 
 ## Expected behavior
@@ -2549,9 +3300,85 @@ Fix: also fail queued jobs with no matching queue entry after a few minutes (or 
 when submission throws), and only mark a job failed on its final attempt. Distinct from #61, which
 covered a live worker that stopped consuming.
 
+## What the new recovery module already covers (2026-07-26)
+
+`worker/jobRecovery.ts` + `worker/shutdown.ts` landed in the same milestone and
+were read first. **They close neither half of this bug**, and the boundary is
+clean:
+
+| Mechanism | Question it answers | Signal | Bound |
+|-----------|--------------------|--------|-------|
+| `jobRecovery.reconcileOrphanedJobs` | "this row says **running** but its worker is gone" | dead heartbeat, `WHERE status = 'running'` | `checkpoint->recovery->attempts` |
+| **#69(1)**, this fix | "this row says **queued** and was never submitted" | the `queue.add` that threw | n/a — one terminal write |
+| **#69(2)**, this fix | "the processor threw and BullMQ is about to redeliver" | `attemptsMade + 1 < opts.attempts` | `opts.attempts` |
+
+The recovery sweep cannot rescue a never-submitted job by construction: its only
+liveness signal is a heartbeat, and a job that never started has none — it will
+sit on `'queued'` past any timeout. And the sweep never sees #69(2) either,
+because the old code wrote `'failed'` immediately, which the sweep also skips.
+Both files were left untouched.
+
+## Verification and fix (2026-07-26)
+
+**Half 1 — a failed submission leaves the row queued forever. Reproduced.**
+`POST /projects/:id/analyze` calls `enqueueAnalysisRun` **after** `COMMIT`
+(`routes/projects.ts:1237-1239`). A throw there hit a catch whose `ROLLBACK` is
+a no-op on a committed transaction and returned a 500, leaving
+`analysis_jobs.status = 'queued'` and `projects.status = 'analyzing'` forever.
+Every retry then failed the per-tuple guard in `prepareAnalysisRun` with 409
+"already being analyzed" — the concurrency guard doing its job on a phantom.
+
+*Fixed* in the producer, which is the only place that knows the submission
+failed. `failUnsubmittedJob` (`api/services/analysisStarter.ts`) fails the row
+with the reason and recomputes the project scalar; it is guarded on
+`status = 'queued'` so a worker that DID pick the job up despite a lost ack is
+never stomped mid-run. Wired into all four sites that commit a row before
+submitting: `enqueueAnalysisRun` (used by both the analyze route and the push
+webhook), the new `enqueuePreflightRun`, `POST /analysis-jobs/:id/resume`, and
+`enqueueSummaryGeneration` in the worker. The webhook loop no longer aborts on
+the first failure, so one unreachable-queue error cannot strand its sibling
+scopes. The two chained generation enqueues are contained with `.catch`: the
+analysis really did complete, so a generation submission failure must not drag
+a finished run — or its snapshot — back to `'failed'`.
+
+**Half 2 — the retry policy is a no-op. Reproduced.** Producers enqueue with
+`attempts: 2`, so BullMQ redelivers once. Both workers wrote
+`status = 'failed'` on the FIRST failure, and both guard their progress writes
+with `status NOT IN ('paused','failed')` (`worker/index.ts:280`,
+`summaryWorker.ts:107`) — so the redelivery threw `KillSwitchError('failed')`
+on its very first step and exited having done nothing. Every transient error
+became a hard failure needing a manual resume, while the configured retry
+burned a delivery.
+
+*Fixed* in a new `worker/retryPolicy.ts`, shared by both workers. `shouldRetry`
+mirrors BullMQ's own `Job.shouldRetryJob` (`attemptsMade + 1 < opts.attempts`,
+never for an `UnrecoverableError`) and subtracts a small anchored list of
+failures a second attempt cannot fix — project/scope/snapshot not found, no
+installation linked, no supported source files, duplicate run. On a non-final
+attempt the row goes back to `'queued'` with
+`Retrying after error (attempt N of M)`, `finished_at` cleared, guarded on
+`status NOT IN ('paused','complete')` so a pause clicked mid-failure still wins.
+On the final attempt it is terminal, exactly as before. The generation worker
+additionally skips its terminal side effects while retrying — a package that
+flickers `'failed'` between attempts is the same lie in miniature.
+
+The snapshot is still marked failed on **every** attempt, deliberately: that
+keeps the row truthful (bug #75) and it is also what makes the retry re-run the
+pipeline instead of short-circuiting on the optimistic `'complete'` the
+persistence step writes at 46%.
+
+**Tests:** `backend/src/worker/__tests__/jobLifecycle.test.ts` — the BullMQ
+mirror at each attempt boundary, transient-vs-permanent classification (with
+the anchoring check: a 502 quoting "Project not found" is still retried),
+`'queued'` on a non-final attempt vs `'failed'` on the last, and the
+reconciliation of an unsubmitted row including the `status = 'queued'` guard
+and the project recompute. `analysisStarter` gained a
+`__setQueuePublishForTests` seam because a real `Queue.add` against an
+unreachable Redis never rejects — ioredis reconnects forever by design.
+
 ---
 
-## [P2][Open] Bug 70: The dependency graph reports "imported by 0" for everything, and search blanks the canvas
+## [P2][Closed] Bug 70: The dependency graph reports "imported by 0" for everything, and search blanks the canvas
 
 **Bug #70**
 
@@ -2560,7 +3387,7 @@ covered a live worker that stopped consuming.
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P2 |
-| State | Open — Bradley (backend), Eugene (frontend), M5 batch 3 |
+| State | Closed — half 1 fixed in M4, half 2 fixed 2026-07-26 (M5 batch 3) |
 | Area | Dependency graph — grouped view aggregation, search |
 
 ## Expected behavior
@@ -2584,6 +3411,55 @@ A directory group shows how many things depend on it, and searching brings the m
 Fix: aggregate inbound cross-directory edges into each group's count; fit the viewport to the
 filtered node set once a search resolves (the camera machinery already exists, it just is not driven
 by search); debounce the input.
+
+## Verification — half 1 (2026-07-26): already fixed in M4, closed with evidence
+
+**Not reproducible.** `dependentCount` is computed cross-boundary at all three
+grouping sites and is no longer hardcoded:
+
+- `api/routes/graph.ts:350` — directory groups: `dependentCount: crossIn.get(dir) ?? 0`,
+  built from a `crossOut`/`crossIn`/`internalLinks` pass over `fileEdges`
+  (`:327-337`). Its paired half was fixed at the same time: `importCount` counts
+  links crossing the group's boundary rather than summing members' own imports.
+- `graph.ts:1096` — class-view groups: `inn.get(...)` over `scopedEdges`.
+- `graph.ts:511` — sub-cluster groups: `subIn.get(...)`.
+
+Landed in commit `00639bf` ("Recalibrated onboarding"), whose diff carries the
+`AUDIT C1 / SC F7 / UX §9.1 + §17.6` comment naming this defect. No change made.
+
+## Verification and fix — half 2 (2026-07-26)
+
+**Reproduced.** `GraphPage.tsx` passed `refitSignal={`${direction}:${fullscreen}`}`
+— a search could never change it, and that prop is the only thing that refits
+the camera (`GraphCanvas.tsx` keys `<ReactFlow>` on it, so a change remounts the
+flow and reruns its declarative `fitView`). Filtering re-runs
+`layoutDependencyGraph` over the surviving nodes, which places them somewhere
+the current viewport need not cover — so "2 / 60 files" over a blank canvas is
+exactly what the pipeline produces. The input was also undebounced: `onChange`
+wrote `search` directly, and every keystroke re-ran filter → edge cap → dagre
+layout.
+
+**Fixed**, entirely in `GraphPage.tsx`:
+
+- Two states. `searchInput` echoes every keystroke (a laggy box is its own bug);
+  `search` is the settled value, 200ms behind, and everything expensive keys off
+  it. Clearing is not typing — an emptied box and the X button snap back
+  immediately rather than waiting out the debounce.
+- `refitSignal={`${direction}:${fullscreen}:${search}`}` — the settled query
+  joins the signal, so the camera fits the filtered set once per query rather
+  than once per keystroke. This is what the prop is documented for ("bumped when
+  node positions change without the selection changing"); no new camera
+  machinery.
+- `GraphCanvas` publishes the value as `data-refit-signal` so a test can assert
+  *when* the camera refits — React Flow's own `fitView` no-ops at jsdom's zero
+  canvas size, so the signal is the only observable.
+
+**Tests:** two in `frontend/src/pages/GraphPage.test.tsx` — the signal changes
+on a settled query, contains the whole query (not a prefix), and returns to its
+original value on clear; and a MutationObserver over the signal proves no
+intermediate value is ever emitted for `l`/`lo`/`log`/`logg`/`logge` while
+typing "logger". Both were confirmed to **fail** against the pre-fix
+`refitSignal`.
 
 ---
 
@@ -2675,16 +3551,17 @@ share the link yourself" hint.
 
 ---
 
-## [P3][Open] Bug 73: The frontend image only works when the browser is on the Docker host
+## [P3][Fixed] Bug 73: The frontend image only works when the browser is on the Docker host
 
 **Bug #73**
 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
+| Date fixed | 2026-07-26 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P3 |
-| State | Open — Nam, M5 batch 6 |
+| State | Fixed — M5 |
 | Area | Frontend build, nginx |
 
 ## Expected behavior
@@ -2698,10 +3575,34 @@ for it, so the image is pinned to `localhost:3000`. **Not a blocker for grading*
 Docker Compose setup is exactly that case — but it blocks any non-localhost deployment, and it is why
 the Content-Security-Policy has to name `localhost:3000` explicitly instead of `'self'`.
 
-## Notes
+## Fix
 
-Fix: accept the origin as a build argument from compose, or serve the API through the frontend's
-nginx on a relative path — the second option also lets the CSP tighten.
+Configuration moved from build time to container start. The nginx image runs
+`frontend/docker-entrypoint.d/10-onboardbuddy-runtime-config.sh` before nginx boots; it reads
+`VITE_API_URL`, `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the environment and writes
+`/usr/share/nginx/html/config.js` (`window.__ONBOARDBUDDY_CONFIG__`), which `index.html` loads as a
+plain synchronous script before the app module. `frontend/src/lib/runtimeConfig.ts` reads that global
+and falls back to `import.meta.env` only when it is absent — i.e. the Vite dev server. The same
+script renders `connect-src` into the CSP from the same two URLs, so the policy no longer names
+`localhost:3000` and now allows one Supabase host rather than `https://*.supabase.co`.
+`frontend/Dockerfile` deletes `frontend/.env` before `vite build`, so the image provably carries no
+origin to fall back to; `docker-compose.yml` passes the same `frontend/.env` to the container as
+`env_file`, so the reviewer's instructions are unchanged.
+
+Considered and rejected: a build argument (still one origin per image, and Railway's API hostname
+does not exist when the image is built); a `/config` endpoint fetched on boot (a round trip before
+first paint, plus a 404 failure mode); `envsubst` over the built assets (fragile against
+content-hashed filenames and immutable caching); and serving the SPA from the API process (loses
+nginx's per-location header handling and couples the two deploys). A same-origin `/api` reverse proxy
+through nginx is complementary, not sufficient — the Supabase URL and anon key still have to reach
+the browser somehow.
+
+Verified: one image, three containers, three configurations —
+`connect-src 'self' http://localhost:3000 https://<ref>.supabase.co wss://<ref>.supabase.co` for the
+compose values; `connect-src 'self' http://127.0.0.1:9099 ws://127.0.0.1:9099` for an origin that did
+not exist at build time, with the app's real sign-in request landing on that origin and zero requests
+to `:3000`; and `connect-src 'self'` with a "OnboardBuddy is not configured" page naming the missing
+variables when nothing is set.
 
 ---
 
@@ -3272,6 +4173,192 @@ open`; put `file.ts:120–134 · symbolName` on the chip (those ranges are verif
 reconcile the strip and say what it counts; and rewrite gap copy to describe the codebase, not the
 pipeline. See [UX_AUDIT_FINDINGS.md §19.3](./UX_AUDIT_FINDINGS.md#193-the-citations-footer-43-numbered-file-paths-with-no-names)
 and [§19.4](./UX_AUDIT_FINDINGS.md#194-known-gaps-34-copies-of-one-sentence-63-of-a-section).
+
+---
+
+## [P3][Closed] Bug 84: The Files ⇄ Classes toggle needs two clicks — a tooltip's invisible wrapper eats the first press
+
+**Bug #84**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-26 |
+| Reported by | M4 live UI verification (`.notes/UI_VERIFY_M4.md` #5, VISUAL QA M4 #5); filed retrospectively during the M5 frontend batch |
+| Priority | P3 |
+| State | Closed |
+| File / area | frontend/src/components/ui/tooltip.tsx, frontend/src/styles.css (surfaced on frontend/src/pages/GraphPage.tsx) |
+
+## Expected behavior
+
+One click on `Classes & interfaces` switches the Dependencies canvas to the class view.
+
+## Actual behavior
+
+The first click restyled the button and left the canvas showing Files; a second click switched it.
+Reproduced on OnboardBuddy and FloowForge during the M4 sweep.
+
+## Steps to reproduce
+
+Open `/projects/:id/dependencies`, move the pointer across the header controls (count badge,
+Fullscreen, "Show all edges", LR/TB) so a tooltip opens, then click `Classes & interfaces` once, at a
+width where the header actions row **wraps to two lines**.
+
+## Notes
+
+**This is filed retrospectively because a fix had already shipped for it in M4 — and that fix did not
+work.** It was written from an *inferred* mechanism that was never observed, which is exactly why it
+missed. Recording both halves, because the interesting part is the miss.
+
+**The M4 attempt.** `GraphPage.tsx` reasoned that a portalled tooltip was landing on the toggle when
+the row wrapped, and added `sideOffset={6}` plus `pointer-events-none` to the four header
+`TooltipContent`s, and `flex-nowrap` to the toggle group. The comment left in the file says a
+tooltip "can never take a click" as a result. It still could.
+
+**Observed 2026-07-26, live, for the first time.** The inference was right; the fix was on the wrong
+element. Radix renders `TooltipPrimitive.Content` *inside* `[data-radix-popper-content-wrapper]` — an
+un-classed `position: fixed; z-index: 50` div, with no way to pass it a className, that keeps
+`pointer-events: auto`. So the visible tooltip was transparent to the pointer while the invisible box
+around it was not. `document.elementFromPoint` at the toggle's centre returned that **DIV**, not the
+BUTTON, and a hit scan across the button's whole width returned it at every sample.
+
+The decisive control, on the same button with the same tooltip open: clicking the region the tooltip
+covered failed **3/3**; clicking the uncovered region succeeded first time. Purely geometric.
+Tallies: unwrapped row — 1 click switches, 6/6 across both projects. Wrapped row — first click a
+no-op, **7/7** on OnboardBuddy and **3/3** on FloowForge, confirmed on the canvas (`8 / 8 groups` →
+`2 / 2 groups · 5 inheritance links`), not merely on `aria-pressed`. `sideOffset={6}` was irrelevant —
+6px is smaller than the gap between wrapped rows. `flex-nowrap` does keep the two buttons together;
+it just cannot stop a tooltip landing on them.
+
+**Confirmed fixed, live, after the fix was actually deployed.** Same page, same forced wrap
+(`main{max-width:660px}`, actions row 68px = two lines, verified per trial), judged on the canvas:
+
+| Probe | Before | After |
+|---|---|---|
+| `elementFromPoint` at the toggle centre, badge tooltip covering it | `DIV [data-radix-popper-content-wrapper]` | `BUTTON "Classes & interfaces"` (`el === toggleButton`) |
+| Wrapper computed `pointer-events` | `auto` | `none` |
+| Wrapper inline `style.pointerEvents` | `""` | `none` |
+
+One-click switches: **5/5 OnboardBuddy** (`8 / 8 groups` → `2 / 2 groups · 5 inheritance links`) and
+**3/3 FloowForge** (`6 / 6 groups` → `15 / 15 classes`), each with the covering tooltip verified
+open, including the exact left-of-centre spot that failed 3/3 before. Classes → Files: **6/6**.
+
+*Direction asymmetry worth knowing:* in Classes view the header holds only the toggle — no badge,
+fullscreen, edges or LR/TB controls — so that row never wraps and no tooltip can cover the toggle.
+Classes → Files could never reproduce the condition in the first place.
+
+**No regressions, checked live rather than argued** — the `:has()` scoping holds. The package/commit
+`DropdownMenu` opened and **items were actually selected twice**, with
+`wrapper.matches(':has(> [data-slot="tooltip-content"])')` → **false** and inline `pointerEvents`
+empty. The ranking-weights `Select` opened and **"frontend" was actually selected** (weights
+re-projected `25/10/10/25/10/10/10` → `10/20/20/25/5/10/10`); it uses item-aligned positioning and
+has no popper wrapper at all. Tooltips still appear on hover and still dismiss.
+
+**Deployment note, found during that verification and worth more than the bug.** `localhost:5173` is
+not a Vite dev server — it is `team15-frontend-1`, nginx serving a **static production build baked
+into the image** (`frontend/Dockerfile`). There is no HMR. The first measurements reproduced the bug
+perfectly against a container built 100 minutes before the fix was written, while the DOM shape
+matched every assumption the fix makes — i.e. it was staleness, not a bad selector. **No frontend
+change reaches this stack without `docker compose up -d --build frontend`.** Anyone verifying
+frontend work here by loading `:5173` is testing whatever was last built, not what is on disk.
+
+**Fixed on the wrapper, and for every tooltip rather than that one control** — any tooltip that
+overlaps any control eats a click; this instance only became reproducible because a wrapping header
+row happened to put the box over a button. Two layers, both in shared UI code:
+
+- `ui/tooltip.tsx` — `TooltipContent` takes a ref callback that walks to `parentElement` and sets
+  `pointerEvents = "none"` on the popper wrapper. Observable from a test, unlike a CSS rule.
+- `styles.css` — `[data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"])
+  { pointer-events: none }`. Scoped with `:has()` on purpose: dropdown-menu, select and the other
+  Radix poppers share that wrapper and must stay interactive.
+
+Safe app-wide because no `TooltipContent` in this codebase contains anything clickable — that is a
+premise, so it is asserted rather than assumed.
+
+**Severity note, and one honest loose end.** Measured wrap threshold is `main` ≤ 680px, which needs
+a viewport under ~676 CSS px with the sidebar expanded — so not a normal desktop, but real at narrow
+windows, on mobile, and at high browser zoom (1280 @ 200% = 640 CSS px). P3 rather than P2 for that
+reason. The loose end: the M4 sweep recorded this at its normal 1493×812 session width, where the
+row should not wrap, while the 2026-07-26 pass got 6/6 first-click successes unwrapped. Either the
+M4 session was in a state that widened the row (the Files-view count badge grows with the repo, and
+a truncation suffix widens it further) or something else contributed there. The mechanism proven
+above is real and is fixed; that width discrepancy is not explained, and is recorded rather than
+tidied away.
+
+**Test:** `frontend/src/components/ui/tooltip.interactive.test.tsx`, three assertions. jsdom does no
+layout and cannot reproduce a hit test, so it pins the three facts the fix depends on instead —
+each one something a future edit could quietly undo:
+
+1. the popper **wrapper** (not just the content) ends up `pointer-events: none` — fails if the fix
+   drifts back onto the inner element, which is exactly how M4 got it wrong;
+2. a `Select` still opens **and accepts a click on an option**, with its wrapper untouched — the
+   regression the `:has()` scoping guards, since select and dropdown-menu share that wrapper;
+3. no `TooltipContent` anywhere in `src/**/*.tsx` contains a button, link or `onClick` — the premise
+   that makes the fix safe app-wide, asserted rather than assumed.
+
+---
+
+## [P4][Closed] Bug 85: Two "known gaps" numbers on one screen, neither saying what it counted
+
+**Bug #85**
+
+| Field | Value |
+|-------|-------|
+| Date created | 2026-07-26 |
+| Reported by | M4 live UI verification (`.notes/UI_VERIFY_M4.md` #9 and "still broken" #6); filed retrospectively during the M5 frontend batch |
+| Priority | P4 |
+| State | Closed |
+| File / area | frontend/src/pages/OnboardingPage.tsx |
+
+## Expected behavior
+
+Every gap count on the reader states the population it counted, so two different numbers on one
+screen do not read as a contradiction.
+
+## Actual behavior
+
+The sticky trust strip said **"66 known gaps"** while a section footer on the same screen said
+**"6 known gaps"**. Both were correct — the strip counts the package, the footer counts that section
+— but neither said so, so one word described two populations.
+
+## Steps to reproduce
+
+Open a package in the reader (`/projects/:id/onboarding?view=reader`) and compare the sticky strip
+with a section footer.
+
+## Notes
+
+**Fixed in M4; re-verified live 2026-07-26 and confirmed to read clearly.** Filed retrospectively so
+the tracker carries the finding and its verification rather than only the code comments.
+
+Both labels now name their scope, and the strip's tooltip explicitly cross-references the section
+label. Verified with both on screen simultaneously:
+
+| Where | Rendered text |
+|---|---|
+| Strip (OnboardBuddy) | `82 known gaps in this package` |
+| Section 9 | `5 known gaps in this section · 1 kinds` |
+| Section 1 | `1 known gap in this section` |
+| Strip (FloowForge) | `42 known gaps in this package` |
+| Section 1 (FloowForge) | `5 known gaps in this section · 3 kinds` |
+
+- **No truncation at any width.** The strip span's `scrollWidth == clientWidth` (162px) from 900 down
+  to 300 CSS px; its container is `flex flex-wrap` with `overflow: visible`, so it wraps to a second
+  line rather than ellipsizing. Both scope words survive.
+- **The strip tooltip reconciles the two numbers in words**: "82 things this analysis knows it could
+  not determine, across the whole package: 71 raised while writing the sections (each section lists
+  its own share under *known gaps in this section*; grouped into 14 kinds in total) and 11 found by
+  detection."
+- (The count is 82, not the 66 recorded in M4, because the package was regenerated at `main@9f4d168`.)
+
+**One defect found by this verification and fixed here:** the "kinds" suffix did not pluralise —
+`· 1 kinds`. The gap noun did (`1 known gap` / `5 known gaps`); the suffix was a bare template. Now
+`1 kind` / `3 kinds`.
+
+**Carried forward, not fixed:** the strip number is still a hover/focus `cursor-help` span (a Radix
+tooltip trigger with `tabindex="0"`), not a clickable disclosure — while the section number is a real
+`<button>` with `aria-expanded` that expands the gap list. The M4 note calls this out: the counted
+*affordances* live only at the section footer. Making the package-level number a disclosure too is a
+reader-navigation change, not an error-state one; it belongs to the #74 polish tail.
 
 ---
 

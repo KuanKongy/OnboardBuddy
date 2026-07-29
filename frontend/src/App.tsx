@@ -4,6 +4,7 @@ import { Compass } from "lucide-react";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
 import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
@@ -145,7 +146,12 @@ function AuthenticatedLayout() {
       <div className="flex h-screen">
         <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
         <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
-          <Outlet />
+          {/* Bug #24: a render error in one shell page used to unmount the
+              whole app via the top-level boundary. Scoped here, the sidebar
+              survives and the user can navigate out without a reload. */}
+          <RouteErrorBoundary scope="dashboard-shell">
+            <Outlet />
+          </RouteErrorBoundary>
         </main>
       </div>
       <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} context="dashboard" />

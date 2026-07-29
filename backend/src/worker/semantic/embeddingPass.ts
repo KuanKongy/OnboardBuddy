@@ -6,15 +6,22 @@
  */
 
 import { query } from '../../lib/db.js';
+import { envInt } from '../../lib/env.js';
 import { mapLimit } from '../../lib/parallel.js';
 import { withStatementTimeoutRetry } from '../../lib/pgRetry.js';
+import { profileForModel } from '../ai/embeddingProfiles.js';
 import type { SemanticContext } from './context.js';
 import type { SemanticRecordBody, RecordLevel } from './recordTypes.js';
 import { viewsForRecord, renderView, kindForRecord, type ViewType, type ViewRenderContext } from './embeddingViews.js';
 
 // 128 inputs/request (OpenAI allows 2,048; 128×1536-dim rows keeps each
 // multi-row INSERT under ~2MB) — Track C/D sizing.
-const EMBED_BATCH_SIZE = 128;
+//
+// Env-overridable (EMBED_BATCH_SIZE) because the per-request input cap is the
+// upstream's to set and it changes with the model: an OpenRouter upstream that
+// rejects 128 inputs would fail every batch of the phase, and that must be
+// fixable with an env line rather than a rebuild.
+const EMBED_BATCH_SIZE_DEFAULT = 128;
 /**
  * Rows per INSERT statement. Decoupled from EMBED_BATCH_SIZE (which is sized
  * for the embeddings API) because the two are limited by different things.
@@ -36,8 +43,6 @@ const EMBED_BATCH_SIZE = 128;
  * spends its whole budget queued behind the others.
  */
 const EMBED_INSERT_CHUNK = 32;
-/** Embeddings currently go to the OpenAI-compatible embeddings endpoint. */
-const EMBEDDINGS_PROVIDER = 'openai';
 
 export interface EmbeddingPassResult {
   embedded: number;
@@ -59,6 +64,11 @@ interface MappedRecordRow {
 
 export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingPassResult> {
   const model = ctx.ai.embeddingModel;
+  // `embeddings.provider` is descriptive only — nothing filters on it — but it
+  // is the fastest way to see which upstream produced a row when two models
+  // coexist in the table, so it follows the model instead of being hardcoded.
+  const embeddingsProvider = profileForModel(model).id;
+  const batchSize = envInt('EMBED_BATCH_SIZE', EMBED_BATCH_SIZE_DEFAULT);
 
   // The three reads below are wrapped too, not just the writes: on 2026-07-26
   // StudyFlow spent 43s in this preamble before its first vector left for the
@@ -127,8 +137,8 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   let embedded = 0;
   let batches = 0;
   const embedBatches: Array<typeof pending> = [];
-  for (let i = 0; i < pending.length; i += EMBED_BATCH_SIZE) {
-    embedBatches.push(pending.slice(i, i + EMBED_BATCH_SIZE));
+  for (let i = 0; i < pending.length; i += batchSize) {
+    embedBatches.push(pending.slice(i, i + batchSize));
   }
   await mapLimit(embedBatches, 8, async (batch) => {
     const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
@@ -140,7 +150,7 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
       const item = batch[j]!;
       const vector = vectors[j];
       if (!vector) continue;
-      tuples.push([item.recordId, item.view, item.content, `[${vector.join(',')}]`, EMBEDDINGS_PROVIDER, model]);
+      tuples.push([item.recordId, item.view, item.content, `[${vector.join(',')}]`, embeddingsProvider, model]);
       embedded += 1;
     }
     // Bug #76: this is the write the transaction-mode pooler cancels under

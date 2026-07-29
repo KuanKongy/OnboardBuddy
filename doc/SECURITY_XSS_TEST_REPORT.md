@@ -44,7 +44,7 @@ production nginx image — see the honest limitation below.
 
 **Honest limitation:** the browser tests ran against the Vite dev server, which serves **no CSP**.
 That is expected, not a finding — the CSP is an nginx-layer, production-image-only control
-(`frontend/security-headers.conf`), already built, served through the real nginx config, and
+(`frontend/security-headers.conf.template`), already built, served through the real nginx config, and
 verified in a browser in the prior round (§7.2 of `SECURITY_XSS_PROMPT_INJECTION.md`), and
 statically re-asserted every run by `frontend/src/lib/markdownRenderers.guard.test.ts`. This round
 does not re-verify it and does not claim CSP coverage from the dev-server tests.

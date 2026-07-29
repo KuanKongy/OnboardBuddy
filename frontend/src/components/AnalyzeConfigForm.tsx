@@ -102,22 +102,40 @@ export function AnalyzeConfigForm({
   const [commits, setCommits] = useState<Commit[]>([]);
   const [scopes, setScopes] = useState<Scope[]>([]);
   const [loadingCommits, setLoadingCommits] = useState(false);
+  /**
+   * Bug #68: all three of these lists used to `catch` into an empty array, and
+   * each control falls back to a single sensible default when its list is
+   * empty. So a failed request rendered as "this repo has one branch / no
+   * history / no detected scopes" — a quiet lie on the screen that starts a
+   * BILLED run. The run is still startable on the defaults; the form just
+   * stops claiming the defaults are all there is.
+   */
+  const [listErrors, setListErrors] = useState<{ branches: boolean; commits: boolean; scopes: boolean }>({
+    branches: false,
+    commits: false,
+    scopes: false,
+  });
 
   const branch = config.branch || defaultBranch;
 
   useEffect(() => {
     if (!repoOwner || !repoName || !installationId) return;
     apiFetch(`/github/repos/${repoOwner}/${repoName}/branches?installation_id=${installationId}`)
-      .then((data: { branches: Array<{ name: string }> }) =>
-        setBranches((data.branches ?? []).map((b) => b.name)))
-      .catch(() => setBranches([]));
+      .then((data: { branches: Array<{ name: string }> }) => {
+        setBranches((data.branches ?? []).map((b) => b.name));
+        setListErrors((e) => ({ ...e, branches: false }));
+      })
+      .catch(() => { setBranches([]); setListErrors((e) => ({ ...e, branches: true })); });
   }, [repoOwner, repoName, installationId]);
 
   useEffect(() => {
     if (!projectId) return;
     apiFetch(`/projects/${projectId}/scopes`)
-      .then((data: { scopes: Scope[] }) => setScopes(data.scopes ?? []))
-      .catch(() => setScopes([]));
+      .then((data: { scopes: Scope[] }) => {
+        setScopes(data.scopes ?? []);
+        setListErrors((e) => ({ ...e, scopes: false }));
+      })
+      .catch(() => { setScopes([]); setListErrors((e) => ({ ...e, scopes: true })); });
   }, [projectId]);
 
   useEffect(() => {
@@ -126,8 +144,11 @@ export function AnalyzeConfigForm({
     apiFetch(
       `/github/repos/${repoOwner}/${repoName}/commits?installation_id=${installationId}&branch=${encodeURIComponent(branch)}`,
     )
-      .then((data: { commits: Commit[] }) => setCommits(data.commits ?? []))
-      .catch(() => setCommits([]))
+      .then((data: { commits: Commit[] }) => {
+        setCommits(data.commits ?? []);
+        setListErrors((e) => ({ ...e, commits: false }));
+      })
+      .catch(() => { setCommits([]); setListErrors((e) => ({ ...e, commits: true })); })
       .finally(() => setLoadingCommits(false));
   }, [repoOwner, repoName, installationId, branch]);
 
@@ -149,6 +170,11 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
+        {listErrors.branches && (
+          <p className="text-[0.6875rem] text-warning">
+            Branch list couldn&apos;t be loaded — only the default is offered. Other branches may exist.
+          </p>
+        )}
       </div>
 
       <div className="min-w-0 space-y-1">
@@ -171,6 +197,11 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
+        {listErrors.commits && (
+          <p className="text-[0.6875rem] text-warning">
+            Commit history couldn&apos;t be loaded — this will analyze the branch head.
+          </p>
+        )}
       </div>
 
       <div className="min-w-0 space-y-1">
@@ -190,6 +221,12 @@ export function AnalyzeConfigForm({
             <SelectItem value="custom">Custom path…</SelectItem>
           </SelectContent>
         </Select>
+        {listErrors.scopes && (
+          <p className="text-[0.6875rem] text-warning">
+            Detected scopes couldn&apos;t be loaded — this is a failed request, not a repository
+            without sub-packages. Use a custom path if you meant to narrow the run.
+          </p>
+        )}
         {config.scopeId === "custom" && (
           <>
             <Label htmlFor="analyze-scope-path" className="sr-only">Custom scope path</Label>

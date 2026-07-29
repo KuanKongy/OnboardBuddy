@@ -28,14 +28,13 @@ describe("encryption", () => {
       expect(decrypt(b)).to.equal(plaintext);
     });
 
-    it("rejects empty string (produces empty ciphertext part)", () => {
-      // BUG: encrypt("") produces a valid iv:authTag but empty ciphertext,
-      // which decrypt() rejects with "Invalid encrypted string format".
-      // This is a known P4 edge case — tokens are never empty in practice.
-      expect(() => {
-        const encrypted = encrypt("");
-        decrypt(encrypted);
-      }).to.throw();
+    it("round-trips the empty string (bug #1)", () => {
+      // encrypt("") emits `iv:tag:` — an empty ciphertext part is what AES-GCM
+      // over an empty plaintext *is*. decrypt used to read that empty part as a
+      // missing field and throw, so the pair was not an inverse for one legal
+      // input. Nothing else in the suite exercises a zero-length plaintext, so
+      // a regression here is silent until a caller loses a value.
+      expect(decrypt(encrypt(""))).to.equal("");
     });
 
     it("handles unicode content", () => {

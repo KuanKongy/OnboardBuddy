@@ -1,5 +1,12 @@
 # Security headers (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.1).
 #
+# TEMPLATE. `__CSP_CONNECT_SRC__` is substituted at container start by
+# docker-entrypoint.d/10-onboardbuddy-runtime-config.sh, which derives the
+# allowed origins from the SAME three variables it writes into config.js
+# (VITE_API_URL, VITE_SUPABASE_URL). The rendered file lands at
+# /etc/nginx/security-headers.conf. Editing that file inside a container has no
+# lasting effect — edit this template, or the variables.
+#
 # This lives in its own file because of an nginx rule that is easy to get
 # wrong: `add_header` directives are NOT merged across levels — a `location`
 # block that declares even one `add_header` discards every `add_header`
@@ -21,13 +28,21 @@
 #                       attributes and mermaid injects <style> into its
 #                       rendered SVG. Inline style cannot execute script under
 #                       this policy, so the residual is limited to appearance.
-# connect-src         — tune per deployment. Compose serves the API
-#                       cross-origin on :3000 and Supabase over https/wss.
-#                       Keep this exact rather than wildcarding.
+# connect-src         — GENERATED, never hand-written. Exactly `'self'`, plus
+#                       the origin of VITE_API_URL (omitted when that is a
+#                       same-origin path), plus the Supabase origin and its
+#                       wss: counterpart. Compose therefore renders the local
+#                       API origin; a hosted deploy renders its own API domain.
+#                       This file deliberately names no host of its own: a
+#                       hardcoded one is what previously pinned the image to a
+#                       single deployment. It is also tighter than the
+#                       `*.supabase.co` wildcard it replaced — the policy now
+#                       names one Supabase project, not every project on the
+#                       platform.
 # frame-ancestors     — clickjacking; matches X-Frame-Options: DENY.
 # base-uri/object-src/form-action — close the base-tag hijack, plugin, and
 #                       form-exfiltration paths.
-add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src 'self' http://localhost:3000 https://*.supabase.co wss://*.supabase.co; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://avatars.githubusercontent.com; font-src 'self' data:; connect-src __CSP_CONNECT_SRC__; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'" always;
 add_header X-Frame-Options "DENY" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;

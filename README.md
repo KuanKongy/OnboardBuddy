@@ -38,7 +38,7 @@ The app runs via **Docker Compose**. Three containers start together: frontend, 
    - `frontend/.env` — `VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
    - `backend/github-app.pem` — GitHub App private key (mounted read-only into both backend containers)
 
-   Both `.env` files must exist **before** building: `docker-compose.yml` loads `backend/.env` into the API and worker at runtime, and Vite reads `frontend/.env` during the frontend image build to bake in the API and Supabase settings. If you only have the templates, `cp backend/.env.example backend/.env` and `cp frontend/.env.example frontend/.env` show every variable with comments.
+   Both `.env` files must exist before you start: `docker-compose.yml` loads `backend/.env` into the API and worker, and `frontend/.env` into the frontend. All three containers read their configuration at **startup**, so editing a `.env` and re-running `docker compose up -d` is enough — no rebuild. If you only have the templates, `cp backend/.env.example backend/.env` and `cp frontend/.env.example frontend/.env` show every variable with comments.
 3. From the repo root:
 
 ```sh
@@ -466,12 +466,13 @@ hidden from the reader in the product.
    contrast.
 6. **Deployment.** M5's one piece of genuinely new work. The app runs in Docker Compose today, which
    is what this course requires, but it has never been stood up on a public URL. The plan is a
-   three-service deploy (frontend, API, worker) on Railway — the setup is already written up in
+   three-service deploy (frontend, API, worker) on Railway — the setup is written up in
    [doc/DEVOPS.md](doc/DEVOPS.md) → "Deploying to Railway", including the environment differences and
-   the auth redirect URLs. **One blocker first:** the frontend currently bakes `localhost:3000` in as
-   the API origin at build time (#73), so that has to become configurable before a deploy can work.
-   Fixing it also lets the Content-Security-Policy stop naming localhost explicitly. Treat this as a
-   stretch goal — it is sequenced last because the 10 open issues matter more than a public URL.
+   the auth redirect URLs. **The blocker is cleared:** the frontend used to bake `localhost:3000` in
+   as the API origin at build time (#73); it now reads its API origin, Supabase URL and anon key when
+   the container starts, so one image can serve any deployment, and the Content-Security-Policy is
+   derived from those same values instead of naming localhost. See
+   [doc/DEVOPS.md](doc/DEVOPS.md) → "Runtime configuration". What remains is the deploy itself.
 
 **Out of scope for this course project:** a second parsed language (see
 [What it can analyse](#what-it-can-analyse)) and non-GitHub integrations such as BitBucket, Notion or

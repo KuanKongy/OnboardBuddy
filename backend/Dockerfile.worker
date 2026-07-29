@@ -18,4 +18,14 @@ COPY package.json ./
 COPY backend/package.json backend/package.json
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./backend/dist
-CMD ["npm", "run", "start:worker", "-w", "backend"]
+# Run node DIRECTLY, not via `npm run` — graceful shutdown depends on it.
+# `npm run` becomes PID 1 and node a grandchild; npm's signal forwarding to
+# the script child is unreliable, and the kernel drops default-action signals
+# to PID 1 entirely. Either way SIGTERM never reached the worker's handler, so
+# every deploy killed in-flight runs outright instead of draining them
+# (src/worker/shutdown.ts). WORKDIR must be backend/ because the process
+# resolves GITHUB_APP_PRIVATE_KEY_PATH="./github-app.pem" relative to cwd —
+# `npm run -w backend` used to set that; node_modules still resolves upward
+# to the hoisted /app/node_modules.
+WORKDIR /app/backend
+CMD ["node", "dist/worker/index.js"]

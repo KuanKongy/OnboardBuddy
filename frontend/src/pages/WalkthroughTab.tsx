@@ -11,6 +11,7 @@ import {
   HelpCircle,
   Loader2,
   PlayCircle,
+  RefreshCw,
   Route as RouteIcon,
   Terminal,
   Wrench,
@@ -31,6 +32,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
 import { apiFetch } from "@/lib/api";
+import { regenerateTutorial } from "@/lib/onboardingData";
 import { useProgress } from "@/lib/useProgress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -61,6 +63,12 @@ type TutorialMode = "walkthrough" | "howto";
 
 interface TutorialSummary {
   id: string;
+  /**
+   * `tut:<workflow key>` — stable across regenerations, while `id` is not:
+   * the worker replaces the row for a (package, stable_key) pair, so this is
+   * what a regeneration poll follows (bug #36).
+   */
+  stable_key: string;
   title: string;
   summary: string;
   /** "After this, you can …" — the concrete thing the reader can then do. */
@@ -370,6 +378,38 @@ function CoverageNote({ coverage }: { coverage: Coverage }) {
   );
 }
 
+/**
+ * Failure state for the detail pane (bug #68). Kept visually distinct from the
+ * "nothing selected" and "no steps" prompts it replaces, so an error can never
+ * be misread as an authoritative empty result — and it always offers a retry,
+ * because the previous behaviour left the user with nothing to press.
+ */
+function DetailErrorPane({
+  title,
+  body,
+  error,
+}: {
+  title: string;
+  body: string;
+  error: { message: string; retry: () => void };
+}) {
+  return (
+    <div className="flex h-full min-h-[260px] items-center justify-center text-center" role="alert">
+      <div className="max-w-sm">
+        <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-danger-soft">
+          <AlertTriangle className="h-5 w-5 text-danger" />
+        </div>
+        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+        <p className="mt-1 text-xs text-muted-foreground">{body}</p>
+        <p className="mt-1.5 break-words text-[0.6875rem] text-muted-foreground/80">{error.message}</p>
+        <Button size="sm" variant="outline" className="mt-3 gap-1.5" onClick={error.retry}>
+          <RefreshCw className="h-3.5 w-3.5" /> Try again
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function WalkthroughTab() {
   const { project } = useProject();
   const githubRepo: GithubRepoRef | undefined = project
@@ -384,6 +424,16 @@ export function WalkthroughTab() {
   const [loadError, setLoadError] = useState(false);
   const [detail, setDetail] = useState<TutorialDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  /**
+   * Bug #68: the detail pane had no failure state, so both of its fetches
+   * lied when they rejected. A failed tutorial open showed a spinner and then
+   * snapped back to "Pick a path to read" — the click looked like it did
+   * nothing. A failed workflow-steps load emptied `wfSteps` and rendered "No
+   * steps found for this workflow", presenting a server error as an
+   * authoritative statement about the repository. `retry` re-runs whichever
+   * of the two failed.
+   */
+  const [detailError, setDetailError] = useState<{ message: string; retry: () => void } | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   /** `?step=n` on a walkthrough: scroll after the anchors exist, not before. */
   const [pendingScroll, setPendingScroll] = useState<number | null>(null);
@@ -396,6 +446,27 @@ export function WalkthroughTab() {
   const [hoveredReceipt, setHoveredReceipt] = useState<StepReceipt | null>(null);
   useEffect(() => { setHoveredReceipt(null); }, [currentStep, detail?.tutorial.id]);
   const { save: saveProgress } = useProgress(id);
+
+  /**
+   * Bug #36: per-tutorial regeneration. A stale section has offered this since
+   * M3; a stale tutorial could only be refreshed by regenerating the entire
+   * package, so the tab showed a warning with no way to act on it.
+   *
+   * The banner is ungated and the ACTION is owner/admin, the same split
+   * OnboardingPage settled on (E10): the tier that reads the walkthrough is
+   * the tier that needs to know it is stale, while
+   * `POST /tutorials/:id/regenerate` really is owner/admin.
+   */
+  const canManage = project?.permission_tier === "owner" || project?.permission_tier === "admin";
+  const [regenerating, setRegenerating] = useState(false);
+  const [regenError, setRegenError] = useState("");
+  const regenPollRef = useRef<number | null>(null);
+  // Bug #68(4)'s lesson, applied up front: a poll owned by a ref can be
+  // cleared on unmount, so navigating away mid-regeneration does not leave a
+  // request firing every four seconds for two minutes.
+  useEffect(() => () => {
+    if (regenPollRef.current) window.clearInterval(regenPollRef.current);
+  }, []);
 
   // Remember the reader's step so "Continue tutorial" resumes here.
   useEffect(() => {
@@ -478,6 +549,7 @@ export function WalkthroughTab() {
     const controller = new AbortController();
     abortRef.current = controller;
     setLoadingDetail(true);
+    setDetailError(null);
     setCurrentStep(0);
     try {
       const data = await apiFetch(`/projects/${id}/tutorials/${tutorialId}`, { signal: controller.signal });
@@ -491,9 +563,70 @@ export function WalkthroughTab() {
           if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
         }
       }
-    } catch { /* list stays */ }
+    } catch (err: unknown) {
+      // The list stays, but the pane now says why it is empty instead of
+      // silently reverting to the "pick something" prompt (bug #68).
+      if (!controller.signal.aborted) {
+        setDetail(null);
+        setDetailError({
+          message: err instanceof Error ? err.message : "Failed to load this tutorial",
+          retry: () => void openTutorial(tutorialId, startStep),
+        });
+      }
+    }
     finally {
       if (!controller.signal.aborted) setLoadingDetail(false);
+    }
+  }
+
+  /**
+   * Bug #36: rebuild the open tutorial against the newest analysis.
+   *
+   * Polls the tutorial list until this key's row is a different one — the
+   * worker DELETEs and re-INSERTs `(package_id, stable_key)`, so a new row id
+   * for the same key is the completion signal. A miss (the flow no longer
+   * exists, or no longer supports a procedure) fails the job with a reason,
+   * which surfaces here rather than as a poll that quietly times out.
+   */
+  async function handleRegenerateTutorial() {
+    if (!id || !detail) return;
+    const targetKey = detail.tutorial.stable_key;
+    const oldId = detail.tutorial.id;
+    setRegenerating(true);
+    setRegenError("");
+    try {
+      await regenerateTutorial(id, oldId);
+      const started = Date.now();
+      const stop = () => {
+        if (regenPollRef.current) window.clearInterval(regenPollRef.current);
+        regenPollRef.current = null;
+      };
+      stop();
+      regenPollRef.current = window.setInterval(async () => {
+        let list: TutorialSummary[] | null = null;
+        try {
+          const data = await apiFetch(`/projects/${id}/tutorials${packageQuery}`);
+          list = (data.tutorials ?? []) as TutorialSummary[];
+        } catch { /* transient — the next tick retries; the timeout still fires */ }
+        const fresh = list?.find((t) => t.stable_key === targetKey);
+        if (fresh && fresh.id !== oldId) {
+          stop();
+          setRegenerating(false);
+          setTutorials(list);
+          void openTutorial(fresh.id);
+          return;
+        }
+        if (Date.now() - started > 120_000) {
+          stop();
+          setRegenerating(false);
+          setRegenError(
+            "Regeneration is taking longer than expected — the tutorial will replace itself when the worker finishes. Check the Overview page for job status.",
+          );
+        }
+      }, 4000);
+    } catch (err: unknown) {
+      setRegenerating(false);
+      setRegenError(err instanceof Error ? err.message : "Failed to start regeneration");
     }
   }
 
@@ -501,13 +634,21 @@ export function WalkthroughTab() {
     if (!id) return;
     setSelectedWorkflow(workflowId);
     setLoadingDetail(true);
+    setDetailError(null);
     setCurrentStep(0);
     try {
       const data = await apiFetch(`/projects/${id}/workflows/${workflowId}/walkthrough`);
       setWfSteps(data.steps ?? []);
       setWfMeta(data.workflow ?? null);
-    } catch {
+    } catch (err: unknown) {
+      // Was `setWfSteps([])`, which rendered "No steps found for this
+      // workflow" — a claim about the repo, made from a failed request.
       setWfSteps([]);
+      setWfMeta(null);
+      setDetailError({
+        message: err instanceof Error ? err.message : "Failed to load these steps",
+        retry: () => void openWorkflow(workflowId),
+      });
     } finally {
       setLoadingDetail(false);
     }
@@ -585,7 +726,13 @@ export function WalkthroughTab() {
 
             {/* step viewer — a scrolling document for readings, a pager for runbooks */}
             <div className="min-h-[380px] rounded-xl border border-border bg-card p-4">
-              {!detail && !loadingDetail ? (
+              {detailError && !loadingDetail ? (
+                <DetailErrorPane
+                  title="Couldn't open this tutorial"
+                  body="The tutorial is still there — this is a failure to fetch it, not a missing guide."
+                  error={detailError}
+                />
+              ) : !detail && !loadingDetail ? (
                 <div className="flex h-full min-h-[320px] items-center justify-center text-center">
                   <div>
                     <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
@@ -618,6 +765,40 @@ export function WalkthroughTab() {
                       <p className="mt-1 text-[0.78125rem] font-medium text-foreground">{detail.tutorial.goal}</p>
                     )}
                     <p className="mt-0.5 text-xs text-muted-foreground">{detail.tutorial.summary}</p>
+
+                    {/* Bug #36: until now this tab could only SAY a walkthrough
+                        was stale. The banner is ungated and the action is
+                        owner/admin — same split as a stale section (E10). */}
+                    {detail.tutorial.status === "stale" && (
+                      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2">
+                        <p className="text-xs text-warning">
+                          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                          Stale — files this walkthrough steps through changed since it was written.{" "}
+                          {canManage
+                            ? "Regenerating rebuilds just this one against the newest analysis."
+                            : "An owner or admin can rebuild it against the newest analysis."}
+                        </p>
+                        {canManage && (
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            className="shrink-0 border-warning/50 text-warning hover:bg-warning-soft"
+                            onClick={handleRegenerateTutorial}
+                            disabled={regenerating}
+                          >
+                            {regenerating
+                              ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                              : <RefreshCw className="mr-1.5 h-3 w-3" />}
+                            {regenerating ? "Regenerating…" : "Regenerate"}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {regenError && (
+                      <p className="mt-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        {regenError}
+                      </p>
+                    )}
                   </div>
 
                   {!isWalkthrough && (
@@ -808,7 +989,13 @@ export function WalkthroughTab() {
             </div>
 
             <div className="min-h-[320px] rounded-xl border border-border bg-card p-4">
-              {!selectedWorkflow ? (
+              {detailError && !loadingDetail ? (
+                <DetailErrorPane
+                  title="Couldn't load these steps"
+                  body="This workflow's steps could not be fetched. That is a request failure, not a workflow without steps."
+                  error={detailError}
+                />
+              ) : !selectedWorkflow ? (
                 <div className="flex h-full min-h-[260px] items-center justify-center text-center">
                   <div>
                     <RouteIcon className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />

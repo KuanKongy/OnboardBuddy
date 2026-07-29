@@ -3,6 +3,7 @@ import { query } from "../../lib/db.js";
 import { supabaseAdmin } from "../../lib/supabase.js";
 import {
   type GitHubUser,
+  GitHubAppConfigError,
   exchangeGitHubAppOAuthCode,
   getAppInstallation,
   getAppInfo,
@@ -26,14 +27,53 @@ import {
   createInstallationState,
   verifyInstallationState,
 } from "../../lib/github-installation-state.js";
+import { parseInstallationId } from "../lib/installationId.js";
 
 export const githubRouter = Router();
+
+/**
+ * Bug #8: resolve an installation id or answer 400 and return `null`.
+ *
+ * Returns `null` — not a falsy number — so that `0`, which is a well-formed id
+ * that simply is not yours, reaches the ownership check and gets an honest 403
+ * instead of being reported as a missing parameter. Callers must compare
+ * against `null` explicitly for the same reason.
+ */
+function resolveInstallationId(
+  res: import("express").Response,
+  raw: unknown,
+  field = "installation_id query parameter",
+): number | null {
+  const parsed = parseInstallationId(raw);
+  if (parsed.ok) return parsed.value;
+
+  res.status(400).json({
+    error:
+      parsed.reason === "absent"
+        ? `${field} is required`
+        : `${field} must be a positive integer`,
+  });
+  return null;
+}
 
 function handleGitHubRouteError(
   res: import("express").Response,
   err: unknown,
   fallbackMessage = "Internal server error",
 ): void {
+  // Bug #3: a missing or unreadable github-app.pem used to surface as the
+  // generic "Internal server error" for every GitHub route, with the real
+  // ENOENT visible only in the container log. The deployment is broken, not
+  // the request — 503 says so — and the message names the file and the
+  // working directory it was resolved against.
+  if (err instanceof GitHubAppConfigError) {
+    res.status(503).json({
+      error: `GitHub integration is not configured on the server. ${err.message}`,
+      code: "github_app_not_configured",
+    });
+    return;
+  }
+
   if (err instanceof GitHubReconnectRequiredError) {
     res.status(403).json({
       error: err.message,
@@ -113,7 +153,7 @@ githubRouter.get("/app", async (req, res) => {
     });
   } catch (err) {
     console.error("Get app info error:", err);
-    res.status(500).json({ error: "Failed to fetch GitHub App info" });
+    handleGitHubRouteError(res, err, "Failed to fetch GitHub App info");
   }
 });
 
@@ -171,9 +211,10 @@ githubRouter.post("/installations/link", async (req, res) => {
       state?: string;
     };
 
-    const installationId = Number(installation_id);
-    if (!installationId || Number.isNaN(installationId) || !state) {
-      res.status(400).json({ error: "installation_id and state are required" });
+    const installationId = resolveInstallationId(res, installation_id, "installation_id");
+    if (installationId === null) return;
+    if (!state) {
+      res.status(400).json({ error: "state is required" });
       return;
     }
 
@@ -196,6 +237,11 @@ githubRouter.post("/installations/link", async (req, res) => {
     });
   } catch (err) {
     console.error("Link installation error:", err);
+    // A server-side misconfiguration is not a bad request: 503, not 400.
+    if (err instanceof GitHubAppConfigError) {
+      handleGitHubRouteError(res, err);
+      return;
+    }
     res.status(400).json({ error: err instanceof Error ? err.message : "Failed to link installation" });
   }
 });
@@ -232,11 +278,8 @@ githubRouter.get("/installations", async (req, res) => {
 githubRouter.get("/repos", async (req, res) => {
   try {
     const userId = req.user!.id;
-    const installationId = Number(req.query.installation_id);
-    if (!installationId || Number.isNaN(installationId)) {
-      res.status(400).json({ error: "installation_id query parameter is required" });
-      return;
-    }
+    const installationId = resolveInstallationId(res, req.query.installation_id);
+    if (installationId === null) return;
 
     const installationToken = await getInstallationTokenForUser(userId, installationId);
     const repos = await listInstallationRepos(installationToken);
@@ -263,11 +306,8 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
   try {
     const userId = req.user!.id;
     const { owner, repo } = req.params;
-    const installationId = Number(req.query.installation_id);
-    if (!installationId || Number.isNaN(installationId)) {
-      res.status(400).json({ error: "installation_id query parameter is required" });
-      return;
-    }
+    const installationId = resolveInstallationId(res, req.query.installation_id);
+    if (installationId === null) return;
 
     const installationToken = await getInstallationTokenForUser(userId, installationId);
     const branches = await listBranches(installationToken, owner, repo);
@@ -284,12 +324,9 @@ githubRouter.get("/repos/:owner/:repo/commits", async (req, res) => {
   try {
     const userId = req.user!.id;
     const { owner, repo } = req.params;
-    const installationId = Number(req.query.installation_id);
+    const installationId = resolveInstallationId(res, req.query.installation_id);
+    if (installationId === null) return;
     const branch = typeof req.query.branch === "string" ? req.query.branch : "";
-    if (!installationId || Number.isNaN(installationId)) {
-      res.status(400).json({ error: "installation_id query parameter is required" });
-      return;
-    }
     if (!branch) {
       res.status(400).json({ error: "branch query parameter is required" });
       return;

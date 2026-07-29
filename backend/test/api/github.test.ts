@@ -78,6 +78,35 @@ describe("GET /api/github/repos", () => {
     expect(res.status).to.equal(403);
     expect(res.body.error).to.include("You do not have access");
   });
+
+  it("validates installation_id by shape, not truthiness (bug #8)", async () => {
+    // `!Number(raw)` answered the wrong question twice, and both answers are
+    // silent: `0` is a well-formed id, so it belongs to the ownership check
+    // (403), not to "you forgot the parameter" (400); and `Number()` reads
+    // "0x2329" as 9001, which would authorize one installation while `POST
+    // /projects` persists the other spelling into a text column the webhook
+    // later string-matches. Neither shows up as an error anywhere.
+    const statuses: Record<string, number> = {};
+    for (const installation_id of ["0", "0x2329", "9001.5", "-9001", ""]) {
+      installTestAuth();
+      mockGithubConnection();
+      mockGithubInstallationsFetch();
+      const res = await request(app)
+        .get("/api/github/repos")
+        .query({ installation_id })
+        .set(authHeader());
+      statuses[installation_id] = res.status;
+      resetGithubMocks();
+    }
+
+    expect(statuses).to.deep.equal({
+      "0": 403, // parses; simply is not an installation of yours
+      "0x2329": 400, // not a decimal id, however Number() reads it
+      "9001.5": 400,
+      "-9001": 400,
+      "": 400, // genuinely absent
+    });
+  });
 });
 
 describe("GET /api/github/repos/:owner/:repo/branches", () => {

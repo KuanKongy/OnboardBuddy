@@ -82,6 +82,11 @@ export interface RunHistoryEntry {
   snapshot_id: string | null;
   /** regenerate_section runs: which section. */
   section_type: string | null;
+  /**
+   * Set instead of `section_type` when the run was a single-tutorial
+   * regeneration (bug #36) — both ride the `regenerate_section` job type.
+   */
+  tutorial_title?: string | null;
   config: {
     branch: string | null;
     commit: string | null;

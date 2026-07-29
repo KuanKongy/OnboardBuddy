@@ -1,6 +1,13 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import {
+  DEVELOPER_ROLES,
+  INVITABLE_TIERS,
+  isDeveloperRole,
+  isInvitableTier,
+  isPermissionTier,
+} from "../lib/permissionTiers.js";
 
 export const membersRouter = Router({ mergeParams: true });
 
@@ -69,6 +76,19 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
       return;
     }
 
+    // Whitelist the tier here, at the only place it enters the system from a
+    // request body. Unvalidated, `"owner"` was stored verbatim and granted on
+    // accept (#66); a typo'd tier reached the CHECK constraint and surfaced as
+    // a 500 instead of telling the caller what they got wrong.
+    if (!isInvitableTier(permission_tier)) {
+      res.status(400).json({ error: `permission_tier must be one of: ${INVITABLE_TIERS.join(", ")}` });
+      return;
+    }
+    if (developer_role !== undefined && developer_role !== null && !isDeveloperRole(developer_role)) {
+      res.status(400).json({ error: `developer_role must be one of: ${DEVELOPER_ROLES.join(", ")}` });
+      return;
+    }
+
     const existing = await query(
       `SELECT id FROM project_invitations
        WHERE project_id = $1 AND LOWER(email) = LOWER($2) AND status = 'pending'`,
@@ -130,14 +150,13 @@ membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), async (r
       developer_role?: string;
     };
 
-    const VALID_TIERS = ["owner", "admin", "developer"];
-    const VALID_ROLES = ["backend", "frontend", "devops", "qa", "general"];
-
-    if (permission_tier !== undefined && !VALID_TIERS.includes(permission_tier)) {
+    // Same vocabulary as the invitation route, from one definition — the two
+    // used to keep their own copies, and only one of them checked.
+    if (permission_tier !== undefined && !isPermissionTier(permission_tier)) {
       res.status(400).json({ error: "Invalid permission_tier" });
       return;
     }
-    if (developer_role !== undefined && !VALID_ROLES.includes(developer_role)) {
+    if (developer_role !== undefined && !isDeveloperRole(developer_role)) {
       res.status(400).json({ error: "Invalid developer_role" });
       return;
     }

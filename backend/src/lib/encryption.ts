@@ -30,12 +30,17 @@ export function encrypt(plaintext: string): string {
 
 export function decrypt(encrypted: string): string {
   const key = getKey();
+  // The format check tests for a *missing* field, not a falsy one. AES-GCM over
+  // an empty plaintext is well defined: `encrypt("")` emits `iv:tag:` with an
+  // empty ciphertext part, and rejecting that made encrypt/decrypt non-inverse
+  // for one legal input. Emptiness is not tampering — the auth tag still covers
+  // the (empty) plaintext, so a forged or altered tag fails in `final()` below.
   const parts = encrypted.split(":");
   const ivHex = parts[0];
   const authTagHex = parts[1];
   const ciphertextHex = parts[2];
 
-  if (!ivHex || !authTagHex || !ciphertextHex) {
+  if (parts.length !== 3 || !ivHex || !authTagHex || ciphertextHex === undefined) {
     throw new Error("Invalid encrypted string format");
   }
 

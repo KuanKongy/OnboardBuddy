@@ -109,6 +109,93 @@ describe("GraphPage", () => {
     expect(screen.queryByText("strings")).not.toBeInTheDocument();
   });
 
+  /**
+   * Bug #70(2): "search updates the count but not the camera."
+   *
+   * Confirmed live — a query reading "2 / 60 files" left the canvas completely
+   * blank, because filtering re-runs the layout and the survivors land outside
+   * the viewport the user was on. The count claimed matches the screen did not
+   * show, so search read as broken.
+   *
+   * `refitSignal` is the camera: GraphCanvas keys React Flow on it, so a change
+   * remounts the flow and reruns its declarative `fitView` over the filtered
+   * node set. jsdom gives the canvas no size, so `fitView` itself is a no-op
+   * there — the assertion is on the signal, which is the thing search was not
+   * driving. (Before this fix the signal was `${direction}:${fullscreen}` and
+   * a search could never change it.)
+   */
+  it("refits the camera onto the search result, once per settled query", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
+
+    const canvas = () => document.querySelector("[data-refit-signal]") as HTMLElement;
+    const before = canvas().getAttribute("data-refit-signal");
+
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/search files, classes or methods/i), "logger");
+
+    await waitFor(() => {
+      expect(canvas().getAttribute("data-refit-signal")).not.toBe(before);
+    });
+    // The camera is aimed at the settled query, not at a prefix of it — six
+    // keystrokes must not leave the graph framed on "logge".
+    expect(canvas().getAttribute("data-refit-signal")).toContain("logger");
+    expect(screen.getByText("logger")).toBeInTheDocument();
+
+    // Clearing snaps straight back to the whole level rather than waiting out
+    // the debounce on an empty box.
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    await waitFor(() => {
+      expect(canvas().getAttribute("data-refit-signal")).toBe(before);
+    });
+    expect(screen.getByText("4 / 4 files")).toBeInTheDocument();
+  });
+
+  /**
+   * The other half of #70(2): "the search input is not debounced, so each
+   * keystroke re-runs a full graph re-layout". The input must still echo every
+   * character — a laggy search box is its own bug — while the expensive
+   * pipeline behind it sees one settled value.
+   */
+  it("echoes every keystroke but only re-lays-out once typing settles", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("index")).toBeInTheDocument());
+
+    const canvas = document.querySelector("[data-refit-signal]") as HTMLElement;
+    // Every distinct camera signal the graph passes through while typing. Each
+    // one is a full re-filter + re-layout, so the undebounced version of this
+    // page produced one per character.
+    const seen: string[] = [canvas.getAttribute("data-refit-signal") ?? ""];
+    const observer = new MutationObserver(() => {
+      const now = document.querySelector("[data-refit-signal]")?.getAttribute("data-refit-signal") ?? "";
+      if (now !== seen[seen.length - 1]) seen.push(now);
+    });
+    observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ["data-refit-signal"] });
+
+    try {
+      const user = userEvent.setup();
+      const box = screen.getByPlaceholderText(/search files, classes or methods/i) as HTMLInputElement;
+      await user.type(box, "logger");
+
+      expect(box.value, "the box must echo every keystroke immediately").toBe("logger");
+      await waitFor(() => {
+        expect(seen[seen.length - 1]).toContain("logger");
+      });
+    } finally {
+      observer.disconnect();
+    }
+
+    // The whole point: no signal for "l", "lo", "log"… Only the settled query
+    // reaches the layout.
+    const prefixes = ["logge", "logg", "log", "lo"];
+    for (const prefix of prefixes) {
+      expect(
+        seen.some((s) => s.endsWith(`:${prefix}`)),
+        `re-laid out mid-word on "${prefix}" — the input is not debounced`,
+      ).toBe(false);
+    }
+  });
+
   it("opens the symbol-doc info panel when a node is clicked", async () => {
     renderGraphPage();
     await waitFor(() => expect(screen.getByText("userService")).toBeInTheDocument());

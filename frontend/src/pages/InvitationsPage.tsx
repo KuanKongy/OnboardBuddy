@@ -44,13 +44,21 @@ export function InvitationsPage() {
 
   const selected = invitations.find((inv) => inv.id === selectedId);
 
+  // Bug #14: the error banner is scoped to ONE operation, so anything that
+  // starts a new one has to clear it. A failed accept used to leave "You are
+  // already a member of this project" pinned above the page while the user
+  // picked a different invitation — the banner then described an invitation
+  // that was no longer on screen, and after a successful accept of the second
+  // one the last thing they saw was still a failure.
   function selectInvitation(inv: Invitation) {
+    setError("");
     setSelectedId(inv.id);
     if (inv.developer_role) setSelectedRole(inv.developer_role);
   }
 
   async function handleAccept(invitation: Invitation) {
     setAccepting(true);
+    setError("");
     try {
       await apiFetch(`/invitations/${invitation.id}/accept`, {
         method: "POST",

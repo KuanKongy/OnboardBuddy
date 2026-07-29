@@ -182,24 +182,33 @@ export function sectionWhy(sectionId: SectionId, role: string | null | undefined
   return overlay ?? SECTION_WHY[sectionId];
 }
 
+/**
+ * Load one onboarding package. **Rejects** when the request fails.
+ *
+ * Bug #68: this used to `catch { return null }`, and the comment called that
+ * "the honest missing state" — it is the opposite. Absence is not an error
+ * here and never was: when a role has no package the API answers `200` with
+ * `{ package: { status: "missing", sections: [] } }` (api/routes/onboarding.ts).
+ * So `null` only ever meant "the request failed", and the reader rendered it
+ * as *"No package for Backend — Generate for Backend"*. A 500 or a dropped
+ * connection told the user their existing package did not exist and offered
+ * them a **billed** generation to rebuild something that was already there.
+ * Errors now propagate and each caller decides; only `status: "missing"`
+ * reaches the empty state.
+ */
 export async function fetchOnboardingPackage(
   projectId: string,
   opts: { role?: string; packageId?: string | null },
-): Promise<OnboardingPackage | null> {
-  try {
-    // An explicit package id pins the exact package; role is the legacy
-    // "latest for role" path.
-    const qs = opts.packageId
-      ? `?package_id=${encodeURIComponent(opts.packageId)}`
-      : opts.role
-        ? `?role=${encodeURIComponent(opts.role)}`
-        : "";
-    const data = await apiFetch(`/projects/${projectId}/onboarding${qs}`);
-    return (data.package ?? data) as OnboardingPackage;
-  } catch {
-    // No mock fallback: a failed load shows the honest missing state.
-    return null;
-  }
+): Promise<OnboardingPackage> {
+  // An explicit package id pins the exact package; role is the legacy
+  // "latest for role" path.
+  const qs = opts.packageId
+    ? `?package_id=${encodeURIComponent(opts.packageId)}`
+    : opts.role
+      ? `?role=${encodeURIComponent(opts.role)}`
+      : "";
+  const data = await apiFetch(`/projects/${projectId}/onboarding${qs}`);
+  return (data.package ?? data) as OnboardingPackage;
 }
 
 export async function fetchPackageCards(projectId: string): Promise<PackageCard[]> {
@@ -210,6 +219,18 @@ export async function fetchPackageCards(projectId: string): Promise<PackageCard[
 /** Queues regeneration of one section; stale sections rebuild against the newest snapshot. */
 export async function regenerateSection(projectId: string, sectionId: string): Promise<void> {
   await apiFetch(`/projects/${projectId}/onboarding/sections/${sectionId}/regenerate`, {
+    method: "POST",
+  });
+}
+
+/**
+ * Bug #36: queues regeneration of ONE tutorial. Same contract as
+ * `regenerateSection` — a stale tutorial rebuilds against the newest complete
+ * snapshot of its scope, and the rest of the package is neither rebuilt nor
+ * paid for.
+ */
+export async function regenerateTutorial(projectId: string, tutorialId: string): Promise<void> {
+  await apiFetch(`/projects/${projectId}/tutorials/${tutorialId}/regenerate`, {
     method: "POST",
   });
 }

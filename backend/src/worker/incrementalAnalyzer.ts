@@ -399,9 +399,17 @@ async function flagStaleArtifacts(params: {
 }
 
 /**
- * After a section regeneration: the package leaves 'stale' once no stale
- * sections remain, and its package-level stale flags resolve. (Section-level
- * flags cascade away when the stale section row is replaced.)
+ * After a section OR tutorial regeneration: the package leaves 'stale' once no
+ * stale content remains, and its package-level stale flags resolve.
+ * (Section-level flags cascade away when the stale section row is replaced;
+ * tutorial-level flags do the same when the tutorial row is replaced.)
+ *
+ * Bug #36: the tutorial half of this predicate was missing. `markStale` flags
+ * BOTH sections and tutorials and marks the package stale if either is hit, so
+ * a package whose only stale content was a tutorial could never leave 'stale'
+ * — there was no per-tutorial regeneration to settle it, and a section
+ * regeneration would clear the package flag while a stale tutorial was still
+ * sitting in it. Both directions are now consistent with what set the flag.
  */
 export async function settlePackageStaleness(packageId: string): Promise<{ stale: boolean }> {
   const row = (await query(
@@ -409,6 +417,9 @@ export async function settlePackageStaleness(packageId: string): Promise<{ stale
      SET status = CASE WHEN EXISTS (
            SELECT 1 FROM package_sections ps
            WHERE ps.package_id = op.id AND ps.review_status = 'stale'
+         ) OR EXISTS (
+           SELECT 1 FROM tutorials t
+           WHERE t.package_id = op.id AND t.status = 'stale'
          ) THEN 'stale' ELSE 'draft' END,
          updated_at = NOW()
      WHERE op.id = $1

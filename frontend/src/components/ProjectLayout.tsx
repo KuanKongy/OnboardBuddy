@@ -27,6 +27,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AccountCard } from "@/components/AccountCard";
 import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarProvider, SidebarShell, useSidebar } from "@/components/SidebarShell";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -373,7 +374,18 @@ function ProjectLayoutContent() {
             <Loader2 className="h-5 w-5 animate-spin text-primary" />
           </div>
         ) : (
-          <Outlet />
+          // Bug #24: the feature tabs are the pages that render analysis
+          // payloads, so they are where a malformed payload throws. Scoped
+          // here, one broken tab leaves the project sidebar, the tab strip
+          // and the package selector working — the user switches tab instead
+          // of losing the whole app to a full-screen reload prompt.
+          <RouteErrorBoundary
+            scope="project-tab"
+            homeTo={`/projects/${id}`}
+            homeLabel="Back to project overview"
+          >
+            <Outlet />
+          </RouteErrorBoundary>
         )}
       </main>
       {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={handleTourDone} />}

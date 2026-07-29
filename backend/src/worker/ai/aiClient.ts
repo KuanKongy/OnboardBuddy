@@ -233,14 +233,14 @@ export class AiClient {
       return { vectors: [], cached: true };
     }
 
-    const key = resolveEmbeddingsKey();
+    const key = resolveEmbeddingsKey(model);
     const runId = await startRun(identity);
     const startedAt = Date.now();
     try {
       const result = await this.withRetries('embedding', () =>
         this.semaphore.run(() => this.provider.embed(inputs, model, { apiKey: key.apiKey })),
       );
-      const costUsd = estimateCostUsd('embedding', result.usage.inputTokens, result.usage.outputTokens);
+      const costUsd = estimateCostUsd('embedding', result.usage.inputTokens, result.usage.outputTokens, model);
       await finishRun(runId, {
         status: 'complete',
         outputHash: computeOutputHash(JSON.stringify(result.vectors.map((v) => v.length))),

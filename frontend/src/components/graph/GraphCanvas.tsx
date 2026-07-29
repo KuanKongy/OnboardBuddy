@@ -122,6 +122,10 @@ export function GraphCanvas({
         className="h-full w-full"
         data-drill-phase={drill?.phase ?? "idle"}
         data-drill-busy={busy ? "true" : "false"}
+        // Published so a test can assert WHEN the camera refits without
+        // needing a measurable canvas (React Flow's fitView no-ops at zero
+        // size in jsdom). Changing this value is the refit.
+        data-refit-signal={refitSignal ?? ""}
       >
         <ReactFlow
           nodes={nodes}
