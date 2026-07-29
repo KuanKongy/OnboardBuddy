@@ -631,6 +631,42 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
     });
     const journeys = composed.journeys;
     const workflows = [...extraction.workflows, ...configFlows.workflows, ...journeys];
+    // Churn is a remote GitHub walk (up to N sequential /commits requests), its
+    // inputs — the workflow set and the file records — are final right here,
+    // and its only consumer is rankCandidates ~90 lines below. Starting it now
+    // overlaps it with the deterministic persistence and honesty writes that
+    // follow instead of serializing two independent waits; we still block on it
+    // (and label the step) at the point we actually need the result. The
+    // `.catch` is attached synchronously, so a GitHub failure during those
+    // writes surfaces as the same degrade it always did, never as an unhandled
+    // rejection.
+    const churnPromise: Promise<Map<string, ChurnStats>> = (async () => {
+      // Preliminary churn-free ranking picks the top files worth a per-file
+      // churn request; dirs give everything else a coarse fallback signal.
+      const preliminary = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows });
+      const topFiles = preliminary
+        .filter((r) => r.targetType === 'file')
+        .slice(0, 20)
+        .map((r) => r.stableKey);
+      const topLevelDirs = [...new Set(
+        snapshot.fileRecords
+          .filter((r) => r.relativePath.includes('/'))
+          .map((r) => r.relativePath.split('/')[0]!),
+      )].slice(0, 10);
+      const fetched = await fetchChurnSignals({
+        token,
+        owner: project.repo_owner,
+        repo: project.repo_name,
+        branch,
+        topLevelDirs,
+        topFiles,
+      });
+      await persistChurn(snapshotId, fetched, new Set(snapshot.fileRecords.map((r) => r.relativePath)));
+      return fetched;
+    })().catch((err) => {
+      console.warn(`[worker] churn fetch failed (project=${projectId}):`, err instanceof Error ? err.message : err);
+      return new Map<string, ChurnStats>();
+    });
     const workflowIdMap = await persistWorkflows(snapshotId, workflows, nodeIdMap, entrypointIdMap);
     await query(
       `UPDATE analysis_snapshots SET workflow_count = $2 WHERE id = $1`,
@@ -692,35 +728,12 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       );
     }
 
-    // 10. Churn (GitHub API, degrades to 0-weight on any failure), then
-    //     Phase A candidate ranking + depth gating
+    // 10. Churn (GitHub API, degrades to 0-weight on any failure — started
+    //     right after workflow extraction above), then Phase A candidate
+    //     ranking + depth gating. The step label sits here because here is
+    //     where the run actually waits on it.
     await updateStep('Fetching churn signals', 59);
-    let churn = new Map<string, ChurnStats>();
-    try {
-      // Preliminary churn-free ranking picks the top files worth a per-file
-      // churn request; dirs give everything else a coarse fallback signal.
-      const preliminary = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows });
-      const topFiles = preliminary
-        .filter((r) => r.targetType === 'file')
-        .slice(0, 20)
-        .map((r) => r.stableKey);
-      const topLevelDirs = [...new Set(
-        snapshot.fileRecords
-          .filter((r) => r.relativePath.includes('/'))
-          .map((r) => r.relativePath.split('/')[0]!),
-      )].slice(0, 10);
-      churn = await fetchChurnSignals({
-        token,
-        owner: project.repo_owner,
-        repo: project.repo_name,
-        branch,
-        topLevelDirs,
-        topFiles,
-      });
-      await persistChurn(snapshotId, churn, new Set(snapshot.fileRecords.map((r) => r.relativePath)));
-    } catch (err) {
-      console.warn(`[worker] churn fetch failed (project=${projectId}):`, err instanceof Error ? err.message : err);
-    }
+    const churn = await churnPromise;
 
     await updateStep('Ranking candidates', 61);
     const rankings = rankCandidates({ graph: evidence, entrypoints, sideEffects, workflows, churn });
@@ -822,11 +835,17 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       // batch counters — the job used to sit at a static percentage for the
       // entire LLM phase. Throttled to ~1 write/1.5s; updateStep doubles as
       // the kill-switch check, so pause responsiveness improves too.
+      // semantic_ranking and embeddings SHARE one window because they now run
+      // concurrently (semanticPipeline's `concurrentTail`): two interleaved
+      // phases reporting into adjacent bands walked the bar backwards every
+      // time the slower one reported. The floor below keeps it monotonic —
+      // a no-op for the sequential phases, whose bands already ascend.
       const SEMANTIC_PCT_BAND: Record<string, [number, number]> = {
         semantic_symbols: [66, 84], synthesis: [84, 90], capabilities: [90, 91],
-        refinement: [91, 92], critique: [92, 96], semantic_ranking: [96, 97], embeddings: [97, 98],
+        refinement: [91, 92], critique: [92, 96], semantic_ranking: [96, 98], embeddings: [96, 98],
       };
       let lastProgressWriteMs = 0;
+      let lastProgressPct = 0;
       const onProgress = async (info: { phase: string; done: number; total: number; detail?: string }): Promise<void> => {
         const nowMs = Date.now();
         const atBoundary = info.done === 0 || info.done >= info.total;
@@ -834,7 +853,8 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         lastProgressWriteMs = nowMs;
         const [lo, hi] = SEMANTIC_PCT_BAND[info.phase] ?? [66, 98];
         const frac = info.total > 0 ? Math.min(1, info.done / info.total) : 0;
-        const pct = Math.min(98, Math.round(lo + (hi - lo) * frac));
+        const pct = Math.max(lastProgressPct, Math.min(98, Math.round(lo + (hi - lo) * frac)));
+        lastProgressPct = pct;
         const label = info.detail ?? `Semantic: ${info.phase.replace(/_/g, ' ')} (${info.done}/${info.total})`;
         await updateStep(label, pct);
       };

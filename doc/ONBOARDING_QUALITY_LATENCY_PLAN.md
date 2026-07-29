@@ -97,6 +97,101 @@ Measured on gemini-2.5-flash-lite, fully cold (fresh DB, zero cache), **two repo
 - Quality on gemini: critique rejected 7/695 (**1.0%**; deepseek 3.5%, scout 3.4%), 0 failed symbols, 0 unreceipted claims, **$0.36/cold run**.
 - The redesign's cost model: deeper sections ship as parallel shards (≤ ~90s generation fresh at ~3× depth); deterministic reference sections and the section cache make re-generation nearly free. Next knob if needed: embeddings are now the longest phase (121s).
 
+## Latency regression audit (2026-07-28) — 6:41 → ~19 min, attributed from telemetry
+
+The user-visible regression (OnboardBuddy455/OnboardBuddy, ~2M tokens / 300
+files / 1,400 symbols: analyze 15:00 + generate 3:34) was attributed from
+`snapshot_phases` + `ai_generation_runs` before touching any code. The LLM
+phases did NOT regress — the two suspected causes (nested-symbol fan-out,
+provider routing) measure innocent:
+
+| Phase (snapshot `252239a3`, 07-27 23:27, 900s total) | Bench 07-24 | Slow run |
+| --- | --- | --- |
+| semantic_symbols | 61s | 51s |
+| synthesis | 55s | 48s |
+| capabilities | 25s | 31s |
+| refinement | 11s | 9s |
+| critique | 34s | 13s |
+| semantic_ranking | 15s | 13s |
+| **embeddings** | **121s** | **673s** (791s on the 07-27 incremental) |
+
+Inside the embeddings phase: 41 API batch calls totalling 82s (p50 1.6–2.7s,
+zero failures/timeouts) — the other ~590s is the INSERT side. Timeline from
+`ai_generation_runs.created_at`: all 8 `mapLimit` slots fire at +2s, the
+first slot doesn't free until +77s — each batch's 4 sequential 32-row
+INSERTs stall under 8-way self-contention on the HNSW index
+(`idx_embeddings_vector`, 230MB; table 522MB / 34.5k rows, tripled since the
+bench at 10–13k new rows/day). Micro-benchmark on the live DB: the same
+32-row INSERT is 420–900ms uncontended (~14ms/row, matching the
+embeddingPass comment) vs ~8 rows/s effective in the run — **~40× collapse
+from sustained concurrent HNSW writes**, not from statement size.
+
+Fixes shipped (quality-neutral): single-writer insert queue in
+`embeddingPass.ts` (API fetches stay 8-wide, exactly one INSERT in flight
+per job), rerank ∥ embeddings phase overlap, parallel critique regens,
+tutorial fan-out 4→6, early churn fetch. The generation tail (39 strong
+section calls for 12 sections — lint/critique retry chain) is a quality
+trade-off deliberately NOT taken here.
+
+**Measured after the fixes (2026-07-28, pplx-embed-v1-4b via OpenRouter):**
+- Same-commit re-run of the slow snapshot (warm records, cold re-embed of
+  5,241 vectors): analyze **3:00** (embeddings 104s ≈ 50 rows/s) +
+  generate **0:49**.
+- Fresh-from-scratch cold run (new project, zero caches, 5,265 vectors,
+  241 LLM calls, $0.36): analyze **11:28** + generate **1:09** =
+  **12:37 end-to-end** (was ~19:00). Embeddings measured 390s (~13 rows/s)
+  in this run — the same writer that did 50 rows/s two hours earlier —
+  right after a 16k-row cascade DELETE and a full re-embed had drained the
+  Supabase instance's disk-IO burst budget (VACUUM found zero dead tuples,
+  ruling out bloat). Symbol phase 181s included one ~96s straggler batch.
+  Write throughput is now bounded by the shared instance's IO budget, not
+  by statement self-contention; next levers are infra (compute/IO upgrade,
+  orphan cleanup + `REINDEX CONCURRENTLY`) or a second writer, both
+  deliberately left for a separate decision.
+
+Also relevant: the 07-25 prompt-version bumps voided the record + section
+caches, so every measured run that week was fully cold — see the
+prompt-version freeze note in DEVOPS "Latency model". Orphaned embeddings
+rows (no live snapshot reference) are 5,003/34,509 (14.5%) — real but not
+the driver; cleanup + `REINDEX CONCURRENTLY` is an infra task for later.
+
+### Round 2 (2026-07-29): write-path levers, hedging, REINDEX — embeddings bottleneck eliminated
+
+Shipped: `EMBED_WRITE_CONCURRENCY` (default 2) + `EMBED_INSERT_CHUNK` (default 64) env knobs, compact 7-digit vector serialization (live-validated: worst cosine drift vs stored originals 3.0e-7), writer progress throttled to every 4th chunk (kill-switch preserved), AbortSignal wiring + winner-take-first hedging for symbol-phase stragglers (`SYMBOL_HEDGE_MAX`, default 3), `REINDEX INDEX CONCURRENTLY idx_embeddings_vector` (300 MB → 216 MB, 236s), Supabase Pro upgrade (user). Suite: 890 passing.
+
+**Embeddings phase, cold full re-embed (~4.9-5.3k vectors), measured across the campaign:**
+
+| Config | Phase time | rows/s |
+| --- | --- | --- |
+| 8-way inline inserts (regression, 07-27) | 673-791s | ~7.8 |
+| single writer × 32-row chunks (07-28) | 104-390s | 13-50 |
+| **2 writers × 64-row chunks + reindex (07-29, two runs)** | **74s / 83s** | **~60-67** |
+
+**The 07-29 cold end-to-end numbers are provider-storm-polluted and NOT representative.**
+Both benchmark attempts ran into a multi-hour OpenRouter cheap-tier degradation
+(p50 42.7s vs the normal ~3s across 357 calls; all three rotation models affected,
+scout emitting malformed JSON; one pause + one fail + resume). Measured under the
+storm: analyze 18:25 + generate 0:46. The LLM phases scale linearly with provider
+latency; at the normal ~3s p50 the identical run computes to **~7-8 min analyze**
+(deterministic ~120s + symbols ~150s hedged + synthesis/caps/refine/critique ~90s +
+max(rerank, embeddings 83s)) — under the 9:00 target. Re-measure on a calm provider
+day via the delete → re-import → analyze recipe before quoting an official number.
+Provider-independent components are done: embeddings 74-83s (was 673s), generation
+46s cold, retrieval verified (64 records) on the pplx-only snapshot.
+
+**Calm-day measurement landed (2026-07-29 12:06, fresh import, fully cold,
+provider healthy — snapshot `b2ae71a2`): analyze 4:16 + generate 1:01 =
+5:17 end-to-end.** Phase profile: symbols 72s (hedged) · synthesis 68s ·
+capabilities 15s · refinement 8s · critique 18s · embeddings **47s** for
+5,253 vectors (~112 rows/s, ∥ rerank 19s) · deterministic ~28s. $0.35, 234
+calls. Against the original regression (15:00 + 3:34 ≈ 19 min) that is
+**3.6× end-to-end; the ≤9:00 analyze target is met with 4:44 to spare.**
+Symbol co-batching also landed (2026-07-29 round 3) — measured honestly, it
+dedupes ~0.02% on this repo (the triviality gate already routes most nested
+functions to facts-only), so the pipeline is at its algorithmic floor;
+remaining cold-run variance is provider weather, partially trimmed by the
+straggler hedging.
+
 ## Sequencing
 
 0. ~~**Data acquisition first — journeys + coverage**~~ — **DONE (2026-07-24)**: consumer handler-reference seeding (`entrypointDetector.ts` — the SUMMARY-consumer root cause was `new Worker(Q, handlerRef)` bare references), auth/identity + external-service + process-exec sinks with enqueue queue-hints (`sideEffectDetector.ts`), the honesty rule (`unknown_external` fallback + `TraceDeadEnd` recording + snapshot `unknowns` rollup; no schema change — unknowns ride `external_integration` + `metadata.detectorKind`), config-as-flow (`configFlowExtractor.ts`: compose topology stamped on the compose config node, dev/test/CI journeys as `dev_command`/`ci_pipeline` workflow rows), journey composition (`journeyComposer.ts`: queue-boundary pipelines via normalized queue tokens, auth group, OAuth/import chain with terminal POST; journeys are workflow rows `trigger_type='journey'` — ranking/selection/tabs consume them with zero new machinery), the golden-journey gate (`journeyGate.ts`, shape-conditional, gaps → snapshot `unknowns`), and journey-first tutorial selection (bonus in `tutorialGenerator.selectWorkflows`). Suite 486 green; fixtures extended (bare-reference consumer, supabase-auth routes, compose/CI in mixed).

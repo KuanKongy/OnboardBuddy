@@ -41,10 +41,11 @@ services:
       PG_POOL_MAX: 30
       WORKER_CONCURRENCY: 4     # parallel analysis runs per replica
       SUMMARY_CONCURRENCY: 4    # parallel package generations per replica
-      # Also available (defaults in code): SECTION_CONCURRENCY (12, sections in
-      # parallel within one generation) and LLM_MAX_CONCURRENCY (12, provider
-      # calls per AiClient — i.e. PER RUN, so 4 runs burst 4x that at
-      # OpenRouter; there is no global cross-run LLM limiter).
+      # Also available: SECTION_CONCURRENCY (code default 12, sections in
+      # parallel within one generation) and LLM_MAX_CONCURRENCY (code default
+      # 12, but backend/.env sets 28 and env_file forwards it here) — provider
+      # calls per AiClient, i.e. PER RUN, so 4 runs burst 4x that at
+      # OpenRouter; there is no global cross-run LLM limiter.
     volumes:
       - ./backend/github-app.pem:/app/backend/github-app.pem:ro
 

@@ -253,7 +253,10 @@ export async function generateTutorials(params: GenerateTutorialsParams): Promis
   const { candidates, report } = await selectProcedures(params);
   const result: TutorialResult = { tutorials: 0, steps: 0, failed: 0, selection: report };
 
-  await mapLimit(candidates, 4, async (candidate, index) => {
+  // 6 = DEFAULT_MAX_TUTORIALS, so a default-sized selection goes out in one
+  // wave instead of two. Concurrency only — the number of tutorials (capped by
+  // `maxTutorials`), the calls each makes, and their prompts are untouched.
+  await mapLimit(candidates, 6, async (candidate, index) => {
     try {
       const one = await generateOneTutorial(params, candidate, index, report);
       result.tutorials += 1;

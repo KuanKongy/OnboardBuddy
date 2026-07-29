@@ -1,16 +1,17 @@
 import { Component, useState, type ReactNode } from "react";
 import { Link, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Compass } from "lucide-react";
+import { Compass, Loader2 } from "lucide-react";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { PublicPageHeader } from "@/components/PublicPageHeader";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
 import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { ProjectLayout } from "@/components/ProjectLayout";
-import { AuthProvider } from "@/contexts/AuthContext";
+import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { AccountSettingsPage } from "@/pages/AccountSettingsPage";
 import { ArchitecturePage } from "@/pages/ArchitecturePage";
 import { AuthCallbackPage } from "@/pages/AuthCallbackPage";
@@ -114,7 +115,7 @@ function NotFoundPage() {
   );
 }
 
-function AuthenticatedLayout() {
+function AuthenticatedLayout({ children }: { children?: ReactNode }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -150,12 +151,54 @@ function AuthenticatedLayout() {
               whole app via the top-level boundary. Scoped here, the sidebar
               survives and the user can navigate out without a reload. */}
           <RouteErrorBoundary scope="dashboard-shell">
-            <Outlet />
+            {/* Normally a layout route (Outlet); `children` is for /help, which
+                needs this same chrome from outside ProtectedRoute. */}
+            {children ?? <Outlet />}
           </RouteErrorBoundary>
         </main>
       </div>
       <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} context="dashboard" />
     </SidebarProvider>
+  );
+}
+
+/**
+ * /help is the one page that answers "what does this thing send to an AI?", so
+ * it is reachable without an account — the landing page links straight to
+ * `/help#privacy`, and bouncing that link to /login would hide the answer from
+ * exactly the person asking.
+ *
+ * The chrome is picked by session, not by route: a signed-in reader gets the
+ * usual sidebar shell (nothing about /help changes for them), a signed-out one
+ * gets the landing page's public header. Waiting out `loading` first avoids
+ * painting the public header and then swapping it for the sidebar.
+ */
+export function HelpRoute() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (user) {
+    return (
+      <AuthenticatedLayout>
+        <HelpPage />
+      </AuthenticatedLayout>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <PublicPageHeader />
+      <main className="px-4 py-8">
+        <HelpPage signedOut />
+      </main>
+    </div>
   );
 }
 
@@ -171,6 +214,7 @@ export default function App() {
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          <Route path="/help" element={<HelpRoute />} />
 
           {import.meta.env.DEV && <Route path="/dev/graph/:id" element={<GraphPage />} />}
 
@@ -183,7 +227,6 @@ export default function App() {
               <Route path="/import" element={<ImportPage />} />
               <Route path="/invitations" element={<InvitationsPage />} />
               <Route path="/settings" element={<AccountSettingsPage />} />
-              <Route path="/help" element={<HelpPage />} />
             </Route>
 
             <Route path="/projects/:id" element={<ProjectLayout />}>

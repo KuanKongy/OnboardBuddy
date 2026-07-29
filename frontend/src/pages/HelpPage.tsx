@@ -2,6 +2,7 @@ import { ChevronDown, ExternalLink, HelpCircle, Route, Shield, Sparkles } from "
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
+import type { Project } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -118,10 +119,25 @@ function FaqSection({ items }: { items: FaqItem[] }) {
   );
 }
 
-export function HelpPage() {
+/**
+ * /help is reachable signed out (see `HelpRoute` in App.tsx), so the projects
+ * fetch has to be skippable: with no session `GET /projects` is a guaranteed
+ * 401 whose only effect is a red line in a visitor's console. Splitting the
+ * hook into a wrapper keeps it out of the signed-out render entirely rather
+ * than firing it and swallowing the failure.
+ */
+export function HelpPage({ signedOut = false }: { signedOut?: boolean }) {
+  return signedOut ? <HelpPageView projects={[]} signedOut /> : <AuthedHelpPage />;
+}
+
+function AuthedHelpPage() {
+  const { projects } = useProjects();
+  return <HelpPageView projects={projects} signedOut={false} />;
+}
+
+function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { projects } = useProjects();
 
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => activityTime(b) - activityTime(a)),
@@ -253,10 +269,24 @@ export function HelpPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <PageHeader
-        title="Help & FAQ"
-        subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
-      />
+      {signedOut ? (
+        // PageHeader leads with the sidebar toggle, and there is no sidebar on
+        // the public route — the same title block without a control that
+        // toggles nothing.
+        <div className="page-header">
+          <div className="min-w-0">
+            <h1 className="page-title">Help &amp; FAQ</h1>
+            <div className="page-subtitle">
+              Tours, frequently asked questions, and what OnboardBuddy sends to the AI.
+            </div>
+          </div>
+        </div>
+      ) : (
+        <PageHeader
+          title="Help & FAQ"
+          subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
+        />
+      )}
 
       <div className="space-y-4">
         <Card id="tours">
@@ -269,10 +299,24 @@ export function HelpPage() {
               again on its own.
             </p>
 
-            {sortedProjects.length === 0 && (
+            {signedOut ? (
               <p className="mb-3 text-[0.71875rem] text-muted-foreground/80">
-                Project-scoped tours need a project to open — import one first.
+                Tours run inside the app —{" "}
+                <Link to="/login" className="text-primary hover:underline">
+                  log in
+                </Link>{" "}
+                or{" "}
+                <Link to="/signup" className="text-primary hover:underline">
+                  sign up
+                </Link>{" "}
+                to start one.
               </p>
+            ) : (
+              sortedProjects.length === 0 && (
+                <p className="mb-3 text-[0.71875rem] text-muted-foreground/80">
+                  Project-scoped tours need a project to open — import one first.
+                </p>
+              )
             )}
             {sortedProjects.length > 0 && (
               <div className="mb-3">
@@ -293,7 +337,9 @@ export function HelpPage() {
 
             <div className="space-y-2">
               {TOUR_ROWS.map((row) => {
-                const disabled = row.projectScoped && sortedProjects.length === 0;
+                // Every tour target sits behind ProtectedRoute, so a signed-out
+                // visitor pressing Start would only be bounced to /login.
+                const disabled = signedOut || (row.projectScoped && sortedProjects.length === 0);
                 return (
                   <div key={row.name} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
                     <div className="min-w-0">
@@ -306,7 +352,13 @@ export function HelpPage() {
                       variant="outline"
                       className="shrink-0"
                       disabled={disabled}
-                      title={disabled ? "Import a project first" : undefined}
+                      title={
+                        signedOut
+                          ? "Log in to start a tour"
+                          : disabled
+                            ? "Import a project first"
+                            : undefined
+                      }
                       onClick={() => startTour(row)}
                     >
                       <HelpCircle className="mr-1 h-3 w-3" />

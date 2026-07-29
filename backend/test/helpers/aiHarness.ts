@@ -74,6 +74,36 @@ export function installFakeDb(overrides: {
   return log;
 }
 
+/**
+ * Routes the record-store SQL a semantic pass issues, so a suite can drive the
+ * real pass end to end: every cache lookup misses (so every batch reaches the
+ * LLM), and the bulk inserts hand back the ids the pass then maps to the
+ * snapshot. Column counts are the ones `insertRecordsBulk` / `attachReceiptsBulk`
+ * build — kept HERE, once, so a change to either statement cannot fix one
+ * suite's copy and leave another's silently returning the wrong ids.
+ */
+export function recordStoreRoutes(): (text: string, params?: unknown[]) => unknown[] | null {
+  let receiptSeq = 0;
+  return (text, params) => {
+    if (text.includes('FROM semantic_records sr') && text.includes('JOIN unnest')) return [];
+    if (text.includes('INSERT INTO semantic_records')) {
+      const cols = 16; // stable_key is the 2nd column of each VALUES tuple
+      return Array.from({ length: (params?.length ?? 0) / cols }, (_, i) => {
+        const stableKey = String(params![i * cols + 1]);
+        return { id: `rec-${stableKey}`, stable_key: stableKey };
+      });
+    }
+    if (text.includes('INSERT INTO source_receipts')) {
+      const cols = 17; // record_id is the 5th column; RETURNING order must match
+      return Array.from({ length: (params?.length ?? 0) / cols }, (_, i) => ({
+        id: `00000000-0000-4000-8000-${String(receiptSeq++).padStart(12, '0')}`,
+        record_id: String(params![i * cols + 4]),
+      }));
+    }
+    return null;
+  };
+}
+
 /** One recorded provider request — the prompt is kept so privacy tests can read it. */
 export interface RecordedCall {
   model: string;

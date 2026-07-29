@@ -111,8 +111,8 @@ export function ProvenancePanel({
                     </p>
                   )}
                   {/* Cost with no cap beside it is a number, not a budget.
-                      The cap applies per run; the snapshot's counters are the
-                      lifetime record across every run on this commit. */}
+                      Snapshot-lifetime spend lives in project settings now —
+                      surfaces tied to one run show only that run's budget. */}
                   {data.budget && (
                     <div className="border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] tabular-nums text-muted-foreground">
                       {data.budget.usedThisRun === null ? (
@@ -127,8 +127,6 @@ export function ProvenancePanel({
                           {data.budget.remaining !== null && ` · ${data.budget.remaining.toLocaleString()} left`}
                         </>
                       )}
-                      {" · "}lifetime on this snapshot: {data.budget.lifetimeLlmCalls.toLocaleString()} calls, $
-                      {data.budget.lifetimeCostUsd.toFixed(4)}
                     </div>
                   )}
                   {data.models.map((m, i) => (

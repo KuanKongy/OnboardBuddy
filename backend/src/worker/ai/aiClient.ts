@@ -69,6 +69,13 @@ export interface AiRequest {
   temperature?: number;
   /** Skip when an identical complete run exists for this snapshot (resume path). */
   skipIfCached?: boolean;
+  /**
+   * Cancels the provider call. The provider merges it with its own
+   * per-attempt timeout (openRouterProvider.post), and withRetries treats an
+   * aborted request as final — symbolPass aborts the losing copy of a hedged
+   * straggler batch the moment the winner lands.
+   */
+  signal?: AbortSignal;
 }
 
 export interface AiResponse<T = unknown> {
@@ -280,8 +287,8 @@ export class AiClient {
       if (req.schema) {
         const result = await this.withRetries(req.tier, () =>
           this.semaphore.run(() =>
-            this.provider.completeStructured<T>({ ...base, schemaName: req.schemaName ?? 'response', schema: req.schema! }, { apiKey: key.apiKey }),
-          ),
+            this.provider.completeStructured<T>({ ...base, schemaName: req.schemaName ?? 'response', schema: req.schema! }, { apiKey: key.apiKey, signal: req.signal }),
+          ), req.signal,
         );
         if (result.usedSchemaFallback) this.stats.schemaFallbacks += 1;
         value = result.value;
@@ -289,7 +296,8 @@ export class AiClient {
         usage = result.usage;
       } else {
         const result = await this.withRetries(req.tier, () =>
-          this.semaphore.run(() => this.provider.complete(base, { apiKey: key.apiKey })),
+          this.semaphore.run(() => this.provider.complete(base, { apiKey: key.apiKey, signal: req.signal })),
+          req.signal,
         );
         content = result.content;
         usage = result.usage;
@@ -312,8 +320,14 @@ export class AiClient {
   }
 
   /** Exponential backoff on retryable provider errors when the tier allows 'retry'. */
-  private async withRetries<T>(tier: ModelTier, fn: () => Promise<T>): Promise<T> {
+  private async withRetries<T>(tier: ModelTier, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const canRetry = this.tierConfig.failureBehavior[tier]?.includes('retry') ?? true;
+    // An aborted request was cancelled deliberately — the losing copy of a
+    // hedged straggler batch, whose twin has already answered. The provider
+    // reports an abort as a RETRYABLE ProviderError, so without this bail the
+    // loser would spend its whole retry budget (and a semaphore slot) redoing
+    // work that is already persisted.
+    if (signal?.aborted) throw abortError(signal);
     let attempt = 0;
     for (;;) {
       try {
@@ -325,7 +339,7 @@ export class AiClient {
         // in-conversation repair retry did not.
         const retryable =
           (err instanceof ProviderError && err.retryable) || err instanceof StructuredOutputError;
-        if (!canRetry || !retryable || attempt >= this.maxRetries) throw err;
+        if (!canRetry || signal?.aborted || !retryable || attempt >= this.maxRetries) throw err;
         await this.sleep(BACKOFF_BASE_MS * 2 ** attempt);
         attempt += 1;
       }
@@ -350,6 +364,13 @@ export class AiClient {
     if (behaviors.includes('pause')) throw new AiPausedError(message);
     throw new AiFailedError(`LLM work failed (${message})`, cause);
   }
+}
+
+/** Abort reasons are usually a DOMException; keep the audit row's message readable. */
+function abortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new ProviderError('request aborted before dispatch', null, false);
 }
 
 function errMessage(err: unknown): string {

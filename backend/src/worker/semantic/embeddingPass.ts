@@ -23,8 +23,9 @@ import { viewsForRecord, renderView, kindForRecord, type ViewType, type ViewRend
 // fixable with an env line rather than a rebuild.
 const EMBED_BATCH_SIZE_DEFAULT = 128;
 /**
- * Rows per INSERT statement. Decoupled from EMBED_BATCH_SIZE (which is sized
- * for the embeddings API) because the two are limited by different things.
+ * Rows per INSERT statement, env-overridable (EMBED_INSERT_CHUNK). Decoupled
+ * from EMBED_BATCH_SIZE (which is sized for the embeddings API) because the two
+ * are limited by different things.
  *
  * 2026-07-26, six-way concurrency: CourseInsights, StudyFlow and
  * kuankongy.github.io all died in this phase on 57014 — and the timing proves
@@ -33,16 +34,90 @@ const EMBED_BATCH_SIZE_DEFAULT = 128;
  * exceed statement_timeout 120s + a 30s pool acquire). The retry was not
  * missing; the statement was simply too big to fit the budget under load.
  *
- * Measured on the live DB: this INSERT costs ~11-14ms/row, linear, dominated
- * by the HNSW index maintenance on `embeddings.embedding` — 128 rows is ~1.3-1.9s
- * idle but >120s when up to 48 of them (8 in-flight × 6 analyses) contend for
- * the same index. Sub-chunking cuts per-statement latency proportionally
- * WITHOUT cutting throughput: the sub-chunks are issued sequentially, so the
- * number of concurrently outstanding statements is unchanged while each one is
- * a quarter of the work. Total phase time is the same; no single statement
- * spends its whole budget queued behind the others.
+ * Measured on the live DB: this INSERT costs ~11-14ms/row idle, linear,
+ * dominated by HNSW index maintenance on `embeddings.embedding`
+ * (idx_embeddings_vector, 230MB over a 522MB / 34.5k-row table).
+ *
+ * Sub-chunking alone was not enough, and this comment's old claim that "total
+ * phase time is the same" is measured FALSE — the sub-chunks were issued from
+ * 8 concurrent slots, so they contended with each other. Snapshot 252239a3
+ * (2026-07-27) spent 673s in this phase: 41 embedding API calls totalling only
+ * 82s (p50 1.6-2.7s, zero failures), while each mapLimit slot took 70+s to
+ * free because its 4 sequential inserts fought the other 7 slots for that one
+ * index. Effective throughput collapsed to ~8 rows/s — ~40x worse than the
+ * ~14ms/row the same statement costs uncontended. The writes are self-
+ * contention, so the fix below is to stop competing with ourselves rather than
+ * to shrink the statement further: the same 5,241 rows written by a single
+ * writer at the idle rate are ~75s of work.
+ *
+ * Why 64 and not the 32 that shipped alongside that single writer: 32 rows is
+ * only ~0.4s of index work, so the phase bought one round trip to a remote DB
+ * for every 0.4s of useful work. At 64 a statement is ~0.7-0.9s idle (64 × the
+ * 11-14ms/row above), or roughly 0.9-1.8s once EMBED_WRITE_CONCURRENCY writers
+ * overlap on the same index — still under 2% of the statement_timeout 120s the
+ * 2026-07-26 deaths blew through, and the single 57014 retry
+ * (withStatementTimeoutRetry) is unchanged underneath. Raise it only with a
+ * measurement: the timeout budget it spends is per statement, not per phase.
  */
-const EMBED_INSERT_CHUNK = 32;
+const EMBED_INSERT_CHUNK_DEFAULT = 64;
+/**
+ * Writer loops draining the queue (EMBED_WRITE_CONCURRENCY). The collapse
+ * measured above was EIGHT-way self-contention on one HNSW index; 2 is far
+ * below that and buys back the round trip a lone writer spends idle between
+ * statements — which is most of its wall clock once the statement itself is
+ * under a second. Peak memory scales with it:
+ * (EMBED_INSERT_QUEUE_MAX_CHUNKS + W) × EMBED_INSERT_CHUNK × ~16KB per
+ * serialized vector, i.e. ~18MB at the defaults.
+ */
+const EMBED_WRITE_CONCURRENCY_DEFAULT = 2;
+/**
+ * How far the writers may fall behind before producers stop embedding. A memory
+ * bound, not a throughput knob (see EMBED_WRITE_CONCURRENCY for the arithmetic
+ * at the current defaults). Without a bound the fast API leg (82s for the whole
+ * run above) would hold every vector of the run — ~5.2k × 16KB ≈ 84MB —
+ * resident while the slow writers caught up.
+ */
+const EMBED_INSERT_QUEUE_MAX_CHUNKS = 16;
+/**
+ * Chunks between progress reports from a writer. `ctx.onProgress` is a remote
+ * UPDATE on the step row, and one per chunk put that round trip directly on the
+ * write path this phase is bottlenecked on. It cannot be dropped entirely: it
+ * is the kill-switch conduit (updateStep throws KillSwitchError when the run is
+ * paused), so a writer that never awaits it never notices a pause. Every 4th
+ * chunk plus a report after the drain keeps worst-case pause latency at ~4
+ * chunks (a few seconds) instead of one.
+ */
+const PROGRESS_EVERY_CHUNKS = 4;
+
+/**
+ * pgvector literal for one embedding, e.g. `[0.1,-0.0234568]`.
+ *
+ * Components go out at 7 decimal places rather than JS default precision
+ * because the destination is a `vector(1536)` column and pgvector stores
+ * float4 — the digits past that are discarded on arrival, so sending them only
+ * inflates the statement. Measured 2026-07-29 against the live table: pgvector
+ * renders a stored vector back as ~19KB of text (already float4-truncated, so
+ * whatever the upstream sent was at least that long) and this formatter emits
+ * ~16KB for the same values; against an upstream that sends full doubles it is
+ * closer to half. Re-serializing 20 live vectors and asking Postgres to compare
+ * them with the stored originals gave a worst-case cosine distance of 3.0e-7
+ * (worst L2 1.2e-6, worst relative norm drift 4.3e-8) — four orders of
+ * magnitude below any similarity gap that changes a ranking.
+ *
+ * Embeddings are unit-norm, so |x| <= 1 and toFixed(7) never reaches the 1e21
+ * threshold where it would switch to exponential notation — which pgvector's
+ * parser would reject. Components below 5e-8 in magnitude collapse to `0`
+ * (including the `-0` that toFixed produces for small negatives).
+ */
+export function formatVectorLiteral(vector: readonly number[]): string {
+  let out = '[';
+  for (let i = 0; i < vector.length; i++) {
+    if (i > 0) out += ',';
+    const fixed = vector[i]!.toFixed(7).replace(/0+$/, '').replace(/\.$/, '');
+    out += fixed === '-0' ? '0' : fixed;
+  }
+  return `${out}]`;
+}
 
 export interface EmbeddingPassResult {
   embedded: number;
@@ -69,6 +144,8 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   // coexist in the table, so it follows the model instead of being hardcoded.
   const embeddingsProvider = profileForModel(model).id;
   const batchSize = envInt('EMBED_BATCH_SIZE', EMBED_BATCH_SIZE_DEFAULT);
+  const insertChunk = envInt('EMBED_INSERT_CHUNK', EMBED_INSERT_CHUNK_DEFAULT);
+  const writeConcurrency = envInt('EMBED_WRITE_CONCURRENCY', EMBED_WRITE_CONCURRENCY_DEFAULT);
 
   // The three reads below are wrapped too, not just the writes: on 2026-07-26
   // StudyFlow spent 43s in this preamble before its first vector left for the
@@ -140,30 +217,59 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   for (let i = 0; i < pending.length; i += batchSize) {
     embedBatches.push(pending.slice(i, i + batchSize));
   }
-  await mapLimit(embedBatches, 8, async (batch) => {
-    const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
-    batches += 1;
-    // Multi-row inserts — per-vector inserts were hundreds of sequential round
-    // trips to the remote DB.
-    const tuples: unknown[][] = [];
-    for (let j = 0; j < batch.length; j++) {
-      const item = batch[j]!;
-      const vector = vectors[j];
-      if (!vector) continue;
-      tuples.push([item.recordId, item.view, item.content, `[${vector.join(',')}]`, embeddingsProvider, model]);
-      embedded += 1;
-    }
-    // Bug #76: this is the write the transaction-mode pooler cancels under
-    // load. It goes out in EMBED_INSERT_CHUNK-row statements (see the constant)
-    // so no single statement can spend its whole 120s budget queued behind its
-    // siblings. ON CONFLICT DO NOTHING makes the one retry a no-op for anything
-    // that did land, and makes each sub-chunk independently resumable: a chunk
-    // that committed before a later one failed is skipped by the
-    // `loadExisting` read on the next run.
-    for (let start = 0; start < tuples.length; start += EMBED_INSERT_CHUNK) {
-      const part = tuples.slice(start, start + EMBED_INSERT_CHUNK);
-      const values = part.flat();
-      const rowsSql = part.map((_, i) => {
+  // Producer/consumer split (see EMBED_INSERT_CHUNK): the 8 producers below do
+  // ONLY the API call and tuple building, and hand chunks to a fixed set of
+  // writers. The number of insert statements this phase has outstanding at any
+  // instant is therefore exactly EMBED_WRITE_CONCURRENCY, where it used to be 8
+  // — which is what actually cost the 673s above, and which also removes this
+  // phase's share of the 2026-07-26 57014 deaths (its inserts can no longer
+  // queue up 8-deep behind each other).
+  const queue: unknown[][][] = [];
+  let producersDone = false;
+  // First error from EITHER side wins and is the one thrown, exactly as
+  // mapLimit's own first-error rule did when the insert lived inside it.
+  let phaseFailure: unknown = null;
+  let writerStopped = false;
+  const workWaiters: Array<() => void> = [];
+  const spaceWaiters: Array<() => void> = [];
+  const wake = (waiters: Array<() => void>): void => { while (waiters.length > 0) waiters.shift()!(); };
+  const fail = (err: unknown): void => { if (phaseFailure === null) phaseFailure = err; };
+
+  // Progress is reported by the writers because a writer is the phase's real
+  // clock now: a batch whose vectors are back but unwritten is not done.
+  let chunksWritten = 0;
+  const reportProgress = (): Promise<void> | undefined => ctx.onProgress?.({
+    phase: 'embeddings',
+    done: embedded,
+    total: pending.length,
+    detail: `Embedding records (${embedded}/${pending.length} vectors)`,
+  });
+
+  const writerLoop = async (): Promise<void> => {
+    for (;;) {
+      // A sibling that already failed has failed the whole phase, so draining
+      // the rest of the queue would only add writes to a run about to throw.
+      if (writerStopped) return;
+      const chunk = queue.shift();
+      if (chunk === undefined) {
+        // Nothing to write: finish once no producer can enqueue again,
+        // otherwise park until one does.
+        if (producersDone) return;
+        await new Promise<void>((resolve) => { workWaiters.push(resolve); });
+        continue;
+      }
+      wake(spaceWaiters);
+      // Bug #76: this is the write the transaction-mode pooler cancels under
+      // load. It goes out in EMBED_INSERT_CHUNK-row statements (see the
+      // constant) so no single statement can spend its whole 120s budget queued
+      // behind the writers of the OTHER analyses running at the same time —
+      // within this job there are now EMBED_WRITE_CONCURRENCY of them, not 8.
+      // ON CONFLICT DO NOTHING makes the one retry a no-op for anything that
+      // did land, and makes each chunk independently resumable: a chunk that
+      // committed before a later one failed is skipped by the `loadExisting`
+      // read on the next run.
+      const values = chunk.flat();
+      const rowsSql = chunk.map((_, i) => {
         const base = i * 6;
         return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}::vector, $${base + 5}, $${base + 6})`;
       });
@@ -173,9 +279,60 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
          ON CONFLICT (record_id, view_type, model) DO NOTHING`,
         values,
       ));
+      embedded += chunk.length;
+      chunksWritten += 1;
+      // Throttled, and still awaited — see PROGRESS_EVERY_CHUNKS (kill switch).
+      if (chunksWritten % PROGRESS_EVERY_CHUNKS === 0) await reportProgress();
     }
-    await ctx.onProgress?.({ phase: 'embeddings', done: batches, total: embedBatches.length, detail: `Embedding records (${batches}/${embedBatches.length} batches)` });
-  });
+  };
+
+  const writers = Promise.all(Array.from({ length: writeConcurrency }, () => writerLoop().catch((err) => {
+    // A failed writer will fail every later chunk too, so unblock the producers
+    // AND any sibling writer parked on an empty queue — either would otherwise
+    // sit waiting on a hand-off that is never coming.
+    fail(err);
+    writerStopped = true;
+    wake(spaceWaiters);
+    wake(workWaiters);
+  })));
+
+  const producers = (async () => {
+    try {
+      await mapLimit(embedBatches, 8, async (batch) => {
+        if (writerStopped) return; // don't pay for vectors nothing will store
+        const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
+        batches += 1;
+        // Multi-row inserts — per-vector inserts were hundreds of sequential
+        // round trips to the remote DB.
+        const tuples: unknown[][] = [];
+        for (let j = 0; j < batch.length; j++) {
+          const item = batch[j]!;
+          const vector = vectors[j];
+          if (!vector) continue;
+          tuples.push([item.recordId, item.view, item.content, formatVectorLiteral(vector), embeddingsProvider, model]);
+        }
+        for (let start = 0; start < tuples.length; start += insertChunk) {
+          while (queue.length >= EMBED_INSERT_QUEUE_MAX_CHUNKS && !writerStopped) {
+            await new Promise<void>((resolve) => { spaceWaiters.push(resolve); });
+          }
+          if (writerStopped) return;
+          queue.push(tuples.slice(start, start + insertChunk));
+          wake(workWaiters);
+        }
+      });
+    } finally {
+      // Unconditional: a producer that threw must still release the writers,
+      // which would otherwise park forever waiting for work that never comes.
+      producersDone = true;
+      wake(workWaiters);
+    }
+  })();
+
+  await Promise.all([producers.catch(fail), writers]);
+  if (phaseFailure !== null) throw phaseFailure;
+  // The last chunk almost never lands on the every-4th boundary, and without
+  // this the step row would sit short of the real total for the rest of the run.
+  if (chunksWritten % PROGRESS_EVERY_CHUNKS !== 0) await reportProgress();
 
   return { embedded, skippedExisting, records: rows.length, batches };
 }
