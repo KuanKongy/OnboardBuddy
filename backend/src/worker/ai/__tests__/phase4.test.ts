@@ -241,18 +241,79 @@ describe('phase 4 — OpenRouter provider', () => {
     }
   });
 
-  it('embed returns index-ordered vectors', async () => {
-    const requests: unknown[] = [];
-    const fetchImpl = (async (_url: RequestInfo | URL, init?: RequestInit) => {
-      requests.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        data: [{ index: 1, embedding: [2] }, { index: 0, embedding: [1] }],
-        usage: { prompt_tokens: 4 },
-      }), { status: 200 });
+  // ── embeddings ─────────────────────────────────────────────────────────
+  //
+  // The request body is model-shaped (ai/embeddingProfiles.ts) and both
+  // shapes have to keep working for all of M5: the M4 build writes
+  // text-embedding-3-small rows against the same database this build reads.
+
+  /** Env knobs the profile reads — pinned so a dev shell cannot skew asserts. */
+  const embedEnv = ['OPENROUTER_BASE_URL', 'OPENROUTER_PROVIDER_SORT', 'OPENROUTER_ZDR', 'OPENROUTER_DATA_COLLECTION'] as const;
+  const savedEnv = new Map<string, string | undefined>();
+  before(() => {
+    for (const k of embedEnv) { savedEnv.set(k, process.env[k]); delete process.env[k]; }
+  });
+  after(() => {
+    for (const [k, v] of savedEnv) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  });
+
+  /** One-hot vector of `dims` dims: normalization must leave it one-hot. */
+  const oneHot = (hot: number, dims: number): number[] =>
+    Array.from({ length: dims }, (_, i) => (i === hot ? 7 : 0));
+
+  function embedderWith(data: Array<{ index: number; embedding: unknown }>) {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      return new Response(JSON.stringify({ data, usage: { prompt_tokens: 4 } }), { status: 200 });
     }) as typeof fetch;
-    const provider = new OpenRouterProvider({ embeddingsBaseUrl: 'https://emb.local/v1', fetchImpl });
+    // embeddingsBaseUrl is the OpenAI-path injection seam only — the
+    // OpenRouter path must ignore it and use its own base URL.
+    return { provider: new OpenRouterProvider({ embeddingsBaseUrl: 'https://emb.local/v1', fetchImpl }), requests };
+  }
+
+  it('embed (OpenAI model): legacy body, index-ordered vectors, injected base URL', async () => {
+    const { provider, requests } = embedderWith([
+      { index: 1, embedding: oneHot(1, 1536) },
+      { index: 0, embedding: oneHot(0, 1536) },
+    ]);
     const result = await provider.embed(['a', 'b'], 'text-embedding-3-small', opts);
-    expect(result.vectors).to.deep.equal([[1], [2]]);
+
+    expect(requests[0]!.url).to.equal('https://emb.local/v1/embeddings');
+    expect(requests[0]!.body.dimensions).to.equal(1536);
+    expect(requests[0]!.body.provider).to.equal(undefined);
+    expect(requests[0]!.body.encoding_format).to.equal(undefined);
+    // Sorted back into input order, not response order.
+    expect(result.vectors[0]![0]).to.equal(1);
+    expect(result.vectors[1]![1]).to.equal(1);
+  });
+
+  it('embed (OpenRouter model): ZDR prefs + float encoding, no dimensions, truncated and normalized', async () => {
+    // 2560 dims, unnormalized — pplx's real output shape.
+    const raw = Array.from({ length: 2560 }, (_, i) => Math.sin(i + 1) * 7);
+    const { provider, requests } = embedderWith([{ index: 0, embedding: raw }]);
+    const result = await provider.embed(['a'], 'perplexity/pplx-embed-v1-4b', opts);
+
+    expect(requests[0]!.url).to.equal('https://openrouter.ai/api/v1/embeddings');
+    expect(requests[0]!.body.dimensions).to.equal(undefined);
+    expect(requests[0]!.body.encoding_format).to.equal('float');
+    expect(requests[0]!.body.provider).to.deep.equal({ sort: 'throughput', zdr: true, data_collection: 'deny' });
+
+    const vector = result.vectors[0]!;
+    expect(vector).to.have.length(1536);
+    expect(Math.sqrt(vector.reduce((s, v) => s + v * v, 0))).to.be.closeTo(1, 1e-6);
+  });
+
+  it('embed: a non-float vector fails non-retryably naming encoding_format', async () => {
+    const { provider } = embedderWith([{ index: 0, embedding: 'YmFzZTY0' }]);
+    try {
+      await provider.embed(['a'], 'perplexity/pplx-embed-v1-4b', opts);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).to.be.instanceOf(ProviderError);
+      expect((err as ProviderError).retryable).to.equal(false);
+      expect((err as ProviderError).message).to.include('encoding_format');
+    }
   });
 });
 
@@ -616,6 +677,29 @@ describe('phase 4 — AiClient', () => {
       expect(err).to.be.instanceOf(BudgetExceededError);
       expect((err as BudgetExceededError).behavior).to.equal('pause');
     }
+  });
+
+  it('never dispatches an already-aborted request', async () => {
+    // The hedged straggler retries in symbolPass abort the loser as soon as
+    // the winner lands. An abort reads as a RETRYABLE provider error, so
+    // without the bail in withRetries the cancelled copy would keep re-issuing
+    // itself — the one case where "retry" is exactly the wrong response.
+    const log = installFakeDb();
+    const provider = new FakeProvider();
+    const controller = new AbortController();
+    controller.abort();
+    const client = makeClient(provider);
+    try {
+      await client.call({ ...baseRequest, signal: controller.signal });
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect(err).to.be.instanceOf(AiFailedError);
+    }
+    expect(provider.completeCalls).to.have.length(0);
+    expect(client.stats.calls).to.equal(0);
+    // The attempt is still audited, and closed — not left hanging in 'running'.
+    expect(log.filter((q) => q.text.includes('UPDATE ai_generation_runs')).map((q) => q.params?.[1]))
+      .to.deep.equal(['failed']);
   });
 
   it('budgets and audits embedding batches', async () => {

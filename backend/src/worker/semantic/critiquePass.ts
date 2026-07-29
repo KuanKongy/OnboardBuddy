@@ -87,6 +87,7 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
     // Straightforward outcomes collect into ONE vectorized status write per
     // batch (Track C); only the rare regenerate path stays per-record.
     const statusUpdates: Array<{ id: string; status: 'usable' | 'rejected'; flags?: Array<Record<string, unknown>> }> = [];
+    const toRegenerate: Array<{ record: PendingRecord; critique: string; verdictNotes: string }> = [];
     for (const record of batch) {
       result.reviewed += 1;
       const verdict = verdicts.get(record.stable_key);
@@ -98,24 +99,36 @@ export async function runCritiquePass(ctx: SemanticContext): Promise<CritiqueRes
       }
       const notes = [verdict.notes, ...verdict.failed_claims.map((c) => `unsupported claim: ${c}`)].join('\n');
       if (record.record_level === 'symbol' && !record.facts_only) {
-        const regenerated = await regenerateSymbolRecord(ctx, record.stable_key, notes);
-        if (regenerated) {
-          result.regenerated += 1;
-          const recheck = await critiqueBatch(ctx, [{ ...record, id: regenerated.id, record: regenerated.record as unknown as PendingRecord['record'], summary: regenerated.summary, receipt_ids: regenerated.receiptIds }]);
-          const second = recheck.get(record.stable_key);
-          if (!second || second.verdict === 'usable') {
-            await setRecordStatus(regenerated.id, 'usable');
-            result.usable += 1;
-            continue;
-          }
-          await setRecordStatus(regenerated.id, 'rejected', [{ kind: 'record_rejected', notes: second.notes }]);
-          result.rejected += 1;
-          continue;
-        }
+        toRegenerate.push({ record, critique: notes, verdictNotes: verdict.notes });
+        continue;
       }
       statusUpdates.push({ id: record.id, status: 'rejected', flags: [{ kind: 'record_rejected', notes: verdict.notes }] });
       result.rejected += 1;
     }
+    // Rejected records are this pass's slow path — two more LLM round trips
+    // each (regenerate, then re-critique) — and they used to be paid one after
+    // another inside the loop above, so a batch with several rejects cost their
+    // latencies summed. They are independent (own record, own status write), so
+    // they go side by side now; provider pressure stays bounded by the AiClient
+    // semaphore rather than by this number.
+    await mapLimit(toRegenerate, 4, async ({ record, critique, verdictNotes }) => {
+      const regenerated = await regenerateSymbolRecord(ctx, record.stable_key, critique);
+      if (!regenerated) {
+        statusUpdates.push({ id: record.id, status: 'rejected', flags: [{ kind: 'record_rejected', notes: verdictNotes }] });
+        result.rejected += 1;
+        return;
+      }
+      result.regenerated += 1;
+      const recheck = await critiqueBatch(ctx, [{ ...record, id: regenerated.id, record: regenerated.record as unknown as PendingRecord['record'], summary: regenerated.summary, receipt_ids: regenerated.receiptIds }]);
+      const second = recheck.get(record.stable_key);
+      if (!second || second.verdict === 'usable') {
+        await setRecordStatus(regenerated.id, 'usable');
+        result.usable += 1;
+        return;
+      }
+      await setRecordStatus(regenerated.id, 'rejected', [{ kind: 'record_rejected', notes: second.notes }]);
+      result.rejected += 1;
+    });
     await setRecordStatusBulk(statusUpdates);
     batchesDone += 1;
     await ctx.onProgress?.({ phase: 'critique', done: batchesDone, total: batches.length, detail: `Verifying records (${batchesDone}/${batches.length} batches)` });

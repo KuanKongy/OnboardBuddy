@@ -358,8 +358,11 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{runActionLabel(run)}</span>
         <span className="flex shrink-0 items-center gap-2 text-[0.6875rem] tabular-nums text-muted-foreground">
           {hasCost && (
-            <span title={`${run.cost.llm_calls} AI calls · ${run.cost.cached_calls} served from cache · ${run.cost.input_tokens.toLocaleString()} in / ${run.cost.output_tokens.toLocaleString()} out tokens`}>
+            <span title={`This run only. ${run.cost.cached_calls} calls were served from cache at $0.`}>
               ${run.cost.estimated_cost_usd.toFixed(4)} · {run.cost.llm_calls} calls
+              {run.cost.input_tokens > 0 || run.cost.output_tokens > 0
+                ? ` · ${run.cost.input_tokens.toLocaleString()} in / ${run.cost.output_tokens.toLocaleString()} out tok`
+                : ""}
               {run.cost.cached_calls > 0 ? ` · ${run.cost.cached_calls} cached` : ""}
             </span>
           )}
@@ -824,7 +827,9 @@ export function ProjectOverviewPage() {
             // A budget pause is only actionable if the banner says how much
             // of the per-run cap was actually spent — the run-history row for
             // this same job already carries those numbers.
-            const jobBudget = runs?.find((r) => r.id === job.id)?.budget ?? null;
+            const jobRun = runs?.find((r) => r.id === job.id) ?? null;
+            const jobBudget = jobRun?.budget ?? null;
+            const jobCost = jobRun?.cost ?? null;
             return (
             <Card key={job.id}>
               <CardContent className="flex flex-wrap items-center gap-2 p-3">
@@ -843,6 +848,9 @@ export function ProjectOverviewPage() {
                     <p className="mt-0.5 text-[0.6875rem] tabular-nums text-muted-foreground">
                       {jobBudget.usedThisRun.toLocaleString()} of {jobBudget.capLlmCalls.toLocaleString()} calls used this run
                       {jobBudget.remaining !== null && ` · ${jobBudget.remaining.toLocaleString()} left`}
+                      {jobCost && (jobCost.input_tokens > 0 || jobCost.output_tokens > 0)
+                        ? ` · ${jobCost.input_tokens.toLocaleString()} in / ${jobCost.output_tokens.toLocaleString()} out tok`
+                        : ""}
                     </p>
                   )}
                 </div>

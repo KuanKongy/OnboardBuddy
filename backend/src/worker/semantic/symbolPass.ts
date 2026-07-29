@@ -11,11 +11,13 @@
 
 import { BudgetExceededError } from '../ai/budgetEnforcer.js';
 import { mapLimit } from '../../lib/parallel.js';
+import { envInt } from '../../lib/env.js';
 import {
   MAX_SYMBOLS_PER_CALL, MAX_SNIPPET_CHARS, MAX_REQUEST_INPUT_TOKENS, CHARS_PER_TOKEN,
   SYMBOL_BATCH_OUTPUT_TOKENS_PER_SYMBOL,
 } from '../engine/budgets.js';
 import { capReceiptSpan } from '../engine/receiptSpan.js';
+import { symbolKey } from '../engine/stableKeys.js';
 import { makeUntrustedFence, UNTRUSTED_DATA_RULE } from '../ai/untrustedData.js';
 import type { EvidenceNode } from '../types/analysis.js';
 import type { SemanticContext } from './context.js';
@@ -217,11 +219,14 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
     // pressure; this loop was the single biggest wall-clock cost when serial.
     const targetByKey = new Map(misses.map((m) => [m.node.stableKey, m]));
     const batches = planBatches(misses.map((m) => m.node));
+    // Hedging budget for this run (see callBatchHedged): shared across all
+    // batches so a single pathological phase cannot fan out duplicates.
+    const hedge: HedgeState = { durations: [], fired: 0, max: envInt('SYMBOL_HEDGE_MAX', 3) };
     let batchesDone = 0;
     await ctx.onProgress?.({ phase: 'semantic_symbols', done: 0, total: Math.max(1, batches.length), detail: `Semantic: symbol records (0/${batches.length} batches)` });
     await mapLimit(batches, 28, async (batch) => {
       const targets = batch.map((n) => targetByKey.get(n.stableKey)!);
-      const produced = await runBatchWithSplitting(ctx, targets, result);
+      const produced = await runBatchWithSplitting(ctx, targets, result, hedge);
       for (const [key, record] of produced) {
         result.records.set(key, record);
         if (!record.factsOnly) result.llmRecords += 1;
@@ -247,12 +252,143 @@ export async function runSymbolPass(ctx: SemanticContext): Promise<SymbolPassRes
   return result;
 }
 
+// ── Symbol co-batching (families) ────────────────────────────────────────────
+
+/**
+ * A nested function's code is ALREADY inside its container's snippet: the
+ * extractor emits handlers declared inside a top-level function as
+ * `Container.inner` (symbolExtractor.extractNestedFunctions) and the container
+ * node's snippet is the container's whole text. Batched separately, the same
+ * lines were paid for twice in one call. Keeping a family in one batch lets
+ * each child cite a line range into the container's fence instead of carrying
+ * its own copy (renderSymbolFacts).
+ *
+ * Only the container's ACTUALLY-SENT window counts. The snippet is cut at
+ * MAX_SNIPPET_CHARS, so a child declared past the cut is genuinely not in the
+ * prompt and keeps its own snippet — pointing at it would be a citation to
+ * text the model never received.
+ */
+
+/** Rendered pointer line, measured: ~130 chars for a long container key. */
+const SNIPPET_POINTER_TOKENS = 40;
+
+/** Container stable key for a nested symbol; null when the node is not nested. */
+function containerKeyOf(node: EvidenceNode): string | null {
+  const container = node.metadata.container;
+  if (typeof container !== 'string' || container.length === 0 || !node.filePath) return null;
+  const key = symbolKey(node.filePath, container);
+  return key === node.stableKey ? null : key;
+}
+
+/**
+ * The file lines a container's fence actually carries. The last line of a
+ * truncated snippet is half a statement, so it is excluded — and a snippet
+ * that already arrives at the cap was truncated by the extractor, which caps
+ * at the same MAX_SNIPPET_CHARS.
+ */
+function sentSnippetWindow(container: EvidenceNode): { firstLine: number; lastLine: number } | null {
+  const snippet = container.snippet;
+  if (!snippet || container.lineStart == null) return null;
+  const sent = snippet.slice(0, MAX_SNIPPET_CHARS);
+  let lines = 1;
+  for (let i = 0; i < sent.length; i++) if (sent.charCodeAt(i) === 10) lines += 1;
+  if (snippet.length >= MAX_SNIPPET_CHARS) lines -= 1;
+  if (lines < 1) return null;
+  return { firstLine: container.lineStart, lastLine: container.lineStart + lines - 1 };
+}
+
+/** Where a symbol's code already sits inside a same-batch container's fence. */
+export interface SnippetPointer {
+  containerKey: string;
+  /** 1-based line numbers WITHIN the container's rendered snippet. */
+  fromLine: number;
+  toLine: number;
+}
+
+/**
+ * Which symbols in THIS batch can cite a container instead of repeating their
+ * own snippet. Computed from the actual call targets, not from the plan: a
+ * failing batch is retried in halves, and a half may carry the child without
+ * its container.
+ */
+export function planSnippetDedupe(nodes: EvidenceNode[]): Map<string, SnippetPointer> {
+  const pointers = new Map<string, SnippetPointer>();
+  const indexByKey = new Map(nodes.map((n, i) => [n.stableKey, i]));
+  nodes.forEach((node, index) => {
+    const containerKey = containerKeyOf(node);
+    if (!containerKey) return;
+    const containerIndex = indexByKey.get(containerKey);
+    // The pointer says "above", so the container's section has to precede this
+    // one — the model can only cite what it has already read.
+    if (containerIndex === undefined || containerIndex >= index) return;
+    const window = sentSnippetWindow(nodes[containerIndex]!);
+    if (!window || node.lineStart == null || node.lineEnd == null) return;
+    if (node.lineStart < window.firstLine || node.lineEnd > window.lastLine) return;
+    pointers.set(node.stableKey, {
+      containerKey,
+      fromLine: node.lineStart - window.firstLine + 1,
+      toLine: node.lineEnd - window.firstLine + 1,
+    });
+  });
+  return pointers;
+}
+
+/**
+ * Input-token estimate for a batch as it will actually be RENDERED — a symbol
+ * that cites a container pays for the pointer line, not for a second copy of
+ * the snippet. Sharing planSnippetDedupe with the renderer is what keeps the
+ * estimate from drifting away from the bytes on the wire.
+ */
+function estimateBatchTokens(nodes: EvidenceNode[]): number {
+  const pointers = planSnippetDedupe(nodes);
+  let tokens = PROMPT_OVERHEAD_TOKENS;
+  for (const node of nodes) {
+    tokens += PER_SYMBOL_FACTS_TOKENS;
+    tokens += pointers.has(node.stableKey)
+      ? SNIPPET_POINTER_TOKENS
+      : Math.ceil(Math.min((node.snippet ?? '').length, MAX_SNIPPET_CHARS) / CHARS_PER_TOKEN);
+  }
+  return tokens;
+}
+
+/**
+ * Groups the sorted symbols into families (a container followed by its nested
+ * children) so the packer can keep one whole. The sort by (file, line) already
+ * places a family adjacently — grouping explicitly instead of relying on that
+ * means an odd shape (a container with no line info, a two-level nest) costs
+ * the dedupe, not the family.
+ */
+function groupFamilies(sorted: EvidenceNode[]): EvidenceNode[][] {
+  const byKey = new Map(sorted.map((n) => [n.stableKey, n]));
+  const headKey = (node: EvidenceNode): string => {
+    // Nesting is one level deep today; the bounded walk is a cycle guard, so a
+    // key that somehow contains itself cannot spin here.
+    let key = node.stableKey;
+    for (let hops = 0; hops < 4; hops++) {
+      const parent = containerKeyOf(byKey.get(key)!);
+      if (!parent || !byKey.has(parent)) return key;
+      key = parent;
+    }
+    return key;
+  };
+  const families = new Map<string, EvidenceNode[]>();
+  const order: string[] = [];
+  for (const node of sorted) {
+    const head = headKey(node);
+    const family = families.get(head);
+    if (family) family.push(node);
+    else { families.set(head, [node]); order.push(head); }
+  }
+  return order.map((head) => families.get(head)!);
+}
+
 /**
  * Packs symbols into batches of up to MAX_SYMBOLS_PER_CALL / the input
  * token cap. Symbols are sorted by file for prompt locality but batches
  * pack ACROSS files — per-file batches averaged 2-5 symbols on real repos,
  * which pinned the call count to ~the file count no matter the cap
- * (latency overhaul Track B).
+ * (latency overhaul Track B). Families (see above) are placed as a unit so
+ * their snippet dedupe survives the packing.
  */
 export function planBatches(nodes: EvidenceNode[]): EvidenceNode[][] {
   const sorted = [...nodes].sort((a, b) =>
@@ -261,18 +397,38 @@ export function planBatches(nodes: EvidenceNode[]): EvidenceNode[][] {
   const batches: EvidenceNode[][] = [];
   let current: EvidenceNode[] = [];
   let currentTokens = PROMPT_OVERHEAD_TOKENS;
-  for (const node of sorted) {
-    const snippetChars = Math.min((node.snippet ?? '').length, MAX_SNIPPET_CHARS);
-    const tokens = Math.ceil(snippetChars / CHARS_PER_TOKEN) + PER_SYMBOL_FACTS_TOKENS;
-    if (current.length >= MAX_SYMBOLS_PER_CALL || (current.length > 0 && currentTokens + tokens > MAX_REQUEST_INPUT_TOKENS)) {
-      batches.push(current);
-      current = [];
-      currentTokens = PROMPT_OVERHEAD_TOKENS;
+  const flush = (): void => {
+    if (current.length === 0) return;
+    batches.push(current);
+    current = [];
+    currentTokens = PROMPT_OVERHEAD_TOKENS;
+  };
+
+  for (const family of groupFamilies(sorted)) {
+    // No pointer ever crosses families (a child sits in its container's family
+    // whenever the container is in this run at all), so family costs are
+    // additive and can be summed once here.
+    const familyTokens = estimateBatchTokens(family) - PROMPT_OVERHEAD_TOKENS;
+    const fitsOneBatch = family.length <= MAX_SYMBOLS_PER_CALL
+      && PROMPT_OVERHEAD_TOKENS + familyTokens <= MAX_REQUEST_INPUT_TOKENS;
+    if (fitsOneBatch) {
+      if (current.length + family.length > MAX_SYMBOLS_PER_CALL
+        || (current.length > 0 && currentTokens + familyTokens > MAX_REQUEST_INPUT_TOKENS)) flush();
+      current.push(...family);
+      currentTokens += familyTokens;
+      continue;
     }
-    current.push(node);
-    currentTokens += tokens;
+    // A family too big for one call splits like any other run of symbols. The
+    // members that land away from their container pay for their own snippet
+    // again: correctness of the citation first, dedupe second.
+    for (const node of family) {
+      if (current.length >= MAX_SYMBOLS_PER_CALL
+        || (current.length > 0 && estimateBatchTokens([...current, node]) > MAX_REQUEST_INPUT_TOKENS)) flush();
+      current.push(node);
+      currentTokens = estimateBatchTokens(current);
+    }
   }
-  if (current.length > 0) batches.push(current);
+  flush();
   return batches;
 }
 
@@ -289,8 +445,11 @@ async function runBatchWithSplitting(
   ctx: SemanticContext,
   targets: SymbolTarget[],
   result: SymbolPassResult,
+  /** Set only for the top-level attempt at a full batch — halves never hedge. */
+  hedge?: HedgeState,
 ): Promise<Map<string, StoredRecord>> {
-  const produced = await callBatch(ctx, targets).catch((err) => {
+  const attempt = hedge ? callBatchHedged(ctx, targets, hedge) : callBatch(ctx, targets);
+  const produced = await attempt.catch((err) => {
     if (isControlError(err)) throw err;
     return new Map<string, StoredRecord>();
   });
@@ -300,6 +459,9 @@ async function runBatchWithSplitting(
   if (missing.length > RETRY_LEAF_SIZE) {
     const mid = Math.ceil(missing.length / 2);
     const halves = [missing.slice(0, mid), missing.slice(mid)];
+    // Halves never hedge: from here down this is failure handling, not latency
+    // handling. The batch has already proven it answers badly, so a duplicate
+    // is likelier to buy a second failure than a faster one.
     const sub = await mapLimit(halves, 2, (half) => runBatchWithSplitting(ctx, half, result));
     for (const map of sub) for (const [k, v] of map) produced.set(k, v);
     return produced;
@@ -324,6 +486,122 @@ async function runBatchWithSplitting(
   return produced;
 }
 
+// ── Straggler hedging ────────────────────────────────────────────────────────
+
+/**
+ * One batch took 96s of a 181s symbol phase in the 2026-07-28 cold benchmark:
+ * the provider occasionally parks a single request far beyond its siblings'
+ * latency, and mapLimit holds that slot until it answers. When a top-level
+ * batch has not settled by max(20s, 3x the running median of the batches that
+ * already finished this run), we send ONE duplicate of the same request and
+ * keep whichever answers first, aborting the loser.
+ *
+ * Accounting: the hedge pays a second BudgetEnforcer.checkBeforeBatch (a
+ * headroom check, not a charge), so a run sitting exactly on its cap stops one
+ * batch earlier than it otherwise would. It double-CHARGES only when both
+ * copies complete before the abort lands — bounded by SYMBOL_HEDGE_MAX, i.e.
+ * at most 3 extra cheap-tier calls per run. An aborted loser never reaches
+ * recordUsage (AiClient records usage only on success) and its
+ * ai_generation_runs row closes through the normal failure path, so the audit
+ * shows a failed duplicate rather than a row stuck in 'running'.
+ */
+const SYMBOL_HEDGE_MIN_DELAY_MS = 20_000;
+const SYMBOL_HEDGE_MEDIAN_FACTOR = 3;
+
+interface HedgeState {
+  /** Wall-clock ms of every top-level batch that has COMPLETED this run. */
+  durations: number[];
+  fired: number;
+  max: number;
+}
+
+/** Test seam (mirrors `__setQueryForTests`): pins the hedge delay, in ms. */
+let hedgeDelayOverrideMs: number | null = null;
+export function __setHedgeDelayForTests(ms: number | null): void {
+  hedgeDelayOverrideMs = ms;
+}
+
+function hedgeDelayMs(state: HedgeState): number {
+  if (hedgeDelayOverrideMs !== null) return hedgeDelayOverrideMs;
+  // Stragglers stay in the sample. The median is robust to a handful of them,
+  // and excluding them would drag the threshold DOWN as the phase degrades —
+  // precisely when extra duplicate calls help least.
+  const sorted = [...state.durations].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length === 0 ? 0
+    : sorted.length % 2 === 1 ? sorted[mid]!
+      : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  return Math.max(SYMBOL_HEDGE_MIN_DELAY_MS, median * SYMBOL_HEDGE_MEDIAN_FACTOR);
+}
+
+/** Race sentinel: the hedge deadline elapsed with the primary still in flight. */
+const HEDGE_DEADLINE = Symbol('hedge-deadline');
+
+async function callBatchHedged(
+  ctx: SemanticContext,
+  targets: SymbolTarget[],
+  state: HedgeState,
+): Promise<Map<string, StoredRecord>> {
+  const startedAt = Date.now();
+  const primary = new AbortController();
+  const primaryCall = callBatch(ctx, targets, undefined, primary.signal);
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let first: Map<string, StoredRecord> | typeof HEDGE_DEADLINE;
+  try {
+    const delayMs = hedgeDelayMs(state);
+    first = await Promise.race([
+      primaryCall,
+      new Promise<typeof HEDGE_DEADLINE>((resolve) => {
+        timer = setTimeout(() => resolve(HEDGE_DEADLINE), delayMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (first !== HEDGE_DEADLINE) {
+    state.durations.push(Date.now() - startedAt);
+    return first;
+  }
+  if (state.fired >= state.max) {
+    // Cap spent: this batch waits it out, exactly as it did before hedging.
+    const produced = await primaryCall;
+    state.durations.push(Date.now() - startedAt);
+    return produced;
+  }
+
+  state.fired += 1;
+  const hedged = new AbortController();
+  const hedgedCall = callBatch(ctx, targets, undefined, hedged.signal);
+  const primaryTagged = primaryCall.then((records) => ({ from: 'primary' as const, records }));
+  const hedgedTagged = hedgedCall.then((records) => ({ from: 'hedged' as const, records }));
+
+  let winner: { from: 'primary' | 'hedged'; records: Map<string, StoredRecord> };
+  try {
+    winner = await Promise.race([primaryTagged, hedgedTagged]);
+  } catch (err) {
+    // Whichever answered first failed. Cancel both and hand the error to the
+    // caller's existing handling — a control error propagates out of
+    // runBatchWithSplitting, anything else drops to the halving path. One
+    // recovery path for a failing batch, not two.
+    primary.abort();
+    hedged.abort();
+    primaryTagged.catch(() => {});
+    hedgedTagged.catch(() => {});
+    throw err;
+  }
+
+  const loser = winner.from === 'primary' ? { ctl: hedged, call: hedgedTagged } : { ctl: primary, call: primaryTagged };
+  loser.ctl.abort();
+  // The loser settles in the background. Swallowing its rejection is safe even
+  // when it is a control error (pause / kill switch / budget): every following
+  // batch re-checks all three at its own checkBeforeBatch, so a pause takes
+  // effect one batch later instead of being lost.
+  loser.call.catch(() => {});
+  state.durations.push(Date.now() - startedAt);
+  return winner.records;
+}
+
 // ── LLM batch call ───────────────────────────────────────────────────────────
 
 interface RawSymbolRecord extends SemanticRecordBody {
@@ -344,16 +622,24 @@ const SYMBOL_SYSTEM_PROMPT = [
   `Set each record's stable_key to the symbol's stable key exactly as given.`,
 ].join('\n\n');
 
-async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critiqueNotes?: string): Promise<Map<string, StoredRecord>> {
+async function callBatch(
+  ctx: SemanticContext,
+  targets: SymbolTarget[],
+  critiqueNotes?: string,
+  signal?: AbortSignal,
+): Promise<Map<string, StoredRecord>> {
   const produced = new Map<string, StoredRecord>();
   if (targets.length === 0) return produced;
 
   const sections: string[] = [];
   const aliasByKey = new Map<string, string>();
+  // Symbols whose code already appears inside a container's fence in this very
+  // prompt cite it instead of repeating it (co-batching).
+  const pointers = planSnippetDedupe(targets.map((t) => t.node));
   targets.forEach((t, i) => {
     const alias = `r${i + 1}`;
     aliasByKey.set(t.node.stableKey, alias);
-    sections.push(renderSymbolFacts(ctx, t.node, alias));
+    sections.push(renderSymbolFacts(ctx, t.node, alias, pointers.get(t.node.stableKey)));
   });
 
   // The symbol facts are pure repo content — snippets, names, paths, and the
@@ -376,7 +662,14 @@ async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critique
     // Provider default output caps would truncate a 32-record batch.
     // 4k floor covers deepseek reasoning tokens (counted against max_tokens).
     maxOutputTokens: Math.min(60_000, 4_000 + SYMBOL_BATCH_OUTPUT_TOKENS_PER_SYMBOL * targets.length),
+    signal,
   });
+
+  // Hedged loser that answered inside the abort window: the winner has already
+  // persisted these records. Writing them again would insert a second set of
+  // source_receipts (that INSERT has no conflict key), and the graph node panel
+  // reads receipts by record_id — the duplicates would render twice.
+  if (signal?.aborted) return produced;
 
   const byKey = new Map((response.value?.records ?? []).map((r) => [r.stable_key, r]));
   const toPersist: Array<{ target: SymbolTarget; input: InsertRecordInput }> = [];
@@ -422,7 +715,13 @@ async function callBatch(ctx: SemanticContext, targets: SymbolTarget[], critique
   return produced;
 }
 
-function renderSymbolFacts(ctx: SemanticContext, node: EvidenceNode, receiptAlias: string): string {
+function renderSymbolFacts(
+  ctx: SemanticContext,
+  node: EvidenceNode,
+  receiptAlias: string,
+  /** Set when this symbol's code is already inside a container's fence above. */
+  pointer?: SnippetPointer,
+): string {
   const callees = ctx.graph.edges.filter((e) => e.type === 'calls' && e.sourceKey === node.stableKey).map((e) => e.targetKey);
   const callers = ctx.graph.edges.filter((e) => e.type === 'calls' && e.targetKey === node.stableKey).map((e) => e.sourceKey);
   const effects = ctx.sideEffects
@@ -437,7 +736,14 @@ function renderSymbolFacts(ctx: SemanticContext, node: EvidenceNode, receiptAlia
     effects.length > 0 ? `detected side effects: ${effects.join('; ')}` : null,
     node.metadata.behaviorSignals ? `behavior signals: ${JSON.stringify(node.metadata.behaviorSignals)}` : null,
   ].filter(Boolean) as string[];
-  if (ctx.privacyMode === 'full_ai' && node.snippet) {
+  if (ctx.privacyMode === 'full_ai' && pointer) {
+    // Every facts line above is still this symbol's own; only the code copy is
+    // dropped, because the container's fence above carries these exact lines.
+    lines.push(
+      `source: lines ${pointer.fromLine}-${pointer.toLine} of the snippet under `
+      + `"### Symbol ${pointer.containerKey}" above (file lines ${node.lineStart}-${node.lineEnd})`,
+    );
+  } else if (ctx.privacyMode === 'full_ai' && node.snippet) {
     lines.push('```', node.snippet.slice(0, MAX_SNIPPET_CHARS), '```');
   } else {
     lines.push('(code snippet withheld by privacy settings — reason from the facts above only)');

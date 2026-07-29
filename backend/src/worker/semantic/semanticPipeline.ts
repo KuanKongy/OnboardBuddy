@@ -1,7 +1,9 @@
 /**
  * Orchestrates pipeline phases 7-12 (doc/Pipeline.md "Pipeline Phases"):
  * semantic_symbols -> synthesis -> capabilities -> refinement -> critique
- * -> semantic_ranking. Each phase gets a snapshot_phases row. A budget
+ * -> semantic_ranking and embeddings, which are the one pair that runs
+ * concurrently (see `concurrentTail`). Each phase gets a snapshot_phases row.
+ * A budget
  * 'degrade' stops LLM work and skips the remaining phases (what exists is
  * kept; un-critiqued records stay 'pending' and are not used). Pause /
  * kill-switch / fail errors mark the phase and bubble up to the worker,
@@ -81,6 +83,18 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
         return { reviewed: result.reviewed, usable: result.usable, rejected: result.rejected, regenerated: result.regenerated };
       },
     },
+  ];
+
+  /**
+   * The last two phases run CONCURRENTLY, not head to tail: they are
+   * write-disjoint (the reranker writes criticality_scores only, the embedding
+   * pass writes embeddings only) and neither reads the other's output — both
+   * consume the symbol records and synthesis that critique already gated.
+   * Worth the special case because embeddings is the long pole: 673s of a
+   * 15-minute job on snapshot 252239a3 (2026-07-27), against a rerank phase
+   * that is mostly cheap-tier LLM latency.
+   */
+  const concurrentTail: typeof phases = [
     {
       name: 'semantic_ranking',
       run: async () => {
@@ -99,7 +113,7 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
 
   if (symbols.degraded) {
     // Budget already tripped during the cheap tier — don't start strong-tier work.
-    for (const phase of phases) {
+    for (const phase of [...phases, ...concurrentTail]) {
       await markPhase(ctx.snapshotId, phase.name, 'skipped', { reason: 'budget_degraded' });
     }
     return { status: 'degraded', metrics };
@@ -116,7 +130,7 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
     } catch (err) {
       if (err instanceof BudgetExceededError && err.behavior === 'degrade') {
         // Keep what exists; skip this phase's remainder and every later phase.
-        for (const rest of phases.slice(i)) {
+        for (const rest of [...phases.slice(i), ...concurrentTail]) {
           await markPhase(ctx.snapshotId, rest.name, 'skipped', { reason: 'budget_degraded' });
         }
         return { status: 'degraded', metrics };
@@ -126,7 +140,46 @@ export async function runSemanticPipeline(ctx: SemanticContext): Promise<Semanti
     }
   }
 
-  return { status: 'complete', metrics };
+  // Each tail phase owns its own running/complete marks and its own metrics.
+  // allSettled rather than all: whichever phase survives must not be left
+  // sitting at 'running' because its sibling threw first, so both are allowed
+  // to settle before anything is decided.
+  const outcomes = await Promise.allSettled(concurrentTail.map(async (phase) => {
+    await markPhase(ctx.snapshotId, phase.name, 'running');
+    metrics[phase.name] = await phase.run();
+    await markPhase(ctx.snapshotId, phase.name, 'complete', metrics[phase.name]);
+  }));
+
+  const rejected: Array<{ name: (typeof SEMANTIC_PHASES)[number]; err: unknown }> = [];
+  for (let i = 0; i < concurrentTail.length; i++) {
+    const outcome = outcomes[i]!;
+    if (outcome.status === 'rejected') rejected.push({ name: concurrentTail[i]!.name, err: outcome.reason });
+  }
+  if (rejected.length === 0) {
+    // One flush for the pair, where the sequential loop flushed per phase.
+    await ctx.ai.budget.flush();
+    return { status: 'complete', metrics };
+  }
+  // A phase that COMPLETED beside a failing sibling still has counters that
+  // must survive, and a flush error here must not mask the real failure.
+  await ctx.ai.budget.flush().catch(() => {});
+
+  // Same bookkeeping as the sequential degrade branch above, applied per phase
+  // because the pair can now fail independently: a budget degrade marks the
+  // phase that tripped skipped and keeps whatever its sibling produced.
+  for (const r of rejected) {
+    if (r.err instanceof BudgetExceededError && r.err.behavior === 'degrade') {
+      await markPhase(ctx.snapshotId, r.name, 'skipped', { reason: 'budget_degraded' });
+    }
+  }
+  // A non-budget error is the louder failure and keeps today's surface: mark
+  // it and rethrow, so a real fault is never reported as a budget degrade.
+  const hard = rejected.find((r) => !(r.err instanceof BudgetExceededError && r.err.behavior === 'degrade'));
+  if (hard) {
+    await markPhaseForError(ctx, hard.name, hard.err);
+    throw hard.err;
+  }
+  return { status: 'degraded', metrics };
 }
 
 async function markPhaseForError(ctx: SemanticContext, phase: string, err: unknown): Promise<void> {

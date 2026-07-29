@@ -232,25 +232,55 @@ per-call bound, ~65k max output).
   (`carriedForward` in the `semantic_symbols` phase metrics).
 - **Benchmarking:** `node scripts/latency-report.cjs <snapshot_id>` inside a
   backend container prints per-phase wall-clock + per-call rollups.
+- **Prompt-version freeze (M5, 2026-07-28):** `SECTION_PROMPT_VERSION`,
+  `TUTORIAL_PROMPT_VERSION` and `PROMPT_VERSIONS.*` are frozen for the rest
+  of M5 unless a change is deliberately paid for. Every bump voids the
+  semantic-record carry-forward AND the section cache in one stroke — the
+  07-25 bumps (`section-v6→v7`, `tutorial-v2→v3→v4`) are why every run that
+  week was fully cold. A bump must say so in its commit message.
 
 Defaults live in `backend/src/worker/ai/modelTiers.ts`
 (`defaultTierModels()`); the coarse per-tier price table used for the cost
 UI is in the same file — update the `strong` row if you point that tier at
 a premium model.
 
-### 6. OpenAI Embeddings (for RAG)
+### 6. Embeddings (for RAG — OpenAI or OpenRouter, keyed by model id)
 
-**What it does:** Generates vector embeddings for onboarding section content,
-enabling semantic search and retrieval-augmented generation. Uses
-`text-embedding-3-small` (1536 dimensions) by default.
+**What it does:** Generates vector embeddings for semantic-record views,
+enabling semantic search and retrieval-augmented generation. Routing is
+decided by the SHAPE of `EMBEDDINGS_MODEL` (`worker/ai/embeddingProfiles.ts`):
+
+| Model id shape | Route | Key | Body |
+|---|---|---|---|
+| `vendor/model` (e.g. `perplexity/pplx-embed-v1-4b`, this deployment, $0.03/M) | OpenRouter `/embeddings` | `OPENROUTER_API_KEY` | ZDR provider prefs (`zdr`, `data_collection` — same envs as chat), `encoding_format: float`, no `dimensions` |
+| bare (e.g. `text-embedding-3-small`, code default, $0.02/M) | `EMBEDDINGS_BASE_URL` (OpenAI direct) | `EMBEDDINGS_API_KEY` | `dimensions: 1536` |
+
+The DB column is frozen at `vector(1536)` (M5 policy above), so OpenRouter-
+route vectors longer than 1536 are MRL-truncated to the leading 1536 dims and
+L2-normalized before insert (pplx-embed is Matryoshka-trained and natively
+unnormalized; cosine `<=>` needs unit vectors). Rows are keyed
+`unique(record_id, view_type, model)`, and retrieval detects per snapshot
+which model wrote its vectors, embeds the query with that same model, and
+filters the seed search on `e.model` — so pre-switch snapshots (and anything
+the TA's M4 build writes) keep working after a model flip.
+
+**M4 coexistence caveat:** `semantic_records` is a project-scoped cache. If
+the M5 build re-analyzes a project and the M4 build (whose retrieval has no
+model filter) then queries it, M4 silently ranks 3-small and pplx vectors
+against each other — no crash, degraded ordering. Don't point the M4 build at
+projects re-analyzed by M5.
 
 **What data it holds:** None — embeddings are stored in PostgreSQL (pgvector).
 
 | Env var | `.env` file | Description |
 |---|---|---|
-| `EMBEDDINGS_API_KEY` | `backend/.env` | OpenAI API key for embeddings |
-| `EMBEDDINGS_BASE_URL` | `backend/.env` | `https://api.openai.com/v1` (default) |
-| `EMBEDDINGS_MODEL` | `backend/.env` | `text-embedding-3-small` (default) |
+| `EMBEDDINGS_API_KEY` | `backend/.env` | OpenAI key (bare-model route; keep it for pre-switch snapshots) |
+| `EMBEDDINGS_BASE_URL` | `backend/.env` | `https://api.openai.com/v1` (bare-model route only) |
+| `EMBEDDINGS_MODEL` | `backend/.env` | this deployment: `perplexity/pplx-embed-v1-4b` (code default `text-embedding-3-small`) |
+| `EMBED_BATCH_SIZE` | `backend/.env` | inputs per API request (default 128); the escape hatch if an upstream rejects the batch |
+| `EMBED_WRITE_CONCURRENCY` | `backend/.env` | concurrent INSERT writers per job (default 2 — 8-way self-contention on the HNSW index is the measured failure mode, see the 2026-07-28 latency audit) |
+| `EMBED_INSERT_CHUNK` | `backend/.env` | rows per INSERT statement (default 64) |
+| `SYMBOL_HEDGE_MAX` | `backend/.env` | max hedged duplicate calls per run against symbol-phase straggler batches (default 3; winner-take-first, loser aborted) |
 
 ### 7. BullMQ Worker Configuration
 
