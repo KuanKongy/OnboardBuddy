@@ -87,6 +87,13 @@ export interface RunHistoryEntry {
    * regeneration (bug #36) — both ride the `regenerate_section` job type.
    */
   tutorial_title?: string | null;
+  /**
+   * `generate_package` runs the worker chained onto an analysis: the id of that
+   * analyze run. History merges the pair into one row. Null/absent = a package
+   * someone asked for directly, or a row written before the key existed (those
+   * merge by timestamp adjacency instead).
+   */
+  chained_from?: string | null;
   config: {
     branch: string | null;
     commit: string | null;

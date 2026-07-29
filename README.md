@@ -123,7 +123,8 @@ affected sections stale instead of rewriting them. This can run automatically on
 
 **Privacy and cost controls.** Three privacy modes including fully AI-disabled, per-project API keys,
 spend budgets with a stop switch, and AI routing restricted to providers that do not retain data. A
-cold analysis of a 2.3M-token repository takes under 7 minutes and costs about $0.36.
+cold analysis of a 2.3M-token repository takes about 4–5 minutes and costs about $0.35 (gates: under
+9 minutes for a first import, under 5 for a re-import — cold runs only; warm re-runs are nearly free).
 
 ## Tech Stack
 
@@ -374,7 +375,7 @@ is a simulation. **It is off unless `GITHUB_WEBHOOK_SECRET` is set** — unset, 
 
 | Area | What changed | Result |
 |------|--------------|--------|
-| **Speed and cost** | Rebuilt how work is cached and which AI provider each job uses | Cold analysis of our own 2.3M-token repository: **6:41 end-to-end for $0.36**, against a 10-minute target. Re-running an unchanged repository is nearly free. |
+| **Speed and cost** | Rebuilt how work is cached, written to the database, and which AI provider each job uses | Cold analysis of our own 2.3M-token repository: **analyze 4:16, 5:17 end-to-end, $0.35**. M5 gates: cold first import ≤ 9:00 analysis, cold re-import ≤ 5:00 analysis — warm runs don't count and are nearly free. |
 | **Privacy** | AI routing restricted to providers that contractually do not retain data | Verified live for all three models we rotate between |
 | **What the analysis can see** | Broadened detection — background jobs, authentication, external services, Docker/CI configuration read as its own layer | Whole subsystems that previously traced to nothing are now covered; anything still unrecognised is reported as a known unknown rather than dropped |
 | **Account management** | Password reset, profile editing, disconnect GitHub, delete account | The gaps flagged in M3 feedback are closed |

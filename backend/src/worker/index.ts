@@ -239,14 +239,25 @@ async function enqueueSummaryGeneration(opts: {
   branch?: string | null;
   commitHash?: string | null;
   scopeId?: string | null;
+  /**
+   * The analyze run that chained this generation. Run history merges the pair
+   * into ONE row (two rows expanding to the same 16 phases read as the work
+   * having been done — and paid for — twice), and without a stored link the UI
+   * can only guess by timestamp adjacency. M5 freezes the schema, so the link
+   * rides a checkpoint key like `sectionType`/`tutorialTitle` do; summaryWorker
+   * MERGES checkpoint (`checkpoint || $2`), so the key survives the run.
+   * Absent = nobody chained it, i.e. POST /summarize — its own row.
+   */
+  chainedFrom?: string | null;
 }): Promise<string> {
   const result = await query(
     `INSERT INTO analysis_jobs
-       (project_id, snapshot_id, requested_by, job_type, status, current_step, role, branch, commit_hash, scope_id)
-     VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4, $5, $6, $7)
+       (project_id, snapshot_id, requested_by, job_type, status, current_step, role, branch, commit_hash, scope_id, checkpoint)
+     VALUES ($1, $2, $3, 'generate_package', 'queued', 'Waiting for worker', $4, $5, $6, $7, $8)
      RETURNING id`,
     [opts.projectId, opts.snapshotId, opts.requestedBy, opts.role ?? null,
-     opts.branch ?? null, opts.commitHash ?? null, opts.scopeId ?? null],
+     opts.branch ?? null, opts.commitHash ?? null, opts.scopeId ?? null,
+     opts.chainedFrom ? JSON.stringify({ chainedFrom: opts.chainedFrom }) : null],
   );
   const summaryJobId = (result.rows[0] as { id: string }).id;
   try {
@@ -423,6 +434,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
           await enqueueSummaryGeneration({
             projectId, snapshotId: existing.id, requestedBy: requester,
             role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
+            chainedFrom: jobId,
           }).catch((err) => console.error(
             `[worker] could not queue package generation for ${projectId}:`,
             err instanceof Error ? err.message : err,
@@ -942,6 +954,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       await enqueueSummaryGeneration({
         projectId, snapshotId, requestedBy: requester,
         role: job.data.role, branch, commitHash, scopeId: scope.scopeId,
+        chainedFrom: jobId,
       }).catch((err) => console.error(
         `[worker] could not queue package generation for ${projectId}:`,
         err instanceof Error ? err.message : err,
