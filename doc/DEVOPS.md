@@ -195,6 +195,11 @@ them in either of two places:
 
 #### Latency model (2026-07 overhaul)
 
+**M5 gates (cold runs only; warm/incremental runs don't count):** cold first
+import ≤ 9:00 analysis, cold re-import ≤ 5:00 analysis; end-to-end adds ~1:00
+of generation. Standing measurements and evidence live in
+`doc/ONBOARDING_QUALITY_LATENCY_PLAN.md` ("Latency gates").
+
 The pipeline is sized for a flash-class 1M-context model and a REMOTE
 Postgres: throughput comes from *moderately sized batches × high
 concurrency × bulk DB statements*, not mega-prompts (output decode is the

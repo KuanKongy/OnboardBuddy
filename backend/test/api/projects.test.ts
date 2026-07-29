@@ -260,3 +260,51 @@ describe("PUT /api/projects/:id/settings", () => {
     expect(updated).to.equal(false);
   });
 });
+
+describe("GET /api/projects/:id/runs", () => {
+  afterEach(() => resetTestHarness());
+
+  // The overview merges an auto-chained package generation into the analysis
+  // that caused it, and the only thing telling the two apart from a package a
+  // person asked for is this key. A mapper that dropped it would leave the UI
+  // silently guessing by timestamp adjacency — pairs would still merge, just
+  // sometimes the wrong ones.
+  it("exposes the chaining link, null for a package nobody chained", async () => {
+    installTestAuth();
+    mockQuery((text) => {
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: TEST_PROJECT_ID,
+            user_id: "11111111-1111-1111-1111-111111111111",
+            permission_tier: "developer",
+            developer_role: "backend",
+            default_package_id: null,
+          }],
+        };
+      }
+      if (text.includes("FROM analysis_jobs aj")) {
+        expect(text).to.include("aj.checkpoint->>'chainedFrom' AS chained_from");
+        return {
+          rows: [
+            { id: "gen-auto", job_type: "generate_package", status: "complete", chained_from: "analyze-1",
+              created_at: "2026-07-29T10:05:00.000Z", step_log: [] },
+            { id: "gen-manual", job_type: "generate_package", status: "complete", chained_from: null,
+              created_at: "2026-07-29T09:00:00.000Z", step_log: [] },
+            { id: "analyze-1", job_type: "analyze_scope", status: "complete", chained_from: null,
+              created_at: "2026-07-29T10:00:00.000Z", step_log: [] },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .get(`/api/projects/${TEST_PROJECT_ID}/runs`)
+      .set(authHeader());
+
+    expect(res.status).to.equal(200);
+    expect(res.body.runs.map((r: { chained_from: string | null }) => r.chained_from))
+      .to.deep.equal(["analyze-1", null, null]);
+  });
+});

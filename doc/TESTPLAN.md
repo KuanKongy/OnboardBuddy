@@ -136,9 +136,10 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 | 5 | Hover a phase row | A description of what that phase does |
 
 > ℹ️ **Expected timings.** Our own repository (2.3M tokens, 268 files) is the worst case we benchmark:
-> **6:41 end-to-end cold, ~$0.36**, against a 10-minute target. A small repository is ~3:40.
-> CourseInsights sits between them. The per-phase timings above are how you tell a slow run from a
-> stuck one.
+> **analyze ~4:16, ~5:17 end-to-end cold, ~$0.35**. The M5 gates are cold-only: first import ≤ 9:00
+> analysis, re-import ≤ 5:00 analysis — warm re-runs don't count (and are nearly free). A small
+> repository is ~2–3 minutes. The per-phase timings above are how you tell a slow run from a
+> stuck one; a run that is slow across EVERY LLM phase is provider weather, not the pipeline.
 
 ---
 

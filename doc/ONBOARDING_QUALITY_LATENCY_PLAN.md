@@ -82,7 +82,23 @@ The tabs already map cleanly onto quadrants — the redesign strengthens the map
 - OnboardingPage: chaptered sidebar (Orient/Understand/Do/Consult), "Suggested for you (role)" ordered rail, resume position; section renderer gains the TL;DR box and inline-diagram placement.
 - Export (markdown) mirrors chapter order.
 
-## Latency: 2M ≤ 10 min — GATE PASSED (2026-07-24)
+## Latency gates
+
+**M5 gates (2M-token repo, COLD runs only — warm/incremental runs do not
+count toward any gate):**
+
+- **Cold FIRST import** (repo never analyzed under this project, nothing
+  cached anywhere): analysis ≤ **9:00**.
+- **Cold RE-import** (delete → re-import → analyze, the benchmark recipe):
+  analysis ≤ **5:00**.
+- End-to-end adds ~1:00 of package generation on top of either.
+- Current standing (2026-07-29, snapshot `b2ae71a2`): analyze **4:16**,
+  end-to-end **5:17** — both gates pass. Both paths run the identical cold
+  pipeline (semantic records, sections and embeddings are all project-scoped);
+  the wider first-import allowance absorbs provider-latency variance, which is
+  the one factor we do not control (see the 2026-07-29 storm evidence below).
+
+### M4-era gate (historical): 2M ≤ 10 min end-to-end — PASSED (2026-07-24)
 
 Measured on gemini-2.5-flash-lite, fully cold (fresh DB, zero cache), **two repos concurrently on one worker**:
 

@@ -256,6 +256,27 @@ function isPartialRun(run: RunHistoryEntry): boolean {
 
 const PHASE_BY_KEY = new Map(PHASE_ORDER.map((p) => [p.key, p]));
 
+/** The two phases only the summary worker writes; everything before them is
+ *  the analysis. The split is what lets a standalone row show its own steps. */
+const GENERATION_PHASE_KEYS = ["generation", "validation"];
+const ANALYSIS_PHASE_KEYS = PHASE_ORDER.map((p) => p.key).filter((k) => !GENERATION_PHASE_KEYS.includes(k));
+
+const ANALYZE_JOB_TYPES = ["analyze_scope", "incremental_update"];
+
+/**
+ * Which pipeline phases a history row may claim. Phase rows hang off the
+ * SNAPSHOT, so every full run used to be shown all 16 — an analysis credited
+ * with generating the package, and a package generation credited with the
+ * analysis that built its snapshot. A merged pair genuinely ran both halves,
+ * so it keeps the full list; undefined = no filter.
+ */
+export function runPhaseKeys(jobType: string, merged: boolean): string[] | undefined {
+  if (merged) return undefined;
+  if (jobType === "generate_package") return GENERATION_PHASE_KEYS;
+  if (ANALYZE_JOB_TYPES.includes(jobType)) return ANALYSIS_PHASE_KEYS;
+  return undefined;
+}
+
 /** The worker stamps citation validation at 93% and everything before it
  *  lower (summaryWorker's `updateJob` calls), so the run row's own
  *  progress_pct is enough to place a partial run inside its step list. */
@@ -276,7 +297,7 @@ export function partialRunSteps(run: Pick<RunHistoryEntry, "tutorial_title">): A
       desc: "Rebuilds this one walkthrough from the traced flow — nothing else in the package is touched or paid for",
     }];
   }
-  return ["generation", "validation"].map((key) => {
+  return GENERATION_PHASE_KEYS.map((key) => {
     const phase = PHASE_BY_KEY.get(key)!;
     return { label: phase.label, desc: phase.desc };
   });
@@ -343,9 +364,148 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
   );
 }
 
-function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: string }) {
+/** A history row: one run, plus the package generation the worker chained onto
+ *  it when there was one. */
+export interface RunHistoryRowData {
+  run: RunHistoryEntry;
+  partner: RunHistoryEntry | null;
+}
+
+/**
+ * How far apart a legacy `generate_package` may sit from the analysis that
+ * chained it. Rows written before `chainedFrom` existed carry no link at all,
+ * and the worker enqueues the generation within milliseconds of marking the
+ * analysis complete — 90s is slack for a queue that is busy, and far below the
+ * gap to any package a person asked for afterwards.
+ */
+const LEGACY_CHAIN_WINDOW_MS = 90_000;
+
+/** The unclaimed analysis this legacy generation most plausibly belongs to. */
+function legacyChainPartner(
+  gen: RunHistoryEntry,
+  runs: RunHistoryEntry[],
+  claimed: Set<string>,
+): RunHistoryEntry | undefined {
+  const genStart = Date.parse(gen.created_at);
+  let best: RunHistoryEntry | undefined;
+  let bestGap = LEGACY_CHAIN_WINDOW_MS;
+  for (const candidate of runs) {
+    if (!ANALYZE_JOB_TYPES.includes(candidate.job_type)) continue;
+    if (claimed.has(candidate.id)) continue;
+    // Same snapshot is the hard requirement — a generation always runs against
+    // the snapshot its analysis produced (or reused). Note that a re-analysis
+    // of the same commit REUSES the snapshot, so several analyses on this page
+    // can share one snapshot id; timing is what separates them.
+    if (!candidate.snapshot_id || candidate.snapshot_id !== gen.snapshot_id) continue;
+    // The worker only chains off an analysis it has already marked complete,
+    // so nothing else can be the other half of a pair.
+    if (candidate.status !== "complete" || !candidate.finished_at) continue;
+    // Directional, not absolute: the chained row is inserted right AFTER the
+    // analysis is marked finished (22–115ms, measured on live rows). Allowing
+    // the other direction would swallow a package a user asked for WHILE a
+    // re-analysis of that same snapshot was still running.
+    const gap = genStart - Date.parse(candidate.finished_at);
+    // NaN (unparseable timestamp) fails both comparisons — no merge, which is
+    // the safe direction: a wrong merge hides a run, a missed one repeats it.
+    if (gap >= 0 && gap < bestGap) {
+      best = candidate;
+      bestGap = gap;
+    }
+  }
+  return best;
+}
+
+/**
+ * Pair each auto-chained package generation with its analysis so the two render
+ * as ONE row. Before this, an analyze run and the generation it triggered were
+ * two rows expanding to the same 16 phases — indistinguishable from a repo that
+ * had been analyzed twice, and from a package that had been paid for twice.
+ *
+ * A generation whose partner is not on this page (pagination straddle — rare,
+ * since a pair sorts adjacently) stays standalone rather than being merged into
+ * whatever else is nearby.
+ */
+export function groupChainedRuns(runs: RunHistoryEntry[]): RunHistoryRowData[] {
+  const byId = new Map(runs.map((r) => [r.id, r]));
+  const claimed = new Set<string>();
+  const partnerOf = new Map<string, RunHistoryEntry>();
+  const mergedAway = new Set<string>();
+
+  const pair = (analyze: RunHistoryEntry, gen: RunHistoryEntry) => {
+    claimed.add(analyze.id);
+    partnerOf.set(analyze.id, gen);
+    mergedAway.add(gen.id);
+  };
+
+  const generations = runs.filter((r) => r.job_type === "generate_package");
+
+  // Stored links first, so a guess can never claim the analysis a later row
+  // names outright.
+  for (const gen of generations) {
+    if (!gen.chained_from) continue;
+    const linked = byId.get(gen.chained_from);
+    if (linked && ANALYZE_JOB_TYPES.includes(linked.job_type) && !claimed.has(linked.id)) pair(linked, gen);
+  }
+  // Only rows predating the key fall back to adjacency: a row that HAS a link
+  // and cannot find it must not be adopted by a different analysis.
+  for (const gen of generations) {
+    if (gen.chained_from) continue;
+    const analyze = legacyChainPartner(gen, runs, claimed);
+    if (analyze) pair(analyze, gen);
+  }
+
+  // Emitted at the ANALYSIS's position: the merged row is stamped with the
+  // analysis's created_at, so the list stays ordered by what it displays.
+  return runs
+    .filter((run) => !mergedAway.has(run.id))
+    .map((run) => ({ run, partner: partnerOf.get(run.id) ?? null }));
+}
+
+/** Combined spend of a merged pair — the analysis and its package together are
+ *  what the user asked for, so one figure is what they are owed. */
+export function sumRunCost(a: RunHistoryEntry["cost"], b: RunHistoryEntry["cost"]): RunHistoryEntry["cost"] {
+  return {
+    estimated_cost_usd: a.estimated_cost_usd + b.estimated_cost_usd,
+    llm_calls: a.llm_calls + b.llm_calls,
+    cached_calls: a.cached_calls + b.cached_calls,
+    input_tokens: a.input_tokens + b.input_tokens,
+    output_tokens: a.output_tokens + b.output_tokens,
+  };
+}
+
+/** One badge for the pair: the worst thing that happened to either half. An
+ *  analysis whose package generation failed is not a complete run. */
+export function mergedRunStatus(a: string, b: string): string {
+  const order = ["failed", "paused", "running", "queued", "complete"];
+  const rank = (s: string) => {
+    const i = order.indexOf(s);
+    return i === -1 ? order.length : i;
+  };
+  return rank(a) <= rank(b) ? a : b;
+}
+
+/** Sum of two durations, still null when neither half recorded one. */
+function sumDuration(a: number | null, b: number | null): number | null {
+  if (a === null && b === null) return null;
+  return (a ?? 0) + (b ?? 0);
+}
+
+function RunHistoryRow({ run, partner, projectId }: { run: RunHistoryEntry; partner: RunHistoryEntry | null; projectId: string }) {
   const [open, setOpen] = useState(false);
-  const hasCost = run.cost.llm_calls > 0 || run.cost.cached_calls > 0 || run.cost.estimated_cost_usd > 0;
+  // A merged pair speaks as one run: combined spend, combined duration, the
+  // analysis's own config and timestamp (it is the action the user took).
+  const cost = partner ? sumRunCost(run.cost, partner.cost) : run.cost;
+  const status = partner ? mergedRunStatus(run.status, partner.status) : run.status;
+  const durationMs = partner ? sumDuration(run.duration_ms, partner.duration_ms) : run.duration_ms;
+  const errors = [run.error_message, partner?.error_message ?? null].filter((m): m is string => !!m);
+  const sections = partner
+    ? {
+        generated: [...new Set([...run.sections.generated, ...partner.sections.generated])],
+        cached: [...new Set([...run.sections.cached, ...partner.sections.cached])],
+      }
+    : run.sections;
+  const stepLog = partner ? [...run.step_log, ...partner.step_log] : run.step_log;
+  const hasCost = cost.llm_calls > 0 || cost.cached_calls > 0 || cost.estimated_cost_usd > 0;
 
   return (
     <details
@@ -358,17 +518,21 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{runActionLabel(run)}</span>
         <span className="flex shrink-0 items-center gap-2 text-[0.6875rem] tabular-nums text-muted-foreground">
           {hasCost && (
-            <span title={`This run only. ${run.cost.cached_calls} calls were served from cache at $0.`}>
-              ${run.cost.estimated_cost_usd.toFixed(4)} · {run.cost.llm_calls} calls
-              {run.cost.input_tokens > 0 || run.cost.output_tokens > 0
-                ? ` · ${run.cost.input_tokens.toLocaleString()} in / ${run.cost.output_tokens.toLocaleString()} out tok`
+            <span
+              title={partner
+                ? `This analysis and the package it generated. ${cost.cached_calls} calls were served from cache at $0.`
+                : `This run only. ${cost.cached_calls} calls were served from cache at $0.`}
+            >
+              ${cost.estimated_cost_usd.toFixed(4)} · {cost.llm_calls} calls
+              {cost.input_tokens > 0 || cost.output_tokens > 0
+                ? ` · ${cost.input_tokens.toLocaleString()} in / ${cost.output_tokens.toLocaleString()} out tok`
                 : ""}
-              {run.cost.cached_calls > 0 ? ` · ${run.cost.cached_calls} cached` : ""}
+              {cost.cached_calls > 0 ? ` · ${cost.cached_calls} cached` : ""}
             </span>
           )}
-          {run.duration_ms !== null && <span>{fmtDuration(run.duration_ms)}</span>}
+          {durationMs !== null && <span>{fmtDuration(durationMs)}</span>}
           <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
-          <Badge variant={statusBadgeVariant(run.status)} className="text-[0.6875rem]">{run.status}</Badge>
+          <Badge variant={statusBadgeVariant(status)} className="text-[0.6875rem]">{status}</Badge>
         </span>
       </summary>
 
@@ -381,26 +545,29 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           {run.config.role && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.role} role</Badge>}
           {run.requested_by_email && <span>by {run.requested_by_email}</span>}
           {run.attempt > 1 && <span>attempt #{run.attempt}</span>}
+          {/* The package half retrying is its own fact — inside a merged row it
+              would otherwise vanish behind the analysis's attempt count. */}
+          {partner && partner.attempt > 1 && <span>package attempt #{partner.attempt}</span>}
         </div>
 
-        {run.error_message && (
-          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[0.6875rem] text-destructive">
-            {run.error_message}
+        {errors.map((message, i) => (
+          <p key={i} className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[0.6875rem] text-destructive">
+            {message}
           </p>
-        )}
+        ))}
 
-        {(run.sections.generated.length > 0 || run.sections.cached.length > 0) && (
+        {(sections.generated.length > 0 || sections.cached.length > 0) && (
           <div className="space-y-1 text-[0.6875rem]">
-            {run.sections.generated.length > 0 && (
+            {sections.generated.length > 0 && (
               <p className="text-muted-foreground">
                 <span className="font-medium text-foreground">Generated:</span>{" "}
-                {run.sections.generated.map((s) => s.replace(/_/g, " ")).join(", ")}
+                {sections.generated.map((s) => s.replace(/_/g, " ")).join(", ")}
               </p>
             )}
-            {run.sections.cached.length > 0 && (
+            {sections.cached.length > 0 && (
               <p className="text-muted-foreground">
                 <span className="font-medium text-foreground">From cache:</span>{" "}
-                {run.sections.cached.map((s) => s.replace(/_/g, " ")).join(", ")}
+                {sections.cached.map((s) => s.replace(/_/g, " ")).join(", ")}
               </p>
             )}
           </div>
@@ -408,20 +575,27 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
 
         {/* Budgets cap ONE run, so this row talks about one run only. The
             project-wide total moved to Project Settings — a lifetime figure
-            inside a single run's row was read as that run's spend. */}
+            inside a single run's row was read as that run's spend. In a merged
+            row the cap is still the ANALYSIS's, named as such: the call count
+            above covers both halves, and two numbers that disagree without
+            saying why is how a truthful figure gets read as a bug. */}
         {run.job_type !== "preflight" && (
           <p className="text-[0.6875rem] text-muted-foreground">
             {run.budget.usedThisRun === null ? (
               <>
                 <span className="font-medium text-foreground">Budget:</span>{" "}
-                cap {run.budget.capLlmCalls.toLocaleString()} calls per run · usage this run not recorded
+                cap {run.budget.capLlmCalls.toLocaleString()} calls per run · usage not recorded
                 {run.budget.note ? ` (${run.budget.note})` : ""}
               </>
             ) : (
               <>
                 <span className="font-medium text-foreground">Budget:</span>{" "}
-                {run.budget.usedThisRun.toLocaleString()} of {run.budget.capLlmCalls.toLocaleString()} calls used this run
+                {run.budget.usedThisRun.toLocaleString()} of {run.budget.capLlmCalls.toLocaleString()} calls used
+                {partner ? " by the analysis" : " this run"}
                 {run.budget.remaining !== null && ` · ${run.budget.remaining.toLocaleString()} left`}
+                {partner && partner.budget.usedThisRun !== null
+                  ? ` · package ${partner.budget.usedThisRun.toLocaleString()} of ${partner.budget.capLlmCalls.toLocaleString()}`
+                  : ""}
               </>
             )}
           </p>
@@ -433,9 +607,9 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           </p>
         )}
 
-        {run.step_log.length > 0 && (
+        {stepLog.length > 0 && (
           <div className="max-h-48 overflow-y-auto rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5">
-            {run.step_log.map((entry, i) => (
+            {stepLog.map((entry, i) => (
               <div key={i} className="flex items-start gap-2 py-0.5">
                 <span className="flex-1 text-[0.6875rem] text-muted-foreground">{entry.step}</span>
                 <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground">
@@ -446,20 +620,22 @@ function RunHistoryRow({ run, projectId }: { run: RunHistoryEntry; projectId: st
           </div>
         )}
 
-        {/* A full run owns its snapshot's phases, so it gets the pipeline
-            panel (mounting — and fetching — only while the row is open). A
-            regeneration does not: the panel showed it the 16 phases of the
-            analysis that had built the snapshot, i.e. someone else's work
-            billed to a run that rewrote one section. */}
+        {/* A full run gets the pipeline panel (mounting — and fetching — only
+            while the row is open), cut down to the phases it is accountable
+            for: a merged pair ran all 16, an analysis alone stops before
+            generation. A regeneration gets neither — the panel showed it the
+            16 phases of the analysis that had built the snapshot, i.e. someone
+            else's work billed to a run that rewrote one section. */}
         {open && (isPartialRun(run)
           ? <PartialRunSteps run={run} />
-          : run.snapshot_id ? (
+          : (run.snapshot_id ?? partner?.snapshot_id) ? (
             <AnalysisRunPanel
               projectId={projectId}
-              snapshotId={run.snapshot_id}
+              snapshotId={run.snapshot_id ?? partner?.snapshot_id ?? null}
               isActive={false}
               currentStep={null}
               stepLog={[]}
+              phaseKeys={runPhaseKeys(run.job_type, partner !== null)}
             />
           ) : null)}
       </div>
@@ -999,8 +1175,8 @@ export function ProjectOverviewPage() {
           <p className="text-xs text-muted-foreground">No runs yet.</p>
         ) : (
           <div className="space-y-1.5">
-            {runs.map((run) => (
-              <RunHistoryRow key={run.id} run={run} projectId={id!} />
+            {groupChainedRuns(runs).map(({ run, partner }) => (
+              <RunHistoryRow key={run.id} run={run} partner={partner} projectId={id!} />
             ))}
           </div>
         )}

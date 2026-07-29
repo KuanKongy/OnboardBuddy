@@ -120,12 +120,20 @@ export function AnalysisRunPanel({
   isActive,
   currentStep,
   stepLog,
+  phaseKeys,
 }: {
   projectId: string;
   snapshotId: string | null;
   isActive: boolean;
   currentStep: string | null;
   stepLog: StepLogEntry[];
+  /**
+   * The phases this run is actually accountable for; omit for all of them. The
+   * phase rows belong to the SNAPSHOT, so a standalone package generation shown
+   * the full list was being credited with the analysis that built its snapshot
+   * — someone else's work, in its row.
+   */
+  phaseKeys?: string[];
 }) {
   const [data, setData] = useState<MetricsResponse | null>(null);
 
@@ -156,7 +164,10 @@ export function AnalysisRunPanel({
   }, [projectId, snapshotId, isActive]);
 
   const phaseByKey = new Map((data?.phases ?? []).map((p) => [p.phase, p]));
-  const havePhases = (data?.phases ?? []).length > 0;
+  const shownPhases = phaseKeys ? PHASE_ORDER.filter((p) => phaseKeys.includes(p.key)) : PHASE_ORDER;
+  // Counted over the SHOWN phases: a filtered panel whose own phases never ran
+  // would otherwise render an empty list instead of saying so.
+  const havePhases = shownPhases.some((p) => phaseByKey.has(p.key));
 
   return (
     <div className="rounded-md border border-border bg-muted/25">
@@ -166,7 +177,7 @@ export function AnalysisRunPanel({
         </p>
         {havePhases ? (
           <ol className="space-y-0.5">
-            {PHASE_ORDER.map(({ key, label, desc }) => {
+            {shownPhases.map(({ key, label, desc }) => {
               const p = phaseByKey.get(key);
               const status = p?.status ?? (isActive ? "pending" : "not_run");
               // Hide phases that never applied to finished runs (e.g. no
@@ -236,7 +247,7 @@ export function AnalysisRunPanel({
             })}
           </ol>
         ) : (
-          <p className="py-1 text-[0.71875rem] text-muted-foreground">No run recorded yet for this snapshot.</p>
+          <p className="py-1 text-[0.71875rem] text-muted-foreground">No pipeline phases recorded for this run yet.</p>
         )}
       </div>
 

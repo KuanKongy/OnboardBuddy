@@ -672,6 +672,11 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
               -- and M5 freezes the schema), so the history row is told apart
               -- by which checkpoint key is present.
               aj.checkpoint->>'tutorialTitle' AS tutorial_title,
+              -- The analyze run that chained this package generation (the
+              -- worker's enqueueSummaryGeneration). History merges the pair
+              -- into one row; NULL means nobody chained it — a package someone
+              -- asked for directly — or the row predates the key.
+              aj.checkpoint->>'chainedFrom' AS chained_from,
               CASE WHEN aj.finished_at IS NOT NULL AND aj.started_at IS NOT NULL
                    THEN (EXTRACT(EPOCH FROM (aj.finished_at - aj.started_at)) * 1000)::bigint
                    ELSE NULL END AS duration_ms,
@@ -730,6 +735,7 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
       snapshot_id: r.snapshot_id,
       section_type: r.section_type ?? null,
       tutorial_title: r.tutorial_title ?? null,
+      chained_from: r.chained_from ?? null,
       config: {
         branch: (r.snapshot_branch as string | null) ?? (r.requested_branch as string | null),
         commit: (r.snapshot_commit as string | null) ?? (r.requested_commit as string | null),
