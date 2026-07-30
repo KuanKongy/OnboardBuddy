@@ -335,15 +335,27 @@ export function WorkflowsPage() {
     setError("");
     setStepsError("");
     setSelectedNodeId(null);
+    // Bug #74 (F19): clicking down the rail leaves several of these in flight
+    // and response order is not click order, so the abandoned flow's steps
+    // could land last under the selected flow's title.
+    let cancelled = false;
     // The walkthrough route, not the folded workflow graph: it serves one row
     // per step, which is the number the rail beside this canvas advertises.
     apiFetch(`/projects/${id}/workflows/${encodeURIComponent(selectedWorkflowId)}/walkthrough`)
-      .then((res) => { setDetail(res as WalkthroughResponse); setStepsError(""); })
+      .then((res) => {
+        if (cancelled) return;
+        setDetail(res as WalkthroughResponse);
+        setStepsError("");
+      })
       .catch((err: unknown) => {
+        if (cancelled) return;
         setDetail(null);
         setStepsError(err instanceof Error ? err.message : "Failed to load this workflow's steps");
       })
-      .finally(() => setLoadingGraph(false));
+      .finally(() => {
+        if (!cancelled) setLoadingGraph(false);
+      });
+    return () => { cancelled = true; };
   }, [id, selectedWorkflowId, stepsReload]);
 
   const steps = useMemo(

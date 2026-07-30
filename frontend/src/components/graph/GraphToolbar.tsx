@@ -1,6 +1,15 @@
 import { Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
+/**
+ * How long this box waits after the last keystroke before the graph re-filters.
+ *
+ * Bug #70(2): every keystroke re-ran filter → edge cap → dagre layout, which on
+ * a 200-node level is a full re-layout per character. Long enough to swallow a
+ * burst of typing, short enough that the result still feels immediate.
+ */
+export const SEARCH_DEBOUNCE_MS = 200;
+
 interface GraphToolbarProps {
   search: string;
   onSearchChange: (value: string) => void;

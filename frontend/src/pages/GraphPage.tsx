@@ -5,7 +5,7 @@ import type { Viewport } from "reactflow";
 import { ClassGraphSection } from "@/components/graph/ClassGraphSection";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
-import { GraphToolbar } from "@/components/graph/GraphToolbar";
+import { GraphToolbar, SEARCH_DEBOUNCE_MS } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import {
 import type { DrillFrame } from "@/lib/drillStack";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
@@ -35,17 +36,6 @@ const VIEWS: { key: GraphView; label: string }[] = [
   { key: "files", label: "Files" },
   { key: "classes", label: "Classes & interfaces" },
 ];
-
-/**
- * How long the search box waits after the last keystroke before re-filtering.
- *
- * AUDIT / bug #70(2): every keystroke re-ran the whole pipeline — filter,
- * edge cap, dagre layout — for a query the user was still in the middle of
- * typing. On a 200-node level that is a full re-layout per character. Long
- * enough to swallow a burst of typing, short enough that the result still
- * feels immediate.
- */
-const SEARCH_DEBOUNCE_MS = 200;
 
 /** The directory a cluster node stands for (`cluster:src/lib` → `src/lib`). */
 function clusterDirectory(nodeId: string): string {
@@ -76,11 +66,11 @@ export function GraphPage() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  // Two states, deliberately. `searchInput` is what the box shows (it has to
-  // echo every keystroke immediately or typing feels broken); `search` is the
-  // settled query everything expensive keys off. See SEARCH_DEBOUNCE_MS.
+  // `searchInput` is what the box shows (it has to echo every keystroke or
+  // typing feels broken); `search` is the settled query everything expensive
+  // keys off. See SEARCH_DEBOUNCE_MS.
   const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
+  const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS, "");
   const [allEdges, setAllEdges] = useState(false);
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(() => new Set());
   const [direction, setDirection] = useState<"LR" | "TB">("LR");
@@ -89,8 +79,21 @@ export function GraphPage() {
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const stack = useDrillStack();
+  // Bug #74 (F18): a `?focus=` left in the URL is re-resolved by every later
+  // load, so Back and breadcrumb-root bounced into the focused cluster again.
+  // `replace` — consuming a param is not a place the reader navigated to.
+  const clearFocusParam = useCallback(() => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("focus");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [setSearchParams]);
   /**
    * Dependencies is a TWO-level ladder: directory groups → files. Owner E1:
    * "have only two level, the current third level drill down is not useful and
@@ -115,7 +118,12 @@ export function GraphPage() {
   // Suppresses React Flow's own declarative initial fitView on this mount
   // so ViewportFocus is the sole viewport writer while resolving a
   // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
-  const hasFocusTarget = !!searchParams.get("focus");
+  // Latched: the param is deleted in the same batch that selects the node, so
+  // reading it live would un-suppress the fit in the render that first draws
+  // the focused graph — the two-writer race this prop exists to prevent.
+  const hasFocusTargetRef = useRef(false);
+  if (searchParams.get("focus")) hasFocusTargetRef.current = true;
+  const hasFocusTarget = hasFocusTargetRef.current;
   // A deep link has no viewport the user chose, so its target must be framed
   // for them. Every other selection only nudges the camera.
   const [focusIntent, setFocusIntent] = useState<"deeplink" | "user">(
@@ -132,10 +140,20 @@ export function GraphPage() {
     `${id ?? ""}::${selectedPackageId ?? ""}::${frame ? `${frame.kind}:${frame.id}` : ""}`;
   const loadedKeyRef = useRef<string | null>(null);
   const pendingFocusDrillRef = useRef<string | null>(null);
+  // Bug #74 (F18): deleting the param is not enough on its own — the router
+  // defers that write through a transition, so a jump landing in the same tick
+  // still reads the old `focus` and drills back in. A target is resolved once.
+  const resolvedFocusRef = useRef<string | null>(null);
+  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
+  // can be in flight and response order is not selection order. `runId` idiom
+  // from useGraphDrill's live().
+  const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(
     async (frame: DrillFrame | null): Promise<void> => {
       if (!id) return;
+      const myRun = ++loadRunRef.current;
+      const live = () => loadRunRef.current === myRun;
       setLoading(true);
       setError("");
       setSelectedNodeId(null);
@@ -145,6 +163,7 @@ export function GraphPage() {
           frame?.kind === "cluster" ? frame.id : undefined,
           selectedPackageId,
         );
+        if (!live()) return;
         setData(d);
         loadedKeyRef.current = levelKey(frame);
 
@@ -154,10 +173,12 @@ export function GraphPage() {
         // is why arriving by redirect used to frame inconsistently while a
         // manual click on a settled graph always worked.
         const focus = searchParams.get("focus");
-        if (!focus) return;
+        if (!focus || resolvedFocusRef.current === focus) return;
         if (d.graph.nodes.some((n) => n.id === focus)) {
+          resolvedFocusRef.current = focus;
           setSelectedNodeId(focus);
           setFocusNotFoundId(null);
+          clearFocusParam();
           return;
         }
         // Not on this canvas: if one of the groups here covers it, that group
@@ -169,18 +190,22 @@ export function GraphPage() {
           (n) => n.id.startsWith("cluster:") && clusterContains(n.id, focus),
         );
         if (owningGroup) {
+          // Not resolved yet — the next level still has to read the param, so
+          // it stays in the URL for exactly one more hop.
           pendingFocusDrillRef.current = clusterDirectory(owningGroup.id);
           return;
         }
+        resolvedFocusRef.current = focus;
         setFocusNotFoundId(focus);
+        clearFocusParam();
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load graph");
+        if (live()) setError(err instanceof Error ? err.message : "Failed to load graph");
         throw err;
       } finally {
-        setLoading(false);
+        if (live()) setLoading(false);
       }
     },
-    [id, selectedPackageId, searchParams],
+    [id, selectedPackageId, searchParams, clearFocusParam],
   );
 
   // Filled by GraphCanvas from inside the React Flow provider, so the camera
@@ -314,17 +339,6 @@ export function GraphPage() {
       weight: (e as { weight?: number }).weight ?? 1,
     }));
   }, [data]);
-
-  useEffect(() => {
-    // Clearing is not typing: the X button and an emptied box should snap back
-    // to the whole level rather than sit on a stale filter for 200ms.
-    if (searchInput === "") {
-      setSearch("");
-      return;
-    }
-    const timer = window.setTimeout(() => setSearch(searchInput), SEARCH_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [searchInput]);
 
   const filteredNodeIds = useMemo(() => {
     const query = search.trim().toLowerCase();

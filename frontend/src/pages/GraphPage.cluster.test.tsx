@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { GraphPage } from "./GraphPage";
 import { fetchClassGraph, fetchDependencyGraph } from "@/lib/graphData";
@@ -153,10 +153,18 @@ vi.mock("@/lib/supabase", () => ({
   },
 }));
 
+/** The query string as the router currently holds it. */
+function LocationProbe() {
+  return <span data-testid="search">{useLocation().search}</span>;
+}
+
+const currentSearch = () => screen.getByTestId("search").textContent ?? "";
+
 function renderGraphPage(entry = "/projects/proj-1/dependencies") {
   return render(
     <TooltipProvider>
       <MemoryRouter initialEntries={[entry]}>
+        <LocationProbe />
         <Routes>
           <Route path="/projects/:id/dependencies" element={<GraphPage />} />
         </Routes>
@@ -338,6 +346,32 @@ describe("GraphPage drill-down", () => {
 
     expect(await screen.findByText("SnapshotWriter", undefined, { timeout: 3000 })).toBeInTheDocument();
     expect(fetchClassGraph).toHaveBeenCalledWith("proj-1", null, "backend/src");
+  });
+
+  /**
+   * ASSERTION 4 — bug #74 (F18): a `?focus=` that outlives its resolution is
+   * re-resolved by every later load, so Back and breadcrumb-root auto-drill
+   * into the focused cluster again and the reader cannot leave it.
+   */
+  it("drops a resolved ?focus= so the breadcrumb root can escape the cluster", async () => {
+    renderGraphPage("/projects/proj-1/dependencies?focus=src%2Flib%2Findex.ts");
+
+    // Root cannot show the file, so one auto-drill resolves it. Two matches for
+    // the label: the node on the canvas and the panel the focus opened.
+    await waitFor(() => expect(fetchDependencyGraph).toHaveBeenCalledWith("proj-1", "src/lib", null));
+    await screen.findAllByText("index");
+    // Consumed, and gone from the URL — the drill it performed stays shareable.
+    await waitFor(() => expect(currentSearch()).not.toContain("focus"));
+    expect(currentSearch()).toContain("drill=");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
+
+    // Empty query: no drill frame, and nothing left to re-arm one.
+    await waitFor(() => expect(currentSearch()).toBe(""));
+    await waitFor(() => expect(screen.getByText("src/api/ (40 files)")).toBeInTheDocument());
+    expect(screen.queryByText("lib")).not.toBeInTheDocument();
+    // One src/lib fetch for the whole visit — the arrival hop, not a re-drill.
+    expect(vi.mocked(fetchDependencyGraph).mock.calls.filter(([, c]) => c === "src/lib")).toHaveLength(1);
   });
 
   it("still understands a legacy ?cluster= link", async () => {

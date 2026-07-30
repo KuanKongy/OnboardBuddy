@@ -160,6 +160,113 @@ const UNKNOWN_LABELS: Record<string, string> = {
  */
 const DETAIL_SUPPRESSED_KINDS = new Set(["incomplete_coverage"]);
 
+type DetectionUnknown = NonNullable<PackageCoverage["detectionUnknowns"]>[number];
+
+/** One detection gap in a sentence — shared by the tooltip and the panel. */
+function describeDetectionUnknown(u: DetectionUnknown): string {
+  if (u.kind === "trace_dead_ends") return `${u.count ?? "?"} traces reached no effect`;
+  if (u.kind === "unknown_external_calls")
+    return `calls into unmodeled packages: ${(u.packages ?? []).slice(0, 5).join(", ")}`;
+  if (u.kind === "journey_gap") return `journey not composed: ${u.expected}${u.queue ? ` (${u.queue})` : ""}`;
+  if (u.kind === "doc_conflict")
+    return `docs out of date: ${(u as { doc?: string }).doc ?? "?"} mentions ${(u as { claim?: string }).claim ?? "?"} (${(u as { class?: string }).class ?? "claim"} not found)`;
+  return u.kind.replace(/_/g, " ");
+}
+
+/** Section gaps rolled up by kind, with the sections that raised each one. */
+function packageGapRows(
+  sections: OnboardingSection[],
+): Array<{ kind: string; count: number; sections: string[] }> {
+  const byKind = new Map<string, { kind: string; count: number; sections: string[] }>();
+  for (const section of sections) {
+    // `unknownGroups` is the deduped view; fall back for payloads without it.
+    const groups: Array<{ kind: string; count: number }> = section.unknownGroups?.length
+      ? section.unknownGroups
+      : (section.unknowns ?? []).map((u) => ({ kind: u.kind, count: 1 }));
+    for (const group of groups) {
+      const row = byKind.get(group.kind) ?? { kind: group.kind, count: 0, sections: [] };
+      row.count += group.count;
+      if (!row.sections.includes(section.label)) row.sections.push(section.label);
+      byKind.set(group.kind, row);
+    }
+  }
+  return [...byKind.values()].sort((a, b) => b.count - a.count || a.kind.localeCompare(b.kind));
+}
+
+/**
+ * Bug #85's remainder: the count was hover-only, so the items behind it were
+ * reachable only by opening every section. Tooltip keeps the arithmetic, panel
+ * carries the items; `w-full` puts the panel on its own line of the strip.
+ */
+export function PackageGapsDisclosure({
+  coverage,
+  sections,
+}: {
+  coverage: PackageCoverage;
+  sections: OnboardingSection[];
+}) {
+  const [open, setOpen] = useState(false);
+  const total = coverage.gaps?.total ?? coverage.detectionUnknowns?.length ?? 0;
+  if (total === 0) return null;
+  const rows = packageGapRows(sections);
+  const detection = coverage.detectionUnknowns ?? [];
+
+  return (
+    <>
+      <span aria-hidden>·</span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-controls="package-known-gaps"
+            className="inline-flex items-center gap-1 rounded text-warning underline decoration-dotted underline-offset-2 hover:text-warning/80"
+          >
+            <ChevronDown
+              className={cn("h-3 w-3 shrink-0 transition-transform duration-150", !open && "-rotate-90")}
+              aria-hidden
+            />
+            {total} known gap{total === 1 ? "" : "s"} in this package
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="max-w-80">
+          {coverage.gaps && (
+            <p className="mb-1 font-medium">
+              {coverage.gaps.total} things this analysis knows it could not determine, across the
+              whole package: {coverage.gaps.sections} raised while writing the sections (each section
+              lists its own share under &ldquo;known gaps in this section&rdquo;; grouped into{" "}
+              {coverage.gaps.groups} kinds in total)
+              {coverage.gaps.detection > 0 ? ` and ${coverage.gaps.detection} found by detection:` : "."}
+            </p>
+          )}
+          {detection.map(describeDetectionUnknown).join(" · ")}
+        </TooltipContent>
+      </Tooltip>
+      {open && (
+        <ul id="package-known-gaps" className="w-full space-y-1 pt-1">
+          {rows.map((row) => (
+            <li key={row.kind} className="max-w-[85ch]">
+              <span className="font-medium text-foreground/80">
+                {UNKNOWN_LABELS[row.kind] ?? row.kind.replace(/_/g, " ")}
+              </span>
+              <span className="ml-1.5 rounded bg-muted px-1 tabular-nums">× {row.count}</span>
+              {/* Which sections raised it — the section footers hold the wording. */}
+              <span className="ml-1.5">in {row.sections.join(", ")}</span>
+            </li>
+          ))}
+          {detection.map((u, ui) => (
+            <li key={`detection-${ui}`} className="max-w-[85ch]">
+              <span className="font-medium text-foreground/80">{describeDetectionUnknown(u)}</span>
+              <span className="ml-1.5">found by detection</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
 /**
  * CONSULT sections are deterministic reference tables. Zero receipts is their
  * CORRECT state — "the table is the evidence" (audit §8.1/A13) — so they get
@@ -929,14 +1036,17 @@ export function OnboardingPage() {
     });
   }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, readSections, saveProgress]);
 
-  function setParams(next: Record<string, string | null>) {
+  // `replace` by default — a role or package tweak refines the current view.
+  // Bug #74 (J3): the reader boundary is real navigation and passes
+  // `{ replace: false }`, or Back leaves the tab instead of returning to the grid.
+  function setParams(next: Record<string, string | null>, options?: { replace?: boolean }) {
     setSearchParams((prev) => {
       for (const [k, v] of Object.entries(next)) {
         if (v === null) prev.delete(k);
         else prev.set(k, v);
       }
       return prev;
-    }, { replace: true });
+    }, { replace: options?.replace ?? true });
   }
 
   // Package list + its while-generating refresh live in PackagesContext (the
@@ -1486,7 +1596,8 @@ export function OnboardingPage() {
                   // Opening a card pins the reader to that exact package and
                   // makes it the sidebar selection so every tab follows.
                   selectPackage(card.id);
-                  setParams({ view: "reader", package: card.id, role: card.role });
+                  // A view boundary — pushed so Back returns to the grid.
+                  setParams({ view: "reader", package: card.id, role: card.role }, { replace: false });
                 }}
                 onRegenerate={() => {
                   setRegenError("");
@@ -1582,7 +1693,12 @@ export function OnboardingPage() {
       {/* compact top bar: navigation + role + actions in one row */}
       <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
         <SidebarToggle />
-        <Button variant="ghost" size="xs" onClick={() => setParams({ view: null, package: null })} className="gap-1">
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setParams({ view: null, package: null }, { replace: false })}
+          className="gap-1"
+        >
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
         </Button>
         <div className="min-w-0">
@@ -1813,45 +1929,7 @@ export function OnboardingPage() {
               analysis recorded as undetermined, the number is the sum of both
               provenances (API `coverage.gaps`), and the tooltip says which is
               which. Pre-`gaps` payloads fall back to the detection count. */}
-          {((pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns?.length) ?? 0) > 0 && (
-            <>
-              <span aria-hidden>·</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="cursor-help text-warning underline decoration-dotted underline-offset-2">
-                    {pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length} known gap
-                    {(pkg.coverage.gaps?.total ?? pkg.coverage.detectionUnknowns!.length) === 1 ? "" : "s"}{" "}
-                    in this package
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-80">
-                  {pkg.coverage.gaps && (
-                    <p className="mb-1 font-medium">
-                      {pkg.coverage.gaps.total} things this analysis knows it could not determine,
-                      across the whole package:{" "}
-                      {pkg.coverage.gaps.sections} raised while writing the sections (each section
-                      lists its own share under &ldquo;known gaps in this section&rdquo;; grouped
-                      into {pkg.coverage.gaps.groups} kinds in total)
-                      {pkg.coverage.gaps.detection > 0
-                        ? ` and ${pkg.coverage.gaps.detection} found by detection:`
-                        : "."}
-                    </p>
-                  )}
-                  {(pkg.coverage.detectionUnknowns ?? [])
-                    .map((u) => {
-                      if (u.kind === "trace_dead_ends") return `${u.count ?? "?"} traces reached no effect`;
-                      if (u.kind === "unknown_external_calls")
-                        return `calls into unmodeled packages: ${(u.packages ?? []).slice(0, 5).join(", ")}`;
-                      if (u.kind === "journey_gap") return `journey not composed: ${u.expected}${u.queue ? ` (${u.queue})` : ""}`;
-                      if (u.kind === "doc_conflict")
-                        return `docs out of date: ${(u as { doc?: string }).doc ?? "?"} mentions ${(u as { claim?: string }).claim ?? "?"} (${(u as { class?: string }).class ?? "claim"} not found)`;
-                      return u.kind.replace(/_/g, " ");
-                    })
-                    .join(" · ")}
-                </TooltipContent>
-              </Tooltip>
-            </>
-          )}
+          <PackageGapsDisclosure coverage={pkg.coverage} sections={pkg.sections} />
           <Link
             to={`/projects/${id}/dependencies`}
             className="ml-auto shrink-0 font-medium text-primary hover:underline"
@@ -2097,7 +2175,7 @@ export function OnboardingPage() {
                       size="sm"
                       variant={pkgError.gone ? "default" : "ghost"}
                       className="gap-1.5"
-                      onClick={() => setParams({ view: null, package: null })}
+                      onClick={() => setParams({ view: null, package: null }, { replace: false })}
                     >
                       <BookOpen className="h-3.5 w-3.5" /> Back to packages
                     </Button>

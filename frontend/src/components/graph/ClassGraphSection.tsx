@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Viewport } from "reactflow";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
-import { GraphToolbar } from "@/components/graph/GraphToolbar";
+import { GraphToolbar, SEARCH_DEBOUNCE_MS } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
 import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useLocalDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
+import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useOptionalPackages } from "@/contexts/PackagesContext";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import type { DrillFrame } from "@/lib/drillStack";
@@ -61,7 +62,10 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  // Bug #74 (F20): the raw box value fed the union-find/layout memo, so every
+  // keystroke re-laid out the level. Same 200ms budget as the Files view.
+  const [searchInput, setSearchInput] = useState("");
+  const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS, "");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedNodeDetail, setSelectedNodeDetail] = useState<NodeDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -80,15 +84,22 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   const levelKey = (frame: DrillFrame | null) =>
     `${projectId}::${selectedPackageId ?? ""}::${frame?.id ?? ""}::${focusNodeId ?? ""}`;
   const loadedKeyRef = useRef<string | null>(null);
+  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
+  // can be in flight and response order is not selection order. `runId` idiom
+  // from useGraphDrill's live().
+  const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(
     async (frame: DrillFrame | null): Promise<void> => {
+      const myRun = ++loadRunRef.current;
+      const live = () => loadRunRef.current === myRun;
       setLoading(true);
       setError("");
       setSelectedNodeId(null);
       setFocusMissing(false);
       try {
         const d = await fetchClassGraph(projectId, selectedPackageId, frame?.id ?? null);
+        if (!live()) return;
         setData(d);
         loadedKeyRef.current = levelKey(frame);
         if (!focusNodeId) return;
@@ -106,10 +117,10 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         }
         setFocusMissing(true);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load class graph data");
+        if (live()) setError(err instanceof Error ? err.message : "Failed to load class graph data");
         throw err;
       } finally {
-        setLoading(false);
+        if (live()) setLoading(false);
       }
     },
     [projectId, selectedPackageId, focusNodeId],
@@ -449,8 +460,8 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
       )}
 
       <GraphToolbar
-        search={search}
-        onSearchChange={setSearch}
+        search={searchInput}
+        onSearchChange={setSearchInput}
         matchCount={visibleNodes.length}
         totalCount={nodes.length}
         noun={levelUnit}
@@ -481,6 +492,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
             drill={drill}
             restoreViewport={stack.savedViewport(stack.depth)}
             viewportRef={viewportRef}
+            hintVariant="classes"
             // Never fit below a readable label (VISUAL QA M4 #3 measured 3px).
             minZoom={0.35}
             // Two folder boxes do not need a map of themselves in the corner

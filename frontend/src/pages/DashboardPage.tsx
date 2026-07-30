@@ -206,21 +206,23 @@ export function DashboardPage() {
     navigate("/dashboard", { replace: true, state: null });
   }, [location.state, navigate]);
 
-  useEffect(() => {
-    if (!pendingTour || loading) return;
-    setPendingTour(false);
-    startTour();
-  });
-
   function finishTour() {
     if (user) dismissTour("dashboard", user.id);
     setTourOpen(false);
   }
 
-  function startTour() {
+  // Memoized so the effect below can name it as a dependency rather than
+  // running on every render, which is what it did with no dep array at all.
+  const startTour = useCallback(() => {
     if (user) resetTour("dashboard", user.id);
     setTourOpen(true);
-  }
+  }, [user]);
+
+  useEffect(() => {
+    if (!pendingTour || loading) return;
+    setPendingTour(false);
+    startTour();
+  }, [pendingTour, loading, startTour]);
 
   const recentProjects = useMemo(
     () => [...projects].sort((a, b) => activityTime(b) - activityTime(a)).slice(0, RECENT_LIMIT),
