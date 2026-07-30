@@ -133,14 +133,14 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 |---|-------|---|-------|-------|----------|
 | 65 | Three routes are not scoped to the project — cross-tenant reads and one write | P2 | Closed | Nam | 1 |
 | 66 | The authentication surface has an unused bypass and no throttling | P2 | Closed | Nam | 1 |
-| 67 | Repository import blocks large accounts and its cost safety gate is bypassable | P2 | Open | Eugene / Nam | 2 — cost gate + pagination fixed; badges/refresh remain |
+| 67 | Repository import blocks large accounts and its cost safety gate is bypassable | P2 | Closed | Eugene / Nam | 2 + 7 — Fixed (M5): cost gate + pagination in batch 2, repo badges + step-2 refresh in batch 7 |
 | 68 | Failed requests look like empty results — one pushes toward a paid action | P2 | Closed | Sahib | 3 |
 | 69 | Analysis jobs can get stuck, or fail on an error that should have been retried | P2 | Closed | Nam | 2 — fixed |
 | 70 | Dependency graph reports "imported by 0" for everything; search blanks the canvas | P2 | Closed | Bradley / Eugene | 3 — fixed |
-| 71 | Accessibility gaps and measured contrast failures | P3 | Open | Eugene | 4 |
-| 72 | Team lifecycle is a one-way door (no email, decline, leave, or ownership transfer) | P3 | Open | Nam | 5 |
+| 71 | Accessibility gaps and measured contrast failures | P3 | Closed | Eugene | 4 — Fixed (M5): announce/label/keyboard sweep + dark-token lift, re-measured |
+| 72 | Team lifecycle is a one-way door (no email, decline, leave, or ownership transfer) | P3 | Closed | Nam | 5 — Fixed (M5): decline, leave, transfer, invite hygiene; email half Won't-Fix (W1) |
 | 73 | The frontend image only works when the browser is on the Docker host | P3 | Closed | Fixed (M5) — runtime config.js written at container start; same image proven against three different API origins, CSP connect-src now derived not hardcoded |
-| 74 | [Tracker] Polish tail from the two end-of-M4 audits — 49 low-severity findings | P4 | Open | Eugene | 7 |
+| 74 | [Tracker] Polish tail from the two end-of-M4 audits — 49 low-severity findings | P4 | Closed | Eugene | 7 — Fixed (M5): all 63 checklist lines ticked with per-line evidence; 8 Won't-Fix sub-items (W1–W8) |
 
 #### Milestone 5 — filed and fixed in the sprint (#84–#85)
 
@@ -242,6 +242,64 @@ changed** — two reproduced, one did not.
 intended behaviour). `npx tsc --noEmit` clean, `npm run truth` 25/25, eslint clean on every touched
 file. **No schema change** — #10's audit was read-only against the live DB and its test asserts the
 schema rather than altering it.
+
+### M5 progress — batch 7 + absorbed bugs (2026-07-29)
+
+Batch 7 was the #74 tracker, so it absorbed the three open bugs whose remainders sat inside the same
+files: **#67**'s declared remainder, **#71** and **#72**. Six commits, oldest first:
+
+| Commit | Subject |
+|--------|---------|
+| `daae508` | Unify product naming and harden the API surface |
+| `26f1118` | Close the team-lifecycle one-way doors (#72) |
+| `4a7cd53` | Fix the auth-page and import dead ends |
+| `05a4f14` | Accessibility pass: announce, label, and keyboard-reach everything (#71) |
+| `cfecb9d` | Stop the graph bouncing back into a focused cluster, and make the package gap count openable |
+| `bd37d63` | Lift the dark theme off dark-on-dark, unify code refs and durations, shell the settings pages |
+
+| # | Was | Now | One line |
+|---|-----|-----|----------|
+| 74 | P4 Open | **Closed** | All 63 checklist lines ticked with per-line evidence — 46 fixed here, 17 verified already-fixed; 8 Won't-Fix sub-items, each with a reason |
+| 67 | P2 Open | **Closed** | The declared remainder: already-imported repos badged and unselectable, the 409 links the existing project, step 2 survives a refresh via `?project=` |
+| 71 | P3 Open | **Closed** | Announce/label/keyboard-reach sweep, reduced motion, hotkey preference; dark tokens lifted and **re-measured** (table in the entry — only input/card is a 1.4.11 pass, the rest are reported as perceptual lifts) |
+| 72 | P3 Open | **Closed** | Decline, leave, ownership transfer, invitation hygiene + 14-day TTL. Email delivery Won't-Fix (W1) |
+
+**Suites: backend 898 → 934, frontend 227 → 285, `npm run truth` 25/25.** Both typechecks and eslint
+clean on every touched file; `npm run build -w frontend` succeeds — checked because two of these
+fixes are CSS/token changes that only a real build compiles.
+
+**Live verification, not assertions.** Three passes against the running stack:
+
+- `backend/tmp/smoke.mts` — **122 checks ok, 2 failures**, both pre-existing: tutorials-coverage
+  checks against projects that have never been analyzed. Neither touches code this batch changed.
+- `backend/tmp/team-lifecycle.mts` (throwaway probe, written for this batch) — **19/19 green**: invite
+  hygiene, decline, re-invite, accept, leave, transfer, and the old owner then failing to delete.
+- A browser walkthrough of every changed surface in **both themes** — import, team, invitations, the
+  two settings shells, the reader and the graphs.
+
+**One bug found by that live pass, and fixed the same day.** A bodyless `POST` to invitation accept
+500'd: `express.json` leaves `req.body` undefined, and the route destructured it
+(`invitations.ts:129-130`). Pre-existing, not introduced here. Now `(req.body ?? {})`, pinned by
+`invitations.test.ts:62` ("answers a bodyless accept with 404, not a destructure 500") — the +1 in the
+backend count.
+
+**Won't-Fix, with reasons** (all sub-items of otherwise-fixed work; nothing on the checklist is wholly
+deferred):
+
+| Ref | Item | Reason |
+|-----|------|--------|
+| W1 | Invitation email delivery | No mail provider provisioned and none planned for M5 (pre-declared). The UI no longer implies one is sent |
+| W2 | Merging the two invitation route surfaces | Different principals and authorization — project-scoped management vs a cross-project invitee inbox. Merging mid-freeze breaks the API and its tests for no user-visible gain; documented at the mount point, UI naming unified |
+| W3 | A first-class `'declined'` status | The status CHECK is frozen for M5; decline maps to terminal `'revoked'` with identical downstream behaviour. The one-line migration is recorded as a post-freeze follow-up |
+| W4 | Background expiry sweeper | Expiry is enforced at every read (accept plus both lists); a write sweeper adds a failure mode with no observable benefit |
+| W5 | Eradicating all sub-12px text | Opacity was dropped on meaningful text only; decorative micro-labels keep the type scale by design |
+| W6 | Reader receipts rail | Receipts render inline under each block and are real buttons since #68; the dead gutter is closed by docking the prose. Recorded as a post-M5 idea |
+| W7 | Import right-rail | The wizard is a deliberate narrow single flow; preflight and security cards already stack in-flow |
+| W8 | Graph edge hover-dimming | Click-to-select dimming already exists (`neighborIds`), and edge visibility was fixed at the token level |
+
+**Open bugs remaining after this batch: #37 only** — GitHub sign-up's identity conflict, blocked on
+the external auth provider's configuration. Our half (a plain-language explanation instead of a raw
+provider error) shipped in M4.
 
 ---
 
@@ -3052,7 +3110,7 @@ once the map grows past 5,000 entries rather than being left to accumulate.
 
 ---
 
-## [P2][Open] Bug 67: Repository import blocks large accounts and its cost safety gate is bypassable
+## [P2][Closed] Bug 67: Repository import blocks large accounts and its cost safety gate is bypassable
 
 **Bug #67**
 
@@ -3061,7 +3119,7 @@ once the map grows past 5,000 entries rather than being left to accumulate.
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P2 |
-| State | Open — Eugene (frontend), Nam (backend), M5 batch 2 |
+| State | Closed — defects 1 and 2 fixed 2026-07-26 (M5 batch 2), defects 3 and 4 fixed 2026-07-29 (M5 batch 7) |
 | Area | Import wizard, GitHub repo/branch listing |
 
 ## Expected behavior
@@ -3139,10 +3197,28 @@ no-match copy; the checkbox is tickable and gates Start; the tick is dropped on
 a config change; the M5 scope notice is not duplicated). Both gate tests were
 confirmed to **fail** against the pre-fix `ImportPage.tsx`.
 
-**Still open — defects 3 and 4** (Eugene, same batch): already-imported repos
-are not badged and the "project already exists" error has no link to the
-existing project; and refreshing on step 2 loses the created project because the
-wizard keeps its state in component state only.
+## Verification and fix — defects 3 and 4 (2026-07-29, M5 batch 7)
+
+Shipped in commit `4a7cd53` ("Fix the auth-page and import dead ends"), which
+closes the declared remainder.
+
+**Defect 3 — no badge, no link. Fixed.** The repo picker cross-references
+`useProjects`, so an already-imported repo renders "(already imported)" and is
+not selectable (`ImportPage.tsx:709`). `POST /projects` now returns the existing
+project's id alongside the 409 (`projects.ts:332-335`; a failed lookup omits the
+id rather than losing the 409), and the wizard turns it into an "Open the project
+you already imported for this repository" link (`:595`) through the same markup
+the stranded-project case already used.
+
+**Defect 4 — refresh on step 2. Fixed.** The created project id lives in the URL
+(`/import?project=<id>`) and is restored on mount (`ImportPage.tsx:104,112,182`),
+so a refresh or a Back keeps step 2 instead of dropping the user into step 1 and
+straight onto defect 3's dead end. The `sessionStorage` hop stays for the OAuth
+round trip only.
+
+**Tests:** `projects.test.ts` (409 body carries `project_id`) and
+`ImportPage.test.tsx` (badge + disabled option; step 2 restored from
+`?project=`).
 
 ---
 
@@ -3463,7 +3539,7 @@ typing "logger". Both were confirmed to **fail** against the pre-fix
 
 ---
 
-## [P3][Open] Bug 71: Accessibility gaps and measured contrast failures
+## [P3][Closed] Bug 71: Accessibility gaps and measured contrast failures
 
 **Bug #71**
 
@@ -3472,7 +3548,7 @@ typing "logger". Both were confirmed to **fail** against the pre-fix
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit + visual audit (the two HIGH items) |
 | Priority | P3 |
-| State | Open — Eugene, M5 batch 4 |
+| State | Closed — fixed/verified in M5 batch 7 (2026-07-29) |
 | Area | Routing, theme tokens, motion, keyboard reachability |
 
 ## Expected behavior
@@ -3509,9 +3585,90 @@ default-package control to its own menu item; add a reduced-motion base rule gat
 camera glides. **Contrast must be measured, not eyeballed** — Phase 6 caught its own approximation
 error exactly that way.
 
+## Fix — 2026-07-29 (M5 batch 7)
+
+Two commits: `05a4f14` ("Accessibility pass: announce, label, and keyboard-reach everything") for
+items 1, 4 and 5, and `bd37d63` ("Lift the dark theme off dark-on-dark…") for item 2.
+
+- **Item 1 — navigation.** A skip-to-content link, per-route `document.title`, and focusable
+  `<main>` regions with a focus reset on route change. `ErrorBanner`/`PageSpinner` (`components/ui/`)
+  give errors `role="alert"` and loading `role="status"`; 28 files were swept onto them.
+- **Labels and semantics.** Every settings/team/overview control now has a label that points at it;
+  selection and status are announced (`aria-pressed`/`aria-current`/sr-only words) rather than
+  carried by background or icon colour alone; the sidebar toggle announces its state; heading levels
+  no longer skip; dimmed micro-text on meaningful strings is back at full opacity.
+- **Item 4 — default package from the keyboard.** The make-default star is keyboard-operable, and
+  its previously uncaught rejection is caught and surfaced.
+- **Item 5 — reduced motion.** A base `@media (prefers-reduced-motion: reduce)` rule plus gated flow
+  edges, camera glides and the five smooth scrolls.
+- **Single-key shortcuts can be disabled** (persisted preference + a toggle in Account settings) —
+  the WCAG 2.1.4 half of the same complaint.
+- ~~**Item 3 — avatar initials.**~~ **Already fixed** in commit `12b6c40`: `avatarTints`
+  (`TeamPage.tsx:64-70`) replaced the white-on-`-500` fills with `bg-*/15 text-*` token pairs.
+  Re-measured 2026-07-29 against the post-lift tokens (same method as item 2): the audit's
+  2.15–2.54 pairs are now **3.80–5.97** — dark 3.80/5.05/5.24/5.83, light 4.22/5.34/5.42/5.97
+  (primary/info/success/warning on their 15% tints over card). Seven of eight clear AA-normal;
+  light `text-primary` at 4.22 sits under 4.5 but at double the audited worst case and above the
+  3.0 large-text bar — recorded rather than hidden.
+- **Item 2 — dark structural contrast.** Full token lift, re-measured with the audit's own
+  OKLCH → sRGB → luminance method rather than eyeballed. The BEFORE column reproduces the
+  2026-07-22 audit's numbers to the digit, which is what validates the script:
+
+  BEFORE
+  ```
+  [dark structural — WCAG 1.4.11 bar 3.0]
+  card / background                    1.09  (needs >= 3)
+  popover / card                       1.08  (needs >= 3)
+  border / card                        1.43  (needs >= 3)
+  border / background                  1.56  (needs >= 3)
+  input / card                         1.43  (needs >= 3)
+  sidebar-border / sidebar             1.26  (needs >= 3)
+  [light soft-chip text — AA-normal bar 4.5]
+  success text / success-soft chip     4.02  (needs >= 4.5)
+  success text / background            4.68  (needs >= 4.5)
+  warning text / warning-soft chip     4.07  (needs >= 4.5)
+  warning text / background            4.60  (needs >= 4.5)
+  danger text / danger-soft chip       4.26  (needs >= 4.5)
+  danger text / background             5.06  (needs >= 4.5)
+  info text / info-soft chip           3.74  (needs >= 4.5)
+  info text / background               4.37  (needs >= 4.5)
+  ```
+
+  AFTER
+  ```
+  [dark structural — WCAG 1.4.11 bar 3.0]
+  card / background                    1.18  (needs >= 3)
+  popover / card                       1.10  (needs >= 3)
+  border / card                        1.78  (needs >= 3)
+  border / background                  2.09  (needs >= 3)
+  input / card                         3.10  (needs >= 3)
+  sidebar-border / sidebar             1.81  (needs >= 3)
+  [light soft-chip text — AA-normal bar 4.5]
+  success text / success-soft chip     5.47  (needs >= 4.5)
+  success text / background            6.37  (needs >= 4.5)
+  warning text / warning-soft chip     6.22  (needs >= 4.5)
+  warning text / background            7.04  (needs >= 4.5)
+  danger text / danger-soft chip       5.47  (needs >= 4.5)
+  danger text / background             6.49  (needs >= 4.5)
+  info text / info-soft chip           5.36  (needs >= 4.5)
+  info text / background               6.27  (needs >= 4.5)
+  ```
+
+  **Read the dark table honestly: only input/card is a 1.4.11 pass.** 1.4.11 scopes 3.0 to
+  boundaries that identify a control, so `--input` was split from the field tint to become that
+  boundary (3.10 vs card) while the surface steps and the decorative card border are **perceptual
+  lifts** — card/bg 1.09 → 1.18, border/card 1.43 → 1.78, border/bg 1.56 → 2.09, sidebar-border
+  1.26 → 1.81 — and are reported as such, not as compliance. All eight light chip pairs clear AA.
+  `--ring` was re-measured against the new surfaces (4.26–5.54 dark, 4.86–5.23 light): focus
+  indicators are 1.4.11-scoped and all clear 3.0 unchanged, so no lift was needed.
+
+**Verified:** frontend suite 227 → 285 passing across the batch, `tsc -b frontend` and
+`npm run build -w frontend` clean, and the built stylesheet grepped to confirm every planned token
+value actually compiled. Both themes were walked in a browser (see the batch-7 progress section).
+
 ---
 
-## [P3][Open] Bug 72: Team lifecycle is a one-way door
+## [P3][Closed] Bug 72: Team lifecycle is a one-way door
 
 **Bug #72**
 
@@ -3520,7 +3677,7 @@ error exactly that way.
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15), UX audit |
 | Priority | P3 |
-| State | Open — Nam, M5 batch 5 |
+| State | Closed — fixed 2026-07-29 (M5 batch 7); the email half Won't-Fix (W1) |
 | Area | Invitations, membership, ownership |
 
 ## Expected behavior
@@ -3548,6 +3705,43 @@ Plan: add decline, expiry filtering, self-removal for non-owners, and an ownersh
 with a type-to-confirm dialog. The **email** half is the likely Won't-Fix — no mail provider is
 provisioned; the fallback is relabelling the action "Create invitation" with a "no email is sent —
 share the link yourself" hint.
+
+## Fix — 2026-07-29 (M5 batch 7)
+
+Commit `26f1118` ("Close the team-lifecycle one-way doors"), plus the copy half in `daae508`. Four
+capabilities, all application-level — **no schema change**, per the M5 freeze.
+
+1. **Decline** — `POST /api/invitations/:invitationId/decline` (`invitations.ts:66`) reuses the
+   accept path's fetch and email-match guards, then moves the row to `'revoked'`. The status CHECK is
+   frozen and has no `'declined'` value, so `'revoked'` is the terminal stand-in and the code says so
+   (`invitations.ts:64`); downstream behaviour is identical. The permanently-disabled button and its
+   "isn't supported yet" tooltip are gone.
+2. **Leave** — `DELETE /api/projects/:id/members/me` (`members.ts:385`), registered before
+   `delete("/:userId")` so the literal wins, open to any member and 403 for the owner ("transfer
+   ownership first"). Dependent rows were checked: `default_package_id` lives on the deleted row and
+   `user_progress` survives by design.
+3. **Ownership transfer** — `POST /api/projects/:id/members/:userId/transfer-ownership` in one
+   transaction: demote the caller, promote the target, and **move `projects.user_id`**
+   (`members.ts:355`). That last write is load-bearing rather than cosmetic —
+   `services/accountDeletion.ts` cascades owned projects through `projects.user_id`, so an old owner
+   left there would take the project with them when they deleted their account
+   (`members.ts:290-292`). A concurrent transfer rolls back as 409; a target who already has a
+   project for the same repo answers 409 against `UNIQUE (user_id, repo_owner, repo_name)`;
+   self-transfer is 400.
+4. **Invitation hygiene** — email trimmed, format-checked, self-invites and existing members
+   rejected before the tier check; every invitation stamped `expires_at = NOW() + 14 days`
+   (`INVITATION_TTL_DAYS`, `members.ts:17`, set in the INSERT because the schema is frozen); expired
+   rows filtered out of both pending lists, keeping the `IS NULL` arm for legacy rows. A background
+   sweeper was considered and declined (W4) — expiry is enforced at every read.
+
+**Email delivery stays Won't-Fix (W1)** — no provider is provisioned and none was planned for M5.
+The UI no longer implies one: the action is "Create invitation" and it says no email is sent.
+
+**Live probe, not assertions.** `backend/tmp/team-lifecycle.mts` drove the running stack end to end —
+invite hygiene (trim, bad format, self, existing member, duplicate), invite → decline → re-invite →
+accept, leave, transfer, and the old owner then failing to delete the project: **19/19 checks
+green**. Suite coverage lives in `members.test.ts`, `invitations.test.ts`,
+`tenantIsolation.test.ts` and `InvitationsPage.test.tsx`.
 
 ---
 
@@ -3606,7 +3800,7 @@ variables when nothing is set.
 
 ---
 
-## [P4][Open] Bug 74: [Tracker] Polish tail from the two end-of-M4 audits
+## [P4][Closed] Bug 74: [Tracker] Polish tail from the two end-of-M4 audits
 
 **Bug #74**
 
@@ -3615,7 +3809,7 @@ variables when nothing is set.
 | Date created | 2026-07-22 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P4 |
-| State | Open — Eugene, M5 batch 7 |
+| State | Closed — fixed/verified in M5 batch 7 (2026-07-29) |
 | Area | Frontend and backend, various |
 
 ## Expected behavior
@@ -3637,73 +3831,73 @@ Filing 49 separate issues would bury the ten that matter, so they are tracked he
 The checklist:
 
 **Backend (13)**
-- [ ] `backend/src/api/routes/members.ts:57` — `permission_tier` on invitations is not validated; `"owner"` is accepted and inserted verbatim on accept. An admin.
-- [ ] `backend/src/api/routes/github.ts:160` — OAuth/link catch-alls return `err.message` verbatim (400), and lib errors embed raw GitHub/Supabase response bodie.
-- [ ] `backend/src/api/app.ts:10` — No rate limiting anywhere; `POST /api/auth/login` proxies `signInWithPassword` with unlimited attempts. Brute-forceable, and.
-- [ ] `backend/src/api/routes/members.ts:83` — Invitations are inserted with no `expires_at`, and the accept path treats NULL as never-expiring. Pending invites.
-- [ ] `backend/src/worker/index.ts:780` — The orphan reconciler only rescues `status='running'` jobs. A job whose DB row committed but whose Redis enqueue failed.
-- [ ] `backend/src/worker/index.ts:244` — BullMQ `attempts: 2` is a no-op: the first failure stamps the DB row `failed`, so the retry immediately hits the `KillS.
-- [ ] `backend/src/api/routes/projects.ts:159` — When no branch is supplied and the GitHub repo fetch fails (revoked access / deleted repo), it becomes a generic.
-- [ ] `backend/src/api/routes/members.ts:83` + `frontend/src/pages/TeamPage.tsx:305` — "Inviting" only inserts a DB row — no email is ever sent — yet the dialog.
-- [ ] `backend/src/api/routes/members.ts:67` — Invite creation does no email trim/format check and doesn't reject self-invites or existing members. A whitespace-.
-- [ ] `backend/src/api/routes/graph.ts:73` — In the default directory-grouped dependency view, every group is built with `dependentCount: 0` hardcoded while `imp.
-- [ ] `backend/src/api/middleware/project-access.ts:15` — A non-UUID `:id` (truncated shared link) makes Postgres throw, caught as a 500 instead of a comprehensi.
-- [ ] `backend/src/api/app.ts:30` — The global error handler ignores `err.status`, so malformed-JSON (400) and payload-too-large (413) both surface as 500.
-- [ ] `backend/src/api/app.ts:7` — No `compression()` middleware, and large graph payloads have no node caps: `/graph/classes` and `/graph/architecture` (incl. a.
+- [x] `backend/src/api/routes/members.ts:57` — `permission_tier` on invitations is not validated; `"owner"` is accepted and inserted verbatim on accept. An admin. (already fixed by #66 — verified: tier whitelist plus an accept-path recheck)
+- [x] `backend/src/api/routes/github.ts:160` — OAuth/link catch-alls return `err.message` verbatim (400), and lib errors embed raw GitHub/Supabase response bodie. (fixed 2026-07-29 — `GitHubApiError {status, body}` keeps bodies out of `message`; catch-alls routed through `handleGitHubRouteError`)
+- [x] `backend/src/api/app.ts:10` — No rate limiting anywhere; `POST /api/auth/login` proxies `signInWithPassword` with unlimited attempts. Brute-forceable, and. (already fixed by #66 — verified: `middleware/rateLimit.ts` + tests)
+- [x] `backend/src/api/routes/members.ts:83` — Invitations are inserted with no `expires_at`, and the accept path treats NULL as never-expiring. Pending invites. (fixed 2026-07-29 — 14-day `expires_at` set in the INSERT; expired rows filtered from both lists)
+- [x] `backend/src/worker/index.ts:780` — The orphan reconciler only rescues `status='running'` jobs. A job whose DB row committed but whose Redis enqueue failed. (fixed 2026-07-29 — the three unguarded enqueues wrapped in `failUnsubmittedJob`; `claimOrphans` now sweeps aged `queued` too)
+- [x] `backend/src/worker/index.ts:244` — BullMQ `attempts: 2` is a no-op: the first failure stamps the DB row `failed`, so the retry immediately hits the `KillS. (already fixed by #69 — verified: `worker/retryPolicy.ts`)
+- [x] `backend/src/api/routes/projects.ts:159` — When no branch is supplied and the GitHub repo fetch fails (revoked access / deleted repo), it becomes a generic. (fixed 2026-07-29 — classified to 422 "repository not accessible")
+- [x] `backend/src/api/routes/members.ts:83` + `frontend/src/pages/TeamPage.tsx:305` — "Inviting" only inserts a DB row — no email is ever sent — yet the dialog. (fixed 2026-07-29 — "Create invitation" + a "no email is sent" hint; delivery itself Won't-Fix: W1)
+- [x] `backend/src/api/routes/members.ts:67` — Invite creation does no email trim/format check and doesn't reject self-invites or existing members. A whitespace-. (fixed 2026-07-29 — trim, format, self-invite and existing-member checks before the tier check)
+- [x] `backend/src/api/routes/graph.ts:73` — In the default directory-grouped dependency view, every group is built with `dependentCount: 0` hardcoded while `imp. (already fixed by #70 — verified; the missing regression test added in `graph.test.ts`)
+- [x] `backend/src/api/middleware/project-access.ts:15` — A non-UUID `:id` (truncated shared link) makes Postgres throw, caught as a 500 instead of a comprehensi. (fixed 2026-07-29 — shared `requireUuidParam` answers 404)
+- [x] `backend/src/api/app.ts:30` — The global error handler ignores `err.status`, so malformed-JSON (400) and payload-too-large (413) both surface as 500. (already fixed — verified, and now pinned by a test: malformed JSON 400, oversize body 413)
+- [x] `backend/src/api/app.ts:7` — No `compression()` middleware, and large graph payloads have no node caps: `/graph/classes` and `/graph/architecture` (incl. a. (fixed 2026-07-29 — `compression()` after the webhook raw mount; `/onboarding/packages` capped with lateral rollups)
 
 **Frontend (48)**
-- [ ] `frontend/src/pages/OnboardingPage.tsx:1125` — The reader has no loading state for the package fetch; `pkg` starts `null` so `isMissing` immediately paints.
-- [ ] `frontend/src/pages/OnboardingPage.tsx:639` — `handleRegenerateSection`'s 4s poll interval is a local variable, cleared only from inside its own callback;.
-- [ ] `frontend/src/pages/ProjectOverviewPage.tsx:452` — `packagesError`/`statusError` are only surfaced in the `neverAnalyzed` branch. On an already-analyzed pr.
-- [ ] `frontend/src/pages/ImportPage.tsx:484` — Already-imported repos aren't marked or filtered, and the resulting 409 "Project already exists" is a bare error.
-- [ ] `frontend/src/pages/ImportPage.tsx:91` — The two-step wizard keeps `createdProjectId` and step-1 selections only in component state. Refreshing on "Step 2.
-- [ ] `frontend/src/pages/ResetPasswordPage.tsx:26` — The page never reads Supabase's `#error=access_denied&error_code=otp_expired` hash on an expired/invalid re.
-- [ ] `frontend/src/pages/LoginPage.tsx:44` — "Sign in with GitHub" drops the deep link. Email login preserves `location.state.from`, but `signInWithGithub()` re.
-- [ ] `frontend/src/pages/LoginPage.tsx:76` — None of the four auth pages set `autocomplete` (login lacks `email`/`current-password`, signup lacks `email`/`new-p.
-- [ ] `frontend/src/pages/AccountSettingsPage.tsx:373` — Unlinking a GitHub/email sign-in identity happens instantly on click with no confirmation, while the *le.
-- [ ] `frontend/src/pages/AccountSettingsPage.tsx:538` — The "Add email sign-in" dialog is a `<div>` with onClick buttons, not a `<form onSubmit>`, so pressing E.
-- [ ] `frontend/src/pages/SignupPage.tsx:46` — "Sign up with GitHub" has no loading state and doesn't mutually disable with the submit button (LoginPage shares `.
-- [ ] `frontend/src/pages/ResetPasswordPage.tsx:110` — Test convenience leaks into user copy: the confirm field is labeled "Confirm new" (truncated) and the mism.
-- [ ] `frontend/src/pages/InvitationsPage.tsx:221` — The Decline button is permanently disabled (no decline endpoint exists), and the list also shows expired inv.
-- [ ] `frontend/src/pages/TeamPage.tsx:208` — There is no "Leave project" anywhere in the UI, and the backend forbids self-removal (members.ts:216). Anyone who a.
-- [ ] `frontend/src/components/ProjectCard.tsx:119` — The card's "Delete project" menu shows for owner *and* admin, but the API requires owner (projects.ts:486),.
-- [ ] `frontend/src/pages/OnboardingPage.tsx:989` — "Mark reviewed" renders only for owner/admin (API agrees), yet the tour sells it as "your progress tracker" a.
-- [ ] `frontend/src/pages/GraphPage.tsx` (dependency search) — Searching filters the match count but never recenters the viewport onto the matches. *(Confirmed l.
-- [ ] `frontend/src/pages/GraphPage.tsx:82` — The `?focus=` deep-link param is re-resolved on every `loadGraph` and never removed from the URL. On a clustered re.
-- [ ] `frontend/src/pages/WorkflowsPage.tsx:137` — The workflow-graph fetch (and the package-keyed loads in ArchitecturePage/CapabilitiesPage/ClassGraphSection/G.
-- [ ] `frontend/src/pages/GraphPage.tsx:208` (+ `ClassGraphSection.tsx:67`) — The graph search input isn't debounced; each keystroke re-runs a full union-find +.
-- [ ] `frontend/src/components/graph/GraphFirstVisitHint.tsx:37` — The first-visit hint copy is hardcoded to the files view ("map of how files depend… open it on.
-- [ ] `frontend/src/components/graph/ModuleNode.tsx:3` — Leftover commented-out code shipped in a per-node component: a commented import, a dead `const complexit.
-- [ ] `frontend/src/App.tsx:93` — No skip-to-content link and `<main>` regions aren't focus targets. Keyboard users Tab through the logo, 4–9 nav links, tour/sho.
-- [ ] `frontend/src/pages/ImportPage.tsx:407` (+ TeamPage, ProjectSettingsPage, ArchitecturePage, ProjectOverviewPage) — Many `<Label>`s lack `htmlFor` and their.
-- [ ] `frontend/src/pages/ProjectSettingsPage.tsx:266` (+ Dashboard, Import, Team, Invitations, Onboarding, AnalyzeDialog, AccountSettings) — Async error/status.
-- [ ] `frontend/src/pages/DashboardPage.tsx:250` (+ ~13 other pages) — Full-page loading is a bare spinning `Loader2` with no `role="status"`/sr-only text, so du.
-- [ ] `frontend/src/pages/WorkflowsPage.tsx:186` — No `prefers-reduced-motion` handling anywhere while the app runs continuous motion: every workflow edge is `an.
-- [ ] `frontend/src/pages/WalkthroughTab.tsx:310` (+ OnboardingPage, InvitationsPage) — Selected item in several toggle lists is conveyed only by background colo.
-- [ ] `frontend/src/components/AnalysisRunPanel.tsx:177` + `PackageSelector.tsx:120` — Pipeline phase status and package status are conveyed solely by icon color.
-- [ ] `frontend/src/pages/TeamPage.tsx:340` — Avatar initials are white text on `bg-amber-500`/`emerald-500`/`cyan-500` (~1.6:1 on amber) — illegible for low-vis.
-- [ ] `frontend/src/pages/OnboardingPage.tsx:1110` (+ several) — Meaningful sub-12px text at reduced opacity (`text-muted-foreground/50`, `opacity-50` at 10–11px.
-- [ ] `frontend/src/pages/ProjectSettingsPage.tsx:278` (+ ProjectOverviewPage, OnboardingPage) — Heading levels skip `h1 → h3` with no `h2`, breaking the screen-.
-- [ ] `frontend/src/components/AppTour.tsx:119` — On tour end, focus isn't restored to the triggering element (it grabbed focus into the card on open), dropping.
-- [ ] `frontend/src/hooks/useHotkeys.ts:33` — Global single-character shortcuts (`[`, `]`, `1`-`9`, `?`) are always active with no way to disable/remap — a WCAG.
-- [ ] `frontend/src/components/SidebarShell.tsx:60` — The sidebar toggle has `aria-label` but no `aria-expanded`/`aria-controls`.
-- [ ] `frontend/src/pages/ProjectSettingsPage.tsx:251` — A failed project deletion writes to the page-level error banner, but the confirmation dialog has no erro.
-- [ ] `frontend/src/pages/WalkthroughTab.tsx:262` — `openTutorial`'s catch is empty; a tutorial that 500s shows a spinner then silently snaps back to the picker.
-- [ ] `frontend/src/lib/api.ts:48` — On a final 401 there's no shared redirect-to-login; pages print raw text like "API error 401" until Supabase's SIGNED_OUT ev.
-- [ ] `frontend/src/pages/DashboardPage.tsx:162` — The activity-feed fetch swallows errors (`.catch(() => {})`), so on failure users with real activity see "No a.
-- [ ] `frontend/src/pages/ProjectOverviewPage.tsx:716` — On run-history fetch failure, `runs` stays `null`, so the error text renders together with a spinner tha.
-- [ ] `frontend/src/pages/ProjectSettingsPage.tsx:135` — The llm-key and ranking-weights loads swallow errors, leaving a permanently empty role dropdown / "no ke.
-- [ ] `frontend/src/components/PackageSelector.tsx:108` — The "make default" star calls `void setDefaultPackage(...)` and never catches the rejection — it can fa.
-- [ ] `frontend/nginx.conf:1` — The prod nginx config has SPA fallback only — no `gzip`, no `Cache-Control` for `index.html` or hashed `/assets/*`. Big JS ships.
-- [ ] `frontend/index.html:3` — No `<meta name="description">` or `theme-color`, and the theme-bootstrap `catch` forces dark mode when localStorage throws, ignor.
-- [ ] `frontend/src/components/ProjectLayout.tsx:190` — The branch `Badge` in the 224px sidebar has `whitespace-nowrap` and no `max-w`/`truncate` (the repo name.
-- [ ] `frontend/src/pages/InvitationsPage.tsx:107` — "Pending Invitations" (title) vs "Active Invitations" (list heading, 3 lines down) vs "Invitations" (sidebar.
-- [ ] `frontend/src/pages/LoginPage.tsx:117` — Mixed verbs/casing on the app's front door: "Sign In" (Title Case) above "Sign in with GitHub" (sentence case), wh.
-- [ ] `frontend/src/pages/OnboardingPage.tsx:450` — The onboarding reader always uses `setParams({ replace: true })`, so opening a package card replaces the grid.
+- [x] `frontend/src/pages/OnboardingPage.tsx:1125` — The reader has no loading state for the package fetch; `pkg` starts `null` so `isMissing` immediately paints. (already fixed by #68 — verified)
+- [x] `frontend/src/pages/OnboardingPage.tsx:639` — `handleRegenerateSection`'s 4s poll interval is a local variable, cleared only from inside its own callback;. (already fixed by #68 — verified)
+- [x] `frontend/src/pages/ProjectOverviewPage.tsx:452` — `packagesError`/`statusError` are only surfaced in the `neverAnalyzed` branch. On an already-analyzed pr. (fixed 2026-07-29 — error-with-retry hoisted above the grid on analyzed projects too)
+- [x] `frontend/src/pages/ImportPage.tsx:484` — Already-imported repos aren't marked or filtered, and the resulting 409 "Project already exists" is a bare error. (fixed 2026-07-29 — #67 remainder: repos badged and unselectable; the 409 links the existing project)
+- [x] `frontend/src/pages/ImportPage.tsx:91` — The two-step wizard keeps `createdProjectId` and step-1 selections only in component state. Refreshing on "Step 2. (fixed 2026-07-29 — #67 remainder: step 2 restored from `?project=<id>`)
+- [x] `frontend/src/pages/ResetPasswordPage.tsx:26` — The page never reads Supabase's `#error=access_denied&error_code=otp_expired` hash on an expired/invalid re. (fixed 2026-07-29 — expired/dead links surfaced instead of spinning forever, plus a 10s timeout guard)
+- [x] `frontend/src/pages/LoginPage.tsx:44` — "Sign in with GitHub" drops the deep link. Email login preserves `location.state.from`, but `signInWithGithub()` re. (fixed 2026-07-29 — `next` threaded into `redirectTo`)
+- [x] `frontend/src/pages/LoginPage.tsx:76` — None of the four auth pages set `autocomplete` (login lacks `email`/`current-password`, signup lacks `email`/`new-p. (fixed 2026-07-29 — `autoComplete` on all four auth pages)
+- [x] `frontend/src/pages/AccountSettingsPage.tsx:373` — Unlinking a GitHub/email sign-in identity happens instantly on click with no confirmation, while the *le. (fixed 2026-07-29 — both unlinks ask for confirmation first)
+- [x] `frontend/src/pages/AccountSettingsPage.tsx:538` — The "Add email sign-in" dialog is a `<div>` with onClick buttons, not a `<form onSubmit>`, so pressing E. (fixed 2026-07-29 — a real form; Enter submits)
+- [x] `frontend/src/pages/SignupPage.tsx:46` — "Sign up with GitHub" has no loading state and doesn't mutually disable with the submit button (LoginPage shares `. (fixed 2026-07-29 — loading state + mutual disable, mirroring LoginPage)
+- [x] `frontend/src/pages/ResetPasswordPage.tsx:110` — Test convenience leaks into user copy: the confirm field is labeled "Confirm new" (truncated) and the mism. (fixed 2026-07-29 — label and mismatch copy fixed; tests moved to exact-match queries)
+- [x] `frontend/src/pages/InvitationsPage.tsx:221` — The Decline button is permanently disabled (no decline endpoint exists), and the list also shows expired inv. (fixed 2026-07-29 — #72: a real decline endpoint; expired rows filtered out)
+- [x] `frontend/src/pages/TeamPage.tsx:208` — There is no "Leave project" anywhere in the UI, and the backend forbids self-removal (members.ts:216). Anyone who a. (fixed 2026-07-29 — #72: `DELETE /members/me` plus a TeamPage action)
+- [x] `frontend/src/components/ProjectCard.tsx:119` — The card's "Delete project" menu shows for owner *and* admin, but the API requires owner (projects.ts:486),. (fixed 2026-07-29 — owner-gated, behind the shared type-to-confirm dialog)
+- [x] `frontend/src/pages/OnboardingPage.tsx:989` — "Mark reviewed" renders only for owner/admin (API agrees), yet the tour sells it as "your progress tracker" a. (fixed 2026-07-29 — the editorial metric is relabelled "Approvals" and a per-member read count sits beside it)
+- [x] `frontend/src/pages/GraphPage.tsx` (dependency search) — Searching filters the match count but never recenters the viewport onto the matches. *(Confirmed l. (already fixed by #70 — verified: `refitSignal` + test)
+- [x] `frontend/src/pages/GraphPage.tsx:82` — The `?focus=` deep-link param is re-resolved on every `loadGraph` and never removed from the URL. On a clustered re. (fixed 2026-07-29 — `focus` deleted once resolved, and a target resolves only once)
+- [x] `frontend/src/pages/WorkflowsPage.tsx:137` — The workflow-graph fetch (and the package-keyed loads in ArchitecturePage/CapabilitiesPage/ClassGraphSection/G. (fixed 2026-07-29 — staleness guards on all five package-keyed loads)
+- [x] `frontend/src/pages/GraphPage.tsx:208` (+ `ClassGraphSection.tsx:67`) — The graph search input isn't debounced; each keystroke re-runs a full union-find +. (fixed 2026-07-29 — `useDebouncedValue` extracted; ClassGraphSection debounced for the first time)
+- [x] `frontend/src/components/graph/GraphFirstVisitHint.tsx:37` — The first-visit hint copy is hardcoded to the files view ("map of how files depend… open it on. (fixed 2026-07-29 — a `classes` variant with its own copy and dismissal key)
+- [x] `frontend/src/components/graph/ModuleNode.tsx:3` — Leftover commented-out code shipped in a per-node component: a commented import, a dead `const complexit. (already fixed — verified: the component carries no dead code)
+- [x] `frontend/src/App.tsx:93` — No skip-to-content link and `<main>` regions aren't focus targets. Keyboard users Tab through the logo, 4–9 nav links, tour/sho. (fixed 2026-07-29 — skip link, focusable `<main>` with a focus reset, per-route `document.title`)
+- [x] `frontend/src/pages/ImportPage.tsx:407` (+ TeamPage, ProjectSettingsPage, ArchitecturePage, ProjectOverviewPage) — Many `<Label>`s lack `htmlFor` and their. (fixed 2026-07-29 — label sweep across the settings, team and overview controls)
+- [x] `frontend/src/pages/ProjectSettingsPage.tsx:266` (+ Dashboard, Import, Team, Invitations, Onboarding, AnalyzeDialog, AccountSettings) — Async error/status. (fixed 2026-07-29 — shared `ErrorBanner` with `role="alert"`, 28 files swept onto it)
+- [x] `frontend/src/pages/DashboardPage.tsx:250` (+ ~13 other pages) — Full-page loading is a bare spinning `Loader2` with no `role="status"`/sr-only text, so du. (fixed 2026-07-29 — shared `PageSpinner` with `role="status"` and a label)
+- [x] `frontend/src/pages/WorkflowsPage.tsx:186` — No `prefers-reduced-motion` handling anywhere while the app runs continuous motion: every workflow edge is `an. (fixed 2026-07-29 — base CSS rule plus gated edge animation, camera glides and smooth scrolls)
+- [x] `frontend/src/pages/WalkthroughTab.tsx:310` (+ OnboardingPage, InvitationsPage) — Selected item in several toggle lists is conveyed only by background colo. (fixed 2026-07-29 — `aria-pressed` on the toggle lists, `aria-current` on the reader nav)
+- [x] `frontend/src/components/AnalysisRunPanel.tsx:177` + `PackageSelector.tsx:120` — Pipeline phase status and package status are conveyed solely by icon color. (fixed 2026-07-29 — sr-only status words on the phase icon and the package dot)
+- [x] `frontend/src/pages/TeamPage.tsx:340` — Avatar initials are white text on `bg-amber-500`/`emerald-500`/`cyan-500` (~1.6:1 on amber) — illegible for low-vis. (already fixed by 12b6c40 — verified: `avatarTints` token pairs replaced the `-500` fills)
+- [x] `frontend/src/pages/OnboardingPage.tsx:1110` (+ several) — Meaningful sub-12px text at reduced opacity (`text-muted-foreground/50`, `opacity-50` at 10–11px. (fixed 2026-07-29 — opacity dropped on meaningful text; full sub-12px eradication Won't-Fix: W5)
+- [x] `frontend/src/pages/ProjectSettingsPage.tsx:278` (+ ProjectOverviewPage, OnboardingPage) — Heading levels skip `h1 → h3` with no `h2`, breaking the screen-. (fixed 2026-07-29 — levels corrected; the settings h2 layer arrived with SettingsShell)
+- [x] `frontend/src/components/AppTour.tsx:119` — On tour end, focus isn't restored to the triggering element (it grabbed focus into the card on open), dropping. (fixed 2026-07-29 — the tour restores focus to its trigger)
+- [x] `frontend/src/hooks/useHotkeys.ts:33` — Global single-character shortcuts (`[`, `]`, `1`-`9`, `?`) are always active with no way to disable/remap — a WCAG. (fixed 2026-07-29 — persisted hotkeys preference, a settings toggle and a note in the shortcuts dialog)
+- [x] `frontend/src/components/SidebarShell.tsx:60` — The sidebar toggle has `aria-label` but no `aria-expanded`/`aria-controls`. (fixed 2026-07-29 — the toggle announces its state)
+- [x] `frontend/src/pages/ProjectSettingsPage.tsx:251` — A failed project deletion writes to the page-level error banner, but the confirmation dialog has no erro. (fixed 2026-07-29 — delete failures render inside the dialog)
+- [x] `frontend/src/pages/WalkthroughTab.tsx:262` — `openTutorial`'s catch is empty; a tutorial that 500s shows a spinner then silently snaps back to the picker. (already fixed by #68 — verified)
+- [x] `frontend/src/lib/api.ts:48` — On a final 401 there's no shared redirect-to-login; pages print raw text like "API error 401" until Supabase's SIGNED_OUT ev. (fixed 2026-07-29 — one idempotent sign-out, then login with the return path)
+- [x] `frontend/src/pages/DashboardPage.tsx:162` — The activity-feed fetch swallows errors (`.catch(() => {})`), so on failure users with real activity see "No a. (already fixed by #68 — verified)
+- [x] `frontend/src/pages/ProjectOverviewPage.tsx:716` — On run-history fetch failure, `runs` stays `null`, so the error text renders together with a spinner tha. (already fixed by #68 — verified)
+- [x] `frontend/src/pages/ProjectSettingsPage.tsx:135` — The llm-key and ranking-weights loads swallow errors, leaving a permanently empty role dropdown / "no ke. (already fixed by #68 — verified)
+- [x] `frontend/src/components/PackageSelector.tsx:108` — The "make default" star calls `void setDefaultPackage(...)` and never catches the rejection — it can fa. (fixed 2026-07-29 — caught in `PackagesContext` and surfaced; the star is keyboard-operable via `*`)
+- [x] `frontend/nginx.conf:1` — The prod nginx config has SPA fallback only — no `gzip`, no `Cache-Control` for `index.html` or hashed `/assets/*`. Big JS ships. (already fixed with #73 — verified: gzip, no-cache `index.html`, immutable assets)
+- [x] `frontend/index.html:3` — No `<meta name="description">` or `theme-color`, and the theme-bootstrap `catch` forces dark mode when localStorage throws, ignor. (fixed 2026-07-29 — description + per-scheme `theme-color`; the catch falls back to `matchMedia`)
+- [x] `frontend/src/components/ProjectLayout.tsx:190` — The branch `Badge` in the 224px sidebar has `whitespace-nowrap` and no `max-w`/`truncate` (the repo name. (already fixed — verified: the badge was removed by design after M2 owner feedback)
+- [x] `frontend/src/pages/InvitationsPage.tsx:107` — "Pending Invitations" (title) vs "Active Invitations" (list heading, 3 lines down) vs "Invitations" (sidebar. (fixed 2026-07-29 — one name for the surface; the two routers stay, Won't-Fix: W2)
+- [x] `frontend/src/pages/LoginPage.tsx:117` — Mixed verbs/casing on the app's front door: "Sign In" (Title Case) above "Sign in with GitHub" (sentence case), wh. (fixed 2026-07-29 — sentence-case verbs across the front door)
+- [x] `frontend/src/pages/OnboardingPage.tsx:450` — The onboarding reader always uses `setParams({ replace: true })`, so opening a package card replaces the grid. (fixed 2026-07-29 — the three reader view boundaries push instead of replacing)
 
 **Cross-cutting (2)**
-- [ ] Architecture view (AI-generated component summaries) — *(Observed live)* a component card read "Database Schema: 0 files." in its description while showing.
-- [ ] One action, four names: the import action is "Add Project" (headers), "Import Repository" (empty state), "Add New Repository" (`ProjectListPage.tsx:161`),.
+- [x] Architecture view (AI-generated component summaries) — *(Observed live)* a component card read "Database Schema: 0 files." in its description while showing. (already fixed at root cause — `architectureClusterer.ts:296-306`: counts live in the chip, never in the prose; **checked live 2026-07-29**: 0 of 94 stored clusters carry an "N files." claim in `deterministic_summary` or `metadata`, semantic narratives included)
+- [x] One action, four names: the import action is "Add Project" (headers), "Import Repository" (empty state), "Add New Repository" (`ProjectListPage.tsx:161`),. (fixed 2026-07-29 — "Import repository" at every CTA site, grep-proofed to zero others)
 
 ## Notes
 
@@ -3711,7 +3905,23 @@ Plan for M5: work the two audit documents as a checklist in priority order, nami
 first because that is what a reviewer notices. Anything not done by the freeze is closed
 **Won't-Fix with its specific reason**, so the tracker ends clean rather than open.
 
----
+## Closure — 2026-07-29 (M5 batch 7)
+
+Every one of the 63 lines above is ticked, each with its own evidence: **46 fixed in this batch, 17
+verified already-fixed** (checked against current source or a test, not assumed). Eight sub-items are
+Won't-Fix with a stated reason — W1–W8 in the batch-7 progress section. Nothing on the checklist is
+wholly Won't-Fix; the eight are halves of items whose other half shipped.
+
+Three items that lived only in this log's prose were closed with the batch: the two pre-existing
+`react-hooks/exhaustive-deps` errors (DashboardPage's tour effect, WalkthroughTab's `load` — proven
+with an out-of-tree run of the rule at error level, 2 → 0), the dual invitation route surfaces (kept,
+W2, with an explanatory comment at the mount point), and the package-level known-gaps count, which is
+now a real disclosure listing both provenances (#85's remainder).
+
+The **visual-audit tail** landed in the same batch (`bd37d63`): the dark-theme token lift with
+before/after numbers, the light soft-chip darkening, `--node-state` split off `ui`, the disabled-button
+and duration formatting fixes, `CodeRef`, and `SettingsShell`. Its measured contrast table is recorded
+under **#71**, which is where the "measured, not eyeballed" bar was set.
 
 ---
 
