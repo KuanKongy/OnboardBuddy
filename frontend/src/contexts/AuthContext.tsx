@@ -16,7 +16,8 @@ interface AuthContextValue {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<Session | null>;
   signOut: () => Promise<void>;
-  signInWithGithub: () => Promise<void>;
+  /** `next` = in-app path to land on after the OAuth hop (deep-link preservation). */
+  signInWithGithub: (next?: string) => Promise<void>;
   connectGithub: (preserveAfterOAuthFlag?: boolean) => Promise<void>;
   disconnectGithub: () => Promise<void>;
 }
@@ -71,10 +72,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  async function signInWithGithub() {
+  // #74/F7: a GitHub sign-in from a protected deep link used to land on
+  // /dashboard, dropping the page the user actually asked for. The callback
+  // already honors `?next=` (and rejects anything that isn't a local path), so
+  // the destination just has to survive the round trip through GitHub.
+  async function signInWithGithub(next?: string) {
+    const callback = new URL("/auth/callback", window.location.origin);
+    if (next) callback.searchParams.set("next", next);
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "github",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: { redirectTo: callback.toString() },
     });
     if (error) throw error;
   }

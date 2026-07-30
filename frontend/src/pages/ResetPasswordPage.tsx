@@ -1,6 +1,7 @@
-import { KeyRound, Loader2 } from "lucide-react";
+import { AlertTriangle, KeyRound, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { readAuthErrorCode, readOAuthError } from "@/lib/authErrors";
 import { supabase } from "@/lib/supabase";
 import { LogoMark } from "@/components/BrandLogo";
 import { Button } from "@/components/ui/button";
@@ -11,10 +12,28 @@ import { Label } from "@/components/ui/label";
 /**
  * Landing page of the Supabase recovery link: the link's hash tokens create a
  * session automatically (PASSWORD_RECOVERY / SIGNED_IN), after which the user
- * sets a new password via auth.updateUser. Field labels deliberately avoid a
- * second bare "Password" label ("Confirm new") so getByLabelText(/password/i)
- * stays unambiguous in tests.
+ * sets a new password via auth.updateUser.
  */
+
+/** GoTrue's code for a recovery link past its TTL (`#error_code=otp_expired`). */
+const EXPIRED_LINK_MESSAGE = "This reset link has expired — request a new one.";
+/**
+ * #74/F6: a link that produces neither a session nor an error param (already
+ * consumed, opened on a different device, hash stripped by a mail client) left
+ * this page on the "Waiting for your reset link…" line forever. Same 10s guard
+ * as AuthCallbackPage — long enough for a real recovery round-trip, short
+ * enough that a dead link stops pretending to be in progress.
+ */
+const LINK_TIMEOUT_MESSAGE =
+  "This reset link didn't sign you in — it may have already been used, or been opened on another device.";
+
+/** Reads the failure Supabase redirected back with, "" when the URL is clean. */
+function readResetLinkError(): string {
+  const description = readOAuthError();
+  if (!description) return "";
+  return readAuthErrorCode() === "otp_expired" ? EXPIRED_LINK_MESSAGE : description;
+}
+
 export function ResetPasswordPage() {
   const navigate = useNavigate();
   const [ready, setReady] = useState(false);
@@ -22,23 +41,37 @@ export function ResetPasswordPage() {
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [linkError, setLinkError] = useState(() => readResetLinkError());
 
   useEffect(() => {
+    // A URL that already carries the failure has nothing to wait for.
+    if (linkError) return;
     let cancelled = false;
+
+    const timeoutId = window.setTimeout(() => {
+      if (!cancelled) setLinkError(LINK_TIMEOUT_MESSAGE);
+    }, 10000);
+
+    function markReady() {
+      window.clearTimeout(timeoutId);
+      setReady(true);
+    }
+
     supabase.auth.getSession().then(({ data }) => {
-      if (!cancelled && data.session) setReady(true);
+      if (!cancelled && data.session) markReady();
     });
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (cancelled) return;
       if (event === "PASSWORD_RECOVERY" || (session && (event === "SIGNED_IN" || event === "INITIAL_SESSION"))) {
-        setReady(true);
+        markReady();
       }
     });
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       sub.subscription.unsubscribe();
     };
-  }, []);
+  }, [linkError]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -48,7 +81,7 @@ export function ResetPasswordPage() {
       return;
     }
     if (password !== confirm) {
-      setError("The two entries don't match.");
+      setError("Passwords don't match.");
       return;
     }
     setSaving(true);
@@ -73,7 +106,21 @@ export function ResetPasswordPage() {
 
         <Card>
           <CardContent className="p-4">
-            {!ready ? (
+            {linkError ? (
+              <div
+                role="alert"
+                className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-xs text-destructive"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {linkError}{" "}
+                  <Link to="/forgot-password" className="font-medium text-destructive underline">
+                    Request a reset email
+                  </Link>
+                  .
+                </span>
+              </div>
+            ) : !ready ? (
               <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
                 <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
                 <span>
@@ -103,11 +150,12 @@ export function ResetPasswordPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     className="h-8 text-[0.8125rem]"
+                    autoComplete="new-password"
                   />
                   <p className="text-[0.65625rem] text-muted-foreground">Minimum 8 characters</p>
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="confirm-new" className="text-xs">Confirm new</Label>
+                  <Label htmlFor="confirm-new" className="text-xs">Confirm new password</Label>
                   <Input
                     id="confirm-new"
                     type="password"
@@ -116,6 +164,7 @@ export function ResetPasswordPage() {
                     onChange={(e) => setConfirm(e.target.value)}
                     placeholder="••••••••"
                     className="h-8 text-[0.8125rem]"
+                    autoComplete="new-password"
                   />
                 </div>
                 <Button type="submit" className="w-full" size="sm" disabled={saving}>

@@ -8,8 +8,8 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -34,9 +34,10 @@ import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
 import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
+import { useProjects } from "@/lib/useProjects";
 
 interface Installation {
   id: number;
@@ -52,6 +53,20 @@ interface Repo {
 
 interface Branch {
   name: string;
+}
+
+/**
+ * Everything step 2 needs to configure the first run. Held as one object
+ * (rather than reading step 1's picker state) so a step 2 restored from the URL
+ * after a refresh does not have to fake its way back through the pickers —
+ * setting `selectedInstallation` alone would trip the repos effect and blank the
+ * branch it just restored (#74/F5).
+ */
+interface ConfigureContext {
+  projectId: string;
+  repo: Repo;
+  installationId: string;
+  branch: string;
 }
 
 /**
@@ -87,12 +102,15 @@ const IMPORT_TOUR_STEPS: TourStep[] = [
 export function ImportPage() {
   const navigate = useNavigate();
   const { connectGithub, user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
 
   // Wizard: step 1 imports the repo (creates the project, nothing analyzed);
   // step 2 configures and explicitly starts the first analysis.
-  const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
+  const [configure, setConfigure] = useState<ConfigureContext | null>(null);
+  const createdProjectId = configure?.projectId ?? null;
+  const [restoring, setRestoring] = useState(() => searchParams.has("project"));
   const [analyzeConfig, setAnalyzeConfig] = useState<AnalyzeConfig>(DEFAULT_ANALYZE_CONFIG);
   const [startingAnalysis, setStartingAnalysis] = useState(false);
   const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(createdProjectId ?? "");
@@ -129,7 +147,23 @@ export function ImportPage() {
   const [selectedBranch, setSelectedBranch] = useState("");
 
   const [strandedProjectId, setStrandedProjectId] = useState<string | null>(null);
+  /** Set from a 409's `project_id`: the repo is already imported, over there. */
+  const [existingProjectId, setExistingProjectId] = useState<string | null>(null);
   const [developerRole, setDeveloperRole] = useState<string>(FALLBACK_ROLE);
+
+  /**
+   * #74/F4: the picker offered repositories the user had already imported, and
+   * the only feedback was a bare 409 after the click. Owner rows only — the
+   * backend's UNIQUE (user_id, repo_owner, repo_name) is per owner, so a repo
+   * you can see through *someone else's* project is still yours to import and
+   * must stay selectable.
+   */
+  const { projects: ownProjects } = useProjects();
+  const importedRepoKeys = new Set(
+    ownProjects
+      .filter((p) => p.permission_tier === "owner")
+      .map((p) => `${p.repo_owner}/${p.repo_name}`.toLowerCase()),
+  );
 
   /**
    * Bug #67(2), the client half. Pagination (lib/github.ts) makes every repo
@@ -146,6 +180,60 @@ export function ImportPage() {
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
+
+  /**
+   * #74/F5: step 2 lived only in React state, so a refresh (or landing on the
+   * URL again) dropped the user back to the picker with the project already
+   * created — the exact situation that produced the bare 409 above. The created
+   * id now lives in the URL and the repo context is rebuilt from the project
+   * row, which is the only place it survives a reload.
+   *
+   * `handledProjectId` keeps this to one fetch per id: the create path claims
+   * the id before it writes the param, so writing the URL cannot re-enter here
+   * and reset an `analyzeConfig` the user has already started editing.
+   */
+  const restoreProjectId = searchParams.get("project");
+  const handledProjectId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!restoreProjectId || handledProjectId.current === restoreProjectId) return;
+    handledProjectId.current = restoreProjectId;
+    let cancelled = false;
+    apiFetch(`/projects/${restoreProjectId}`)
+      .then(({ project }: { project: {
+        id: string; repo_owner: string; repo_name: string; branch: string;
+        github_installation_id: number | string | null;
+      } }) => {
+        if (cancelled) return;
+        setConfigure({
+          projectId: project.id,
+          repo: {
+            full_name: `${project.repo_owner}/${project.repo_name}`,
+            owner: project.repo_owner,
+            name: project.repo_name,
+            default_branch: project.branch,
+          },
+          installationId: String(project.github_installation_id ?? ""),
+          branch: project.branch,
+        });
+        setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: project.branch });
+      })
+      .catch(() => {
+        // A stale or foreign id is not an error worth blocking on: fall back to
+        // step 1 rather than stranding the page on a project we can't read.
+        if (cancelled) return;
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("project");
+          return next;
+        }, { replace: true });
+      })
+      .finally(() => {
+        if (!cancelled) setRestoring(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [restoreProjectId, setSearchParams]);
 
   useEffect(() => {
     setInstallationsLoading(true);
@@ -262,6 +350,7 @@ export function ImportPage() {
     setCreating(true);
     setError("");
     setStrandedProjectId(null);
+    setExistingProjectId(null);
     let createdProject: { id: string } | undefined;
     try {
       const { project } = await apiFetch("/projects", {
@@ -290,8 +379,21 @@ export function ImportPage() {
       // Import ≠ analyze: move to the configuration step, where the first
       // run is configured (branch/commit/scope/depth/role), optionally
       // previewed, and only starts on an explicit click.
-      setCreatedProjectId(project.id);
+      handledProjectId.current = project.id;
+      setConfigure({
+        projectId: project.id,
+        repo,
+        installationId: selectedInstallation,
+        branch: selectedBranch,
+      });
       setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: selectedBranch });
+      // `replace`: the project exists now, so the picker is no longer a state
+      // worth going back to — Back there would only invite a duplicate import.
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("project", project.id);
+        return next;
+      }, { replace: true });
       // Same rule as the other four tours: dismissal is per account, and the
       // Help page's picker can request this one explicitly.
       if (consumeTourRequest("import")) setTourOpen(true);
@@ -302,6 +404,12 @@ export function ImportPage() {
       // after — point the user at it instead of stranding them with only an
       // error message and no way back to what was already created.
       if (createdProject) setStrandedProjectId(createdProject.id);
+      // #74/F4: "Project already exists for this repo" with nowhere to go was
+      // the whole complaint. The 409 now carries the existing project's id
+      // (null only if the lookup behind it failed), so say where it went.
+      if (err instanceof ApiError && err.status === 409 && typeof err.body?.project_id === "string") {
+        setExistingProjectId(err.body.project_id);
+      }
     } finally {
       setCreating(false);
     }
@@ -345,13 +453,28 @@ export function ImportPage() {
     }
   }
 
+  // Restoring step 2 from ?project=: showing the picker first and swapping it
+  // out mid-read would be its own bug (a click could land on the wrong step).
+  if (restoring) {
+    return (
+      <>
+        <PageHeader title="Configure the first analysis" subtitle="Step 2 of 2" actions={<BackLink />} />
+        <div className="mx-auto flex max-w-lg items-center gap-2 text-xs text-muted-foreground" role="status">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          Reopening the repository you imported…
+        </div>
+      </>
+    );
+  }
+
   // ── Step 2: configure + explicitly start the first analysis ───────────────
-  if (createdProjectId && repo) {
+  if (configure) {
+    const { repo: configuredRepo, installationId: configuredInstallationId } = configure;
     return (
       <>
         <PageHeader
           title="Configure the first analysis"
-          subtitle={`Step 2 of 2 — ${repo.full_name} is imported; nothing runs until you press Start.`}
+          subtitle={`Step 2 of 2 — ${configuredRepo.full_name} is imported; nothing runs until you press Start.`}
           actions={<BackLink />}
         />
         <div className="mx-auto max-w-lg">
@@ -365,11 +488,11 @@ export function ImportPage() {
 
               <div data-tour="import-config-form">
                 <AnalyzeConfigForm
-                  projectId={createdProjectId}
-                  repoOwner={repo.owner}
-                  repoName={repo.name}
-                  installationId={selectedInstallation}
-                  defaultBranch={selectedBranch}
+                  projectId={configure.projectId}
+                  repoOwner={configuredRepo.owner}
+                  repoName={configuredRepo.name}
+                  installationId={configuredInstallationId}
+                  defaultBranch={configure.branch}
                   config={analyzeConfig}
                   onChange={(c) => {
                     setAnalyzeConfig(c);
@@ -482,6 +605,15 @@ export function ImportPage() {
                   </Button>
                 </div>
               )}
+              {existingProjectId && (
+                <div className="mt-1.5">
+                  <Button variant="link" size="xs" className="h-auto p-0 text-destructive underline" asChild>
+                    <Link to={`/projects/${existingProjectId}`}>
+                      Open the project you already imported for this repository
+                    </Link>
+                  </Button>
+                </div>
+              )}
             </div>
           )}
 
@@ -585,11 +717,17 @@ export function ImportPage() {
                         <SelectValue placeholder="Select repository" />
                       </SelectTrigger>
                       <SelectContent>
-                        {visibleRepos.map((r) => (
-                          <SelectItem key={r.full_name} value={r.full_name}>
-                            {r.full_name}
-                          </SelectItem>
-                        ))}
+                        {visibleRepos.map((r) => {
+                          const alreadyImported = importedRepoKeys.has(r.full_name.toLowerCase());
+                          return (
+                            <SelectItem key={r.full_name} value={r.full_name} disabled={alreadyImported}>
+                              {r.full_name}
+                              {alreadyImported && (
+                                <span className="text-muted-foreground"> (already imported)</span>
+                              )}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                     {repos.length >= TYPEAHEAD_MIN_OPTIONS && (

@@ -9,6 +9,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
+/**
+ * Where ProtectedRoute wanted the user to be, as a path GitHub can be asked to
+ * come back to (#74/F7). ProtectedRoute hands over a Location; AccountCard-style
+ * callers hand over a plain string — accept both rather than putting
+ * "[object Object]" in a redirect URL.
+ */
+function nextPathOf(from: Location | string | undefined): string | undefined {
+  if (!from) return undefined;
+  if (typeof from === "string") return from;
+  return `${from.pathname}${from.search ?? ""}`;
+}
+
 export function LoginPage() {
   const { user, loading: authLoading, signIn, signInWithGithub } = useAuth();
   const navigate = useNavigate();
@@ -19,6 +31,7 @@ export function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
+  const from = (location.state as { from?: Location } | null)?.from;
 
   // Already signed in → straight to the app (the intro page never redirects;
   // this page is the "I want in" signal).
@@ -32,7 +45,6 @@ export function LoginPage() {
     setLoading(true);
     try {
       await signIn(email, password);
-      const from = (location.state as { from?: Location } | null)?.from;
       navigate(from ?? "/dashboard", { replace: true });
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign in failed");
@@ -45,7 +57,7 @@ export function LoginPage() {
     setError("");
     setGithubLoading(true);
     try {
-      await signInWithGithub();
+      await signInWithGithub(nextPathOf(from));
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "GitHub sign in failed");
     } finally {
@@ -81,6 +93,7 @@ export function LoginPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   className="h-8 text-[0.8125rem]"
+                  autoComplete="email"
                 />
               </div>
               <div className="space-y-1">
@@ -99,6 +112,7 @@ export function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     className="h-8 pr-8 text-[0.8125rem]"
+                    autoComplete="current-password"
                   />
                   <Button
                     type="button"

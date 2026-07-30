@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ImportPage } from "./ImportPage";
 import type { PreflightPreviewData } from "@/components/PreflightPreview";
@@ -53,21 +53,53 @@ vi.mock("@/components/PreflightPreview", async () => {
   };
 });
 
-vi.mock("@/lib/api", () => ({
-  apiFetch: vi.fn(async (path: string) => {
-    if (path === "/github/app") return { name: "OnboardBuddy", install_url: "https://github.test/install" };
-    if (path === "/github/installations") {
-      return { github_connected: true, github_username: "acme-bot", installations: [{ id: 42, account: { login: "acme" } }] };
+/**
+ * Server state the tests drive. GET and POST /projects are DIFFERENT calls with
+ * different shapes — the old mock answered both with the POST body, which is
+ * what let the page's new projects cross-reference read `undefined`.
+ */
+const apiState: {
+  projects: Array<Record<string, unknown>>;
+  conflictProjectId: string | null;
+  projectRow: Record<string, unknown> | null;
+} = { projects: [], conflictProjectId: null, projectRow: null };
+
+vi.mock("@/lib/api", () => {
+  class ApiError extends Error {
+    status: number;
+    body: Record<string, unknown>;
+    constructor(message: string, status: number, body: Record<string, unknown>) {
+      super(message);
+      this.status = status;
+      this.body = body;
     }
-    if (path.startsWith("/github/repos?")) return { repos: REPOS };
-    if (path.includes("/branches")) return { branches: BRANCHES };
-    if (path === "/projects") return { project: { id: "proj-1" } };
-    if (path.startsWith("/projects/") && path.endsWith("/settings")) return {};
-    if (path.endsWith("/analyze")) { analyzeCalls.push(path); return { analysis: { id: "job-1" } }; }
-    return {};
-  }),
-  ApiError: class ApiError extends Error {},
-}));
+  }
+  return {
+    ApiError,
+    apiFetch: vi.fn(async (path: string, options?: RequestInit) => {
+      const method = options?.method ?? "GET";
+      if (path === "/github/app") return { name: "OnboardBuddy", install_url: "https://github.test/install" };
+      if (path === "/github/installations") {
+        return { github_connected: true, github_username: "acme-bot", installations: [{ id: 42, account: { login: "acme" } }] };
+      }
+      if (path.startsWith("/github/repos?")) return { repos: REPOS };
+      if (path.includes("/branches")) return { branches: BRANCHES };
+      if (path === "/projects") {
+        if (method === "GET") return { projects: apiState.projects };
+        if (apiState.conflictProjectId) {
+          throw new ApiError("Project already exists for this repo", 409, {
+            project_id: apiState.conflictProjectId,
+          });
+        }
+        return { project: { id: "proj-1" } };
+      }
+      if (path.endsWith("/settings")) return {};
+      if (path.endsWith("/analyze")) { analyzeCalls.push(path); return { analysis: { id: "job-1" } }; }
+      if (path.startsWith("/projects/")) return { project: apiState.projectRow };
+      return {};
+    }),
+  };
+});
 
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: () => ({ connectGithub: vi.fn(), user: { id: "user-1" } }),
@@ -107,11 +139,18 @@ beforeAll(() => {
   proto.scrollIntoView ??= () => {};
 });
 
-function renderImportPage() {
+/** MemoryRouter keeps its URL to itself; this is how the tests read it. */
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="url">{`${location.pathname}${location.search}`}</span>;
+}
+
+function renderImportPage(entry = "/import") {
   return render(
     <TooltipProvider>
-      <MemoryRouter initialEntries={["/import"]}>
+      <MemoryRouter initialEntries={[entry]}>
         <ImportPage />
+        <LocationProbe />
       </MemoryRouter>
     </TooltipProvider>,
   );
@@ -139,6 +178,9 @@ async function reachConfigureStep(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   analyzeCalls.length = 0;
+  apiState.projects = [];
+  apiState.conflictProjectId = null;
+  apiState.projectRow = null;
 });
 
 /**
@@ -244,5 +286,81 @@ describe("ImportPage — the oversized-repo cost gate (bug #67)", () => {
     await waitFor(() => expect(screen.getByText(/analyzable files/)).toBeInTheDocument());
     // Once the real numbers exist the generic notice steps aside.
     expect(screen.queryByText("What gets analysed")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Bug #67 remainder, tracked as #74/F4 and #74/F5 — the import flow's three
+ * dead ends: a picker that offers repositories you already imported, a 409 that
+ * names the problem and nowhere to go, and a step 2 that only existed in React
+ * state, so a refresh dropped you back onto the picker with the project already
+ * created (which then 409'd).
+ */
+describe("ImportPage — already-imported repositories (#74/F4)", () => {
+  it("badges and disables a repo the user already owns a project for", async () => {
+    apiState.projects = [
+      { id: "p-000", repo_owner: "acme", repo_name: "service-000", permission_tier: "owner" },
+      // Someone else's project the user was invited to. UNIQUE (user_id,
+      // repo_owner, repo_name) is per owner, so this one is still importable.
+      { id: "p-001", repo_owner: "acme", repo_name: "service-001", permission_tier: "viewer" },
+    ];
+    const user = userEvent.setup();
+    await selectAccount(user);
+
+    await user.type(screen.getByLabelText("Filter repositories"), "service-00");
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+
+    const imported = await screen.findByRole("option", { name: /service-000 \(already imported\)/ });
+    expect(imported).toHaveAttribute("aria-disabled", "true");
+    const invitedTo = screen.getByRole("option", { name: "acme/service-001" });
+    expect(invitedTo, "a repo owned by someone else stays importable").not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("links to the existing project when create comes back 409", async () => {
+    apiState.conflictProjectId = "already-there-9";
+    const user = userEvent.setup();
+    await selectAccount(user);
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /import repository/i }));
+
+    expect(await screen.findByText(/Project already exists for this repo/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /already imported/i })).toHaveAttribute(
+      "href",
+      "/projects/already-there-9",
+    );
+  });
+});
+
+describe("ImportPage — step 2 survives a reload (#74/F5)", () => {
+  it("restores the configure step from ?project= without re-running step 1", async () => {
+    apiState.projectRow = {
+      id: "proj-7",
+      repo_owner: "acme",
+      repo_name: "service-042",
+      branch: "release/2026-07",
+      github_installation_id: 42,
+    };
+    renderImportPage("/import?project=proj-7");
+
+    expect(
+      await screen.findByText(/acme\/service-042 is imported; nothing runs until you press Start/),
+    ).toBeInTheDocument();
+    // The picker is gone: this is step 2, not step 1 with a banner.
+    expect(screen.queryByRole("combobox", { name: "Repository" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /start analysis/i })).toBeInTheDocument();
+  });
+
+  it("writes the created project id into the URL when step 2 begins", async () => {
+    const user = userEvent.setup();
+    await reachConfigureStep(user);
+    // reachConfigureStep asserts step 2 is on screen; this id is what makes it
+    // reachable again after a reload.
+    expect(screen.getByTestId("url")).toHaveTextContent("/import?project=proj-1");
   });
 });

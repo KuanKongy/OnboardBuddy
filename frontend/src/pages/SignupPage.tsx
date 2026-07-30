@@ -18,6 +18,7 @@ export function SignupPage() {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
 
   // Already signed in → straight to the app.
   if (!authLoading && user) {
@@ -43,12 +44,18 @@ export function SignupPage() {
     }
   }
 
+  // #74/F11: this button gave no sign it had been pressed. The OAuth redirect
+  // can take a second or two, in which time the page still invited a second
+  // click and a form submit — LoginPage already spins and mutually disables.
   async function handleGithub() {
     setError("");
+    setGithubLoading(true);
     try {
       await signInWithGithub();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "GitHub sign up failed");
+    } finally {
+      setGithubLoading(false);
     }
   }
 
@@ -85,6 +92,7 @@ export function SignupPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
                   className="h-8 text-[0.8125rem]"
+                  autoComplete="email"
                 />
               </div>
               <div className="space-y-1">
@@ -99,6 +107,7 @@ export function SignupPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="••••••••"
                     className="h-8 pr-8 text-[0.8125rem]"
+                    autoComplete="new-password"
                   />
                   <Button
                     type="button"
@@ -113,7 +122,7 @@ export function SignupPage() {
                 </div>
                 <p className="text-xs text-muted-foreground">Minimum 8 characters</p>
               </div>
-              <Button type="submit" className="w-full" size="sm" disabled={loading}>
+              <Button type="submit" className="w-full" size="sm" disabled={loading || githubLoading}>
                 {loading && <Loader2 className="h-3 w-3 animate-spin" />}
                 Create account
               </Button>
@@ -126,8 +135,8 @@ export function SignupPage() {
               </span>
             </div>
 
-            <Button variant="outline" className="w-full" size="sm" onClick={handleGithub}>
-              <Github className="h-3.5 w-3.5" />
+            <Button variant="outline" className="w-full" size="sm" onClick={handleGithub} disabled={loading || githubLoading}>
+              {githubLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Github className="h-3.5 w-3.5" />}
               Sign up with GitHub
             </Button>
           </CardContent>
