@@ -126,7 +126,8 @@ invitationsRouter.post("/:invitationId/accept", requireUuidParam("invitationId")
     const { invitationId } = req.params;
     const userId = req.user!.id;
     const email = req.user!.email;
-    const { developer_role } = req.body as { developer_role?: string };
+    // express.json leaves req.body undefined on a bodyless POST.
+    const { developer_role } = (req.body ?? {}) as { developer_role?: string };
 
     await client.query("BEGIN");
 

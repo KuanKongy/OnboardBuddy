@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import request from "supertest";
 import { createApp } from "../../src/api/app.js";
+import { pool } from "../../src/lib/db.js";
 import {
   authHeader,
   installTestAuth,
@@ -46,12 +47,34 @@ describe("GET /api/invitations/:id", () => {
 });
 
 describe("POST /api/invitations/:id/accept", () => {
+  afterEach(resetTestHarness);
+
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app)
       .post("/api/invitations/some-uuid/accept")
       .send({ developer_role: "backend" });
 
     expect(res.status).to.equal(401);
+  });
+
+  // Found by the live probe: express.json leaves req.body undefined on a
+  // bodyless POST, and the destructure 500'd before the transaction began.
+  it("answers a bodyless accept with 404, not a destructure 500", async () => {
+    installTestAuth();
+    const original = pool.connect;
+    (pool as unknown as { connect: () => Promise<unknown> }).connect = async () => ({
+      query: async () => ({ rows: [] }),
+      release: () => {},
+    });
+    try {
+      const res = await request(app)
+        .post("/api/invitations/44444444-4444-4444-4444-444444444444/accept")
+        .set(authHeader());
+
+      expect(res.status).to.equal(404);
+    } finally {
+      (pool as unknown as { connect: typeof original }).connect = original;
+    }
   });
 });
 
