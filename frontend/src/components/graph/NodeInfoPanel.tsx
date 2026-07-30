@@ -82,7 +82,7 @@ function RelationItem({
     <li className="min-w-0">
       <p className="truncate font-mono text-[0.6875rem] text-muted-foreground">{name}</p>
       {filePath && (
-        <p className="truncate font-mono text-[0.625rem] text-muted-foreground/60">{filePath}</p>
+        <p className="truncate font-mono text-[0.625rem] text-muted-foreground">{filePath}</p>
       )}
     </li>
   );
@@ -210,7 +210,7 @@ export function NodeInfoPanel({
                 <span className="font-mono text-[0.6875rem]">{doc.keySymbols!.join(", ")}</span>
               </p>
             )}
-            <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
+            <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
               {doc.factsOnly ? (
                 "Deterministic facts only — no AI summary here"
               ) : (

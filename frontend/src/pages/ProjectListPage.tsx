@@ -1,8 +1,10 @@
-import { Loader2, Mail, Plus, Search } from "lucide-react";
+import { Mail, Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard } from "@/components/ProjectCard";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -132,15 +134,11 @@ export function ProjectListPage() {
       </div>
 
       {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <PageSpinner className="py-16" label="Loading your projects" />
       )}
 
       {error && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-[0.8125rem] text-destructive">
-          {error}
-        </div>
+        <ErrorBanner className="text-[0.8125rem]">{error}</ErrorBanner>
       )}
 
       {!loading && !error && projects.length === 0 && (

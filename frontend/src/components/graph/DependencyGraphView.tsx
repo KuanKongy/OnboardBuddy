@@ -10,6 +10,7 @@ import { useIsDarkMode } from "@/hooks/useIsDarkMode";
 import type { GraphDrill } from "@/hooks/useGraphDrill";
 import type { PositionedNode } from "@/lib/graphLayout";
 import { inferNodeType } from "@/lib/graphNodeType";
+import { prefersReducedMotion } from "@/lib/motion";
 import type { GraphEdge } from "@/types/graph";
 
 /**
@@ -182,7 +183,7 @@ export function DependencyGraphView({
           id: edge.id,
           source: edge.source,
           target: edge.target,
-          animated: isActive,
+          animated: isActive && !prefersReducedMotion(),
           label,
           labelStyle: { fill: "var(--muted-foreground)", fontSize: 9, fontWeight: 700 },
           labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },

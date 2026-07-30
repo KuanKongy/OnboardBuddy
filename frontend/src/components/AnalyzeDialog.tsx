@@ -158,8 +158,8 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
         )}
 
         {previewing && (
-          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground" role="status">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
             Building the analysis preview — scanning files and estimating cost…
           </div>
         )}

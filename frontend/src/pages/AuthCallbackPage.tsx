@@ -117,8 +117,8 @@ export function AuthCallbackPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" />
+      <div className="text-center" role="status">
+        <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" aria-hidden="true" />
         <p className="mt-3 text-xs text-muted-foreground">Completing sign in...</p>
       </div>
     </div>

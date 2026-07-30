@@ -32,6 +32,7 @@ import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { apiFetch } from "@/lib/api";
 import { CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
 import { middleTruncate } from "@/lib/format";
+import { prefersReducedMotion } from "@/lib/motion";
 import { triggerLabel } from "@/lib/graphData";
 import { layoutGraph, layoutRows } from "@/lib/graphLayout";
 import { buildStepChain, layoutSerpentine, shouldSerpentine, type SerpentineLayout } from "@/lib/serpentine";
@@ -721,7 +722,7 @@ export function CapabilitiesPage() {
           ...(route ? { sourceHandle: route.sourceHandle, targetHandle: route.targetHandle } : {}),
           type: "smoothstep",
           ...(route ? { pathOptions: { borderRadius: 16 } } : {}),
-          animated: true,
+          animated: !prefersReducedMotion(),
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--primary)" },
           style: { stroke: "var(--primary)", strokeWidth: 1.4, opacity: 0.6 },
         };
@@ -920,10 +921,10 @@ export function CapabilitiesPage() {
                 if (inTier.length === 0) return null;
                 return (
                   <div key={key} className="pt-1.5 first:pt-0">
-                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
                       {label} ({inTier.length})
                     </p>
-                    {note && <p className="px-2 pb-1 text-[0.625rem] leading-tight text-muted-foreground/50">{note}</p>}
+                    {note && <p className="px-2 pb-1 text-[0.625rem] leading-tight text-muted-foreground">{note}</p>}
                     {inTier.map((cap) => (
                       <button
                         key={cap.id}
@@ -960,7 +961,7 @@ export function CapabilitiesPage() {
                               {cap.name}
                             </TooltipContent>
                           </Tooltip>
-                          <span className="block text-[0.6875rem] opacity-60">
+                          <span className="block text-[0.6875rem]">
                             {cap.workflows.length} flow{cap.workflows.length === 1 ? "" : "s"}
                             {cap.binding.schemas.length > 0 && ` · ${cap.binding.schemas.length} table${cap.binding.schemas.length === 1 ? "" : "s"}`}
                           </span>
@@ -972,7 +973,7 @@ export function CapabilitiesPage() {
               })}
             </div>
             {sharedFlows > 0 && (
-              <p className="mt-2 border-t border-border px-2 pt-2 text-[0.625rem] leading-relaxed text-muted-foreground/70">
+              <p className="mt-2 border-t border-border px-2 pt-2 text-[0.625rem] leading-relaxed text-muted-foreground">
                 Opening every capability lists {flowListings} flows, against {derivation!.boundFlows} bound in the header:{" "}
                 {sharedFlows} listing{sharedFlows === 1 ? "" : "s"} {sharedFlows === 1 ? "is" : "are"} a flow that delivers
                 more than one capability, counted once above and once per capability below.
@@ -981,7 +982,7 @@ export function CapabilitiesPage() {
             {derivation && derivation.unbound.length > 0 && (
               <div className="mt-3 border-t border-border px-2 pt-2">
                 <p className="section-label mb-1">Not bound ({derivation.unbound.length})</p>
-                <p className="text-[0.625rem] leading-relaxed text-muted-foreground/70">
+                <p className="text-[0.625rem] leading-relaxed text-muted-foreground">
                   Traced flows that reach no schema table or named service, so no capability was derived from them.
                 </p>
                 <ul className="mt-1 space-y-0.5">
@@ -1005,7 +1006,7 @@ export function CapabilitiesPage() {
                     </li>
                   ))}
                   {derivation.unbound.length > 6 && (
-                    <li className="text-[0.625rem] text-muted-foreground/60">+{derivation.unbound.length - 6} more</li>
+                    <li className="text-[0.625rem] text-muted-foreground">+{derivation.unbound.length - 6} more</li>
                   )}
                 </ul>
               </div>
@@ -1343,7 +1344,7 @@ function EmptyFinding({
                 ))}
               </ul>
               {derivation.unbound.length > 8 && (
-                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground/70">
+                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                   +{derivation.unbound.length - 8} more traced flows in the same position.
                 </p>
               )}
@@ -1351,7 +1352,7 @@ function EmptyFinding({
           )}
 
           {derivation && !derivation.reportStored && derivation.tracedFlows > 0 && (
-            <p className="mt-3 text-[0.6875rem] text-muted-foreground/70">
+            <p className="mt-3 text-[0.6875rem] text-muted-foreground">
               This snapshot was analysed before the derivation report was recorded, so the counts above come from the
               same tables but the per-flow reasons are not available. Re-run the analysis to get them.
             </p>

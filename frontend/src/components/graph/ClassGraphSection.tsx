@@ -1,10 +1,11 @@
-import { AlertTriangle, ChevronRight, CornerLeftUp, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronRight, CornerLeftUp, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Viewport } from "reactflow";
 import { DependencyGraphView } from "@/components/graph/DependencyGraphView";
 import { MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { GraphToolbar } from "@/components/graph/GraphToolbar";
 import { NodeInfoPanel } from "@/components/graph/NodeInfoPanel";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { fetchClassGraph, fetchNodeDetail, type GraphResponse, type NodeDetail } from "@/lib/graphData";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
@@ -262,9 +263,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   // screen while the child loads makes the transition what it claims to be.
   if (loading && !data) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-5 w-5 animate-spin text-primary" />
-      </div>
+      <PageSpinner className="py-20" label="Loading classes and interfaces" />
     );
   }
 

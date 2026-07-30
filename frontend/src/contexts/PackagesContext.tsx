@@ -44,6 +44,8 @@ interface PackagesContextValue {
   packagesError: boolean;
   /** Same, for the analysis-status poll. */
   statusError: boolean;
+  /** True after the last "make this my default" PUT failed (#74/H7). */
+  defaultPackageError: boolean;
 }
 
 const PackagesContext = createContext<PackagesContextValue | undefined>(undefined);
@@ -67,6 +69,7 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [packagesError, setPackagesError] = useState(false);
   const [statusError, setStatusError] = useState(false);
+  const [defaultPackageError, setDefaultPackageError] = useState(false);
   // Whether selection still needs initializing from localStorage/default once
   // the package list is known.
   const selectionInitialized = useRef(false);
@@ -219,11 +222,21 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   }, [project?.default_package_id, project, projectId, navigate, selectPackage]);
 
   const setDefaultPackage = useCallback(async (id: string | null) => {
-    await apiFetch(`/projects/${projectId}/default-package`, {
-      method: "PUT",
-      body: JSON.stringify({ package_id: id }),
-    });
-    refetchProject();
+    // #74/H7: the only caller fires this as `void setDefaultPackage(...)` from a
+    // click handler, so a failed PUT became an unhandled promise rejection — a
+    // red line in the console and a star that quietly stayed where it was. The
+    // user is told the default moved by the absence of any complaint.
+    // Cleared on each attempt so a retry does not read as still-broken.
+    setDefaultPackageError(false);
+    try {
+      await apiFetch(`/projects/${projectId}/default-package`, {
+        method: "PUT",
+        body: JSON.stringify({ package_id: id }),
+      });
+      refetchProject();
+    } catch {
+      setDefaultPackageError(true);
+    }
   }, [projectId, refetchProject]);
 
   const registerSessionJob = useCallback((jobId: string, opts?: { navigateOnDone?: boolean }) => {
@@ -253,9 +266,10 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     packageQuery,
     packagesError,
     statusError,
+    defaultPackageError,
   }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage,
        defaultPackageId, setDefaultPackage, status, refreshStatus, activeJobs,
-       registerSessionJob, packageQuery, packagesError, statusError]);
+       registerSessionJob, packageQuery, packagesError, statusError, defaultPackageError]);
 
   return <PackagesContext.Provider value={value}>{children}</PackagesContext.Provider>;
 }

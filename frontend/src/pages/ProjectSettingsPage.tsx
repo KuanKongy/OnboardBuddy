@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,6 +22,7 @@ import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
+import { scrollBehavior } from "@/lib/motion";
 import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
 export const PRIVACY_MODES = [
@@ -180,7 +182,7 @@ export function ProjectSettingsPage() {
   // this long page — the banner renders right under the header, easy to
   // miss from a bottom-of-page action.
   useEffect(() => {
-    if (error) errorRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (error) errorRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
   }, [error]);
 
   // Slider state lives here, not in `project.settings`, so the footer Cancel
@@ -362,12 +364,7 @@ export function ProjectSettingsPage() {
       />
 
       {error && (
-        <div
-          ref={errorRef}
-          className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-        >
-          {error}
-        </div>
+        <ErrorBanner ref={errorRef} className="mb-3">{error}</ErrorBanner>
       )}
 
       <div className="grid grid-cols-1 items-start gap-3">
@@ -472,9 +469,9 @@ export function ProjectSettingsPage() {
             </div>
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="min-w-0 space-y-1">
-                <Label className="text-xs">Analysis depth</Label>
+                <Label htmlFor="analysis-depth" className="text-xs">Analysis depth</Label>
                 <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectTrigger id="analysis-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
                     <SelectItem value="standard">Standard — balanced</SelectItem>
@@ -483,9 +480,9 @@ export function ProjectSettingsPage() {
                 </Select>
               </div>
               <div className="min-w-0 space-y-1">
-                <Label className="text-xs">Analysis model</Label>
+                <Label htmlFor="analysis-model" className="text-xs">Analysis model</Label>
                 <Select value={analysisModel} onValueChange={setAnalysisModel} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectTrigger id="analysis-model" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     {SELECTABLE_MODELS.map((m) => (
                       <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
@@ -509,8 +506,9 @@ export function ProjectSettingsPage() {
             <h3 className="mb-2 text-xs font-medium text-foreground">Analysis budget</h3>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <div className="space-y-1">
-                <Label className="text-xs">Max LLM calls</Label>
+                <Label htmlFor="budget-calls" className="text-xs">Max LLM calls</Label>
                 <Input
+                  id="budget-calls"
                   type="number"
                   value={budgetCalls}
                   onChange={(e) => setBudgetCalls(e.target.value)}
@@ -520,8 +518,9 @@ export function ProjectSettingsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Max input tokens</Label>
+                <Label htmlFor="budget-tokens" className="text-xs">Max input tokens</Label>
                 <Input
+                  id="budget-tokens"
                   type="number"
                   value={budgetTokens}
                   onChange={(e) => setBudgetTokens(e.target.value)}
@@ -531,9 +530,9 @@ export function ProjectSettingsPage() {
                 />
               </div>
               <div className="min-w-0 space-y-1">
-                <Label className="text-xs">When exceeded</Label>
+                <Label htmlFor="stop-behavior" className="text-xs">When exceeded</Label>
                 <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
-                  <SelectTrigger className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                  <SelectTrigger id="stop-behavior" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="pause">Pause — resume later</SelectItem>
                     <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
@@ -655,7 +654,9 @@ export function ProjectSettingsPage() {
               </div>
             ) : canEdit ? (
               <div className="flex gap-2">
+                <Label htmlFor="llm-api-key" className="sr-only">Project LLM API key</Label>
                 <Input
+                  id="llm-api-key"
                   type="password"
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
@@ -792,8 +793,9 @@ export function ProjectSettingsPage() {
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1">
-                <Label className="text-xs">Max files</Label>
+                <Label htmlFor="file-limit" className="text-xs">Max files</Label>
                 <Input
+                  id="file-limit"
                   type="number"
                   value={fileLimit}
                   onChange={(e) => setFileLimit(e.target.value)}
@@ -803,8 +805,9 @@ export function ProjectSettingsPage() {
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Max lines of code</Label>
+                <Label htmlFor="loc-limit" className="text-xs">Max lines of code</Label>
                 <Input
+                  id="loc-limit"
                   type="number"
                   value={locLimit}
                   onChange={(e) => setLocLimit(e.target.value)}

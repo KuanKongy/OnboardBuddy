@@ -1,6 +1,8 @@
 import { CheckCircle, Loader2, Users, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -94,9 +96,7 @@ export function InvitationsPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <Loader2 className="h-4 w-4 animate-spin text-primary" />
-      </div>
+      <PageSpinner className="py-16" iconClassName="h-4 w-4" label="Loading your invitations" />
     );
   }
 
@@ -109,9 +109,7 @@ export function InvitationsPage() {
       />
 
       {error && (
-        <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {error}
-        </div>
+        <ErrorBanner className="mb-3">{error}</ErrorBanner>
       )}
 
       {invitations.length === 0 ? (

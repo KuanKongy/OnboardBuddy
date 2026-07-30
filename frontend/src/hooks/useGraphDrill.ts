@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DrillFrame } from "@/lib/drillStack";
+import { prefersReducedMotion } from "@/lib/motion";
 import type { DrillStack } from "@/hooks/useDrillStack";
 
 export type DrillPhase = "idle" | "zoom-in" | "waiting" | "settle" | "zoom-out";
@@ -43,11 +44,6 @@ export interface UseGraphDrillOptions {
   loadLevel(frame: DrillFrame | null): Promise<void>;
   /** Current viewport, saved against the level being left. */
   readViewport?(): { x: number; y: number; zoom: number } | null;
-}
-
-/** Honour the OS setting: same phases, no animation. */
-function prefersReducedMotion(): boolean {
-  return typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
 }
 
 /**

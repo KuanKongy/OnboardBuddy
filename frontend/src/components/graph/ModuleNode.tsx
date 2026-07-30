@@ -90,7 +90,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
             {data.summary}
           </p>
           {data.role && (
-            <p className="mb-2 truncate text-[0.625rem] uppercase tracking-wide text-muted-foreground/70">
+            <p className="mb-2 truncate text-[0.625rem] uppercase tracking-wide text-muted-foreground">
               {data.role}
             </p>
           )}
@@ -109,7 +109,7 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </p>
       )}
       {!isGroup && isSymbol && data.summary && (
-        <p className="mb-2 truncate font-mono text-[0.625rem] text-muted-foreground/70">{data.filePath}</p>
+        <p className="mb-2 truncate font-mono text-[0.625rem] text-muted-foreground">{data.filePath}</p>
       )}
 
       <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[0.6875rem] text-muted-foreground">

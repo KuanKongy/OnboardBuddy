@@ -31,6 +31,7 @@ import {
   type ArchitectureResponse,
 } from "@/lib/architectureData";
 import { layoutGraph } from "@/lib/graphLayout";
+import { prefersReducedMotion } from "@/lib/motion";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
 import { cn } from "@/lib/utils";
 
@@ -300,7 +301,7 @@ export function ArchitecturePage() {
           id: e.id,
           source: e.source,
           target: e.target,
-          animated: active,
+          animated: active && !prefersReducedMotion(),
           label: active ? e.kind.replace(/_/g, " ") : undefined,
           labelStyle: { fill: "var(--muted-foreground)", fontSize: 10, fontWeight: 600 },
           labelBgStyle: { fill: "var(--popover)", fillOpacity: 0.95 },
@@ -692,7 +693,7 @@ export function ArchitecturePage() {
                         </ul>
                       </div>
                     )}
-                    <p className="text-[0.65625rem] text-muted-foreground/70">
+                    <p className="text-[0.65625rem] text-muted-foreground">
                       Derived from the traced structure — no AI involved.
                     </p>
                   </div>
@@ -700,7 +701,7 @@ export function ArchitecturePage() {
                   asideCluster.summary && (
                     <div className="mb-3">
                       <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{asideCluster.summary}</p>
-                      <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
+                      <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
                         {asideCluster.summarySource === "semantic" ? (
                           <>
                             <Sparkles className="h-2.5 w-2.5" /> AI summary ({asideCluster.confidence} confidence)
@@ -765,7 +766,7 @@ export function ArchitecturePage() {
                 <ul className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border/60 p-1.5">
                   {asideCluster.members.map((m, i) => (
                     <li key={m.key} className="flex min-w-0 items-baseline gap-1.5">
-                      <span className="w-5 shrink-0 text-right text-[0.625rem] tabular-nums text-muted-foreground/50">
+                      <span className="w-5 shrink-0 text-right text-[0.625rem] tabular-nums text-muted-foreground">
                         {i + 1}
                       </span>
                       <div className="min-w-0 flex-1">
@@ -782,7 +783,7 @@ export function ArchitecturePage() {
                     </li>
                   ))}
                 </ul>
-                <p className="mt-1 text-[0.625rem] text-muted-foreground/70">
+                <p className="mt-1 text-[0.625rem] text-muted-foreground">
                   Most critical first, then by path. Each link opens the file on the Dependencies tab.
                   {describedMembers > 0
                     ? ` ${describedMembers} of ${asideCluster.members.length} carry a generated description; the rest were not summarised in this snapshot.`

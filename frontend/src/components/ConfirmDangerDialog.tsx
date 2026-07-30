@@ -1,5 +1,6 @@
 import { Loader2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -73,14 +74,7 @@ export function ConfirmDangerDialog({
           aria-label={`Type ${confirmWord} to confirm`}
           className="h-8 text-[0.8125rem]"
         />
-        {error && (
-          <div
-            className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-            role="alert"
-          >
-            {error}
-          </div>
-        )}
+        {error && <ErrorBanner>{error}</ErrorBanner>}
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel

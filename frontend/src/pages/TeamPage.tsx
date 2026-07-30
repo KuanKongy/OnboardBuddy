@@ -4,6 +4,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -336,8 +338,9 @@ export function TeamPage() {
               }}
             >
               <div className="space-y-1">
-                <Label className="text-xs">Email address</Label>
+                <Label htmlFor="invite-email" className="text-xs">Email address</Label>
                 <Input
+                  id="invite-email"
                   type="email"
                   placeholder="colleague@example.com"
                   value={inviteEmail}
@@ -347,9 +350,9 @@ export function TeamPage() {
               </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label className="text-xs">Permission tier</Label>
+                  <Label htmlFor="invite-tier" className="text-xs">Permission tier</Label>
                   <Select value={inviteTier} onValueChange={setInviteTier}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]">
+                    <SelectTrigger id="invite-tier" className="h-8 text-[0.8125rem]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -359,9 +362,9 @@ export function TeamPage() {
                   </Select>
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Developer role</Label>
+                  <Label htmlFor="invite-role" className="text-xs">Developer role</Label>
                   <Select value={inviteRole} onValueChange={setInviteRole}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]">
+                    <SelectTrigger id="invite-role" className="h-8 text-[0.8125rem]">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -382,11 +385,7 @@ export function TeamPage() {
                 No email is sent — the invitation appears on their Invitations page when they sign
                 in with this address.
               </p>
-              {error && (
-                <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {error}
-                </div>
-              )}
+              {error && <ErrorBanner>{error}</ErrorBanner>}
               <div className="flex justify-end gap-2 pt-1">
                 <Button
                   type="button"
@@ -407,9 +406,7 @@ export function TeamPage() {
       )}
 
       {error && !inviteOpen && !leaveOpen && manageMember === null && removeConfirm === null && transferTarget === null && (
-        <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {error}
-        </div>
+        <ErrorBanner className="mb-3">{error}</ErrorBanner>
       )}
 
       {/* A four-column grid of avatar tiles spent a 1493px viewport on two
@@ -420,9 +417,7 @@ export function TeamPage() {
           other — and the empty two thirds of the screen stop being empty. */}
       <div className="mx-auto max-w-2xl">
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-        </div>
+        <PageSpinner className="py-12" iconClassName="h-4 w-4" label="Loading team members" />
       ) : (
         <div className="overflow-hidden rounded-lg border border-border">
           <table className="w-full text-left text-xs">
@@ -653,9 +648,9 @@ export function TeamPage() {
                   <Separator />
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
-                      <Label className="text-xs">Permission tier</Label>
+                      <Label htmlFor="member-tier" className="text-xs">Permission tier</Label>
                       <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
-                        <SelectTrigger className="h-8 w-full text-[0.8125rem]">
+                        <SelectTrigger id="member-tier" className="h-8 w-full text-[0.8125rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -668,9 +663,9 @@ export function TeamPage() {
                       )}
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Developer role</Label>
+                      <Label htmlFor="member-role" className="text-xs">Developer role</Label>
                       <Select value={editRole} onValueChange={setEditRole}>
-                        <SelectTrigger className="h-8 w-full text-[0.8125rem]">
+                        <SelectTrigger id="member-role" className="h-8 w-full text-[0.8125rem]">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -716,11 +711,7 @@ export function TeamPage() {
                       </Button>
                     </div>
                   </div>
-                  {error && (
-                    <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                      {error}
-                    </div>
-                  )}
+                  {error && <ErrorBanner>{error}</ErrorBanner>}
                 </>
               ) : (
                 <p className="text-[0.6875rem] text-muted-foreground">
@@ -750,11 +741,7 @@ export function TeamPage() {
           <p className="text-xs text-muted-foreground">
             Remove <span className="font-medium text-foreground">{removeConfirm?.email}</span> from this project? This can't be undone.
           </p>
-          {error && (
-            <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {error}
-            </div>
-          )}
+          {error && <ErrorBanner>{error}</ErrorBanner>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => { setRemoveConfirm(null); setError(""); }}>
               Cancel
@@ -810,14 +797,7 @@ export function TeamPage() {
             lose access to its onboarding content until someone invites you back. Sections you
             approved and your reading progress are kept.
           </p>
-          {error && (
-            <div
-              className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              role="alert"
-            >
-              {error}
-            </div>
-          )}
+          {error && <ErrorBanner>{error}</ErrorBanner>}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" disabled={leaving} onClick={() => { setLeaveOpen(false); setError(""); }}>
               Cancel

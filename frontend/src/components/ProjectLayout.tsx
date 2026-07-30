@@ -21,6 +21,7 @@ import { PackagesProvider, usePackages } from "@/contexts/PackagesContext";
 import { PackageSelector } from "@/components/PackageSelector";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -29,6 +30,8 @@ import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarProvider, SidebarShell, useSidebar } from "@/components/SidebarShell";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
+import { SkipToContent } from "@/components/SkipToContent";
+import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useHotkeys } from "@/hooks/useHotkeys";
 
@@ -352,8 +355,13 @@ function ProjectLayoutContent() {
   if (error) {
     return (
       <div className="flex h-screen">
+        <SkipToContent />
         <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
-        <main className="flex flex-1 items-center justify-center bg-background p-4">
+        <main
+          id={MAIN_REGION_ID}
+          tabIndex={-1}
+          className="flex flex-1 items-center justify-center bg-background p-4 outline-none"
+        >
           <div className="text-center">
             <p className="text-sm text-destructive">{error}</p>
             <Button variant="outline" size="sm" className="mt-3" asChild>
@@ -367,12 +375,17 @@ function ProjectLayoutContent() {
 
   return (
     <div className="flex h-screen">
+      <SkipToContent />
       <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
-      <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
+      {/* `outline-none`: usePageChrome focuses this on every tab change, and a
+          ring around the whole tab would be a new visual on navigation. */}
+      <main
+        id={MAIN_REGION_ID}
+        tabIndex={-1}
+        className="flex-1 overflow-y-auto bg-background p-3 outline-none sm:p-4 lg:p-5"
+      >
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-          </div>
+          <PageSpinner className="py-16" label="Loading this project" />
         ) : (
           // Bug #24: the feature tabs are the pages that render analysis
           // payloads, so they are where a malformed payload throws. Scoped

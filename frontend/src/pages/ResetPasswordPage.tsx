@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { readAuthErrorCode, readOAuthError } from "@/lib/authErrors";
 import { supabase } from "@/lib/supabase";
 import { LogoMark } from "@/components/BrandLogo";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -107,10 +108,7 @@ export function ResetPasswordPage() {
         <Card>
           <CardContent className="p-4">
             {linkError ? (
-              <div
-                role="alert"
-                className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2.5 text-xs text-destructive"
-              >
+              <ErrorBanner className="flex items-start gap-2 py-2.5">
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
                   {linkError}{" "}
@@ -119,7 +117,7 @@ export function ResetPasswordPage() {
                   </Link>
                   .
                 </span>
-              </div>
+              </ErrorBanner>
             ) : !ready ? (
               <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2.5 text-xs text-muted-foreground">
                 <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" />
@@ -135,9 +133,7 @@ export function ResetPasswordPage() {
             ) : (
               <form onSubmit={handleSubmit} className="space-y-3">
                 {error && (
-                  <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {error}
-                  </div>
+                  <ErrorBanner>{error}</ErrorBanner>
                 )}
                 <div className="space-y-1">
                   <Label htmlFor="new-password" className="text-xs">New password</Label>

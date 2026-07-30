@@ -15,6 +15,7 @@ import {
 import { activityTime } from "@/pages/DashboardPage";
 import { PRIVACY_MODES } from "@/pages/ProjectSettingsPage";
 import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
+import { scrollBehavior } from "@/lib/motion";
 import { requestTour, type TourName } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 import { cn } from "@/lib/utils";
@@ -75,7 +76,7 @@ interface FaqItem {
 }
 
 function scrollToAnchor(id: string) {
-  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById(id)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
 function FaqSection({ items }: { items: FaqItem[] }) {
@@ -345,7 +346,7 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
                     <div className="min-w-0">
                       <p className="text-[0.8125rem] font-medium text-foreground">{row.title}</p>
                       <p className="text-[0.71875rem] text-muted-foreground">{row.description}</p>
-                      {row.hint && <p className="mt-0.5 text-[0.65625rem] text-muted-foreground/70">{row.hint}</p>}
+                      {row.hint && <p className="mt-0.5 text-[0.65625rem] text-muted-foreground">{row.hint}</p>}
                     </div>
                     <Button
                       size="xs"

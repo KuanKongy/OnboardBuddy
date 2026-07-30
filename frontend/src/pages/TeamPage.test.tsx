@@ -121,6 +121,11 @@ describe("TeamPage", () => {
     expect(screen.queryByRole("button", { name: /Leave project/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "View dev@acme.test" }));
+    // #74/G2: both dropdowns in this dialog drew a Label with nothing to point
+    // at, so each announced only its current value with no idea what it set.
+    expect(await screen.findByLabelText("Permission tier")).toBeInTheDocument();
+    expect(screen.getByLabelText("Developer role")).toBeInTheDocument();
+
     await user.click(await screen.findByRole("button", { name: /Transfer ownership/ }));
 
     // Type-to-confirm, like the project delete: the caller cannot undo this one.

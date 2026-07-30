@@ -34,6 +34,8 @@ import { usePackages } from "@/contexts/PackagesContext";
 import { apiFetch } from "@/lib/api";
 import { regenerateTutorial } from "@/lib/onboardingData";
 import { useProgress } from "@/lib/useProgress";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -671,9 +673,7 @@ export function WalkthroughTab() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </div>
+        <PageSpinner className="py-20" iconClassName="text-muted-foreground" label="Loading tutorials" />
       ) : hasTutorials ? (
         <div className="space-y-3">
           {coverage && <CoverageNote coverage={coverage} />}
@@ -689,7 +689,7 @@ export function WalkthroughTab() {
                     <p className="section-label flex items-center gap-1.5 px-2 pb-0.5 pt-1">
                       <GroupIcon className="h-3 w-3" /> {group.label} ({inGroup.length})
                     </p>
-                    <p className="px-2 pb-1.5 text-[0.625rem] leading-snug text-muted-foreground/70">{group.caption}</p>
+                    <p className="px-2 pb-1.5 text-[0.625rem] leading-snug text-muted-foreground">{group.caption}</p>
                     <div className="space-y-0.5">
                       {inGroup.map((t) => {
                         const meta = PROCEDURE_META[t.procedure_kind as ProcedureKind];
@@ -699,6 +699,7 @@ export function WalkthroughTab() {
                           <button
                             key={t.id}
                             onClick={() => openTutorial(t.id)}
+                            aria-pressed={detail?.tutorial.id === t.id}
                             className={cn(
                               "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
                               detail?.tutorial.id === t.id
@@ -709,7 +710,7 @@ export function WalkthroughTab() {
                             <Icon className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                             <span className="min-w-0">
                               <span className="block truncate font-medium" title={t.title}>{t.title}</span>
-                              <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
+                              <span className="mt-0.5 block truncate text-[0.6875rem]">
                                 {legs > 1 ? `${legs} phases · ` : ""}{t.step_count} steps · {t.confidence} confidence
                                 {t.status === "stale" && " · stale"}
                               </span>
@@ -740,9 +741,7 @@ export function WalkthroughTab() {
                   </div>
                 </div>
               ) : loadingDetail ? (
-                <div className="flex h-full min-h-[320px] items-center justify-center">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
+                <PageSpinner className="h-full min-h-[320px]" iconClassName="text-muted-foreground" label="Loading this tutorial" />
               ) : detail && tStep ? (
                 <div className="space-y-4">
                   <div className="border-b pb-3">
@@ -751,7 +750,7 @@ export function WalkthroughTab() {
                       {detail.tutorial.status === "stale" && (
                         <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
                       )}
-                      <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground/70">
+                      <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
                         {detail.tutorial.annotation === "deterministic"
                           ? "Built from repo evidence · no prose written — AI generation is off for this project"
                           : isWalkthrough
@@ -795,9 +794,7 @@ export function WalkthroughTab() {
                       </div>
                     )}
                     {regenError && (
-                      <p className="mt-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                        {regenError}
-                      </p>
+                      <ErrorBanner className="mt-2">{regenError}</ErrorBanner>
                     )}
                   </div>
 
@@ -875,7 +872,7 @@ export function WalkthroughTab() {
                   {/* Walkthrough cards carry their own receipts; this line is
                       the pager's, where only one step is on screen at a time. */}
                   {!isWalkthrough && tStep.receipts.length > 0 && (
-                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
+                    <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground">
                       Backed by:
                       {tStep.receipts.map((r) => {
                         const highlightable = hoverRangeFor(tStep, r) !== undefined;
@@ -969,6 +966,7 @@ export function WalkthroughTab() {
                   <button
                     key={wf.id}
                     onClick={() => openWorkflow(wf.id)}
+                    aria-pressed={selectedWorkflow === wf.id}
                     className={cn(
                       "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left text-[0.78125rem] transition-colors",
                       selectedWorkflow === wf.id
@@ -979,7 +977,7 @@ export function WalkthroughTab() {
                     <Zap className="mt-0.5 h-3 w-3 shrink-0" />
                     <span className="min-w-0">
                       <span className="block truncate font-medium" title={wf.title}>{wf.title}</span>
-                      <span className="mt-0.5 block truncate text-[0.6875rem] opacity-60">
+                      <span className="mt-0.5 block truncate text-[0.6875rem]">
                         {wf.trigger_type} · {wf.step_count} steps
                       </span>
                     </span>
@@ -1003,9 +1001,7 @@ export function WalkthroughTab() {
                   </div>
                 </div>
               ) : loadingDetail ? (
-                <div className="flex h-full min-h-[260px] items-center justify-center">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                </div>
+                <PageSpinner className="h-full min-h-[260px]" iconClassName="text-muted-foreground" label="Loading this workflow" />
               ) : wStep ? (
                 <div className="space-y-4">
                   {wfMeta && (

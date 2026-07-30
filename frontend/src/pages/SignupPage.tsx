@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark } from "@/components/BrandLogo";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -71,9 +72,7 @@ export function SignupPage() {
         <Card>
           <CardContent className="p-4">
             {error && (
-              <div role="alert" className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
+              <ErrorBanner className="mb-3">{error}</ErrorBanner>
             )}
             {info && (
               <div role="status" className="mb-3 rounded-md border border-primary/50 bg-primary/10 px-3 py-2 text-xs text-primary">

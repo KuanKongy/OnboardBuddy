@@ -1,5 +1,6 @@
-import { AlertTriangle, FlaskConical, Loader2 } from "lucide-react";
+import { AlertTriangle, FlaskConical } from "lucide-react";
 import { useEffect, useState } from "react";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -80,9 +81,7 @@ export function ProvenancePanel({
             </div>
           )}
           {!data && !error && (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-            </div>
+            <PageSpinner className="py-10" iconClassName="h-4 w-4" label="Loading the score breakdown" />
           )}
 
           {data && (
@@ -155,7 +154,7 @@ export function ProvenancePanel({
                           {s.confidence}
                         </Badge>
                         {s.promptVersion && (
-                          <span className="font-mono text-[0.625rem] text-muted-foreground/70">{s.promptVersion}</span>
+                          <span className="font-mono text-[0.625rem] text-muted-foreground">{s.promptVersion}</span>
                         )}
                         <span className="ml-auto text-[0.6875rem] tabular-nums text-muted-foreground">
                           {s.receiptCount} receipts · {s.claims.cited}/{s.claims.total} claims cited
@@ -164,7 +163,7 @@ export function ProvenancePanel({
                       </div>
                       <p className="text-[0.6875rem] text-muted-foreground">{s.confidenceReason}</p>
                       {s.retrieval && (
-                        <p className="text-[0.6875rem] text-muted-foreground/70">
+                        <p className="text-[0.6875rem] text-muted-foreground">
                           retrieval: {s.retrieval.seeds ?? "?"} seeds → {s.retrieval.candidates ?? "?"} candidates → {s.retrieval.selected ?? "?"} selected
                           {s.retrieval.views?.length ? ` (${s.retrieval.views.join(", ")})` : ""}
                           {s.validation.retried ? " · retried once with a stricter prompt" : ""}
@@ -184,7 +183,7 @@ export function ProvenancePanel({
                         </div>
                       )}
                       {s.voiceLintHits.length > 0 && (
-                        <p className="text-[0.6875rem] text-muted-foreground/70">
+                        <p className="text-[0.6875rem] text-muted-foreground">
                           voice lint residuals: {s.voiceLintHits.join(", ")}
                         </p>
                       )}
