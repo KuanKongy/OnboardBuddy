@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, type Location } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { LogoMark } from "@/components/BrandLogo";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -77,9 +78,7 @@ export function LoginPage() {
         <Card>
           <CardContent className="p-4">
             {error && (
-              <div role="alert" className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                {error}
-              </div>
+              <ErrorBanner className="mb-3">{error}</ErrorBanner>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3">

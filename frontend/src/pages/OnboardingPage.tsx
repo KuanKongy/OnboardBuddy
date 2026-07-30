@@ -54,6 +54,8 @@ import { DiagramFrame } from "@/components/reader/DiagramFrame";
 import { SectionMarkdown, type MarkdownComponents } from "@/components/reader/SectionMarkdown";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
 import { ReceiptChip, InlineReceiptRef } from "@/components/ReceiptChips";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -426,7 +428,7 @@ export function SectionView({
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <XCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-        <h3 className="text-sm font-medium text-foreground">Section not generated</h3>
+        <h2 className="text-sm font-medium text-foreground">Section not generated</h2>
         <p className="mt-1 max-w-xs text-xs text-muted-foreground">
           This section hasn't been generated yet. Generate the full package or regenerate this section individually.
         </p>
@@ -594,9 +596,9 @@ export function SectionView({
                 <ChevronDown
                   className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150", !isOpen && "-rotate-90")}
                 />
-                <h3 className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">{block.title}</h3>
+                <h2 className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">{block.title}</h2>
                 {block.receipts.length > 0 && (
-                  <span className="shrink-0 text-[0.6875rem] text-muted-foreground/60">
+                  <span className="shrink-0 text-[0.6875rem] text-muted-foreground">
                     {block.receipts.length} source ref{block.receipts.length === 1 ? "" : "s"}
                   </span>
                 )}
@@ -605,7 +607,7 @@ export function SectionView({
               // The lead block's title always equals the section label shown
               // in the sticky top bar — rendering it again is the duplicated
               // title stack the audit flagged.
-              !isLead && <h3 className="mb-1.5 text-[0.875rem] font-semibold text-foreground">{block.title}</h3>
+              !isLead && <h2 className="mb-1.5 text-[0.875rem] font-semibold text-foreground">{block.title}</h2>
             )}
 
             <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
@@ -710,11 +712,11 @@ export function SectionView({
                         // inline rather than repeating the sentence per name.
                         const others = variant.members.slice(1);
                         return (
-                          <li key={vi} className="text-muted-foreground/70">
+                          <li key={vi} className="text-muted-foreground">
                             {detail}
                             {clipped ? "…" : ""}
                             {variant.count > 1 && (
-                              <span className="text-muted-foreground/60">
+                              <span className="text-muted-foreground">
                                 {" "}
                                 (× {variant.count}
                                 {others.length > 0
@@ -1415,9 +1417,7 @@ export function OnboardingPage() {
               </Button>
             </div>
           ) : (
-            <div className="flex items-center justify-center py-20">
-              <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            </div>
+            <PageSpinner className="py-20" label="Loading your onboarding" />
           )
         ) : !cards || cards.length === 0 ? (
           packagesError ? (
@@ -1508,9 +1508,7 @@ export function OnboardingPage() {
             </DialogHeader>
 
             {regenError && (
-              <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                {regenError}
-              </div>
+              <ErrorBanner>{regenError}</ErrorBanner>
             )}
 
             <div className="space-y-2">
@@ -1946,7 +1944,7 @@ export function OnboardingPage() {
         <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
           {readSections !== null && presentSectionIds.length > 0 && (
-            <p className="mb-2 px-2 text-[0.625rem] tabular-nums text-muted-foreground/60">
+            <p className="mb-2 px-2 text-[0.625rem] tabular-nums text-muted-foreground">
               {presentSectionIds.filter((navId) => readSections.includes(navId)).length}/
               {presentSectionIds.length} read
             </p>
@@ -1997,11 +1995,11 @@ export function OnboardingPage() {
                 if (idsInGroup.length === 0) return null;
                 return (
                   <div key={group.label}>
-                    <p className="mb-1 px-2 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground/50">
+                    <p className="mb-1 px-2 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
                       {group.label}
                     </p>
                     {group.blurb && (
-                      <p className="mb-1 px-2 text-[0.625rem] leading-snug text-muted-foreground/60">{group.blurb}</p>
+                      <p className="mb-1 px-2 text-[0.625rem] leading-snug text-muted-foreground">{group.blurb}</p>
                     )}
                     <div className="space-y-0.5">
                       {idsInGroup.map((navId) => {
@@ -2014,12 +2012,13 @@ export function OnboardingPage() {
                             key={navId}
                             onClick={() => setActiveSectionId(navId)}
                             disabled={isMissing}
+                            aria-current={isActive ? "true" : undefined}
                             className={cn(
                               "flex w-full items-start gap-2 rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-medium transition-colors disabled:opacity-40",
                               isActive ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                             )}
                           >
-                            <span className="w-4 shrink-0 text-right text-[0.6875rem] tabular-nums leading-5 text-muted-foreground/50">{idx + 1}</span>
+                            <span className="w-4 shrink-0 text-right text-[0.6875rem] tabular-nums leading-5 text-muted-foreground">{idx + 1}</span>
                             {/* H1: no tooltip that repeats the label. It only
                                 existed because 4 of 12 titles truncated in the
                                 narrow rail (§8.3/§17.7) — wrapping shows the

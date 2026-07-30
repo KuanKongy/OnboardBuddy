@@ -104,8 +104,8 @@ export function GitHubSetupPage() {
   return (
     <div className="mx-auto max-w-sm">
       <Card>
-        <CardContent className="p-4 text-center">
-          <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" />
+        <CardContent className="p-4 text-center" role="status">
+          <Loader2 className="mx-auto h-5 w-5 animate-spin text-primary" aria-hidden="true" />
           <p className="mt-3 text-xs text-muted-foreground">Linking GitHub installation...</p>
         </CardContent>
       </Card>

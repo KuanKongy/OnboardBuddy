@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -481,9 +482,7 @@ export function ImportPage() {
           <Card>
             <CardContent className="space-y-3 p-4">
               {(error || previewError) && (
-                <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                  {error || previewError}
-                </div>
+                <ErrorBanner>{error || previewError}</ErrorBanner>
               )}
 
               <div data-tour="import-config-form">
@@ -506,8 +505,8 @@ export function ImportPage() {
               </div>
 
               {previewing && (
-                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground" role="status">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
                   Building the analysis preview — scanning files and estimating cost…
                 </div>
               )}
@@ -584,7 +583,7 @@ export function ImportPage() {
         <Card>
           <CardContent className="p-4">
           {error && (
-            <div className="mt-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <ErrorBanner className="mt-3">
               {error}
               {error.includes("reconnect") && (
                 <Button
@@ -614,7 +613,7 @@ export function ImportPage() {
                   </Button>
                 </div>
               )}
-            </div>
+            </ErrorBanner>
           )}
 
           {githubAppConnected && githubAppUsername && (

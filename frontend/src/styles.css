@@ -225,6 +225,35 @@
   [data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) {
     pointer-events: none;
   }
+
+  /* Honour "reduce motion" app-wide.
+     ───────────────────────────────
+     #74/G5 (#71 item 5): nothing in this app read the OS setting except the
+     graph drill camera. Everything else moved regardless — spinners, pulsing
+     "generating" dots, the tour's spotlight glide, every hover transition, the
+     marching dashes on graph edges — which for a reader with vestibular
+     motion sensitivity is not a preference being ignored, it is the product
+     being unusable.
+
+     Flattened to 0.01ms rather than 0s on purpose: a duration of zero skips the
+     `transitionend`/`animationend` event in some engines, and code that waits
+     for one would hang. Kept in `@layer base` so `!important` here outranks an
+     `!important` utility (for important declarations the cascade reverses layer
+     order, and base is the first layer Tailwind emits).
+
+     Motion that CSS cannot reach is handled in `lib/motion.ts`: a JS
+     `scrollIntoView` with an explicit `behavior` outranks `scroll-behavior`,
+     and React Flow's `animated` edges come from a data flag. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 @layer components {

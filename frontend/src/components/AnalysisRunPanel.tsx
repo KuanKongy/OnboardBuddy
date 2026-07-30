@@ -55,13 +55,39 @@ export const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = 
   { key: "validation", label: "Validate citations", desc: "Verifies every citation still points at real code" },
 ];
 
+function statusGlyph(status: string) {
+  if (status === "complete") return <CheckCircle2 className="h-3.5 w-3.5 text-success" aria-hidden="true" />;
+  if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-info" aria-hidden="true" />;
+  if (status === "failed") return <XCircle className="h-3.5 w-3.5 text-danger" aria-hidden="true" />;
+  if (status === "paused") return <PauseCircle className="h-3.5 w-3.5 text-warning" aria-hidden="true" />;
+  if (status === "skipped") return <MinusCircle className="h-3.5 w-3.5 text-muted-foreground/50" aria-hidden="true" />;
+  return <CircleDashed className="h-3.5 w-3.5 text-muted-foreground/40" aria-hidden="true" />;
+}
+
+const STATUS_WORDS: Record<string, string> = {
+  complete: "complete",
+  running: "running",
+  failed: "failed",
+  paused: "paused",
+  skipped: "skipped",
+};
+
+/**
+ * A phase's status, said as well as drawn.
+ *
+ * #74/G7 (#71): the status lived entirely in the glyph's shape and colour, so a
+ * screen reader read each row as its label and its timings and nothing else —
+ * "AI: verify claims, 12s" with no way to learn it had failed. The word rides
+ * along sr-only (invisible, so the row is pixel-identical) and the glyph is
+ * aria-hidden so the status is announced once rather than twice.
+ */
 export function StatusIcon({ status }: { status: string }) {
-  if (status === "complete") return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
-  if (status === "running") return <Loader2 className="h-3.5 w-3.5 animate-spin text-info" />;
-  if (status === "failed") return <XCircle className="h-3.5 w-3.5 text-danger" />;
-  if (status === "paused") return <PauseCircle className="h-3.5 w-3.5 text-warning" />;
-  if (status === "skipped") return <MinusCircle className="h-3.5 w-3.5 text-muted-foreground/50" />;
-  return <CircleDashed className="h-3.5 w-3.5 text-muted-foreground/40" />;
+  return (
+    <>
+      {statusGlyph(status)}
+      <span className="sr-only">{STATUS_WORDS[status] ?? "not started"}</span>
+    </>
+  );
 }
 
 function timeOf(iso: string | null): string {
@@ -172,7 +198,7 @@ export function AnalysisRunPanel({
   return (
     <div className="rounded-md border border-border bg-muted/25">
       <div className="px-3 py-2">
-        <p className="mb-1.5 text-[0.65625rem] text-muted-foreground/70">
+        <p className="mb-1.5 text-[0.65625rem] text-muted-foreground">
           Deterministic phases run first; AI phases are skipped entirely when this project's privacy mode disables them.
         </p>
         {havePhases ? (
@@ -197,7 +223,7 @@ export function AnalysisRunPanel({
                     <TooltipTrigger asChild>
                       <span
                         tabIndex={0}
-                        className={`w-44 shrink-0 cursor-help text-[0.75rem] ${running ? "font-medium text-foreground" : status === "pending" || status === "not_run" ? "text-muted-foreground/60" : "text-foreground"}`}
+                        className={`w-44 shrink-0 cursor-help text-[0.75rem] ${running ? "font-medium text-foreground" : status === "pending" || status === "not_run" ? "text-muted-foreground" : "text-foreground"}`}
                       >
                         {label}
                       </span>
@@ -220,7 +246,7 @@ export function AnalysisRunPanel({
                       {summaryText}
                     </span>
                   )}
-                  <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/60">
+                  <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground">
                     {p?.started_at ? `${timeOf(p.started_at)}${p.finished_at ? ` → ${timeOf(p.finished_at)}` : "…"}` : ""}
                     {p && durationOf(p) ? ` (${durationOf(p)})` : ""}
                     {running && p?.started_at && !p.finished_at ? ` (${liveElapsed(p.started_at, nowTs)})` : ""}
@@ -241,7 +267,7 @@ export function AnalysisRunPanel({
                     ? <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" />
                     : <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />}
                   <span className={isCurrent ? "flex-1 font-medium text-foreground" : "flex-1 text-muted-foreground"}>{entry.step}</span>
-                  <span className="shrink-0 tabular-nums text-muted-foreground/60">{timeOf(entry.ts)}</span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{timeOf(entry.ts)}</span>
                 </li>
               );
             })}
@@ -260,7 +286,7 @@ export function AnalysisRunPanel({
             {stepLog.map((entry, i) => (
               <div key={i} className="flex items-start gap-2 py-0.5">
                 <span className="flex-1 text-[0.6875rem] text-muted-foreground">{entry.step}</span>
-                <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground/60">{timeOf(entry.ts)}</span>
+                <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground">{timeOf(entry.ts)}</span>
               </div>
             ))}
           </div>

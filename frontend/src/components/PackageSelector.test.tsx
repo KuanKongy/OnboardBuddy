@@ -51,6 +51,9 @@ function baseCtx() {
     activeJobs: [],
     registerSessionJob: vi.fn(),
     packageQuery: `?package_id=${PKG_A.id}`,
+    packagesError: false,
+    statusError: false,
+    defaultPackageError: false,
   };
 }
 
@@ -103,5 +106,56 @@ describe("PackageSelector", () => {
 
     expect(ctx.setDefaultPackage).toHaveBeenCalledWith(PKG_A.id);
     expect(ctx.selectPackage).not.toHaveBeenCalled();
+  });
+
+  /**
+   * #74/#71 item 4. Probed before fixing: with the menu open, Tab leaves focus
+   * on the highlighted menuitem and never reaches the nested star button, so
+   * there was no keyboard route to your own default package. The item now takes
+   * the keypress — and it must not also select, or "make this my default" would
+   * silently change what every tab is showing.
+   */
+  it("sets the default from the keyboard without changing the selection", async () => {
+    const ctx = mockCtx();
+    renderSelector();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTitle(/which package every tab shows/i));
+    await waitFor(() => expect(screen.getByText("Latest analysis (auto)")).toBeInTheDocument());
+
+    // Down twice: past "Latest analysis (auto)" onto the first real package.
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    await user.keyboard("*");
+
+    expect(ctx.setDefaultPackage).toHaveBeenCalledWith(PKG_A.id);
+    expect(ctx.selectPackage).not.toHaveBeenCalled();
+    // The key is announced rather than printed, so the attribute is the contract.
+    expect(screen.getAllByRole("menuitem")[0]).toHaveAttribute("aria-keyshortcuts", "*");
+  });
+
+  // #74/H7: the PUT rejected into a `void` call, so the star stayed put and the
+  // only trace was an unhandled rejection in the console.
+  it("shows a failed default without losing the menu", async () => {
+    mockCtx({ defaultPackageError: true });
+    renderSelector();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTitle(/which package every tab shows/i));
+    await waitFor(() => expect(screen.getByText("Latest analysis (auto)")).toBeInTheDocument());
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/couldn't save your default/i);
+    expect(screen.getAllByRole("menuitem").length).toBeGreaterThan(1);
+  });
+
+  // #74/G7: the coloured dot was the only carrier of the package's state.
+  it("says each package's status as well as colouring it", async () => {
+    mockCtx();
+    renderSelector();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByTitle(/which package every tab shows/i));
+    await waitFor(() => expect(screen.getByText("Latest analysis (auto)")).toBeInTheDocument());
+
+    expect(screen.getAllByText("status: approved").length).toBe(2);
   });
 });

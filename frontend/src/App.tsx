@@ -1,10 +1,13 @@
 import { Component, useState, type ReactNode } from "react";
 import { Link, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
-import { Compass, Loader2 } from "lucide-react";
+import { Compass } from "lucide-react";
 import { LogoMark } from "@/components/BrandLogo";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PublicPageHeader } from "@/components/PublicPageHeader";
+import { SkipToContent } from "@/components/SkipToContent";
+import { MAIN_REGION_ID, usePageChrome } from "@/hooks/usePageChrome";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
@@ -145,8 +148,16 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
   return (
     <SidebarProvider>
       <div className="flex h-screen">
+        <SkipToContent />
         <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
-        <main className="flex-1 overflow-y-auto bg-background p-3 sm:p-4 lg:p-5">
+        {/* `outline-none` because usePageChrome focuses this on every route
+            change: a ring around the whole page would be a new visual on a
+            navigation that used to draw nothing. */}
+        <main
+          id={MAIN_REGION_ID}
+          tabIndex={-1}
+          className="flex-1 overflow-y-auto bg-background p-3 outline-none sm:p-4 lg:p-5"
+        >
           {/* Bug #24: a render error in one shell page used to unmount the
               whole app via the top-level boundary. Scoped here, the sidebar
               survives and the user can navigate out without a reload. */}
@@ -178,9 +189,7 @@ export function HelpRoute() {
 
   if (loading) {
     return (
-      <div className="flex h-screen w-full items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
+      <PageSpinner className="h-screen w-full bg-background" iconClassName="h-8 w-8" label="Checking your session" />
     );
   }
 
@@ -194,8 +203,9 @@ export function HelpRoute() {
 
   return (
     <div className="min-h-screen bg-background">
+      <SkipToContent />
       <PublicPageHeader />
-      <main className="px-4 py-8">
+      <main id={MAIN_REGION_ID} tabIndex={-1} className="px-4 py-8 outline-none">
         <HelpPage signedOut />
       </main>
     </div>
@@ -203,6 +213,10 @@ export function HelpRoute() {
 }
 
 export default function App() {
+  // Above <Routes> so one effect covers all 23 routes — the shells come and go,
+  // the title and the focus reset must not.
+  usePageChrome();
+
   return (
     <ErrorBoundary>
     <AuthProvider>

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/lib/supabase";
 import { LogoMark } from "@/components/BrandLogo";
+import { ErrorBanner } from "@/components/ui/error-banner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -63,9 +64,7 @@ export function ForgotPasswordPage() {
             ) : (
               <form onSubmit={handleSubmit} className="space-y-3">
                 {error && (
-                  <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-                    {error}
-                  </div>
+                  <ErrorBanner>{error}</ErrorBanner>
                 )}
                 <div className="space-y-1">
                   <Label htmlFor="email" className="text-xs">Email</Label>

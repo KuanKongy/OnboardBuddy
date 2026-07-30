@@ -84,7 +84,7 @@ export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
         {/* AUDIT C7 / SC F11: 17 of 76 components are drawn with no edge at
             all, and an unexplained island reads as a rendering fault. */}
         {data.degree === 0 && (
-          <span className="inline-flex items-center gap-1 text-[0.625rem] text-muted-foreground/70">
+          <span className="inline-flex items-center gap-1 text-[0.625rem] text-muted-foreground">
             <Unlink className="h-2.5 w-2.5" />
             no links traced
           </span>
@@ -170,7 +170,7 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-muted-foreground/60" />
 
       <p className="truncate text-[0.8125rem] font-medium text-foreground">{data.label}</p>
-      <p className="truncate font-mono text-[0.65625rem] text-muted-foreground/70">
+      <p className="truncate font-mono text-[0.65625rem] text-muted-foreground">
         {data.filePath ?? " "}
       </p>
       {data.summary && (
@@ -182,7 +182,7 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
           {data.importCount} in · {data.dependentCount} out
         </span>
         {data.criticalScore === null ? (
-          <span className="ml-auto text-[0.65625rem] text-muted-foreground/60">not ranked</span>
+          <span className="ml-auto text-[0.65625rem] text-muted-foreground">not ranked</span>
         ) : (
           <span className="ml-auto flex items-center gap-1.5">
             <span className="h-1 w-8 overflow-hidden rounded-full bg-muted">

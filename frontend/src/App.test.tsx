@@ -60,4 +60,26 @@ describe("App", () => {
       ).toBeInTheDocument();
     });
   });
+
+  // #74/G1: without these two, a route change is invisible to anyone not
+  // watching the pixels — same tab title on all 23 pages, and focus left behind
+  // in the sidebar so Tab walked the nav again instead of entering the page.
+  it("names the route in the document title", async () => {
+    await renderApp("/login");
+
+    expect(document.title).toBe("Log in · OnboardBuddy");
+  });
+
+  it("puts the skip link first in tab order, targeting the main region", async () => {
+    await renderApp("/help");
+
+    const skip = screen.getByRole("link", { name: /skip to content/i });
+    expect(skip).toHaveAttribute("href", "#main");
+    expect(document.getElementById("main")).toHaveAttribute("tabindex", "-1");
+
+    const tabbables = document.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    );
+    expect(tabbables[0]).toBe(skip);
+  });
 });

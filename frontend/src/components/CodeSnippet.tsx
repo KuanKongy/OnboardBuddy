@@ -56,7 +56,7 @@ export function CodeSnippet({
               <span
                 className={cn(
                   "w-12 shrink-0 select-none border-r border-border/50 pr-2 text-right tabular-nums",
-                  highlighted ? "border-r-primary/40 text-primary" : "text-muted-foreground/50",
+                  highlighted ? "border-r-primary/40 text-primary" : "text-muted-foreground",
                 )}
               >
                 {absLine}

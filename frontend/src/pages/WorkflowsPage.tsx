@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, ChevronDown, Circle, Info, Loader2, Maximize2, Minimize2, RefreshCw, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronDown, Circle, Info, Maximize2, Minimize2, RefreshCw, Sparkles, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -13,8 +13,10 @@ import {
 import "reactflow/dist/style.css";
 import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { prefersReducedMotion } from "@/lib/motion";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -429,7 +431,7 @@ export function WorkflowsPage() {
           // Rounded orthogonal segments follow the snake.
           type: route ? "smoothstep" : "default",
           ...(route ? { pathOptions: { borderRadius: 16 } } : {}),
-          animated: true,
+          animated: !prefersReducedMotion(),
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: "var(--primary)" },
           style: { stroke: "var(--primary)", strokeWidth: 1.5, opacity: 0.7 },
         };
@@ -624,7 +626,7 @@ export function WorkflowsPage() {
                             <li key={step}>{step}</li>
                           ))}
                         </ol>
-                        <p className="opacity-70">
+                        <p className="">
                           Select a flow to see how its own criticality score was derived.
                         </p>
                       </div>
@@ -664,11 +666,11 @@ export function WorkflowsPage() {
                 if (inTier.length === 0) return null;
                 return (
                   <div key={key} className="pt-1.5 first:pt-0">
-                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
                       {label} ({inTier.length})
                     </p>
                     {note && (
-                      <p className="px-2 pb-1 text-[0.625rem] leading-tight text-muted-foreground/50">{note}</p>
+                      <p className="px-2 pb-1 text-[0.625rem] leading-tight text-muted-foreground">{note}</p>
                     )}
                     {inTier.map((wf) => (
                 <button
@@ -682,7 +684,7 @@ export function WorkflowsPage() {
                       : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                   )}
                 >
-                  <span className="mt-0.5 w-4 shrink-0 text-right text-[0.625rem] tabular-nums opacity-50">
+                  <span className="mt-0.5 w-4 shrink-0 text-right text-[0.625rem] tabular-nums">
                     {visibleWorkflows.indexOf(wf) + 1}
                   </span>
                   {key === "surface" ? (
@@ -706,7 +708,7 @@ export function WorkflowsPage() {
                         {wf.title}
                       </TooltipContent>
                     </Tooltip>
-                    <span className="block text-[0.6875rem] opacity-60">
+                    <span className="block text-[0.6875rem]">
                       {triggerLabel(wf.trigger_type)}
                       {key === "surface" ? "" : ` · ${wf.step_count} steps`}
                       {wf.realizes_capability ? " · capability" : ""}
@@ -785,9 +787,7 @@ export function WorkflowsPage() {
           <div className="flex min-h-80 flex-1 flex-col gap-3 xl:flex-row">
             <div className="graph-canvas relative !h-auto min-h-0 flex-1">
               {loadingGraph && (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/50">
-                  <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                </div>
+                <PageSpinner className="absolute inset-0 z-10 bg-background/50" label="Loading the workflow graph" />
               )}
               {/* Scoped to this canvas: the rail beside it keeps working, so
                   the reader can pick another flow instead of losing the tab. */}

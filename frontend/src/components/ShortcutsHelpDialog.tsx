@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 type ShortcutGroups = Array<{ group: string; rows: Array<{ keys: string[]; action: string }> }>;
@@ -11,6 +12,16 @@ const PROJECT_SHORTCUT_GROUPS: ShortcutGroups = [
       { keys: ["]"], action: "Next tab" },
       { keys: ["1", "…", "9"], action: "Jump to tab (Overview = 1 … Settings = 9)" },
       { keys: ["?"], action: "Show this overlay" },
+    ],
+  },
+  {
+    // #74/#71 item 4: this one is not a global hotkey but a key on the open
+    // package menu, and it was the only route to your default package that a
+    // keyboard could take — so it has to be written down somewhere.
+    group: "Package chooser (sidebar)",
+    rows: [
+      { keys: ["↑", "↓"], action: "Move through the packages" },
+      { keys: ["*"], action: "Make the highlighted package your default" },
     ],
   },
   {
@@ -97,7 +108,12 @@ export function ShortcutsHelpDialog({
             </div>
           ))}
           <p className="text-[0.6875rem] text-muted-foreground">
-            Shortcuts pause while you're typing or a dialog is open.
+            Shortcuts pause while you&apos;re typing or a dialog is open. Single-key shortcuts can be
+            turned off entirely in{" "}
+            <Link to="/settings" className="text-primary hover:underline" onClick={() => onOpenChange(false)}>
+              Account settings → Preferences
+            </Link>
+            ; the buttons and links they duplicate keep working.
           </p>
         </div>
       </DialogContent>

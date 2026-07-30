@@ -19,6 +19,7 @@ import { CodeSnippet, type HighlightRange } from "@/components/CodeSnippet";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
+import { scrollBehavior } from "@/lib/motion";
 
 /**
  * A walkthrough is ONE SCROLLING DOCUMENT, not a one-step-at-a-time pager.
@@ -388,7 +389,7 @@ function WalkthroughStepCard({
       )}
 
       {step.receipts.length > 0 && (
-        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground/70">
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.65625rem] text-muted-foreground">
           Backed by:
           {step.receipts.map((r) => {
             const url = repo && r.file_path
@@ -575,7 +576,7 @@ export function WalkthroughDocument({
               <button
                 key={item.target}
                 type="button"
-                onClick={() => document.getElementById(stepAnchorId(item.target))?.scrollIntoView({ behavior: "smooth", block: "start" })}
+                onClick={() => document.getElementById(stepAnchorId(item.target))?.scrollIntoView({ behavior: scrollBehavior(), block: "start" })}
                 className={cn(
                   "block w-full truncate rounded px-2 py-1 text-left text-[0.6875rem] transition-colors",
                   item.orders.includes(active)
@@ -595,5 +596,5 @@ export function WalkthroughDocument({
 
 /** Scrolls a deep link (`?step=n`) or a keyboard jump to its card. */
 export function scrollToWalkthroughStep(order: number): void {
-  document.getElementById(stepAnchorId(order))?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById(stepAnchorId(order))?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }

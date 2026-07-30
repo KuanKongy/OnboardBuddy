@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { scrollBehavior } from "@/lib/motion";
 
 export interface TourStep {
   /** Matches a `data-tour="<target>"` attribute somewhere in the dashboard. */
@@ -73,6 +74,17 @@ export function AppTour({ steps, onDone }: AppTourProps) {
 
   const step = available[index] ?? null;
 
+  // #74/G11: the tour pulls focus into its card on every step and never handed
+  // it back. Skip or Done unmounted the focused node, which resets focus to
+  // <body>, so the next Tab press restarted from the top of the document rather
+  // than from the "Take a tour" button the reader pressed. Captured in the first
+  // effect declared, so it runs before the per-step focus steal below.
+  const returnFocusTo = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    returnFocusTo.current = document.activeElement as HTMLElement | null;
+    return () => { returnFocusTo.current?.focus(); };
+  }, []);
+
   const reposition = useCallback(() => {
     setRect(step ? measure(step.target) : null);
   }, [step]);
@@ -81,7 +93,7 @@ export function AppTour({ steps, onDone }: AppTourProps) {
   useEffect(() => {
     if (!step) return;
     const el = getTargetEl(step.target);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    el?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
     reposition();
     const settle = window.setTimeout(reposition, 300);
     return () => window.clearTimeout(settle);

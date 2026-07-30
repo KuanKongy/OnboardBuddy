@@ -9,14 +9,20 @@ interface SidebarCtx {
   /** Desktop collapse state (persisted). */
   collapsed: boolean;
   setCollapsed: (v: boolean) => void;
+  /** Which of the two states the toggle is actually driving right now. */
+  isDesktop: boolean;
 }
 
 const Ctx = createContext<SidebarCtx>({
   open: false, setOpen: () => {},
   collapsed: false, setCollapsed: () => {},
+  isDesktop: false,
 });
 
 const COLLAPSED_KEY = "onboardbuddy:sidebar-collapsed";
+const DESKTOP_QUERY = "(min-width: 1024px)";
+/** Referenced by the toggle's aria-controls (#74/G13). */
+export const SIDEBAR_ID = "app-sidebar";
 
 export function useSidebar() {
   return useContext(Ctx);
@@ -38,7 +44,27 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
       else localStorage.removeItem(COLLAPSED_KEY);
     } catch { /* storage unavailable */ }
   };
-  return <Ctx.Provider value={{ open, setOpen, collapsed, setCollapsed }}>{children}</Ctx.Provider>;
+
+  // The toggle drives `collapsed` on desktop and `open` on mobile, so
+  // aria-expanded cannot be honest without knowing which. Tracked here rather
+  // than re-queried inside the click handler so the announced state and the
+  // acted-on state can never disagree.
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(DESKTOP_QUERY).matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(DESKTOP_QUERY);
+    const onChange = () => setIsDesktop(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  return (
+    <Ctx.Provider value={{ open, setOpen, collapsed, setCollapsed, isDesktop }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 /**
@@ -48,16 +74,26 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
  * shifts content down.
  */
 export function SidebarToggle({ className }: { className?: string }) {
-  const { open, setOpen, collapsed, setCollapsed } = useSidebar();
+  const { open, setOpen, collapsed, setCollapsed, isDesktop } = useSidebar();
+  const expanded = isDesktop ? !collapsed : open;
   const toggle = () => {
-    if (typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches) {
-      setCollapsed(!collapsed);
-    } else {
-      setOpen(!open);
-    }
+    if (isDesktop) setCollapsed(!collapsed);
+    else setOpen(!open);
   };
   return (
-    <Button variant="ghost" size="icon-sm" className={className} onClick={toggle} aria-label="Toggle sidebar">
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className={className}
+      onClick={toggle}
+      aria-label="Toggle sidebar"
+      // #74/G13: the button announced "Toggle sidebar" and nothing else, so it
+      // was impossible to tell whether pressing it would open or close, or what
+      // it acted on. The state differs by viewport — collapsed on desktop, the
+      // drawer on mobile — and `expanded` reports whichever one it is driving.
+      aria-expanded={expanded}
+      aria-controls={SIDEBAR_ID}
+    >
       {open ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
     </Button>
   );
@@ -115,7 +151,7 @@ export function SidebarShell({ children }: { children: ReactNode }) {
   // don't outlive the overlay they belong to.
   useEffect(() => {
     if (!open) return;
-    const mq = window.matchMedia("(min-width: 1024px)");
+    const mq = window.matchMedia(DESKTOP_QUERY);
     const onChange = () => { if (mq.matches) setOpen(false); };
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
@@ -131,6 +167,7 @@ export function SidebarShell({ children }: { children: ReactNode }) {
       )}
       <aside
         ref={asideRef}
+        id={SIDEBAR_ID}
         role={open ? "dialog" : undefined}
         aria-modal={open ? "true" : undefined}
         aria-label="Sidebar navigation"

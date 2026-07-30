@@ -16,6 +16,8 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { PageHeader } from "@/components/PageHeader";
 import { ProjectCard, type Project } from "@/components/ProjectCard";
+import { ErrorBanner } from "@/components/ui/error-banner";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
@@ -264,15 +266,11 @@ export function DashboardPage() {
       />
 
       {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-5 w-5 animate-spin text-primary" />
-        </div>
+        <PageSpinner className="py-16" label="Loading your dashboard" />
       )}
 
       {error && (
-        <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-[0.8125rem] text-destructive">
-          {error}
-        </div>
+        <ErrorBanner className="text-[0.8125rem]">{error}</ErrorBanner>
       )}
 
       {/* The empty dashboard keeps the exact same frame as a populated one —
@@ -370,9 +368,7 @@ export function DashboardPage() {
                     </p>
                   )}
                   {activity.length === 0 && !activityError && !activityLoaded && (
-                    <div className="flex justify-center px-2 py-8" role="status" aria-label="Loading recent activity">
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                    </div>
+                    <PageSpinner className="px-2 py-8" iconClassName="h-4 w-4 text-muted-foreground" label="Loading recent activity" />
                   )}
                   <ul className="max-h-[26rem] divide-y divide-border overflow-y-auto">
                     {activity.map((item) => {

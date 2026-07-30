@@ -16,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { applyFontSize, readStoredFontSize, type FontSizeChoice } from "@/lib/fontSize";
+import { hotkeysEnabled, setHotkeysEnabled } from "@/hooks/useHotkeys";
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
@@ -29,6 +30,17 @@ export function AccountSettingsPage() {
   function chooseFontSize(choice: FontSizeChoice) {
     applyFontSize(choice);
     setFontSize(choice);
+  }
+
+  // #74/G12: the preference is read per keypress, so this write is the whole
+  // apply step — every open tab and every already-mounted useHotkeys picks it up
+  // on the next key, with no reload and nothing to subscribe to. Mirrored into
+  // state only so the buttons can show which one is active.
+  const [hotkeys, setHotkeys] = useState(() => hotkeysEnabled());
+
+  function chooseHotkeys(enabled: boolean) {
+    setHotkeysEnabled(enabled);
+    setHotkeys(enabled);
   }
 
   const [appConnected, setAppConnected] = useState(false);
@@ -547,7 +559,9 @@ export function AccountSettingsPage() {
 
       <Card className="mb-3">
         <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">Appearance</h2>
+          {/* Was "Appearance"; the keyboard preference below is not appearance,
+              and "Preferences" is the section name the settings shell uses. */}
+          <h2 className="mb-2 text-xs font-medium text-foreground">Preferences</h2>
           <Label className="text-[0.6875rem] text-muted-foreground">Base font size</Label>
           <div className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5" role="group" aria-label="Base font size">
             {(
@@ -570,6 +584,40 @@ export function AccountSettingsPage() {
               </button>
             ))}
           </div>
+
+          {/* #74/G12: `[`, `]`, `?` and 1-9 fired on a bare keypress with no way
+              to turn them off — exactly the keys a switch device, a dwell
+              selector or speech recognition emits while doing something else, so
+              landing on another tab mid-task was a hazard with no opt-out. */}
+          <Label className="mt-3 block text-[0.6875rem] text-muted-foreground">Keyboard shortcuts</Label>
+          <div
+            className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5"
+            role="group"
+            aria-label="Keyboard shortcuts"
+          >
+            {(
+              [
+                { on: true, label: "On" },
+                { on: false, label: "Off" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => chooseHotkeys(opt.on)}
+                aria-pressed={hotkeys === opt.on}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  hotkeys === opt.on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+            Single-key shortcuts like <kbd className="font-mono">[</kbd>, <kbd className="font-mono">]</kbd> and{" "}
+            <kbd className="font-mono">?</kbd>. Turning them off leaves every button and link working.
+          </p>
         </CardContent>
       </Card>
 

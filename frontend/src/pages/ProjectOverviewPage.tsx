@@ -19,6 +19,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
+import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -333,7 +334,7 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
   const statuses = partialStepStatuses(run, steps.length);
   return (
     <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
-      <p className="mb-1.5 text-[0.65625rem] text-muted-foreground/70">
+      <p className="mb-1.5 text-[0.65625rem] text-muted-foreground">
         Steps this run performed — a regeneration replaces one item, so the rest of the pipeline never re-runs.
       </p>
       <ol className="space-y-0.5">
@@ -346,7 +347,7 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
                 <TooltipTrigger asChild>
                   <span
                     tabIndex={0}
-                    className={`w-44 shrink-0 cursor-help text-[0.75rem] ${status === "running" ? "font-medium text-foreground" : status === "pending" ? "text-muted-foreground/60" : "text-foreground"}`}
+                    className={`w-44 shrink-0 cursor-help text-[0.75rem] ${status === "running" ? "font-medium text-foreground" : status === "pending" ? "text-muted-foreground" : "text-foreground"}`}
                   >
                     {step.label}
                   </span>
@@ -602,7 +603,7 @@ function RunHistoryRow({ run, partner, projectId }: { run: RunHistoryEntry; part
         )}
 
         {!hasCost && run.job_type !== "preflight" && (
-          <p className="text-[0.6875rem] text-muted-foreground/70">
+          <p className="text-[0.6875rem] text-muted-foreground">
             No per-run cost recorded (run predates cost tracking, or it was fully deterministic).
           </p>
         )}
@@ -682,7 +683,7 @@ function QuickAction({
           <Icon className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <h3 className="text-[0.8125rem] font-medium text-foreground">{title}</h3>
+          <h2 className="text-[0.8125rem] font-medium text-foreground">{title}</h2>
           {to ? (
             <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
               {cta}
@@ -1079,7 +1080,7 @@ export function ProjectOverviewPage() {
         <Card className="mb-4">
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <CheckCircle2 className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <h3 className="text-sm font-semibold text-foreground">Not yet analyzed</h3>
+            <h2 className="text-sm font-semibold text-foreground">Not yet analyzed</h2>
             <p className="mt-1 max-w-sm text-xs text-muted-foreground">
               Run the first analysis to build the dependency graph, workflows, and a role-based
               onboarding package — with a cost preview before anything runs.
@@ -1112,14 +1113,14 @@ export function ProjectOverviewPage() {
             )}
             <div className={`ml-auto flex-wrap items-center gap-1.5 ${packages!.length > 1 ? "flex" : "hidden"}`}>
               <Select value={roleFilter} onValueChange={setRoleFilter}>
-                <SelectTrigger className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="Filter packages by role" className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All roles</SelectItem>
                   {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="Filter packages by status" className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Any status</SelectItem>
                   {["draft", "approved", "stale", "generating", "failed"].map((s) => (
@@ -1128,7 +1129,7 @@ export function ProjectOverviewPage() {
                 </SelectContent>
               </Select>
               <Select value={freshFilter} onValueChange={setFreshFilter}>
-                <SelectTrigger className="h-7 w-[130px] text-xs"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="Filter packages by commit" className="h-7 w-[130px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Any commit</SelectItem>
                   <SelectItem value="latest">Latest commit</SelectItem>
@@ -1181,9 +1182,7 @@ export function ProjectOverviewPage() {
             </Button>
           </div>
         ) : runs === null ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          </div>
+          <PageSpinner className="py-8" iconClassName="h-4 w-4" label="Loading run history" />
         ) : runs.length === 0 ? (
           <p className="text-xs text-muted-foreground">No runs yet.</p>
         ) : (
