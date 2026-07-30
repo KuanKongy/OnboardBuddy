@@ -5,11 +5,7 @@ import { WorkflowsPage } from "./WorkflowsPage";
 import { fetchWorkflowsList } from "@/lib/graphData";
 import { apiFetch } from "@/lib/api";
 
-/**
- * Bug #74 (F19). The rail lets a reader click several flows in a row, each
- * firing its own walkthrough request, and nothing tied a response back to the
- * selection that asked for it.
- */
+// The rail lets a reader click several flows in a row, each firing its own request.
 
 const WORKFLOWS = [
   { id: "wf-slow", title: "Analyze a repository", trigger_type: "http_post", confidence: "high", step_count: 1, tier: "core" },

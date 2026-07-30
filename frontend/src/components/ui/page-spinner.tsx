@@ -12,16 +12,10 @@ export interface PageSpinnerProps {
 }
 
 /**
- * A page- or section-level wait that says so out loud.
- *
- * #74/G4 (#71): ~15 loads rendered a bare spinning `Loader2` in a centred div.
- * The spin is the only signal and it carries no text, so to a screen reader
- * the region is simply empty for as long as the fetch takes — indistinguishable
- * from a load that finished with nothing in it. `role="status"` plus an sr-only
- * label announces the wait without changing a pixel; the glyph is `aria-hidden`
- * so the label is the only thing read.
- *
- * Not for buttons: an in-flight button already has its own visible text.
+ * A page- or section-level wait that says so out loud. A bare spinning glyph carries no
+ * text, so the region reads as empty for as long as the fetch takes; `role="status"`
+ * plus an sr-only label announces it without changing a pixel. Not for buttons — an
+ * in-flight button already has its own visible text.
  */
 export function PageSpinner({ label = "Loading…", className, iconClassName }: PageSpinnerProps) {
   return (

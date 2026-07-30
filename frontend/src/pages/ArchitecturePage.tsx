@@ -72,9 +72,8 @@ export function ArchitecturePage() {
   const levelKey = (cluster: string | null) =>
     `${id ?? ""}::${selectedPackageId ?? ""}::${cluster ?? ""}`;
   const loadedKeyRef = useRef<string | null>(null);
-  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
-  // can be in flight and response order is not selection order. `runId` idiom
-  // from useGraphDrill's live().
+  // `loadedKeyRef` guards refetching, not staleness: two loads can be in flight and
+  // response order is not selection order.
   const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(
@@ -319,7 +318,8 @@ export function ArchitecturePage() {
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16, color: stroke },
           style: {
             opacity: neighborIds === null || active ? 0.9 : 0.12,
-            strokeWidth: Math.min(4, 1 + e.weight / 4),
+            // 1.25 floor so a weight-0 edge is still visible; see DependencyGraphView.
+            strokeWidth: Math.min(4, 1.25 + e.weight / 4),
             stroke,
           },
         };
@@ -623,9 +623,8 @@ export function ArchitecturePage() {
                   <div className="min-w-0">
                     <h2 className="truncate text-sm font-semibold text-foreground">{asideCluster.label}</h2>
                     <span
-                      className="mt-1 inline-block rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide"
+                      className="mt-1 inline-block rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-foreground"
                       style={{
-                        color: `var(--node-${CLUSTER_KIND_PALETTE[asideCluster.kind] ?? "shared"})`,
                         background: `color-mix(in oklab, var(--node-${CLUSTER_KIND_PALETTE[asideCluster.kind] ?? "shared"}) 14%, transparent)`,
                       }}
                     >

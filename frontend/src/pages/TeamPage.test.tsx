@@ -4,15 +4,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { TeamPage } from "./TeamPage";
 
-/**
- * Bug #72 + #74/F16 — the three things this page could not do.
- *
- * A member could not leave (removal is somebody else's action and refuses
- * self-removal), ownership could not move (the tier dropdown refuses to assign
- * it), and the one progress number shown was an *editorial* approval count
- * under a label that read like reading progress — so a developer's progress was
- * permanently 0. All three regress silently: the page still renders.
- */
+// Leave, transfer, and the two progress columns. All three regress silently — the
+// page still renders either way.
 
 const projectState = vi.hoisted(() => ({ tier: "developer" }));
 const refetch = vi.hoisted(() => vi.fn());
@@ -90,8 +83,8 @@ describe("TeamPage", () => {
     expect(screen.getByRole("columnheader", { name: "Approvals" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Read" })).toBeInTheDocument();
 
-    // The developer has approved nothing (an owner/admin action) but has read
-    // seven sections — the case the single old column reported as 0.
+    // Approved nothing (an owner/admin action) but has read seven sections — the case
+    // a single column collapses to 0.
     const row = screen.getByRole("button", { name: "View dev@acme.test" });
     const cells = within(row).getAllByRole("cell");
     expect(cells[cells.length - 2]).toHaveTextContent("0");
@@ -121,14 +114,13 @@ describe("TeamPage", () => {
     expect(screen.queryByRole("button", { name: /Leave project/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "View dev@acme.test" }));
-    // #74/G2: both dropdowns in this dialog drew a Label with nothing to point
-    // at, so each announced only its current value with no idea what it set.
+    // Queried by label, which is what a Label pointing at nothing would break.
     expect(await screen.findByLabelText("Permission tier")).toBeInTheDocument();
     expect(screen.getByLabelText("Developer role")).toBeInTheDocument();
 
     await user.click(await screen.findByRole("button", { name: /Transfer ownership/ }));
 
-    // Type-to-confirm, like the project delete: the caller cannot undo this one.
+    // Type-to-confirm: the caller cannot undo this one.
     const typed = await screen.findByLabelText("Type rocket to confirm");
     await user.type(typed, "rocket");
     // The confirm dialog sits over the member dialog, so scope to it.
@@ -139,8 +131,8 @@ describe("TeamPage", () => {
       "/projects/p1/members/u-dev/transfer-ownership",
       { method: "POST" },
     );
-    // The caller's own tier gates every owner-only control on this page and the
-    // settings danger zone, so it has to be re-read immediately.
+    // The caller's own tier gates every owner-only control here and on settings, so
+    // it has to be re-read immediately.
     await waitFor(() => expect(refetch).toHaveBeenCalled());
   });
 });

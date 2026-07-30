@@ -61,9 +61,7 @@ describe("App", () => {
     });
   });
 
-  // #74/G1: without these two, a route change is invisible to anyone not
-  // watching the pixels — same tab title on all 23 pages, and focus left behind
-  // in the sidebar so Tab walked the nav again instead of entering the page.
+  // Without these two, a route change is invisible to anyone not watching the pixels.
   it("names the route in the document title", async () => {
     await renderApp("/login");
 

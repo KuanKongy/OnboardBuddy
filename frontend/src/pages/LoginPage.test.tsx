@@ -51,16 +51,8 @@ describe("LoginPage", () => {
   });
 });
 
-/**
- * Bug #74/F7 — "GitHub sign-in drops the deep link".
- *
- * A shared link to a project page bounces through ProtectedRoute, which parks
- * the wanted location in `location.state.from`. The email form honored it; the
- * GitHub button did not, so anyone arriving on a shared link and signing in the
- * way this app pushes hardest landed on /dashboard and had to find the page
- * again. Asserted through the real AuthProvider so the whole chain — page →
- * context → redirectTo — is what's pinned.
- */
+// ProtectedRoute parks the wanted location in `location.state.from`. Driven through
+// the real AuthProvider so page → context → redirectTo is the whole chain pinned.
 describe("LoginPage — deep link through GitHub sign-in (#74/F7)", () => {
   it("carries the bounced-from path into the OAuth redirect", async () => {
     vi.mocked(supabase.auth.signInWithOAuth).mockClear();

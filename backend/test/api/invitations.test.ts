@@ -20,10 +20,8 @@ describe("GET /api/invitations", () => {
     expect(res.body).to.have.property("error");
   });
 
-  // #74/F13: this inbox listed invitations the accept path would refuse as
-  // "not found or expired" — an invitee looking at a project they cannot join,
-  // with no way to tell why. The predicate is the accept path's, including the
-  // IS NULL arm that keeps pre-TTL rows redeemable.
+  // Copied from the accept path, including the IS NULL arm that keeps pre-TTL
+  // rows redeemable.
   it("filters expired invitations with the accept path's own predicate", async () => {
     installTestAuth();
     const seen: string[] = [];
@@ -88,9 +86,8 @@ describe("POST /api/invitations/:invitationId/decline", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Bug #72. 'revoked' rather than 'declined' is deliberate — the status CHECK
-  // is frozen for M5 (#72/W3) — so this also pins that the route writes a value
-  // the constraint accepts.
+  // #72: the CHECK has no 'declined'; 'revoked' is the terminal stand-in, so this
+  // also pins that the route writes a value the constraint accepts.
   it("retires a pending invitation addressed to the caller", async () => {
     const statements = installInvitation({ email: "TESTER@example.com", status: "pending" });
 

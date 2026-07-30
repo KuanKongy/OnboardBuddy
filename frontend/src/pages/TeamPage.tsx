@@ -49,7 +49,7 @@ interface PendingInvitation {
   developer_role: string | null;
   invited_by_email: string | null;
   created_at: string;
-  /** #74/B4: null on invitations created before the 14-day TTL — those never expire. */
+  /** Null on invitations created before the TTL existed — those never expire. */
   expires_at: string | null;
 }
 
@@ -235,12 +235,9 @@ export function TeamPage() {
     }
   }
 
-  // Bug #72: ownership had no way to move, so the only exit for an owner was
-  // deleting the project. Both tiers swap in one request; the local swap keeps
-  // the table honest without a refetch, and `refetch()` re-reads the CALLER's
-  // tier — every owner-only control on this page (and the danger zone on
-  // settings) is gated on it, so without that the demoted owner keeps an
-  // owner's UI until the next full page load.
+  // The local swap keeps the table honest without a refetch, but `refetch()` is what
+  // re-reads the CALLER's tier — every owner-only control here and on settings is
+  // gated on it, so without it the demoted owner keeps an owner's UI.
   async function handleTransfer(member: Member) {
     setTransferring(true);
     setError("");
@@ -265,9 +262,8 @@ export function TeamPage() {
     }
   }
 
-  // Bug #72: a member could not get out of a project — removal is an
-  // owner/admin action on somebody else, and it refuses self-removal. The
-  // owner's way out is a transfer, so they get no button here.
+  // Removal is an owner/admin action on somebody else and refuses self-removal, so
+  // leaving needs its own endpoint. The owner's way out is a transfer instead.
   async function handleLeave() {
     setLeaving(true);
     setError("");
@@ -378,9 +374,8 @@ export function TeamPage() {
               <p className="text-[0.6875rem] text-muted-foreground">
                 Permission tier controls what they can manage; developer role tailors their onboarding content by specialty.
               </p>
-              {/* #74/W1: no mail provider is provisioned, so "Send" was a lie —
-                  the invitation only surfaces once the invitee signs in with
-                  this address. Say so rather than leave them waiting on mail. */}
+              {/* No mail provider is provisioned: the invitation only surfaces once
+                  the invitee signs in, so say so rather than imply an email. */}
               <p className="text-[0.6875rem] text-muted-foreground">
                 No email is sent — the invitation appears on their Invitations page when they sign
                 in with this address.
@@ -426,9 +421,8 @@ export function TeamPage() {
                 <th scope="col" className="px-3 py-2 font-medium">Member</th>
                 <th scope="col" className="px-3 py-2 font-medium">Role</th>
                 <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">Joined</th>
-                {/* Two columns because they are two different facts, and the
-                    titles say which is which — an approval is editorial, a read
-                    mark is the member's own progress (#74/F16). */}
+                {/* Two columns because they are two different facts: an approval is
+                    editorial, a read mark is the member's own progress. */}
                 <th
                   scope="col"
                   className="px-3 py-2 text-right font-medium"
@@ -544,10 +538,8 @@ export function TeamPage() {
                         {inv.developer_role ? ` · ${inv.developer_role}` : ""}
                         {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}
                       </p>
-                      {/* Invitations now expire (#74/B4), and a pending row that
-                          nobody can redeem is indistinguishable from a fresh one
-                          without the date. Older rows carry no expiry and say
-                          nothing rather than guess one. */}
+                      {/* Without the date a pending row nobody can redeem looks like
+                          a fresh one. Pre-TTL rows say nothing rather than guess. */}
                       {inv.expires_at && (
                         <p className="truncate text-xs text-muted-foreground">
                           Expires {fmtDate(inv.expires_at)}
@@ -688,10 +680,8 @@ export function TeamPage() {
                         <Trash2 className="h-3 w-3" />
                         Remove
                       </Button>
-                      {/* Owner-only, and never on the owner's own row — the
-                          backend answers both cases 403/400, but the point is
-                          that ownership moves from here rather than through the
-                          tier dropdown, which refuses to assign it (#72). */}
+                      {/* Ownership moves from here, not through the tier dropdown,
+                          which refuses to assign it. */}
                       {isOwner && (
                         <Button
                           variant="ghost"
@@ -759,10 +749,8 @@ export function TeamPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Transfer is the one action on this page that cannot be undone by the
-          person taking it — afterwards the caller is an admin and only the new
-          owner can hand it back — so it gets the type-to-confirm treatment the
-          project delete uses. */}
+      {/* Type-to-confirm: afterwards the caller is an admin and only the new owner
+          can hand it back, so this is the one action here they cannot undo. */}
       <ConfirmDangerDialog
         open={transferTarget !== null}
         onOpenChange={(open) => { if (!open) { setTransferTarget(null); setError(""); } }}
@@ -781,8 +769,7 @@ export function TeamPage() {
         onConfirm={() => transferTarget && handleTransfer(transferTarget)}
       />
 
-      {/* Leave confirmation: same shape as remove-member. Deliberately a plain
-          confirm rather than type-to-confirm — nothing is destroyed, and the
+      {/* Plain confirm rather than type-to-confirm: nothing is destroyed and the
           member can be re-invited. */}
       <Dialog
         open={leaveOpen}

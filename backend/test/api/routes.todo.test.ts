@@ -12,8 +12,8 @@ import {
 
 const app = createApp();
 
-// Real uuid: #74/B11 validates id path params before they reach SQL, so a
-// stand-in like "sec-1" is now a 404 rather than a row that does not exist.
+// Must be a real uuid: id path params are validated before they reach SQL, so a
+// stand-in like "sec-1" answers 404.
 const TEST_SECTION_ID = "44444444-4444-4444-4444-444444444444";
 
 describe("backend API integration (mocked auth + db)", () => {

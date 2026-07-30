@@ -1,11 +1,7 @@
 /**
- * Supabase reports auth-link failures by redirecting back with error params in
- * the query string and/or URL hash instead of a session — read both, or the
- * receiving page waits forever for a session that is never coming (bug #37).
- *
- * Lifted out of AuthCallbackPage for #74/F6: the recovery link lands on
- * /reset-password, which read neither, so an expired link showed "Waiting for
- * your reset link…" indefinitely with no way out.
+ * Supabase reports auth-link failures by redirecting back with error params in the
+ * query string and/or URL hash instead of a session — read both, or the receiving
+ * page waits forever for a session that is never coming (#37).
  */
 
 function authErrorParams(): { hash: URLSearchParams; query: URLSearchParams } {

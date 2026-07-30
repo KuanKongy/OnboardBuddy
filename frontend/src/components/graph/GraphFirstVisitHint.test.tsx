@@ -1,10 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { GraphFirstVisitHint } from "./GraphFirstVisitHint";
 
-/**
- * Bug #74 (F21): the Classes view showed the Files copy, promising a GitHub
- * link its panel does not have.
- */
 describe("GraphFirstVisitHint", () => {
   beforeEach(() => localStorage.clear());
 
@@ -22,10 +18,9 @@ describe("GraphFirstVisitHint", () => {
     expect(screen.queryByText("What am I looking at?")).not.toBeInTheDocument();
     unmount();
 
-    // The classes hint is different copy nobody has dismissed yet.
+    // Different copy nobody has dismissed yet, under its own key.
     render(<GraphFirstVisitHint variant="classes" />);
     expect(screen.getByText("What am I looking at?")).toBeInTheDocument();
-    // And the files key is the pre-existing one, so it stays dismissed.
     expect(localStorage.getItem("onboardbuddy:graph-hint-dismissed")).toBe("1");
   });
 });

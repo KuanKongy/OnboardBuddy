@@ -13,10 +13,8 @@ export function requireProjectAccess(...allowedTiers: string[]) {
         return;
       }
 
-      // #74/B11: this is the gate every project-scoped route already passes
-      // through, so it is where a malformed id is cheapest to catch — sending
-      // one to `project_id = $1` raised a uuid cast error and answered 500 for
-      // a project that could not exist under any spelling.
+      // Every project-scoped route passes through here, so a malformed id is
+      // cheapest to catch before it reaches `project_id = $1` as a uuid cast.
       if (!isUuid(projectId)) {
         res.status(404).json({ error: "Not found" });
         return;

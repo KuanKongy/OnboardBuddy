@@ -72,10 +72,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  // #74/F7: a GitHub sign-in from a protected deep link used to land on
-  // /dashboard, dropping the page the user actually asked for. The callback
-  // already honors `?next=` (and rejects anything that isn't a local path), so
-  // the destination just has to survive the round trip through GitHub.
+  // The callback already honors `?next=` (and rejects anything that isn't a local
+  // path), so the destination only has to survive the round trip through GitHub.
   async function signInWithGithub(next?: string) {
     const callback = new URL("/auth/callback", window.location.origin);
     if (next) callback.searchParams.set("next", next);

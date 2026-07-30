@@ -58,9 +58,7 @@ export function InvitationsPage() {
     if (inv.developer_role) setSelectedRole(inv.developer_role);
   }
 
-  // Bug #72: declining used to be impossible — the button was disabled and the
-  // tooltip told the invitee to ask the inviter to cancel it. The invitation is
-  // dropped from the list on success and the next one is selected through
+  // Dropped from the list on success and the next one selected through
   // selectInvitation, so the #14 error-clearing rule holds here too.
   async function handleDecline(invitation: Invitation) {
     setDeclining(true);

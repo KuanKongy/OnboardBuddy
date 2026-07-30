@@ -11,17 +11,9 @@ import {
 import { Input } from "@/components/ui/input";
 
 /**
- * Type-to-confirm dialog for the irreversible actions.
- *
- * Extracted from ProjectSettingsPage's delete-project dialog (#74/F15). The
- * same delete also lived on the dashboard project card behind a plain
- * Cancel/Delete pair, so the surface where a stray click is *likeliest* — a
- * kebab menu in a grid of cards — had the weaker guard of the two.
- *
- * `error` renders inside the dialog (#74/H1). ProjectSettingsPage used to send
- * a failed delete to the page-level banner, which the modal overlay covers:
- * the request failed, the dialog stayed open with a live button, and the only
- * explanation was on the page underneath.
+ * Type-to-confirm dialog for the irreversible actions, shared so two surfaces offering
+ * the same delete cannot guard it differently. `error` renders inside the dialog: the
+ * modal overlay covers a page-level banner, so a failure reported there is invisible.
  */
 export function ConfirmDangerDialog({
   open,
@@ -50,7 +42,7 @@ export function ConfirmDangerDialog({
   const [typed, setTyped] = useState("");
 
   // A reopened dialog starts empty: the guard is only a guard if it has to be
-  // passed again, and a closed-then-reopened dialog kept the word typed.
+  // passed again.
   useEffect(() => {
     if (!open) setTyped("");
   }, [open]);
@@ -58,8 +50,8 @@ export function ConfirmDangerDialog({
   return (
     <Dialog
       open={open}
-      // A request in flight owns the dialog — dismissing it mid-delete leaves
-      // the user with no idea whether the delete happened.
+      // A request in flight owns the dialog: dismissing mid-delete leaves the user
+      // with no idea whether it happened.
       onOpenChange={(next) => { if (!pending) onOpenChange(next); }}
     >
       <DialogContent className="sm:max-w-md">

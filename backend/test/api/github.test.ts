@@ -59,10 +59,7 @@ describe("GET /api/github/installations", () => {
 describe("POST /api/github/oauth/complete", () => {
   afterEach(resetGithubMocks);
 
-  // #74/B2: this catch-all answered `400 { error: err.message }` for anything
-  // that escaped, and lib/github.ts interpolated GitHub's whole response body
-  // into that message — so a provoked failure reflected GitHub's JSON back to
-  // the caller. The body now lives on GitHubApiError.body, log-only.
+  // The body lives on GitHubApiError.body, log-only.
   it("does not reflect GitHub's response body when the code exchange fails", async () => {
     installTestAuth();
     const state = createInstallationState(TEST_USER.id);

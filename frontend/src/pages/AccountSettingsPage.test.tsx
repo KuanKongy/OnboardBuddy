@@ -3,17 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-/**
- * Account settings: the two keyboard/consent gaps from #74.
- *
- * F10 — "Add email sign-in" was a div of inputs, so the sign-up-shaped form
- * could only be submitted with the mouse.
- * F9 — unlinking a sign-in identity fired on the first click. Unlinking the
- * wrong one is how you lock yourself out of an account, and it was the only
- * destructive action on this page without a confirm (the GitHub App disconnect
- * beside it has had one since M3).
- */
-
 type Identity = { provider: string; identity_data?: Record<string, string> };
 
 const authUser: { identities: Identity[]; providers: string[] } = {
@@ -120,7 +109,7 @@ describe("AccountSettingsPage — unlinking a sign-in identity (#74/F9)", () => 
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
     expect(unlinkIdentity).not.toHaveBeenCalled();
 
-    // Confirming is what does it — with the GitHub identity, not the email one.
+    // Confirming unlinks the GitHub identity, not the email one.
     await user.click(screen.getAllByRole("button", { name: /^unlink$/i })[0]!);
     await user.click(await screen.findByRole("button", { name: /unlink github/i }));
     await waitFor(() =>

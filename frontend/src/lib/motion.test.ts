@@ -1,10 +1,7 @@
 import { prefersReducedMotion, scrollBehavior } from "./motion";
 
-/**
- * The failure this guards is silent in the worst direction: a matchMedia that
- * returns `undefined` (or a jsdom without it) reads as "no preference", so the
- * app animates for the one reader who asked it not to and nothing looks wrong.
- */
+// A matchMedia returning `undefined` reads as "no preference", so the app animates
+// for the one reader who asked it not to and nothing looks wrong.
 function mockMatchMedia(matches: boolean | undefined) {
   Object.defineProperty(window, "matchMedia", {
     writable: true,

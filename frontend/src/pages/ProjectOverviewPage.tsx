@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
+import { formatDuration } from "@/lib/format";
 import { buildGithubRepoUrl } from "@/lib/githubUrl";
 import { ROLE_OPTIONS, roleTitle } from "@/lib/roles";
 import { pipelineProgress } from "@/lib/pipelineProgress";
@@ -85,15 +86,10 @@ function runActionLabel(run: RunHistoryEntry): string {
   }
 }
 
-function fmtDuration(ms: number | null): string {
-  if (ms === null || Number.isNaN(ms)) return "";
-  const secs = Math.round(ms / 1000);
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-}
-
-function statusBadgeVariant(status: string): "default" | "destructive" | "secondary" {
-  return status === "complete" ? "default" : status === "failed" ? "destructive" : "secondary";
+// Green for complete, matching the ProjectCard chip. Not the primary/blue variant —
+// blue is this app's info/selected tone, so a finished run would read as highlighted.
+function statusBadgeVariant(status: string): "success" | "destructive" | "secondary" {
+  return status === "complete" ? "success" : status === "failed" ? "destructive" : "secondary";
 }
 
 // ── One active run ────────────────────────────────────────────────────────────
@@ -531,7 +527,7 @@ function RunHistoryRow({ run, partner, projectId }: { run: RunHistoryEntry; part
               {cost.cached_calls > 0 ? ` · ${cost.cached_calls} cached` : ""}
             </span>
           )}
-          {durationMs !== null && <span>{fmtDuration(durationMs)}</span>}
+          {durationMs !== null && <span>{formatDuration(durationMs)}</span>}
           <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
           <Badge variant={statusBadgeVariant(status)} className="text-[0.6875rem]">{status}</Badge>
         </span>
@@ -1050,11 +1046,9 @@ export function ProjectOverviewPage() {
         </div>
       )}
 
-      {/* Bug #74/F3: this error only rendered inside the neverAnalyzed branch,
-          so a project WITH packages whose packages/status fetch failed showed a
-          silently empty grid — indistinguishable from "nothing generated yet",
-          on the one page that is supposed to say what exists. Same
-          error-with-retry shape as the run-history card below. */}
+      {/* Outside the neverAnalyzed branch: an analyzed project whose packages fetch
+          failed renders an empty grid, indistinguishable from "nothing generated
+          yet". Same error-with-retry shape as the run-history card below. */}
       {loadError && (
         <div
           className="mb-4 flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-soft px-3 py-3"

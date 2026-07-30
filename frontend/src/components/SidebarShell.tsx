@@ -21,7 +21,7 @@ const Ctx = createContext<SidebarCtx>({
 
 const COLLAPSED_KEY = "onboardbuddy:sidebar-collapsed";
 const DESKTOP_QUERY = "(min-width: 1024px)";
-/** Referenced by the toggle's aria-controls (#74/G13). */
+/** Referenced by the toggle's aria-controls. */
 export const SIDEBAR_ID = "app-sidebar";
 
 export function useSidebar() {
@@ -46,9 +46,8 @@ export function SidebarProvider({ children }: { children: ReactNode }) {
   };
 
   // The toggle drives `collapsed` on desktop and `open` on mobile, so
-  // aria-expanded cannot be honest without knowing which. Tracked here rather
-  // than re-queried inside the click handler so the announced state and the
-  // acted-on state can never disagree.
+  // aria-expanded cannot be honest without knowing which. Tracked here rather than
+  // re-queried in the click handler, so announced and acted-on cannot disagree.
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== "undefined" && window.matchMedia(DESKTOP_QUERY).matches,
   );
@@ -87,10 +86,8 @@ export function SidebarToggle({ className }: { className?: string }) {
       className={className}
       onClick={toggle}
       aria-label="Toggle sidebar"
-      // #74/G13: the button announced "Toggle sidebar" and nothing else, so it
-      // was impossible to tell whether pressing it would open or close, or what
-      // it acted on. The state differs by viewport — collapsed on desktop, the
-      // drawer on mobile — and `expanded` reports whichever one it is driving.
+      // The state differs by viewport — collapsed on desktop, the drawer on mobile
+      // — and `expanded` reports whichever one this is driving.
       aria-expanded={expanded}
       aria-controls={SIDEBAR_ID}
     >

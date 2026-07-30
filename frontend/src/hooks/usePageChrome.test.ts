@@ -1,11 +1,7 @@
 import { pageTitleFor } from "./usePageChrome";
 
-/**
- * The map is the part that rots: a new route gets added to App.tsx and its tab
- * silently reads "Page not found" — the page renders perfectly, so nothing else
- * catches it. One test over the shapes (top-level, project tab, index route,
- * landing, unmatched) rather than one per route.
- */
+// The map is the part that rots: a new route in App.tsx reads "Page not found" in the
+// tab while rendering perfectly. One test per route SHAPE, not per route.
 describe("pageTitleFor", () => {
   it("names each shape of route", () => {
     expect(pageTitleFor("/")).toBe("OnboardBuddy");

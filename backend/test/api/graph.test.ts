@@ -22,12 +22,8 @@ describe("GET /api/projects/:id/graph/dependencies", () => {
   });
 });
 
-/**
- * Bug #70 regression pin. `dependentCount` was hardcoded to 0 in the grouped
- * view, so on every project the default screen read "N imports · 0 imported by"
- * for each group while the canvas drew arrows into it. Nothing covered it, and
- * a zero is the easiest value in the world to reintroduce.
- */
+// #70: `dependentCount` was hardcoded to 0 in the grouped view, and a zero is
+// easy to reintroduce.
 describe("GET /api/projects/:id/graph/dependencies — grouped view (bug #70)", () => {
   afterEach(resetTestHarness);
 
@@ -46,8 +42,7 @@ describe("GET /api/projects/:id/graph/dependencies — grouped view (bug #70)", 
       })),
     ];
     const edges = [
-      // Cross-directory: frontend imports backend. These are the arrows the
-      // grouped view draws, and the population `dependentCount` must count.
+      // Cross-directory: the arrows the grouped view draws and counts.
       ...Array.from({ length: 4 }, (_, i) => ({
         id: `cross-${i}`, source_node_id: `front-${i}`, target_node_id: `back-${i}`,
         type: "imports", weight: 1,
@@ -62,8 +57,8 @@ describe("GET /api/projects/:id/graph/dependencies — grouped view (bug #70)", 
     installTestAuth();
     const { nodes, edges } = graphFixture();
     mockQuery((text) => {
-      // Member-default resolution also joins project_members, so the access
-      // check has to be matched by its own column list first.
+      // Member-default resolution also joins project_members, so match the access
+      // check by its own column list first.
       if (text.includes("pm.default_package_id = op.id")) return { rows: [] };
       if (text.includes("FROM project_members")) {
         return {
@@ -95,8 +90,8 @@ describe("GET /api/projects/:id/graph/dependencies — grouped view (bug #70)", 
 
     // The bug: this read 0 while four arrows pointed at the group.
     expect(byDir.get("backend/src")!.dependentCount).to.equal(4);
-    // The paired half — both numbers count links that CROSS the boundary, so
-    // backend/src's own internal import does not inflate either of them.
+    // Both numbers count links that CROSS the boundary, so the internal import
+    // inflates neither.
     expect(byDir.get("backend/src")!.importCount).to.equal(0);
     expect(byDir.get("backend/src")!.internalImportCount).to.equal(1);
     expect(byDir.get("frontend/src")!.importCount).to.equal(4);

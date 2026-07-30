@@ -3,11 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-rou
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { PackageCard } from "@/types/onboarding";
 
-/**
- * Bug #74 (J3): every `setParams` call replaced the history entry, so opening a
- * package overwrote the grid — browser Back left the tab instead of returning
- * to it. Only view boundaries push.
- */
+// Only view boundaries push a history entry; everything else replaces.
 
 const CARD: PackageCard = {
   id: "pkg-1",
@@ -126,8 +122,7 @@ describe("onboarding reader history (J3)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "probe-back" }));
 
-    // With `replace: true` the grid entry was overwritten, so Back had nowhere
-    // to go and the reader stayed on screen.
+    // With `replace: true` the grid entry is overwritten, so Back has nowhere to go.
     await waitFor(() => expect(currentSearch()).not.toContain("view=reader"));
     expect(await screen.findByRole("button", { name: /Whole repository/ })).toBeInTheDocument();
   });

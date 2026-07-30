@@ -187,22 +187,15 @@ export async function enqueuePreflightRun(jobId: string, data: AnalysisJobData):
   }
 }
 
-/**
- * Seam for the summary queue, mirroring `__setQueuePublishForTests` above and
- * for the same reason: `Queue.add` against an unreachable Redis reconnects
- * forever instead of rejecting, so the failure path is only reachable by
- * substituting the publish.
- */
+// Same seam as `__setQueuePublishForTests` above: `Queue.add` against an
+// unreachable Redis reconnects forever instead of rejecting.
 type SummaryPublish = (name: string, data: SummaryJobData, opts: Record<string, unknown>) => Promise<unknown>;
 let summaryPublishOverride: SummaryPublish | null = null;
 export function __setSummaryPublishForTests(fn: SummaryPublish | null): void {
   summaryPublishOverride = fn;
 }
 
-/**
- * The retry budget every package-generation submission uses. One constant
- * because the three routes calling this were three copies of the same literal.
- */
+/** The retry budget every package-generation submission uses. */
 const SUMMARY_ENQUEUE_OPTS = {
   attempts: 2,
   backoff: { type: "fixed", delay: 3000 },
@@ -211,14 +204,9 @@ const SUMMARY_ENQUEUE_OPTS = {
 } as const;
 
 /**
- * Summary-queue twin of `enqueueAnalysisRun` (#74/B5).
- *
- * The generation routes published straight to the queue, so all three carried
- * the exact hang bug #69(1) fixed for analysis runs: submission happens after
- * the row is committed 'queued', so a Redis outage left a row no worker would
- * ever see — the UI polling "waiting for worker" indefinitely while the
- * per-package concurrency guard rejected every retry as already in progress.
- * Failing the row frees that guard and turns the hang into a visible error.
+ * Summary-queue twin of `enqueueAnalysisRun`. Submission happens after the row is
+ * committed 'queued', so a publish that throws has to fail the row — otherwise no
+ * worker ever sees it and the concurrency guard rejects every retry.
  */
 export async function enqueueSummaryRun(
   jobId: string,

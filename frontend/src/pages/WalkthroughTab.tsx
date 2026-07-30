@@ -525,14 +525,14 @@ export function WalkthroughTab() {
         setDetail(loaded);
         if (startStep > 0) {
           setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
-          // A walkthrough has no pager to move, so the deep link scrolls — but
-          // only once the document has rendered its anchors.
+          // A walkthrough has no pager to move, so the deep link scrolls — but only
+          // once the document has rendered its anchors.
           if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
         }
       }
     } catch (err: unknown) {
-      // The list stays, but the pane now says why it is empty instead of
-      // silently reverting to the "pick something" prompt (bug #68).
+      // The list stays; the pane says why it is empty rather than reverting to the
+      // "pick something" prompt (#68).
       if (!controller.signal.aborted) {
         setDetail(null);
         setDetailError({

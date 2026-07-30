@@ -9,10 +9,8 @@ invitationsRouter.get("/", async (req, res) => {
   try {
     const email = req.user!.email;
 
-    // #74/F13: the same expiry predicate the accept path uses. Without it this
-    // inbox listed invitations whose Accept button could only answer "not found
-    // or expired" — an invitee staring at a project they cannot join.
-    // The IS NULL arm keeps rows written before invitations had a TTL.
+    // Same expiry predicate as the accept path, so the inbox never lists an
+    // invitation Accept would refuse. The IS NULL arm keeps pre-TTL rows valid.
     const result = await query(
       `SELECT pi.*, p.repo_owner, p.repo_name, p.branch,
               u.email AS invited_by_email
@@ -63,22 +61,8 @@ invitationsRouter.get("/:invitationId", requireUuidParam("invitationId"), async 
   }
 });
 
-/**
- * Bug #72: the invitee had no way to say no. The Decline button was disabled
- * with a tooltip asking them to go and find the inviter, so an invitation they
- * did not want sat pending forever, blocking a re-invitation of that address
- * (the pending-unique index) and cluttering their inbox.
- *
- * Terminal status is 'revoked', not 'declined' (#72/W3): the
- * `project_invitations.status` CHECK is frozen for M5 and has no 'declined'
- * value. Downstream behaviour is identical — both mean "cannot be redeemed,
- * gone from every list" — and the one-line CHECK migration is recorded as a
- * post-freeze follow-up.
- *
- * Deliberately no expiry guard, unlike accept: the invitation is being thrown
- * away either way, and refusing to discard a stale one would leave the invitee
- * holding a row they can neither redeem nor clear.
- */
+// #72: the status CHECK has no 'declined'; 'revoked' is the terminal stand-in.
+// No expiry guard, unlike accept — a stale invitation is still discardable.
 invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"), async (req, res) => {
   try {
     const { invitationId } = req.params;
@@ -96,8 +80,7 @@ invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"
 
     const invitation = invResult.rows[0] as { email: string; status: string };
 
-    // Same guard as accept and the detail route: an invitation is addressed to
-    // one address, and its id is not a capability for anyone else.
+    // An invitation id is not a capability for anyone but its addressee.
     if (invitation.email.toLowerCase() !== email.toLowerCase()) {
       res.status(403).json({ error: "This invitation is not for your account" });
       return;
@@ -108,10 +91,8 @@ invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"
       return;
     }
 
-    // `AND status = 'pending'` makes the write the arbiter: an accept that
-    // landed between the read above and here must not be overwritten with a
-    // decline, which would leave a member of a project whose invitation says
-    // they refused it.
+    // The write is the arbiter: an accept landing since the read above must not
+    // be overwritten with a decline.
     const result = await query(
       `UPDATE project_invitations
        SET status = 'revoked'

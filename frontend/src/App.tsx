@@ -150,9 +150,8 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
       <div className="flex h-screen">
         <SkipToContent />
         <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
-        {/* `outline-none` because usePageChrome focuses this on every route
-            change: a ring around the whole page would be a new visual on a
-            navigation that used to draw nothing. */}
+        {/* `outline-none`: usePageChrome focuses this on every route change, and a
+            ring around the whole page would be a new visual on navigation. */}
         <main
           id={MAIN_REGION_ID}
           tabIndex={-1}
@@ -213,8 +212,8 @@ export function HelpRoute() {
 }
 
 export default function App() {
-  // Above <Routes> so one effect covers all 23 routes — the shells come and go,
-  // the title and the focus reset must not.
+  // Above <Routes> so one effect covers every route: the shells come and go, the
+  // title and the focus reset must not.
   usePageChrome();
 
   return (

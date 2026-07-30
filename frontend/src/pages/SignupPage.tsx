@@ -45,9 +45,8 @@ export function SignupPage() {
     }
   }
 
-  // #74/F11: this button gave no sign it had been pressed. The OAuth redirect
-  // can take a second or two, in which time the page still invited a second
-  // click and a form submit — LoginPage already spins and mutually disables.
+  // The OAuth redirect takes a second or two, during which the page must stop
+  // inviting a second click and a form submit — same shape as LoginPage.
   async function handleGithub() {
     setError("");
     setGithubLoading(true);

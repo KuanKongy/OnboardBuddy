@@ -97,11 +97,6 @@ describe("InvitationsPage error lifecycle (#14)", () => {
   });
 });
 
-/**
- * Bug #72: Decline was a permanently disabled button whose tooltip asked the
- * invitee to go and ask the inviter to cancel it. An unwanted invitation stayed
- * pending forever — in their inbox, and blocking a re-invitation of the address.
- */
 describe("InvitationsPage decline (#72)", () => {
   function renderPage() {
     return render(
@@ -113,9 +108,8 @@ describe("InvitationsPage decline (#72)", () => {
     );
   }
 
-  // Block body on purpose: `mockReset()` returns the mock, and a hook that
-  // returns a function has that function called as the test's teardown — which
-  // here means `apiFetch()` with no arguments and an unhandled rejection.
+  // Block body on purpose: `mockReset()` returns the mock, and a returned function is
+  // run as teardown — here `apiFetch()` with no arguments, unhandled.
   beforeEach(() => { mockApi.mockReset(); });
 
   it("drops the declined invitation and selects the next one", async () => {

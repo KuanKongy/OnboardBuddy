@@ -60,11 +60,8 @@ export function createApp() {
   // verification, so it mounts with its own parser before express.json()
   // (which never sees this path). Auth = the signature, not a bearer token.
   app.use("/api/webhooks/github", express.raw({ type: "*/*", limit: "2mb" }), githubWebhookRouter);
-  // #74/B13: gzip the JSON. The graph, package and provenance payloads are
-  // large and highly repetitive (the same file paths and section keys over and
-  // over), which is exactly what deflate is good at. Mounted AFTER the webhook
-  // above so the HMAC path keeps its own handler chain untouched, and before
-  // express.json so every route below is covered.
+  // After the webhook so the HMAC path keeps its raw parser, before express.json
+  // so every route below is covered.
   app.use(compression());
   app.use(express.json());
 

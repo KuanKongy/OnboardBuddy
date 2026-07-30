@@ -2,13 +2,8 @@ import { useEffect, useRef } from "react";
 import { useLocation } from "react-router-dom";
 
 /**
- * Per-route document title + a focus reset on navigation (#74/G1, #71 item 1).
- *
- * This is a single-page app, so without either of these a route change is
- * invisible to anyone not looking at the pixels: every tab in the browser said
- * "OnboardBuddy" no matter which of 23 pages it held, and focus stayed on the
- * link that was just clicked — in the sidebar — so the next Tab press walked
- * the nav again instead of entering the page that had just replaced itself.
+ * Per-route document title + a focus reset on navigation. Without both, a route
+ * change in a single-page app is invisible to anyone not watching the pixels.
  */
 
 const APP_NAME = "OnboardBuddy";
@@ -57,8 +52,7 @@ export function pageTitleFor(pathname: string): string {
     const project = /^\/projects\/[^/]+(?:\/([^/]*))?$/.exec(clean);
     if (project) page = PROJECT_TAB_TITLES[project[1] ?? ""];
   }
-  // An unmatched path is the 404 route, which is a page like any other — a
-  // reader who lands there from a stale link should see it in the tab too.
+  // An unmatched path is the 404 route, which needs a tab title like any other.
   if (page === undefined) page = "Page not found";
 
   return page ? `${page} · ${APP_NAME}` : APP_NAME;
@@ -66,9 +60,8 @@ export function pageTitleFor(pathname: string): string {
 
 export function usePageChrome(): void {
   const { pathname } = useLocation();
-  // The path this hook last acted on. Compared rather than a boolean "first
-  // render" flag because StrictMode mounts effects twice: a flag would be
-  // spent on the discarded pass and the real one would steal focus on load.
+  // A path rather than a boolean "first render" flag: StrictMode mounts effects
+  // twice, and a flag would be spent on the discarded pass.
   const handled = useRef<string | null>(null);
 
   useEffect(() => {

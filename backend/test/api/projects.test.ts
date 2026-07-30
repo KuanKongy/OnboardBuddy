@@ -61,16 +61,13 @@ describe("POST /api/projects", () => {
     expect(res.body.error).to.include("You do not have access");
   });
 
-  // #74/B7 + #74/F4. Both cases used to be indistinguishable from a server
-  // fault: an unreadable repo rethrew into the generic 500, and the duplicate
-  // 409 named no project, so the importer had nowhere to send the user.
   describe("failures the caller can act on", () => {
     const ownerInstallation = MOCK_GITHUB_ACCOUNTS.owner.installationId;
     let previousKey: string | undefined;
 
     before(() => {
-      // The route reaches getRepo through a real App JWT, so signing has to
-      // work; the test harness points the key path at /dev/null on purpose.
+      // The route signs a real App JWT, and the harness points the key path at
+      // /dev/null on purpose.
       previousKey = process.env.GITHUB_APP_PRIVATE_KEY;
       process.env.GITHUB_APP_PRIVATE_KEY = crypto.generateKeyPairSync("rsa", {
         modulusLength: 2048,
@@ -145,8 +142,8 @@ describe("POST /api/projects", () => {
             }],
           }), { status: 200, headers: { "Content-Type": "application/json" } });
         }
-        // A branch was supplied, so the metadata fetch is best-effort: this
-        // failure is only logged and the INSERT still runs.
+        // A branch was supplied, so the metadata fetch is best-effort — logged,
+        // and the INSERT still runs.
         return new Response("upstream unavailable", { status: 503 });
       }) as typeof fetch;
       const client = stubPoolClient((text) => {
@@ -192,10 +189,9 @@ function connectionRow() {
 }
 
 /**
- * `pool.connect()` has no injection seam and POST /api/projects needs a real
- * transaction, so the client is swapped on the pool for the length of one test.
- * Restored in a `finally` — a leaked stub would silently break every later
- * suite that touches the pool.
+ * `pool.connect()` has no injection seam, so the client is swapped on the pool for
+ * one test. Always restore in a `finally` — a leaked stub would silently break
+ * every later suite that touches the pool.
  */
 function stubPoolClient(
   handler: (text: string) => { rows: unknown[] },
@@ -292,8 +288,6 @@ describe("GET /api/projects/:id", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Bug #74/B11: `project_id = 'not-a-uuid'` is a Postgres cast error, so the
-  // access check 500'd on a project id that could not name anything.
   it("answers a non-uuid :id with 404 JSON instead of a 500", async () => {
     installTestAuth();
     let queried = false;
@@ -332,13 +326,8 @@ describe("POST /api/projects/:id/summarize", () => {
     resetTestHarness();
   });
 
-  /**
-   * Bug #74/B5. The three generation producers published straight to the queue,
-   * so a submission that threw left the row committed 'queued' with nothing to
-   * consume it: "waiting for worker" forever, and the per-package concurrency
-   * guard then refused every retry as already in progress. Driven through the
-   * route because the wiring is the thing that regressed, not the helper.
-   */
+  // Driven through the route rather than the helper: the wiring is the part that
+  // regresses, and a stranded row is invisible until someone waits on it.
   it("fails the queued row instead of leaving it stranded when the queue rejects", async () => {
     installTestAuth();
     const writes: Array<{ text: string; params?: unknown[] }> = [];

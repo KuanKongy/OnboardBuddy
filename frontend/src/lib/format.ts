@@ -18,6 +18,20 @@ export function timeAgo(iso: string | null): string {
 }
 
 /**
+ * A run duration, in the largest unit that keeps it readable. Seconds are dropped
+ * once hours appear. Returns "" for null/NaN so a caller can render the empty case
+ * as nothing.
+ */
+export function formatDuration(ms: number | null): string {
+  if (ms === null || Number.isNaN(ms)) return "";
+  const secs = Math.max(0, Math.round(ms / 1000));
+  if (secs < 1) return ms > 0 ? "<1s" : "0s";
+  if (secs < 60) return `${secs}s`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`;
+}
+
+/**
  * Shorten a label from the MIDDLE, so the END of it survives.
  *
  * A right-hand ellipsis is the wrong tool for route- and path-shaped labels.

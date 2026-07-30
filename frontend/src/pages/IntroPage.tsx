@@ -70,26 +70,55 @@ export function IntroPage() {
           and signup pages are the ones that bounce a signed-in user on.) */}
       <PublicPageHeader />
 
+      {/* Two columns so the showcase card is above the fold. It was MOVED here, not
+          copied — the section further down carries the tutorial example instead. */}
       <section className="px-4 pb-16 pt-14 sm:pb-20 sm:pt-16">
-        <div className="mx-auto max-w-3xl text-center">
-          <h1 className="text-3xl font-bold leading-tight tracking-tight text-foreground sm:text-5xl">
-            Onboard developers to any codebase&nbsp;&mdash; automatically
-          </h1>
-          <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
-            OnboardBuddy analyzes your repository, extracts critical workflows, and
-            generates role-specific onboarding packages grounded in real code evidence.
-          </p>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <Button size="sm" asChild>
-              <Link to="/signup">
-                Get Started
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
-            </Button>
-            <Button variant="outline" size="sm" asChild>
-              <a href="#features">Learn More</a>
-            </Button>
+        <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2">
+          <div className="text-center lg:text-left">
+            <h1 className="text-3xl font-bold leading-tight tracking-tight text-foreground sm:text-5xl">
+              Onboard developers to any codebase&nbsp;&mdash; automatically
+            </h1>
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base lg:mx-0">
+              OnboardBuddy analyzes your repository, extracts critical workflows, and
+              generates role-specific onboarding packages grounded in real code evidence.
+            </p>
+            <div className="mt-8 flex items-center justify-center gap-3 lg:justify-start">
+              <Button size="sm" asChild>
+                <Link to="/signup">
+                  Get Started
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              </Button>
+              <Button variant="outline" size="sm" asChild>
+                <a href="#features">Learn More</a>
+              </Button>
+            </div>
           </div>
+
+          <Card>
+            <CardContent className="p-4">
+              <p className="section-label mb-2">Package section &middot; Backend architecture</p>
+              <div className="mb-3 max-w-[75ch] rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
+                <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">
+                  TL;DR
+                </span>
+                Analysis never runs inside a request &mdash; the API enqueues a job and a worker
+                process executes the pipeline.
+              </div>
+              <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
+                Starting an analysis writes a job row and pushes it onto the analysis queue
+                <SampleCitation file="backend/src/lib/queue.ts" line="56" />, so the HTTP response
+                returns while the work is still queued. The worker picks the job up
+                <SampleCitation file="backend/src/worker/index.ts" line="288" /> and runs the
+                phases in order, recording each one's status and spend as it goes. The
+                deterministic phases come first &mdash; the evidence graph is built from parsed
+                imports and calls
+                <SampleCitation file="backend/src/worker/engine/evidenceGraphBuilder.ts" line="52" />{" "}
+                before any model is asked a question, which is why an AI-disabled project still
+                gets a graph, workflows and rankings.
+              </p>
+            </CardContent>
+          </Card>
         </div>
       </section>
 
@@ -310,32 +339,8 @@ export function IntroPage() {
             Example output &mdash; OnboardBuddy analyzing its own repository.
           </p>
 
-          <div className="grid gap-3 lg:grid-cols-2">
-            <Card>
-              <CardContent className="p-4">
-                <p className="section-label mb-2">Package section &middot; Backend architecture</p>
-                <div className="mb-3 max-w-[75ch] rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
-                  <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">
-                    TL;DR
-                  </span>
-                  Analysis never runs inside a request &mdash; the API enqueues a job and a worker
-                  process executes the pipeline.
-                </div>
-                <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">
-                  Starting an analysis writes a job row and pushes it onto the analysis queue
-                  <SampleCitation file="backend/src/lib/queue.ts" line="56" />, so the HTTP response
-                  returns while the work is still queued. The worker picks the job up
-                  <SampleCitation file="backend/src/worker/index.ts" line="288" /> and runs the
-                  phases in order, recording each one's status and spend as it goes. The
-                  deterministic phases come first &mdash; the evidence graph is built from parsed
-                  imports and calls
-                  <SampleCitation file="backend/src/worker/engine/evidenceGraphBuilder.ts" line="52" />{" "}
-                  before any model is asked a question, which is why an AI-disabled project still
-                  gets a graph, workflows and rankings.
-                </p>
-              </CardContent>
-            </Card>
-
+          {/* One card, so no grid — a lone card in a 2-track grid sits adrift. */}
+          <div className="mx-auto max-w-2xl">
             <Card>
               <CardContent className="p-4">
                 <p className="section-label mb-2">Tutorial &middot; 3 of 6 in the package</p>

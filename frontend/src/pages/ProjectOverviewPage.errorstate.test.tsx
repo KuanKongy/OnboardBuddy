@@ -4,16 +4,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AnalysisStatus } from "@/types/analysis";
 
-/**
- * Bug #74/F3 — the overview's load error had nowhere to render.
- *
- * `loadError = packagesError || statusError` was only consulted inside the
- * `neverAnalyzed` branch. On an ANALYZED project a failed packages fetch
- * therefore produced no message at all: the packages block is gated on
- * `packages.length > 0`, and a failed fetch leaves that empty. The user got a
- * page that quietly omitted the one thing it exists to show, with nothing to
- * retry. This is the silent-failure shape from #68, one page later.
- */
+// The packages block is gated on `packages.length > 0`, which a failed fetch also
+// leaves empty — so the error has to render outside the `neverAnalyzed` branch.
 
 const ANALYZED_STATUS: AnalysisStatus = {
   jobs: [],
@@ -58,8 +50,8 @@ vi.mock("@/contexts/ProjectContext", () => ({
 
 vi.mock("@/contexts/PackagesContext", () => ({
   usePackages: () => ({
-    // The failed fetch is exactly why this is empty — which is what made the
-    // failure indistinguishable from "nothing generated yet".
+    // Empty because the fetch failed, which is what makes it indistinguishable from
+    // "nothing generated yet".
     packages: [],
     refreshPackages,
     selectPackage: vi.fn(),

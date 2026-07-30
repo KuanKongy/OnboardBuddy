@@ -4,15 +4,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
 import { ProjectSettingsPage } from "./ProjectSettingsPage";
 
-/**
- * Bug #74/H1 — a failed delete reported behind its own modal.
- *
- * The delete error was written to the page-level banner under the header,
- * which the dialog overlay covers. So a rejected DELETE looked like nothing
- * happening at all: dialog still open, button still live, explanation on the
- * page underneath. Silent regression — moving the message back to `error`
- * leaves a screen that looks fine in a screenshot.
- */
+// The dialog overlay covers the page-level banner, so a delete error reported there
+// is invisible — and the screenshot still looks fine, which is why this is pinned.
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");

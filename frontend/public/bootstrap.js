@@ -18,8 +18,8 @@
       document.documentElement.classList.add("dark");
     }
   } catch (e) {
-    // Only localStorage can throw here (bug #74/I2). Unconditional dark forced
-    // the wrong theme on a light-mode reader with storage disabled.
+    // Only localStorage can throw here, so still honour the OS preference rather
+    // than forcing dark on a light-mode reader with storage disabled.
     try {
       if (prefersDark()) document.documentElement.classList.add("dark");
     } catch (e2) {
