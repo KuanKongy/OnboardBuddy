@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool, query } from "../../lib/db.js";
 import { INVITABLE_TIERS, isDeveloperRole, isInvitableTier } from "../lib/permissionTiers.js";
+import { requireUuidParam } from "../middleware/requireUuidParam.js";
 
 export const invitationsRouter = Router();
 
@@ -26,7 +27,7 @@ invitationsRouter.get("/", async (req, res) => {
   }
 });
 
-invitationsRouter.get("/:invitationId", async (req, res) => {
+invitationsRouter.get("/:invitationId", requireUuidParam("invitationId"), async (req, res) => {
   try {
     const { invitationId } = req.params;
     const email = req.user!.email;
@@ -57,7 +58,7 @@ invitationsRouter.get("/:invitationId", async (req, res) => {
   }
 });
 
-invitationsRouter.post("/:invitationId/accept", async (req, res) => {
+invitationsRouter.post("/:invitationId/accept", requireUuidParam("invitationId"), async (req, res) => {
   let client: import("pg").PoolClient | undefined;
   try {
     client = await pool.connect();

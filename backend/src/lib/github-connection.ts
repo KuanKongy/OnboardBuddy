@@ -1,5 +1,6 @@
 import { query } from "./db.js";
 import { decrypt, encrypt } from "./encryption.js";
+import { GitHubLinkError } from "./githubErrors.js";
 import {
   getInstallationToken,
   listUserInstallations,
@@ -155,7 +156,7 @@ export async function assertGithubAccountCanBeLinked(
 ): Promise<void> {
   const existing = await getUserGithubConnection(userId);
   if (existing && existing.githubUserId !== githubUserId) {
-    throw new Error(
+    throw new GitHubLinkError(
       `This OnboardBuddy account is already linked to GitHub user @${existing.githubUsername}. ` +
         "Authorize the GitHub App with that same account.",
     );
@@ -168,7 +169,7 @@ export async function assertGithubAccountCanBeLinked(
     [githubUserId, userId],
   );
   if (conflict.rows.length > 0) {
-    throw new Error(
+    throw new GitHubLinkError(
       `GitHub user @${githubUsername} is already linked to another OnboardBuddy account.`,
     );
   }

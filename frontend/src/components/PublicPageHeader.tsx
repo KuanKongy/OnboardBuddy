@@ -35,10 +35,10 @@ export function PublicPageHeader() {
           ) : (
             <>
               <Button variant="ghost" size="sm" asChild>
-                <Link to="/login">Log In</Link>
+                <Link to="/login">Sign in</Link>
               </Button>
               <Button size="sm" asChild>
-                <Link to="/signup">Sign Up</Link>
+                <Link to="/signup">Sign up</Link>
               </Button>
             </>
           )}

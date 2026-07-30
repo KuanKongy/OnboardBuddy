@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import { GitHubApiError, GitHubLinkError } from "./githubErrors.js";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -190,7 +191,7 @@ export async function getInstallationToken(installationId: number): Promise<stri
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   const data = (await res.json()) as { token: string };
@@ -209,7 +210,7 @@ export async function getAppInfo(): Promise<{ slug: string; name: string; html_u
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   const data = (await res.json()) as { slug: string; name: string; html_url: string };
@@ -228,7 +229,7 @@ export async function getAppInstallation(installationId: number): Promise<Instal
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   return (await res.json()) as Installation;
@@ -254,7 +255,7 @@ export async function exchangeGitHubAppOAuthCode(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub OAuth error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body, "GitHub OAuth");
   }
 
   const data = (await res.json()) as {
@@ -266,7 +267,12 @@ export async function exchangeGitHubAppOAuthCode(
     error_description?: string;
   };
   if (!data.access_token) {
-    throw new Error(data.error_description ?? data.error ?? "GitHub OAuth did not return an access token");
+    // GitHub's own words for a rejected code ("The code passed is incorrect or
+    // expired.") are the most useful thing the user can be told, so this one is
+    // whitelisted for reflection rather than swallowed into a 500.
+    throw new GitHubLinkError(
+      data.error_description ?? data.error ?? "GitHub OAuth did not return an access token",
+    );
   }
 
   return {
@@ -296,7 +302,7 @@ export async function refreshGitHubAppUserToken(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub OAuth refresh error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body, "GitHub OAuth refresh");
   }
 
   const data = (await res.json()) as {
@@ -330,7 +336,7 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   return (await res.json()) as GitHubUser;
@@ -354,7 +360,7 @@ export async function listUserInstallations(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   const data = (await res.json()) as { installations: Installation[] };
@@ -402,7 +408,7 @@ async function fetchAllPages<T>(
     });
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`GitHub API error (${res.status}): ${body}`);
+      throw new GitHubApiError(res.status, body);
     }
     const batch = extract(await res.json());
     items.push(...batch);
@@ -463,7 +469,7 @@ export async function getRepo(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   return (await res.json()) as Repo;
@@ -488,7 +494,7 @@ export async function listCommits(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   const raw = (await res.json()) as Array<{
@@ -560,7 +566,7 @@ export async function getCommitSha(
 
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`GitHub API error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body);
   }
 
   return res.text();
@@ -584,7 +590,7 @@ export async function downloadZipball(
 
   if (!res.ok || !res.body) {
     const body = await res.text();
-    throw new Error(`GitHub zipball error (${res.status}): ${body}`);
+    throw new GitHubApiError(res.status, body, "GitHub zipball");
   }
 
   await pipeline(Readable.fromWeb(res.body as import('stream/web').ReadableStream), fs.createWriteStream(destPath));

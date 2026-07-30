@@ -245,7 +245,7 @@ export function DashboardPage() {
             <Button variant="outline" size="sm" asChild>
               <Link to="/invitations">
                 <Mail className="h-3.5 w-3.5" />
-                Join Project
+                Invitations
                 {inviteCount !== null && inviteCount > 0 && (
                   <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[0.6875rem] font-semibold text-primary-foreground">
                     {inviteCount}
@@ -256,7 +256,7 @@ export function DashboardPage() {
             <Button size="sm" data-tour="import-repo" asChild>
               <Link to="/import">
                 <Plus className="h-3.5 w-3.5" />
-                Add Project
+                Import repository
               </Link>
             </Button>
           </>
@@ -299,12 +299,12 @@ export function DashboardPage() {
                   </div>
                   <div>
                     <div className="text-lg font-semibold leading-none text-muted-foreground">—</div>
-                    <div className="mt-1 text-xs text-muted-foreground">Pending invites unavailable</div>
+                    <div className="mt-1 text-xs text-muted-foreground">Pending invitations unavailable</div>
                   </div>
                 </CardContent>
               </Card>
             ) : (
-              <StatCard icon={Mail} label="Pending invites" value={inviteCount ?? 0} tone="text-foreground" />
+              <StatCard icon={Mail} label="Pending invitations" value={inviteCount ?? 0} tone="text-foreground" />
             )}
           </div>
 
@@ -325,7 +325,7 @@ export function DashboardPage() {
                   <Button size="sm" className="mt-3" asChild>
                     <Link to="/import">
                       <Plus className="h-3.5 w-3.5" />
-                      Import Repository
+                      Import repository
                     </Link>
                   </Button>
                 </div>

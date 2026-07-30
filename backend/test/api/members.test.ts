@@ -96,11 +96,44 @@ describe("PATCH /api/projects/:id/members/:userId", () => {
 });
 
 describe("DELETE /api/projects/:id/members/:userId", () => {
+  afterEach(resetTestHarness);
+
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).delete(
       `/api/projects/${PROJECT_ID}/members/some-user-id`,
     );
 
     expect(res.status).to.equal(401);
+  });
+
+  // Bug #74/B11: `WHERE user_id = 'some-user-id'` is a uuid cast error, which
+  // came back as a 500 for a member who cannot exist under that spelling.
+  it("answers a non-uuid :userId with 404, not a 500 from a uuid cast", async () => {
+    installTestAuth();
+    const queries: string[] = [];
+    mockQuery((text) => {
+      queries.push(text);
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: PROJECT_ID,
+            user_id: TEST_USER.id,
+            permission_tier: "owner",
+            developer_role: "general",
+            default_package_id: null,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .delete(`/api/projects/${PROJECT_ID}/members/not-a-uuid`)
+      .set(authHeader());
+
+    expect(res.status).to.equal(404);
+    expect(res.body).to.deep.equal({ error: "Not found" });
+    // The membership lookup is the access gate; nothing keyed on the bad id ran.
+    expect(queries.filter((q) => q.includes("DELETE FROM project_members"))).to.deep.equal([]);
   });
 });

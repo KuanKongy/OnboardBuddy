@@ -120,6 +120,90 @@ describe('restart resilience — orphan recovery and graceful shutdown', () => {
     expect(isRecoverable('regenerate_section', 1, 2)).to.equal(false);
   });
 
+  /**
+   * #74/B5. The 'running' claim cannot see a submission that never landed —
+   * there is no heartbeat to go dead — so the row sat 'queued' forever behind
+   * the concurrency guard. Both halves matter: aged AND absent from the queue.
+   */
+  describe("stranded 'queued' rows", () => {
+    /** Claim returns nothing; the stranded SELECT returns `candidates`. */
+    function stubStrandedDb(candidates: Array<{ id: string; project_id: string }>): QueryLogEntry[] {
+      const log: QueryLogEntry[] = [];
+      __setQueryForTests(async (text, params) => {
+        log.push({ text, params });
+        if (text.includes("SELECT id, project_id FROM analysis_jobs")) {
+          return { rows: candidates, rowCount: candidates.length } as never;
+        }
+        // Terminal write: one row moved.
+        if (text.includes("SET status = 'failed'")) return { rows: [], rowCount: 1 } as never;
+        return { rows: [], rowCount: 0 } as never;
+      });
+      return log;
+    }
+
+    it('fails an aged row the queue has never heard of, and says so to the user', async () => {
+      const log = stubStrandedDb([{ id: 'job-stranded', project_id: 'proj-1' }]);
+
+      const result = await reconcileOrphanedJobs({
+        log: () => {},
+        requeueAnalysis: async () => { throw new Error('must not re-enqueue a stranded row'); },
+        requeueGeneration: async () => { throw new Error('must not re-enqueue a stranded row'); },
+        liveQueuedJobIds: async () => new Set<string>(),
+        strandedAfterSeconds: 300,
+      });
+
+      expect(result.failed).to.deep.equal(['job-stranded']);
+      expect(result.requeued).to.be.empty;
+
+      const select = log.find((q) => q.text.includes('SELECT id, project_id FROM analysis_jobs'))!;
+      expect(select.text).to.include("status = 'queued'");
+      // Same COALESCE idiom as the running sweep, so a row this sweep just
+      // re-queued (fresh heartbeat) is not mistaken for a stranded one.
+      expect(select.text).to.include('COALESCE(last_heartbeat_at, started_at, created_at)');
+      expect(select.params).to.deep.equal([300]);
+
+      const fail = log.find((q) => q.text.includes("SET status = 'failed'"))!;
+      expect(fail.params![0]).to.equal('job-stranded');
+      expect(String(fail.params![1])).to.include('never reached the job queue');
+      // Guarded, so a worker that picked it up mid-sweep is not stomped.
+      expect(fail.text).to.include("WHERE id = $1 AND status = 'queued'");
+      // The card must stop claiming an analysis that does not exist.
+      expect(log.some((q) => q.text.includes('UPDATE projects'))).to.equal(true);
+    });
+
+    it('leaves an aged row alone while it is still on the queue', async () => {
+      const log = stubStrandedDb([{ id: 'job-backlogged', project_id: 'proj-1' }]);
+
+      const result = await reconcileOrphanedJobs({
+        log: () => {},
+        requeueAnalysis: async () => {},
+        requeueGeneration: async () => {},
+        // Waiting behind a backlog is not the same as never submitted, and a
+        // long queue is normal here — analyses take minutes.
+        liveQueuedJobIds: async () => new Set(['job-backlogged']),
+      });
+
+      expect(result.failed).to.be.empty;
+      expect(log.some((q) => q.text.includes("SET status = 'failed'"))).to.equal(false);
+    });
+
+    it('does nothing at all when queue liveness cannot be established', async () => {
+      const log = stubStrandedDb([{ id: 'job-unknown', project_id: 'proj-1' }]);
+      const lines: string[] = [];
+
+      const result = await reconcileOrphanedJobs({
+        log: (m) => lines.push(m),
+        requeueAnalysis: async () => {},
+        requeueGeneration: async () => {},
+        liveQueuedJobIds: async () => { throw new Error('ECONNREFUSED 127.0.0.1:6379'); },
+      });
+
+      expect(result.failed).to.be.empty;
+      expect(log.some((q) => q.text.includes("SET status = 'failed'"))).to.equal(false);
+      expect(lines.join('\n')).to.include('stranded-queued sweep failed');
+    });
+  });
+
   it('shutdown finishes an in-flight job instead of dropping it, and reports a blown grace period', async () => {
     let jobFinished = false;
     // BullMQ's close(false) resolves only once active jobs are done.

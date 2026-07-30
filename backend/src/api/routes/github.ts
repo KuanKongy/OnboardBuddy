@@ -3,7 +3,6 @@ import { query } from "../../lib/db.js";
 import { supabaseAdmin } from "../../lib/supabase.js";
 import {
   type GitHubUser,
-  GitHubAppConfigError,
   exchangeGitHubAppOAuthCode,
   getAppInstallation,
   getAppInfo,
@@ -12,10 +11,9 @@ import {
   listBranches,
   listCommits,
 } from "../../lib/github.js";
+import { GitHubLinkError } from "../../lib/githubErrors.js";
 import {
   assertGithubAccountCanBeLinked,
-  GitHubInstallationAccessError,
-  GitHubReconnectRequiredError,
   getInstallationTokenForUser,
   getUserGithubConnection,
   linkInstallationToUser,
@@ -28,6 +26,7 @@ import {
   verifyInstallationState,
 } from "../../lib/github-installation-state.js";
 import { parseInstallationId } from "../lib/installationId.js";
+import { handleGitHubRouteError } from "../lib/githubRouteError.js";
 
 export const githubRouter = Router();
 
@@ -54,40 +53,6 @@ function resolveInstallationId(
         : `${field} must be a positive integer`,
   });
   return null;
-}
-
-function handleGitHubRouteError(
-  res: import("express").Response,
-  err: unknown,
-  fallbackMessage = "Internal server error",
-): void {
-  // Bug #3: a missing or unreadable github-app.pem used to surface as the
-  // generic "Internal server error" for every GitHub route, with the real
-  // ENOENT visible only in the container log. The deployment is broken, not
-  // the request — 503 says so — and the message names the file and the
-  // working directory it was resolved against.
-  if (err instanceof GitHubAppConfigError) {
-    res.status(503).json({
-      error: `GitHub integration is not configured on the server. ${err.message}`,
-      code: "github_app_not_configured",
-    });
-    return;
-  }
-
-  if (err instanceof GitHubReconnectRequiredError) {
-    res.status(403).json({
-      error: err.message,
-      code: "github_reconnect_required",
-    });
-    return;
-  }
-
-  if (err instanceof GitHubInstallationAccessError) {
-    res.status(403).json({ error: err.message });
-    return;
-  }
-
-  res.status(500).json({ error: fallbackMessage });
 }
 
 function frontendUrl(): string {
@@ -133,7 +98,7 @@ async function assertAuthorizedGitHubMatchesSupabaseIdentity(
   const loginMatches = expectedLogin.length > 0 && expectedLogin === githubUser.login.toLowerCase();
 
   if (!idMatches && !loginMatches) {
-    throw new Error(
+    throw new GitHubLinkError(
       `GitHub App authorization account ${githubUser.login} does not match the signed-in GitHub account.`,
     );
   }
@@ -199,7 +164,7 @@ githubRouter.post("/oauth/complete", async (req, res) => {
     });
   } catch (err) {
     console.error("Complete GitHub OAuth error:", err);
-    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to complete GitHub OAuth" });
+    handleGitHubRouteError(res, err, "Failed to complete GitHub OAuth");
   }
 });
 
@@ -237,12 +202,7 @@ githubRouter.post("/installations/link", async (req, res) => {
     });
   } catch (err) {
     console.error("Link installation error:", err);
-    // A server-side misconfiguration is not a bad request: 503, not 400.
-    if (err instanceof GitHubAppConfigError) {
-      handleGitHubRouteError(res, err);
-      return;
-    }
-    res.status(400).json({ error: err instanceof Error ? err.message : "Failed to link installation" });
+    handleGitHubRouteError(res, err, "Failed to link installation");
   }
 });
 
