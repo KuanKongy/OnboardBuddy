@@ -3,21 +3,8 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { readOAuthError } from "@/lib/authErrors";
 import { supabase } from "@/lib/supabase";
-
-/**
- * Supabase reports OAuth failures by redirecting back with error params in
- * the query string and/or URL hash instead of a session — read both, or the
- * page spins forever (bug #37).
- */
-function readOAuthError(): string {
-  const query = new URLSearchParams(window.location.search);
-  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-  const description = hash.get("error_description") ?? query.get("error_description");
-  const code = hash.get("error") ?? query.get("error");
-  if (!description && !code) return "";
-  return description?.replace(/\+/g, " ") ?? code ?? "";
-}
 
 /**
  * Optional in-app destination (e.g. identity linking sends ?next=/settings so

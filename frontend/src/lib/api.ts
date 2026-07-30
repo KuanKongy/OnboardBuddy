@@ -22,6 +22,30 @@ async function getAccessToken(): Promise<string | null> {
   return session?.access_token ?? null;
 }
 
+/**
+ * #74/H3: a session that could not be refreshed left every page half-alive —
+ * each request threw its own 401 into whatever error state the caller happened
+ * to have, and the user sat on a shell of a page with no idea they were signed
+ * out. One signOut converts that into the state the app already handles:
+ * AuthContext's onAuthStateChange sees SIGNED_OUT and clears `user`,
+ * ProtectedRoute redirects to /login carrying the location to come back to.
+ *
+ * Latched because a page load fires several requests at once and they all get
+ * the same 401 — without it, each one calls signOut and the redirect fights
+ * itself. Cleared on the next request that succeeds (not on SIGNED_IN: this
+ * module deliberately has no subscription to unsubscribe, and a successful
+ * request is the stronger proof that the credentials work again).
+ */
+let signedOutOnFinal401 = false;
+
+async function signOutOnce(): Promise<void> {
+  if (signedOutOnFinal401) return;
+  signedOutOnFinal401 = true;
+  await supabase.auth.signOut().catch(() => {
+    // Best effort: the throw below is what the caller acts on either way.
+  });
+}
+
 export async function apiFetch(
   path: string,
   options: RequestInit = {},
@@ -47,16 +71,22 @@ export async function apiFetch(
   // build-time constant any more.
   const res = await fetch(`${runtimeConfig.apiUrl}${path}`, { ...options, headers });
 
-  if (res.status === 401 && !retried && token) {
-    const { error } = await supabase.auth.refreshSession();
-    if (!error) {
-      return apiFetch(path, options, true);
+  if (res.status === 401 && token) {
+    if (!retried) {
+      const { error } = await supabase.auth.refreshSession();
+      if (!error) {
+        return apiFetch(path, options, true);
+      }
     }
+    // Either the refresh failed or the retry came back 401 anyway: the session
+    // is gone, not stale.
+    await signOutOnce();
   }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new ApiError(body.error || `API error ${res.status}`, res.status, body);
   }
+  signedOutOnFinal401 = false;
   return res.json();
 }

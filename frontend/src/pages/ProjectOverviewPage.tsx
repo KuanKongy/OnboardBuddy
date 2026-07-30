@@ -1049,36 +1049,49 @@ export function ProjectOverviewPage() {
         </div>
       )}
 
-      {neverAnalyzed && (
-        loadError ? (
-          <Card className="mb-4 border-destructive/30">
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <AlertTriangle className="mb-3 h-8 w-8 text-destructive/60" />
-              <h3 className="text-sm font-semibold text-foreground">Couldn't load analysis status</h3>
-              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-                The request for this project's packages and analysis status failed. Try refreshing
-                the page — if it keeps happening, the API may be unreachable.
-              </p>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card className="mb-4">
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <CheckCircle2 className="mb-3 h-8 w-8 text-muted-foreground/40" />
-              <h3 className="text-sm font-semibold text-foreground">Not yet analyzed</h3>
-              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-                Run the first analysis to build the dependency graph, workflows, and a role-based
-                onboarding package — with a cost preview before anything runs.
-              </p>
-              {canManage && (
-                <Button size="sm" className="mt-4" onClick={() => setAnalyzeOpen(true)}>
-                  <RefreshCw className="h-3.5 w-3.5" />
-                  Analyze…
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        )
+      {/* Bug #74/F3: this error only rendered inside the neverAnalyzed branch,
+          so a project WITH packages whose packages/status fetch failed showed a
+          silently empty grid — indistinguishable from "nothing generated yet",
+          on the one page that is supposed to say what exists. Same
+          error-with-retry shape as the run-history card below. */}
+      {loadError && (
+        <div
+          className="mb-4 flex flex-col items-start gap-2 rounded-lg border border-danger/40 bg-danger-soft px-3 py-3"
+          role="alert"
+        >
+          <p className="text-xs text-danger">
+            <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+            Couldn&apos;t load this project&apos;s packages and analysis status — what you see below
+            may be incomplete.
+          </p>
+          <Button
+            size="xs"
+            variant="outline"
+            className="gap-1.5"
+            onClick={() => { refreshPackages(); void refreshStatus(); }}
+          >
+            <RefreshCw className="h-3 w-3" /> Retry
+          </Button>
+        </div>
+      )}
+
+      {neverAnalyzed && !loadError && (
+        <Card className="mb-4">
+          <CardContent className="flex flex-col items-center justify-center py-12 text-center">
+            <CheckCircle2 className="mb-3 h-8 w-8 text-muted-foreground/40" />
+            <h3 className="text-sm font-semibold text-foreground">Not yet analyzed</h3>
+            <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+              Run the first analysis to build the dependency graph, workflows, and a role-based
+              onboarding package — with a cost preview before anything runs.
+            </p>
+            {canManage && (
+              <Button size="sm" className="mt-4" onClick={() => setAnalyzeOpen(true)}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Analyze…
+              </Button>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* ── Packages: every (branch, commit, scope, role) package. ── */}

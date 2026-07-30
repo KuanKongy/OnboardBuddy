@@ -117,6 +117,15 @@ export function AccountSettingsPage() {
   const [unlinking, setUnlinking] = useState(false);
   const [unlinkError, setUnlinkError] = useState("");
   const [linkingGithub, setLinkingGithub] = useState(false);
+  /**
+   * #74/F9: both unlinks fired on the first click. Removing the wrong sign-in
+   * method is how you lose access to an account — the GitHub App disconnect
+   * next to them has been behind a confirm since M3, and these two are the more
+   * consequential of the three. Plain confirm, not type-to-confirm: unlinking is
+   * reversible (link it again) unlike deleting a project.
+   */
+  const [unlinkGithubConfirmOpen, setUnlinkGithubConfirmOpen] = useState(false);
+  const [unlinkEmailConfirmOpen, setUnlinkEmailConfirmOpen] = useState(false);
 
   async function handleUnlinkGithub() {
     if (!githubIdentity) return;
@@ -126,6 +135,7 @@ export function AccountSettingsPage() {
       const { error } = await supabase.auth.unlinkIdentity(githubIdentity);
       if (error) throw new Error(error.message);
       await supabase.auth.refreshSession();
+      setUnlinkGithubConfirmOpen(false);
     } catch (err: unknown) {
       setUnlinkError(err instanceof Error ? err.message : "Failed to unlink GitHub");
     } finally {
@@ -161,7 +171,10 @@ export function AccountSettingsPage() {
   const [emailLoginError, setEmailLoginError] = useState("");
   const [emailLoginNotice, setEmailLoginNotice] = useState("");
 
-  async function handleAddEmailLogin() {
+  // #74/F10: the dialog was a div of inputs, so Enter did nothing — a sign-up
+  // shaped form that only submitted by mouse.
+  async function handleAddEmailLogin(e?: React.FormEvent) {
+    e?.preventDefault();
     const newEmail = loginEmail.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
       setEmailLoginError("Enter a valid email address");
@@ -210,6 +223,7 @@ export function AccountSettingsPage() {
       const { error } = await supabase.auth.unlinkIdentity(emailIdentity);
       if (error) throw new Error(error.message);
       await supabase.auth.refreshSession();
+      setUnlinkEmailConfirmOpen(false);
     } catch (err: unknown) {
       setEmailLoginError(err instanceof Error ? err.message : "Failed to unlink email sign-in");
     } finally {
@@ -385,7 +399,7 @@ export function AccountSettingsPage() {
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={handleUnlinkGithub}
+                      onClick={() => { setUnlinkError(""); setUnlinkGithubConfirmOpen(true); }}
                       disabled={!canUnlinkGithub || unlinking}
                     >
                       {unlinking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
@@ -409,7 +423,9 @@ export function AccountSettingsPage() {
               </Button>
             </div>
           )}
-          {unlinkError && <p className="mt-2 text-[0.6875rem] text-destructive">{unlinkError}</p>}
+          {/* While the confirm is open the failure belongs inside it — the
+              overlay covers the page behind. */}
+          {unlinkError && !unlinkGithubConfirmOpen && <p className="mt-2 text-[0.6875rem] text-destructive">{unlinkError}</p>}
         </CardContent>
       </Card>
 
@@ -431,7 +447,7 @@ export function AccountSettingsPage() {
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={handleUnlinkEmail}
+                      onClick={() => { setEmailLoginError(""); setUnlinkEmailConfirmOpen(true); }}
                       disabled={!canUnlinkEmail || emailLoginBusy}
                     >
                       {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
@@ -476,7 +492,9 @@ export function AccountSettingsPage() {
             </p>
           )}
           {emailLoginNotice && <p className="mt-2 text-[0.6875rem] text-success">{emailLoginNotice}</p>}
-          {emailLoginError && !emailDialogOpen && <p className="mt-2 text-[0.6875rem] text-destructive">{emailLoginError}</p>}
+          {emailLoginError && !emailDialogOpen && !unlinkEmailConfirmOpen && (
+            <p className="mt-2 text-[0.6875rem] text-destructive">{emailLoginError}</p>
+          )}
         </CardContent>
       </Card>
 
@@ -593,7 +611,7 @@ export function AccountSettingsPage() {
           <DialogHeader>
             <DialogTitle className="text-sm">Add email sign-in</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3">
+          <form className="space-y-3" onSubmit={handleAddEmailLogin}>
             <p className="text-xs text-muted-foreground">
               Works like signing up: pick the email and password you'll use to sign in to
               OnboardBuddy — it doesn't have to match your GitHub email.
@@ -642,15 +660,15 @@ export function AccountSettingsPage() {
             </div>
             {emailLoginError && <p className="text-[0.6875rem] text-destructive">{emailLoginError}</p>}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setEmailDialogOpen(false)} disabled={emailLoginBusy}>
+              <Button type="button" variant="outline" size="sm" onClick={() => setEmailDialogOpen(false)} disabled={emailLoginBusy}>
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleAddEmailLogin} disabled={emailLoginBusy}>
+              <Button type="submit" size="sm" disabled={emailLoginBusy}>
                 {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Mail className="h-3 w-3" />}
                 Enable email sign-in
               </Button>
             </div>
-          </div>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -720,6 +738,57 @@ export function AccountSettingsPage() {
               <Button variant="destructive" size="sm" onClick={handleDisconnect} disabled={disconnecting}>
                 {disconnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
                 Disconnect
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={unlinkGithubConfirmOpen} onOpenChange={(open) => !unlinking && setUnlinkGithubConfirmOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Unlink GitHub sign-in</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              GitHub stops being a way to sign in to this account. Your email sign-in
+              ({user?.email}) keeps working, and you can link GitHub — the same account or a
+              different one — again afterwards. This does not touch the GitHub App connection
+              used for importing repositories.
+            </p>
+            {unlinkError && <p className="text-[0.6875rem] text-destructive">{unlinkError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setUnlinkGithubConfirmOpen(false)} disabled={unlinking}>
+                Cancel
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleUnlinkGithub} disabled={unlinking}>
+                {unlinking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                Unlink GitHub
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={unlinkEmailConfirmOpen} onOpenChange={(open) => !emailLoginBusy && setUnlinkEmailConfirmOpen(open)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Unlink email sign-in</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Email and password stop being a way to sign in to this account — GitHub becomes the
+              only one. You can add email sign-in again afterwards, but it needs a fresh password
+              (and a confirmation click if you pick a different address).
+            </p>
+            {emailLoginError && <p className="text-[0.6875rem] text-destructive">{emailLoginError}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setUnlinkEmailConfirmOpen(false)} disabled={emailLoginBusy}>
+                Cancel
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleUnlinkEmail} disabled={emailLoginBusy}>
+                {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                Unlink email sign-in
               </Button>
             </div>
           </div>
