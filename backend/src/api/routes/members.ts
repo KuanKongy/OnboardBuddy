@@ -12,36 +12,20 @@ import {
 
 export const membersRouter = Router({ mergeParams: true });
 
-/**
- * #74/B4: invitations were written with `expires_at` NULL, which every read
- * treats as "never expires" — an address invited once could still join months
- * later, after the person had left the team. The schema is frozen for M5, so
- * the TTL is stamped by the INSERT rather than by a column default; rows
- * written before this keep their NULL and stay valid (the alternative is
- * retro-expiring invitations people are currently holding).
- */
+// Stamped by the INSERT rather than a column default: the schema is frozen, and
+// rows written before this keep their NULL and stay valid.
 const INVITATION_TTL_DAYS = 14;
 
-/** Enough to catch a typo'd or pasted-with-junk address; the invitation is
- *  redeemed by signing in with the address, so a wrong one is simply dead. */
+/** Enough to catch a typo'd or pasted-with-junk address. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 membersRouter.get("/", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    // Two different things, deliberately both reported (#74/F16). `reviewed` is
-    // editorial: sections an owner/admin signed off. `read_marks` is the
-    // member's own reading — the reader's "Mark as read" toggle, which every
-    // tier has and which is what a lead actually means by "how far are they".
-    // The old page showed only the first under a label that read like the
-    // second, so a developer's progress was permanently 0.
-    //
-    // Read marks live in `user_progress.position -> 'readSections'` (no schema
-    // of their own; the frozen-schema constraint is why). The
-    // `jsonb_typeof = 'array'` filter is load-bearing, not defensive: on a row
-    // whose readSections is a scalar, `jsonb_array_length` raises 22023 and
-    // takes the whole member list down with it.
+    // `reviewed` is editorial sign-off; `read_marks` is the member's own reading,
+    // which has no schema of its own and lives in `position -> 'readSections'`.
+    // jsonb_typeof guard: a scalar there would 22023 the whole member list.
     const result = await query(
       `SELECT pm.project_id, pm.user_id, pm.permission_tier, pm.developer_role, pm.joined_at,
               u.email,
@@ -81,11 +65,8 @@ membersRouter.get("/invitations", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    // Same expiry predicate as the accept path (#74/B4) — an invitation that
-    // can no longer be redeemed must not be listed as pending, or an admin
-    // sits waiting on someone who cannot get in and won't re-invite them
-    // (the pending-unique index would reject a second invitation anyway).
-    // The IS NULL arm keeps rows written before the TTL existed.
+    // Same expiry predicate as the accept path, so this list and that route agree
+    // on what is still redeemable. The IS NULL arm keeps pre-TTL rows valid.
     const result = await query(
       `SELECT pi.*, u.email AS invited_by_email
        FROM project_invitations pi
@@ -118,18 +99,15 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
       return;
     }
 
-    // #74/B9: the address was stored exactly as typed and never checked, so a
-    // trailing space (or a newline from a paste) produced an invitation that
-    // matched nobody — `LOWER(email) = LOWER($1)` on the invitee's inbox never
-    // finds " bob@acme.test", and the invitation looked sent from both sides.
+    // Untrimmed, a pasted address matches nothing on the invitee's inbox, which
+    // compares with `LOWER(email) = LOWER($1)`.
     const email = typeof rawEmail === "string" ? rawEmail.trim() : "";
     if (!EMAIL_RE.test(email)) {
       res.status(400).json({ error: "Enter a valid email address" });
       return;
     }
 
-    // Inviting yourself always ended in a dead invitation: you are already a
-    // member, so accepting it fails on the members primary key.
+    // Self-invitation is a dead invitation: accept fails on the members PK.
     if (email.toLowerCase() === req.user!.email.toLowerCase()) {
       res.status(400).json({ error: "You are already a member of this project" });
       return;
@@ -148,10 +126,8 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
       return;
     }
 
-    // Someone who is already on the team got an invitation they could never
-    // redeem (accept 409s on the members primary key), and the inviter was
-    // told it worked. Membership is by user, the invitation is by address, so
-    // the check has to go through `users`.
+    // Membership is by user and the invitation is by address, so the check has to
+    // go through `users` — otherwise accept 409s on the members PK.
     const alreadyMember = await query(
       `SELECT 1 FROM project_members pm
        INNER JOIN users u ON u.id = pm.user_id
@@ -177,11 +153,8 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
       return;
     }
     if (pending) {
-      // Expired but still status='pending'. `idx_project_invitations_pending_unique_email`
-      // would reject the replacement, and the pending lists no longer show this
-      // row — so without retiring it here the inviter is told an invitation
-      // exists that they can neither see nor revoke, forever. 'expired' is in
-      // the frozen status CHECK, so this needs no schema change.
+      // Expired but still 'pending': invisible in every list, yet
+      // idx_project_invitations_pending_unique_email would reject the replacement.
       await query(
         `UPDATE project_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'`,
         [pending.id],
@@ -314,20 +287,9 @@ membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), requireU
   }
 });
 
-/**
- * Bug #72: ownership was unmovable. The member PATCH refuses to assign 'owner'
- * to anyone else and refuses to demote the owner, which is right — ownership is
- * not a tier edit. It is this: two tier changes and `projects.user_id`, together
- * or not at all.
- *
- * `projects.user_id` is load-bearing and moves with the tier. Account deletion
- * cascades owned projects and reassigns other people's RESTRICT rows to
- * `projects.user_id` (`services/accountDeletion.ts`), so leaving it pointing at
- * the old owner means their account deletion would take the whole project with
- * it. Tier resolution itself reads `project_members` only, and GitHub access is
- * per-installation rather than per-user, so analysis keeps working across the
- * transfer.
- */
+// Two tier changes plus `projects.user_id`, together or not at all.
+// `projects.user_id` has to move: `services/accountDeletion.ts` cascades owned
+// projects through it, so an old owner left there would take the project with them.
 membersRouter.post(
   "/:userId/transfer-ownership",
   requireProjectAccess("owner"),
@@ -367,11 +329,8 @@ membersRouter.post(
         return;
       }
 
-      // Demote first, and only from 'owner': if a concurrent transfer already
-      // moved ownership, this matches nothing and the whole thing rolls back.
-      // Promoting first instead would leave two owners for the width of the
-      // transaction — and a project with two owners is a state the remove and
-      // PATCH guards are written to assume cannot exist.
+      // Demote first, and only from 'owner': promoting first would leave two
+      // owners for the width of the transaction, which no other guard allows for.
       const demoted = await client.query(
         `UPDATE project_members SET permission_tier = 'admin'
          WHERE project_id = $1 AND user_id = $2 AND permission_tier = 'owner'
@@ -395,9 +354,8 @@ membersRouter.post(
       try {
         await client.query(`UPDATE projects SET user_id = $1 WHERE id = $2`, [targetUserId, projectId]);
       } catch (err) {
-        // UNIQUE (user_id, repo_owner, repo_name): the new owner has imported
-        // this same repo themselves. Nothing here can resolve that for them, so
-        // say which project is in the way rather than answer 500.
+        // UNIQUE (user_id, repo_owner, repo_name): the new owner already imported
+        // this repo, so name what is in the way rather than answer 500.
         if (err instanceof Error && err.message.includes("duplicate key")) {
           await client.query("ROLLBACK");
           res.status(409).json({
@@ -421,30 +379,16 @@ membersRouter.post(
   },
 );
 
-/**
- * Bug #72: leaving a project was impossible. Removal required owner/admin on
- * `/:userId`, and that route refuses `targetUserId === req.user.id` ("Cannot
- * remove yourself"), so a developer who no longer worked on a repo kept it on
- * their dashboard forever and had to ask an owner to evict them.
- *
- * Literal `/me`, and registered ABOVE `delete("/:userId")` — Express matches in
- * registration order, and the `:userId` route's `requireUuidParam` would answer
- * a non-uuid segment with 404 before this handler ever ran.
- *
- * `requireProjectAccess()` with no tiers: any member may leave. Nothing else is
- * deleted with the row — `default_package_id` lives on it, while `user_progress`
- * and the sections this member approved are keyed to the user and project and
- * survive, so rejoining later returns their reading position and the editorial
- * history stays attributable.
- */
+// Must stay registered ABOVE `delete("/:userId")`: Express matches in order, and
+// that route's requireUuidParam would 404 the literal `/me` segment first.
+// No tiers on requireProjectAccess — any member may leave.
 membersRouter.delete("/me", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
     const userId = req.user!.id;
 
-    // The owner is `projects.user_id` as well as a member row, and the account
-    // cascade + orphan reassignment both go through it, so an owner cannot
-    // simply walk out and leave the project without one.
+    // The account cascade and orphan reassignment both key on `projects.user_id`,
+    // so an ownerless project is not a state the rest of the system answers for.
     if (req.projectMember!.permission_tier === "owner") {
       res.status(403).json({
         error: "Transfer ownership to another member before leaving the project",

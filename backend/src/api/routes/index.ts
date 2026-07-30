@@ -23,12 +23,9 @@ apiRouter.use("/health", healthRouter);
 apiRouter.use("/auth", authRouter);
 apiRouter.use("/github", requireAuth, githubRouter);
 apiRouter.use("/projects", requireAuth, projectsRouter);
-// #74/W2: two invitation surfaces on purpose, not a duplication. `/invitations`
-// is the invitee's cross-project inbox — authorized by the caller's own email,
-// no project membership required (that is the point: you are not a member yet).
-// `/projects/:id/members/invitations` is project-scoped management, authorized
-// by owner/admin membership on that one project. Merging them would mean one
-// route with two authorization models, so they stay apart.
+// Two invitation surfaces on purpose: this one is the invitee's inbox, authorized
+// by their own email because they are not a member yet. The project-scoped
+// `/projects/:id/members/invitations` is authorized by owner/admin membership.
 apiRouter.use("/invitations", requireAuth, invitationsRouter);
 apiRouter.use("/projects/:id/members", requireAuth, membersRouter);
 apiRouter.use("/projects/:id/graph", requireAuth, graphRouter);

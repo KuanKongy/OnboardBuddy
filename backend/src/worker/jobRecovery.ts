@@ -61,14 +61,9 @@ import { markSnapshotFailed } from './runStatus.js';
 export const STALE_AFTER_SECONDS = 180;
 
 /**
- * #74/B5: how long a row may sit on 'queued' before the sweep treats it as
- * never submitted.
- *
- * A real enqueue lands in milliseconds; five minutes is generous enough that
- * only a submission that never happened gets here. It is deliberately NOT the
- * whole test — a job legitimately waiting behind a backlog is also old, and
- * failing that would be worse than the bug. The `liveQueuedJobIds` dep has to
- * confirm Redis has never heard of the row as well (see `failStrandedQueued`).
+ * How long a row may sit on 'queued' before the sweep considers it stranded. Not
+ * the whole test — a backlogged job is also old, so `liveQueuedJobIds` has to
+ * confirm Redis never heard of the row too (see `failStrandedQueued`).
  */
 export const STRANDED_QUEUED_AFTER_SECONDS = 300;
 
@@ -119,11 +114,9 @@ export interface JobRecoveryDeps {
   requeueGeneration(job: OrphanedJob): Promise<void>;
   log?: (msg: string) => void;
   /**
-   * DB job ids Redis still knows about (waiting / delayed / active). Feeds the
-   * stranded-'queued' sweep, and its absence disables that sweep entirely:
-   * without proof the queue has never heard of a row, an old-but-legitimately
-   * backlogged job would be failed seconds before it was due to run. Not
-   * knowing is a reason to leave the row alone, not to guess.
+   * DB job ids Redis still knows about (waiting / delayed / active). Absent
+   * disables the stranded-'queued' sweep entirely: without proof the queue never
+   * heard of a row, a backlogged job would be failed before it was due to run.
    */
   liveQueuedJobIds?: () => Promise<Set<string>>;
   /** Overridable for tests. */
@@ -187,26 +180,11 @@ async function claimOrphans(staleAfterSeconds: number): Promise<OrphanedJob[]> {
 }
 
 /**
- * #74/B5 — the other half of "the reconciler ignores stranded jobs".
- *
- * `claimOrphans` above can only see rows that reached 'running', because a dead
- * heartbeat is its only liveness signal. A submission that never landed (Redis
- * out during the post-commit publish) leaves a committed 'queued' row with no
- * heartbeat to go dead, so the sweep looked straight past it: the project stayed
- * 'analyzing', the UI polled "waiting for worker" forever, and the per-tuple
- * concurrency guard rejected every retry as "already being analyzed". The
- * producer-side `failUnsubmittedJob` covers the case where the publish threw in
- * a process that lived to handle it; this covers the process that did not.
- *
- * Deliberately a SEPARATE statement rather than a second arm of the claim: the
- * claim's whole purpose is to move a row TO 'queued' and count a recovery
- * attempt, which is the opposite of what these rows need. And deliberately a
- * fail rather than a re-enqueue — nothing here knows what job data to publish
- * (that lived in the request), and inventing it would risk running an analysis
- * the user never asked for twice.
- *
- * Two conditions, both required: aged past `strandedAfterSeconds`, and absent
- * from the live queue. The age test alone would kill a backlogged job.
+ * A submission that never landed leaves a committed 'queued' row with no heartbeat to
+ * go dead, so `claimOrphans` cannot see it. A fail rather than a re-enqueue: the job
+ * data lived in the request, and inventing it risks running an analysis nobody asked
+ * for twice. Two conditions, both required — aged past `strandedAfterSeconds` AND
+ * absent from the live queue.
  */
 async function failStrandedQueued(
   liveQueuedJobIds: () => Promise<Set<string>>,
@@ -221,8 +199,7 @@ async function failStrandedQueued(
   );
   if (candidates.rows.length === 0) return [];
 
-  // Asked for only when there is something to judge — one Redis round trip per
-  // sweep, not per sweep-with-nothing-in-it.
+  // Asked for only when there is something to judge.
   const live = await liveQueuedJobIds();
   const failed: string[] = [];
   for (const row of candidates.rows as Array<{ id: string; project_id: string }>) {
@@ -235,12 +212,12 @@ async function failStrandedQueued(
        WHERE id = $1 AND status = 'queued'`,
       [row.id, STRANDED_MESSAGE],
     );
-    // Guarded on 'queued' like every other terminal write here: a worker that
-    // picked the job up between the SELECT and now is never stomped mid-run.
+    // Guarded on 'queued': a worker that picked the job up since the SELECT is
+    // never stomped mid-run.
     if ((result.rowCount ?? 0) === 0) continue;
     failed.push(row.id);
-    // The route set projects.status='analyzing'; with nothing queued the card
-    // would keep claiming an analysis that does not exist.
+    // The route set projects.status='analyzing', so the card would keep claiming
+    // an analysis that does not exist.
     await recomputeProjectStatus(row.project_id).catch(() => {});
     log(`[worker] job ${row.id} sat 'queued' with no queue entry — marked failed`);
   }
@@ -326,8 +303,8 @@ export async function reconcileOrphanedJobs(
     }
   }
 
-  // After the claim, so a row this sweep just re-queued carries a fresh
-  // heartbeat and cannot be mistaken for one that never left the producer.
+  // After the claim, so a row this sweep just re-queued carries a fresh heartbeat
+  // and cannot be mistaken for one that never left the producer.
   if (deps.liveQueuedJobIds) {
     try {
       failed.push(...await failStrandedQueued(
@@ -336,8 +313,8 @@ export async function reconcileOrphanedJobs(
         log,
       ));
     } catch (err) {
-      // Including "could not reach Redis to check". Not knowing which rows are
-      // live is exactly when guessing does damage, so the sweep does nothing.
+      // Including "could not reach Redis to check" — not knowing which rows are
+      // live means the sweep does nothing rather than guess.
       log(`[worker] stranded-queued sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }

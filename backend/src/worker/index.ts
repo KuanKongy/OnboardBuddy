@@ -1109,10 +1109,8 @@ const recoveryDeps = {
       force: true,
     } satisfies AnalysisJobData, RECOVERY_ENQUEUE_OPTS);
   },
-  // #74/B5: the DB job ids Redis can still deliver, so the stranded-'queued'
-  // sweep can tell "nobody will ever run this" from "waiting its turn". Our own
-  // row id travels in the payload (BullMQ's job id is its own), so the live set
-  // is read out of `data.jobId`. Every non-terminal state counts as live.
+  // BullMQ's job id is its own, so our row id is read out of `data.jobId`. Every
+  // non-terminal state counts as live.
   liveQueuedJobIds: async () => {
     const states = ['waiting', 'waiting-children', 'prioritized', 'delayed', 'active', 'paused'] as const;
     const [analysis, summary] = await Promise.all([

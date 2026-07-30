@@ -194,9 +194,8 @@ function packageGapRows(
 }
 
 /**
- * Bug #85's remainder: the count was hover-only, so the items behind it were
- * reachable only by opening every section. Tooltip keeps the arithmetic, panel
- * carries the items; `w-full` puts the panel on its own line of the strip.
+ * Tooltip keeps the arithmetic, the panel carries the items. `w-full` puts the panel
+ * on its own line of the strip.
  */
 export function PackageGapsDisclosure({
   coverage,
@@ -1036,9 +1035,8 @@ export function OnboardingPage() {
     });
   }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, readSections, saveProgress]);
 
-  // `replace` by default — a role or package tweak refines the current view.
-  // Bug #74 (J3): the reader boundary is real navigation and passes
-  // `{ replace: false }`, or Back leaves the tab instead of returning to the grid.
+  // `replace` by default — a role or package tweak refines the current view. Only a
+  // view boundary passes `{ replace: false }`, or Back leaves the tab entirely.
   function setParams(next: Record<string, string | null>, options?: { replace?: boolean }) {
     setSearchParams((prev) => {
       for (const [k, v] of Object.entries(next)) {
@@ -2134,7 +2132,9 @@ export function OnboardingPage() {
 
         {/* content */}
         <div ref={readerScrollRef} className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
-          <div className="mx-auto max-w-3xl">
+          {/* No `mx-auto`: centring inside an already-narrowed column opens ~300px of
+              dead gutter each side. max-w-3xl still caps the line length. */}
+          <div className="max-w-3xl">
             {isMissing ? (
               // Bug #68, the expensive one. Order matters: loading first (so
               // the empty state never flashes before the first response),

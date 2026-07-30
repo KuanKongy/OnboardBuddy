@@ -74,11 +74,8 @@ export function AppTour({ steps, onDone }: AppTourProps) {
 
   const step = available[index] ?? null;
 
-  // #74/G11: the tour pulls focus into its card on every step and never handed
-  // it back. Skip or Done unmounted the focused node, which resets focus to
-  // <body>, so the next Tab press restarted from the top of the document rather
-  // than from the "Take a tour" button the reader pressed. Captured in the first
-  // effect declared, so it runs before the per-step focus steal below.
+  // Closing unmounts the focused card, which resets focus to <body>. Captured in
+  // the first effect declared, so it runs before the per-step focus steal below.
   const returnFocusTo = useRef<HTMLElement | null>(null);
   useEffect(() => {
     returnFocusTo.current = document.activeElement as HTMLElement | null;

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import type { NodeDetail } from "@/lib/graphData";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
+import { CodeRef } from "@/components/CodeRef";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -445,15 +446,10 @@ export function NodeInfoPanel({
                       {r.trust_level}
                     </Badge>
                     {receiptUrl ? (
-                      <a
-                        href={receiptUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex min-w-0 flex-1 items-baseline gap-1 break-all font-mono text-muted-foreground hover:text-foreground hover:underline"
-                      >
+                      <CodeRef href={receiptUrl} className="inline-flex min-w-0 flex-1 items-baseline gap-1 break-all">
                         <span className="min-w-0 break-all">{label}</span>
                         <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-                      </a>
+                      </CodeRef>
                     ) : (
                       <span className="min-w-0 flex-1 break-all font-mono text-muted-foreground">
                         {label}

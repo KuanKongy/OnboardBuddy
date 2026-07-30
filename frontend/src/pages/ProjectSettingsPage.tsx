@@ -21,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
+import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { apiFetch } from "@/lib/api";
 import { scrollBehavior } from "@/lib/motion";
 import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
@@ -130,9 +131,8 @@ export function ProjectSettingsPage() {
   const [error, setError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  // #74/H1: kept apart from `error`. The page banner is behind the modal
-  // overlay, so a failed delete reported there was invisible to the only
-  // person looking at it.
+  // Kept apart from `error`: the page banner sits behind the modal overlay, so a
+  // failed delete reported there is invisible to the person looking at the dialog.
   const [deleteError, setDeleteError] = useState("");
 
   // BYO LLM key
@@ -355,8 +355,517 @@ export function ProjectSettingsPage() {
 
   const spend = totalKeyUsage(keyUsage);
 
+  const sections: SettingsSection[] = [
+    {
+      id: "settings-general",
+      label: "General",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Repository</h3>
+              <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
+              {/* Owner feedback N1: branch used to be listed here as if it were a
+                  project-level setting. It is not — every run picks its own
+                  branch and commit in the Analyze dialog, and each package is
+                  pinned to the one it was built from. Showing a single "Branch"
+                  value on a settings page implied it applied to everything. */}
+              <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                Branch and commit are chosen per analysis run — see the branch/commit chooser
+                in the sidebar and the Analyze dialog.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Default developer role</h3>
+              <Select value={defaultRole} onValueChange={setDefaultRole} disabled={!canEdit}>
+                <SelectTrigger className="h-8 text-[0.8125rem]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLE_OPTIONS.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Ignored paths</h3>
+              <Textarea
+                value={ignoredPaths}
+                onChange={(e) => setIgnoredPaths(e.target.value)}
+                placeholder={"node_modules/\ndist/\n.env"}
+                rows={4}
+                disabled={!canEdit}
+                className="text-[0.8125rem]"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                One path per line. These will be excluded from analysis.
+              </p>
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-analysis",
+      label: "Analysis",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Analysis budget</h3>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="space-y-1">
+                  <Label htmlFor="budget-calls" className="text-xs">Max LLM calls</Label>
+                  <Input
+                    id="budget-calls"
+                    type="number"
+                    value={budgetCalls}
+                    onChange={(e) => setBudgetCalls(e.target.value)}
+                    placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
+                    disabled={!canEdit}
+                    className="h-8 text-[0.8125rem]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="budget-tokens" className="text-xs">Max input tokens</Label>
+                  <Input
+                    id="budget-tokens"
+                    type="number"
+                    value={budgetTokens}
+                    onChange={(e) => setBudgetTokens(e.target.value)}
+                    placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
+                    disabled={!canEdit}
+                    className="h-8 text-[0.8125rem]"
+                  />
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <Label htmlFor="stop-behavior" className="text-xs">When exceeded</Label>
+                  <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
+                    <SelectTrigger id="stop-behavior" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="pause">Pause — resume later</SelectItem>
+                      <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
+                      <SelectItem value="fail">Fail the run</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                Empty fields use the {analysisDepth} depth's built-in limits
+                ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
+                Live spend shows in the analysis status.
+              </p>
+
+              {/* The caps above are per run, and run history reports one run at
+                  a time — so "what has this project cost" had no answer anywhere
+                  in the product. Read-only: it is a record, not a setting. */}
+              <div className="mt-3 border-t border-border pt-2">
+                <h4 className="text-xs font-medium text-foreground">Total AI spend on this project</h4>
+                {keyUsage.length === 0 ? (
+                  <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                    No completed AI calls recorded yet.
+                  </p>
+                ) : (
+                  <>
+                    <p className="mt-0.5 text-[0.8125rem] tabular-nums text-foreground">
+                      ${spend.costUsd.toFixed(4)}
+                      <span className="text-[0.6875rem] text-muted-foreground">
+                        {" · "}{spend.calls.toLocaleString()} AI calls
+                        {" · "}{spend.inputTokens.toLocaleString()} in / {spend.outputTokens.toLocaleString()} out tokens
+                      </span>
+                    </p>
+                    {/* Which key paid matters: a team's own key and the server's
+                        are two different bills, and only this split says which. */}
+                    {keyUsage.length > 1 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {keyUsage.map((row) => (
+                          <li key={row.key_source} className="text-[0.6875rem] tabular-nums text-muted-foreground">
+                            {KEY_SOURCE_LABEL[row.key_source] ?? row.key_source}: ${Number(row.estimated_cost_usd ?? 0).toFixed(4)}
+                            {" · "}{Number(row.calls ?? 0).toLocaleString()} calls
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                      Across every completed AI call on this project's snapshots, all runs included.
+                    </p>
+                  </>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-1 text-xs font-medium text-foreground">Automation</h3>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[0.8125rem] font-medium text-foreground">Re-analyze on push</p>
+                  <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                    When GitHub pushes to a branch that has onboarding packages, run an incremental
+                    re-analysis per affected scope. Changed sections get stale badges — packages are
+                    never rebuilt automatically, so there's no surprise AI spend. Requires the GitHub
+                    App webhook to be configured (see the DevOps guide).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoReanalyze}
+                  aria-label="Re-analyze on push"
+                  disabled={!canEdit}
+                  onClick={() => setAutoReanalyze((v) => !v)}
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                    autoReanalyze ? "bg-primary" : "bg-muted-foreground/30"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-all ${
+                      autoReanalyze ? "left-[18px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-medium text-foreground">Analysis limits</h3>
+                {canEdit && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => setAnalyzeOpen(true)}
+                    disabled={analyzing || project.status === "analyzing"}
+                  >
+                    <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
+                    Re-analyze…
+                  </Button>
+                )}
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label htmlFor="file-limit" className="text-xs">Max files</Label>
+                  <Input
+                    id="file-limit"
+                    type="number"
+                    value={fileLimit}
+                    onChange={(e) => setFileLimit(e.target.value)}
+                    placeholder="unchanged if blank"
+                    disabled={!canEdit}
+                    className="h-8 text-[0.8125rem]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="loc-limit" className="text-xs">Max lines of code</Label>
+                  <Input
+                    id="loc-limit"
+                    type="number"
+                    value={locLimit}
+                    onChange={(e) => setLocLimit(e.target.value)}
+                    placeholder="unchanged if blank"
+                    disabled={!canEdit}
+                    className="h-8 text-[0.8125rem]"
+                  />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-medium text-foreground">Ranking weights</h3>
+                {activeWeights?.customized && (
+                  <Badge variant="outline" className="text-[0.6875rem]">customized</Badge>
+                )}
+              </div>
+              <p className="mb-2 text-[0.6875rem] text-muted-foreground">
+                How much each signal counts toward "critical for this role". Changes apply instantly —
+                scores are re-projected, never re-analyzed.
+              </p>
+              {weightsError ? (
+                <div
+                  className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
+                  role="alert"
+                >
+                  <p className="text-xs text-danger">
+                    <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                    Couldn&apos;t load ranking weights. The saved weights are unchanged — this is a
+                    failed request, not a project without them.
+                  </p>
+                  <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadWeights}>
+                    <RefreshCw className="h-3 w-3" /> Retry
+                  </Button>
+                </div>
+              ) : (
+                <Select value={weightRole} onValueChange={setWeightRole}>
+                  <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(weightRoles ?? []).map((r) => (
+                      <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {activeWeights && (
+                <div className="space-y-2">
+                  {WEIGHT_VIEWS.map((view) => (
+                    <div key={view} className="flex items-center gap-3">
+                      <span className="w-28 shrink-0 text-[0.71875rem] text-muted-foreground">
+                        {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={activeWeights.weights[view] ?? 0}
+                        onChange={(e) => setWeight(view, Number(e.target.value))}
+                        disabled={!canEdit}
+                        className="h-1.5 flex-1 accent-[var(--primary)]"
+                        aria-label={`${WEIGHT_LABELS[view] ?? view} weight`}
+                      />
+                      <span className="w-10 shrink-0 text-right text-[0.71875rem] tabular-nums text-foreground">
+                        {Math.round((activeWeights.weights[view] ?? 0) * 100)}%
+                      </span>
+                    </div>
+                  ))}
+                  {(() => {
+                    const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
+                    return (
+                      <p className={`text-right text-[0.6875rem] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
+                        Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
+                      </p>
+                    );
+                  })()}
+                  {canEdit ? (
+                    <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                      {/* The only signal that a save happened: the request used
+                          to fire and nothing on the page changed. */}
+                      <p role="status" aria-live="polite" className="mr-auto text-[0.6875rem] text-success">
+                        {weightsSaved}
+                      </p>
+                      <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
+                        Revert to defaults
+                      </Button>
+                      <Button size="xs" onClick={handleSaveWeights} disabled={weightsSaving}>
+                        {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}
+                      </Button>
+                    </div>
+                  ) : (
+                    // "Adjust weights" on a graph node sends developers here,
+                    // where every slider is disabled and both buttons are gone,
+                    // with nothing saying why (audit §20.1 dead end).
+                    <p className="pt-1 text-[0.6875rem] text-muted-foreground">
+                      Read-only for your tier — these are the weights your criticality scores are
+                      computed with. Only owners and admins can change them; ask one of them if a
+                      signal is weighted wrong for your work.
+                    </p>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-llm",
+      label: "LLM & privacy",
+      children: (
+        <>
+          <Card data-tour="settings-privacy">
+            <CardContent className="p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-primary" />
+                <h3 className="text-xs font-medium text-foreground">AI &amp; privacy</h3>
+              </div>
+              <div
+                className="space-y-1.5"
+                role="radiogroup"
+                aria-label="Privacy mode"
+                onKeyDown={(e) => {
+                  if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(e.key)) return;
+                  e.preventDefault();
+                  const currentIndex = PRIVACY_MODES.findIndex((m) => m.key === privacyMode);
+                  const dir = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
+                  const nextIndex = (currentIndex + dir + PRIVACY_MODES.length) % PRIVACY_MODES.length;
+                  const next = PRIVACY_MODES[nextIndex];
+                  if (!next) return;
+                  setPrivacyMode(next.key);
+                  radioRefs.current[nextIndex]?.focus();
+                }}
+              >
+                {PRIVACY_MODES.map((mode, i) => (
+                  <button
+                    key={mode.key}
+                    ref={(el) => { radioRefs.current[i] = el; }}
+                    type="button"
+                    role="radio"
+                    aria-checked={privacyMode === mode.key}
+                    tabIndex={privacyMode === mode.key ? 0 : -1}
+                    disabled={!canEdit}
+                    onClick={() => setPrivacyMode(mode.key)}
+                    className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${
+                      privacyMode === mode.key
+                        ? "border-primary/50 bg-primary/5"
+                        : "border-border hover:border-muted-foreground/40"
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 h-3 w-3 shrink-0 rounded-full border-2 ${
+                        privacyMode === mode.key ? "border-primary bg-primary" : "border-muted-foreground/40"
+                      }`}
+                    />
+                    <span>
+                      <span className="block text-xs font-medium text-foreground">{mode.label}</span>
+                      <span className="block text-[0.6875rem] text-muted-foreground">{mode.hint}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="min-w-0 space-y-1">
+                  <Label htmlFor="analysis-depth" className="text-xs">Analysis depth</Label>
+                  <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
+                    <SelectTrigger id="analysis-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
+                      <SelectItem value="standard">Standard — balanced</SelectItem>
+                      <SelectItem value="full">Full — every eligible symbol</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="min-w-0 space-y-1">
+                  <Label htmlFor="analysis-model" className="text-xs">Analysis model</Label>
+                  <Select value={analysisModel} onValueChange={setAnalysisModel} disabled={!canEdit}>
+                    <SelectTrigger id="analysis-model" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
+                    <SelectContent>
+                      {SELECTABLE_MODELS.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
+                <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+                <p className="text-xs text-muted-foreground">
+                  Read-only access · secrets filtered · no full repository stored. The mode used for a
+                  run is stamped on that analysis, so older results keep the promise they were made under.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-1 text-xs font-medium text-foreground">Project LLM API key</h3>
+              <p className="mb-2 text-[0.6875rem] text-muted-foreground">
+                Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
+                shown again, and usage is visible to the whole team.
+              </p>
+              {keyInfoError ? (
+                <div
+                  className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
+                  role="alert"
+                >
+                  <p className="text-xs text-danger">
+                    <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
+                    Couldn&apos;t check whether a key is configured. Don&apos;t add one until this
+                    loads — you could overwrite a key the team is already using.
+                  </p>
+                  <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadKeyInfo}>
+                    <RefreshCw className="h-3 w-3" /> Retry
+                  </Button>
+                </div>
+              ) : keyInfo?.exists ? (
+                <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
+                  <p className="text-xs text-success">
+                    Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""} — all AI calls use it.
+                  </p>
+                  {canEdit && (
+                    <Button variant="outline" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
+                      Remove
+                    </Button>
+                  )}
+                </div>
+              ) : canEdit ? (
+                <div className="flex gap-2">
+                  <Label htmlFor="llm-api-key" className="sr-only">Project LLM API key</Label>
+                  <Input
+                    id="llm-api-key"
+                    type="password"
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder="sk-or-…"
+                    className="h-8 flex-1 text-[0.8125rem]"
+                    autoComplete="off"
+                  />
+                  <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
+                    {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save key"}
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No project key — the server key is used.</p>
+              )}
+              {/* Same silent-mutation class as Save weights: PUT/DELETE fired and
+                  the page said nothing either way (audit §20.3). */}
+              {keySaved && (
+                <p role="status" aria-live="polite" className="mt-1.5 text-[0.6875rem] text-success">{keySaved}</p>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    // Owner-only card, so the rail loses the whole section rather than pointing at
+    // an empty one.
+    ...(project.permission_tier === "owner"
+      ? [
+          {
+            id: "settings-danger",
+            label: "Danger zone",
+            children: (
+              <Card className="border-destructive/30">
+                <CardContent className="p-3">
+                  <div className="flex items-center gap-1.5 text-destructive">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <h3 className="text-xs font-medium">Danger zone</h3>
+                  </div>
+                  <Separator className="my-2" />
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs font-medium text-foreground">Delete project</p>
+                      <p className="text-xs text-muted-foreground">
+                        Permanently delete this project and all data.
+                      </p>
+                    </div>
+                    <Button variant="destructive" size="xs" onClick={() => setDeleteOpen(true)}>
+                      <Trash2 className="h-3 w-3" />
+                      Delete
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ),
+          },
+        ]
+      : []),
+  ];
+
   return (
-    <div className="mx-auto max-w-3xl">
+    <div>
       <PageHeader
         title="Project settings"
         subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
@@ -367,507 +876,34 @@ export function ProjectSettingsPage() {
         <ErrorBanner ref={errorRef} className="mb-3">{error}</ErrorBanner>
       )}
 
-      <div className="grid grid-cols-1 items-start gap-3">
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Repository</h3>
-            <p className="text-xs text-foreground">{project.repo_owner}/{project.repo_name}</p>
-            {/* Owner feedback N1: branch used to be listed here as if it were a
-                project-level setting. It is not — every run picks its own
-                branch and commit in the Analyze dialog, and each package is
-                pinned to the one it was built from. Showing a single "Branch"
-                value on a settings page implied it applied to everything. */}
-            <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-              Branch and commit are chosen per analysis run — see the branch/commit chooser
-              in the sidebar and the Analyze dialog.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Default developer role</h3>
-            <Select value={defaultRole} onValueChange={setDefaultRole} disabled={!canEdit}>
-              <SelectTrigger className="h-8 text-[0.8125rem]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ROLE_OPTIONS.map((r) => (
-                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Ignored paths</h3>
-            <Textarea
-              value={ignoredPaths}
-              onChange={(e) => setIgnoredPaths(e.target.value)}
-              placeholder={"node_modules/\ndist/\n.env"}
-              rows={4}
-              disabled={!canEdit}
-              className="text-[0.8125rem]"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              One path per line. These will be excluded from analysis.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card data-tour="settings-privacy">
-          <CardContent className="p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
-              <h3 className="text-xs font-medium text-foreground">AI &amp; privacy</h3>
-            </div>
-            <div
-              className="space-y-1.5"
-              role="radiogroup"
-              aria-label="Privacy mode"
-              onKeyDown={(e) => {
-                if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(e.key)) return;
-                e.preventDefault();
-                const currentIndex = PRIVACY_MODES.findIndex((m) => m.key === privacyMode);
-                const dir = e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : -1;
-                const nextIndex = (currentIndex + dir + PRIVACY_MODES.length) % PRIVACY_MODES.length;
-                const next = PRIVACY_MODES[nextIndex];
-                if (!next) return;
-                setPrivacyMode(next.key);
-                radioRefs.current[nextIndex]?.focus();
-              }}
-            >
-              {PRIVACY_MODES.map((mode, i) => (
-                <button
-                  key={mode.key}
-                  ref={(el) => { radioRefs.current[i] = el; }}
-                  type="button"
-                  role="radio"
-                  aria-checked={privacyMode === mode.key}
-                  tabIndex={privacyMode === mode.key ? 0 : -1}
-                  disabled={!canEdit}
-                  onClick={() => setPrivacyMode(mode.key)}
-                  className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${
-                    privacyMode === mode.key
-                      ? "border-primary/50 bg-primary/5"
-                      : "border-border hover:border-muted-foreground/40"
-                  }`}
-                >
-                  <span
-                    className={`mt-0.5 h-3 w-3 shrink-0 rounded-full border-2 ${
-                      privacyMode === mode.key ? "border-primary bg-primary" : "border-muted-foreground/40"
-                    }`}
-                  />
-                  <span>
-                    <span className="block text-xs font-medium text-foreground">{mode.label}</span>
-                    <span className="block text-[0.6875rem] text-muted-foreground">{mode.hint}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="analysis-depth" className="text-xs">Analysis depth</Label>
-                <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
-                  <SelectTrigger id="analysis-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
-                    <SelectItem value="standard">Standard — balanced</SelectItem>
-                    <SelectItem value="full">Full — every eligible symbol</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="analysis-model" className="text-xs">Analysis model</Label>
-                <Select value={analysisModel} onValueChange={setAnalysisModel} disabled={!canEdit}>
-                  <SelectTrigger id="analysis-model" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
-                  <SelectContent>
-                    {SELECTABLE_MODELS.map((m) => (
-                      <SelectItem key={m.id} value={m.id}>{m.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="mt-2 flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-              <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-              <p className="text-xs text-muted-foreground">
-                Read-only access · secrets filtered · no full repository stored. The mode used for a
-                run is stamped on that analysis, so older results keep the promise they were made under.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-2 text-xs font-medium text-foreground">Analysis budget</h3>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div className="space-y-1">
-                <Label htmlFor="budget-calls" className="text-xs">Max LLM calls</Label>
-                <Input
-                  id="budget-calls"
-                  type="number"
-                  value={budgetCalls}
-                  onChange={(e) => setBudgetCalls(e.target.value)}
-                  placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
-                  disabled={!canEdit}
-                  className="h-8 text-[0.8125rem]"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="budget-tokens" className="text-xs">Max input tokens</Label>
-                <Input
-                  id="budget-tokens"
-                  type="number"
-                  value={budgetTokens}
-                  onChange={(e) => setBudgetTokens(e.target.value)}
-                  placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
-                  disabled={!canEdit}
-                  className="h-8 text-[0.8125rem]"
-                />
-              </div>
-              <div className="min-w-0 space-y-1">
-                <Label htmlFor="stop-behavior" className="text-xs">When exceeded</Label>
-                <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
-                  <SelectTrigger id="stop-behavior" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="pause">Pause — resume later</SelectItem>
-                    <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
-                    <SelectItem value="fail">Fail the run</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
-              Empty fields use the {analysisDepth} depth's built-in limits
-              ({DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300} calls, {((DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000) / 1_000_000).toLocaleString()}M input tokens).
-              Live spend shows in the analysis status.
-            </p>
-
-            {/* The caps above are per run, and run history reports one run at
-                a time — so "what has this project cost" had no answer anywhere
-                in the product. Read-only: it is a record, not a setting. */}
-            <div className="mt-3 border-t border-border pt-2">
-              <h4 className="text-xs font-medium text-foreground">Total AI spend on this project</h4>
-              {keyUsage.length === 0 ? (
-                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-                  No completed AI calls recorded yet.
-                </p>
-              ) : (
-                <>
-                  <p className="mt-0.5 text-[0.8125rem] tabular-nums text-foreground">
-                    ${spend.costUsd.toFixed(4)}
-                    <span className="text-[0.6875rem] text-muted-foreground">
-                      {" · "}{spend.calls.toLocaleString()} AI calls
-                      {" · "}{spend.inputTokens.toLocaleString()} in / {spend.outputTokens.toLocaleString()} out tokens
-                    </span>
-                  </p>
-                  {/* Which key paid matters: a team's own key and the server's
-                      are two different bills, and only this split says which. */}
-                  {keyUsage.length > 1 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {keyUsage.map((row) => (
-                        <li key={row.key_source} className="text-[0.6875rem] tabular-nums text-muted-foreground">
-                          {KEY_SOURCE_LABEL[row.key_source] ?? row.key_source}: ${Number(row.estimated_cost_usd ?? 0).toFixed(4)}
-                          {" · "}{Number(row.calls ?? 0).toLocaleString()} calls
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-                    Across every completed AI call on this project's snapshots, all runs included.
-                  </p>
-                </>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-1 text-xs font-medium text-foreground">Automation</h3>
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-[0.8125rem] font-medium text-foreground">Re-analyze on push</p>
-                <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
-                  When GitHub pushes to a branch that has onboarding packages, run an incremental
-                  re-analysis per affected scope. Changed sections get stale badges — packages are
-                  never rebuilt automatically, so there's no surprise AI spend. Requires the GitHub
-                  App webhook to be configured (see the DevOps guide).
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoReanalyze}
-                aria-label="Re-analyze on push"
-                disabled={!canEdit}
-                onClick={() => setAutoReanalyze((v) => !v)}
-                className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-                  autoReanalyze ? "bg-primary" : "bg-muted-foreground/30"
-                }`}
+      <SettingsShell
+        sections={sections}
+        footer={
+          canEdit && (
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              {/* Cancel used to refetch settings only, so moved ranking sliders —
+                  which live in `weightRoles`, not in settings — stayed moved. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  refetch();
+                  loadWeights();
+                  setKeyInput("");
+                  setWeightsSaved("");
+                  setKeySaved("");
+                }}
               >
-                <span
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-all ${
-                    autoReanalyze ? "left-[18px]" : "left-0.5"
-                  }`}
-                />
-              </button>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                {saved ? "Saved!" : "Save changes"}
+              </Button>
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <h3 className="mb-1 text-xs font-medium text-foreground">Project LLM API key</h3>
-            <p className="mb-2 text-[0.6875rem] text-muted-foreground">
-              Bring your own OpenRouter key for this project's AI calls. The key is encrypted, never
-              shown again, and usage is visible to the whole team.
-            </p>
-            {keyInfoError ? (
-              <div
-                className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
-                role="alert"
-              >
-                <p className="text-xs text-danger">
-                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                  Couldn&apos;t check whether a key is configured. Don&apos;t add one until this
-                  loads — you could overwrite a key the team is already using.
-                </p>
-                <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadKeyInfo}>
-                  <RefreshCw className="h-3 w-3" /> Retry
-                </Button>
-              </div>
-            ) : keyInfo?.exists ? (
-              <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
-                <p className="text-xs text-success">
-                  Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""} — all AI calls use it.
-                </p>
-                {canEdit && (
-                  <Button variant="outline" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
-                    Remove
-                  </Button>
-                )}
-              </div>
-            ) : canEdit ? (
-              <div className="flex gap-2">
-                <Label htmlFor="llm-api-key" className="sr-only">Project LLM API key</Label>
-                <Input
-                  id="llm-api-key"
-                  type="password"
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  placeholder="sk-or-…"
-                  className="h-8 flex-1 text-[0.8125rem]"
-                  autoComplete="off"
-                />
-                <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
-                  {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save key"}
-                </Button>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">No project key — the server key is used.</p>
-            )}
-            {/* Same silent-mutation class as Save weights: PUT/DELETE fired and
-                the page said nothing either way (audit §20.3). */}
-            {keySaved && (
-              <p role="status" aria-live="polite" className="mt-1.5 text-[0.6875rem] text-success">{keySaved}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-medium text-foreground">Ranking weights</h3>
-              {activeWeights?.customized && (
-                <Badge variant="outline" className="text-[0.6875rem]">customized</Badge>
-              )}
-            </div>
-            <p className="mb-2 text-[0.6875rem] text-muted-foreground">
-              How much each signal counts toward "critical for this role". Changes apply instantly —
-              scores are re-projected, never re-analyzed.
-            </p>
-            {weightsError ? (
-              <div
-                className="flex items-center justify-between gap-2 rounded-md border border-danger/40 bg-danger-soft px-3 py-2"
-                role="alert"
-              >
-                <p className="text-xs text-danger">
-                  <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                  Couldn&apos;t load ranking weights. The saved weights are unchanged — this is a
-                  failed request, not a project without them.
-                </p>
-                <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadWeights}>
-                  <RefreshCw className="h-3 w-3" /> Retry
-                </Button>
-              </div>
-            ) : (
-              <Select value={weightRole} onValueChange={setWeightRole}>
-                <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {(weightRoles ?? []).map((r) => (
-                    <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {activeWeights && (
-              <div className="space-y-2">
-                {WEIGHT_VIEWS.map((view) => (
-                  <div key={view} className="flex items-center gap-3">
-                    <span className="w-28 shrink-0 text-[0.71875rem] text-muted-foreground">
-                      {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
-                    </span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={activeWeights.weights[view] ?? 0}
-                      onChange={(e) => setWeight(view, Number(e.target.value))}
-                      disabled={!canEdit}
-                      className="h-1.5 flex-1 accent-[var(--primary)]"
-                      aria-label={`${WEIGHT_LABELS[view] ?? view} weight`}
-                    />
-                    <span className="w-10 shrink-0 text-right text-[0.71875rem] tabular-nums text-foreground">
-                      {Math.round((activeWeights.weights[view] ?? 0) * 100)}%
-                    </span>
-                  </div>
-                ))}
-                {(() => {
-                  const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
-                  return (
-                    <p className={`text-right text-[0.6875rem] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
-                      Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
-                    </p>
-                  );
-                })()}
-                {canEdit ? (
-                  <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
-                    {/* The only signal that a save happened: the request used
-                        to fire and nothing on the page changed. */}
-                    <p role="status" aria-live="polite" className="mr-auto text-[0.6875rem] text-success">
-                      {weightsSaved}
-                    </p>
-                    <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
-                      Revert to defaults
-                    </Button>
-                    <Button size="xs" onClick={handleSaveWeights} disabled={weightsSaving}>
-                      {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}
-                    </Button>
-                  </div>
-                ) : (
-                  // "Adjust weights" on a graph node sends developers here,
-                  // where every slider is disabled and both buttons are gone,
-                  // with nothing saying why (audit §20.1 dead end).
-                  <p className="pt-1 text-[0.6875rem] text-muted-foreground">
-                    Read-only for your tier — these are the weights your criticality scores are
-                    computed with. Only owners and admins can change them; ask one of them if a
-                    signal is weighted wrong for your work.
-                  </p>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="p-3">
-            <div className="mb-2 flex items-center justify-between">
-              <h3 className="text-xs font-medium text-foreground">Analysis limits</h3>
-              {canEdit && (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => setAnalyzeOpen(true)}
-                  disabled={analyzing || project.status === "analyzing"}
-                >
-                  <RefreshCw className={`h-3 w-3 ${analyzing ? "animate-spin" : ""}`} />
-                  Re-analyze…
-                </Button>
-              )}
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1">
-                <Label htmlFor="file-limit" className="text-xs">Max files</Label>
-                <Input
-                  id="file-limit"
-                  type="number"
-                  value={fileLimit}
-                  onChange={(e) => setFileLimit(e.target.value)}
-                  placeholder="unchanged if blank"
-                  disabled={!canEdit}
-                  className="h-8 text-[0.8125rem]"
-                />
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="loc-limit" className="text-xs">Max lines of code</Label>
-                <Input
-                  id="loc-limit"
-                  type="number"
-                  value={locLimit}
-                  onChange={(e) => setLocLimit(e.target.value)}
-                  placeholder="unchanged if blank"
-                  disabled={!canEdit}
-                  className="h-8 text-[0.8125rem]"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {project.permission_tier === "owner" && (
-          <Card className="border-destructive/30">
-            <CardContent className="p-3">
-              <div className="flex items-center gap-1.5 text-destructive">
-                <AlertTriangle className="h-3.5 w-3.5" />
-                <h3 className="text-xs font-medium">Danger zone</h3>
-              </div>
-              <Separator className="my-2" />
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs font-medium text-foreground">Delete project</p>
-                  <p className="text-xs text-muted-foreground">
-                    Permanently delete this project and all data.
-                  </p>
-                </div>
-                <Button variant="destructive" size="xs" onClick={() => setDeleteOpen(true)}>
-                  <Trash2 className="h-3 w-3" />
-                  Delete
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      {canEdit && (
-        <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-          {/* Cancel used to refetch settings only, so moved ranking sliders —
-              which live in `weightRoles`, not in settings — stayed moved. */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              refetch();
-              loadWeights();
-              setKeyInput("");
-              setWeightsSaved("");
-              setKeySaved("");
-            }}
-          >
-            Cancel
-          </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-            {saved ? "Saved!" : "Save changes"}
-          </Button>
-        </div>
-      )}
+          )
+        }
+      />
 
       <AnalyzeDialog
         project={project}

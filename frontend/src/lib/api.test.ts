@@ -56,16 +56,7 @@ describe("apiFetch headers (#7)", () => {
   });
 });
 
-/**
- * Bug #74/H3 — "no shared redirect on a final 401".
- *
- * When the refresh fails the session is gone, but nothing said so: every
- * in-flight request threw its own 401 into whatever error state its caller had,
- * leaving a half-rendered app the user could not fix. One signOut hands the
- * problem to the chain that already exists (AuthContext SIGNED_OUT →
- * ProtectedRoute → /login with the return path). It has to be exactly one: a
- * page load fires several requests and they all fail together.
- */
+// Exactly one signOut: a page load fires several requests and they all 401 together.
 describe("apiFetch on a final 401 (#74/H3)", () => {
   /** Fresh module = fresh latch, same spies. */
   async function freshApiFetch() {

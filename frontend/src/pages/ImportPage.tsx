@@ -57,11 +57,9 @@ interface Branch {
 }
 
 /**
- * Everything step 2 needs to configure the first run. Held as one object
- * (rather than reading step 1's picker state) so a step 2 restored from the URL
- * after a refresh does not have to fake its way back through the pickers —
- * setting `selectedInstallation` alone would trip the repos effect and blank the
- * branch it just restored (#74/F5).
+ * Everything step 2 needs, as one object rather than step 1's picker state: a step 2
+ * restored from the URL cannot replay the pickers, since setting
+ * `selectedInstallation` alone trips the repos effect and blanks the branch.
  */
 interface ConfigureContext {
   projectId: string;
@@ -152,13 +150,8 @@ export function ImportPage() {
   const [existingProjectId, setExistingProjectId] = useState<string | null>(null);
   const [developerRole, setDeveloperRole] = useState<string>(FALLBACK_ROLE);
 
-  /**
-   * #74/F4: the picker offered repositories the user had already imported, and
-   * the only feedback was a bare 409 after the click. Owner rows only — the
-   * backend's UNIQUE (user_id, repo_owner, repo_name) is per owner, so a repo
-   * you can see through *someone else's* project is still yours to import and
-   * must stay selectable.
-   */
+  // Owner rows only: UNIQUE (user_id, repo_owner, repo_name) is per owner, so a repo
+  // visible through someone else's project is still yours to import.
   const { projects: ownProjects } = useProjects();
   const importedRepoKeys = new Set(
     ownProjects
@@ -182,17 +175,10 @@ export function ImportPage() {
   const [ignoreInput, setIgnoreInput] = useState("");
   const [showIgnored, setShowIgnored] = useState(false);
 
-  /**
-   * #74/F5: step 2 lived only in React state, so a refresh (or landing on the
-   * URL again) dropped the user back to the picker with the project already
-   * created — the exact situation that produced the bare 409 above. The created
-   * id now lives in the URL and the repo context is rebuilt from the project
-   * row, which is the only place it survives a reload.
-   *
-   * `handledProjectId` keeps this to one fetch per id: the create path claims
-   * the id before it writes the param, so writing the URL cannot re-enter here
-   * and reset an `analyzeConfig` the user has already started editing.
-   */
+  // Step 2 survives a reload because the created id lives in the URL and the repo
+  // context is rebuilt from the project row. `handledProjectId` keeps this to one fetch
+  // per id: the create path claims the id before it writes the param, so writing the
+  // URL cannot re-enter here and reset an `analyzeConfig` already being edited.
   const restoreProjectId = searchParams.get("project");
   const handledProjectId = useRef<string | null>(null);
   useEffect(() => {
@@ -219,8 +205,7 @@ export function ImportPage() {
         setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: project.branch });
       })
       .catch(() => {
-        // A stale or foreign id is not an error worth blocking on: fall back to
-        // step 1 rather than stranding the page on a project we can't read.
+        // A stale or foreign id falls back to step 1 rather than stranding the page.
         if (cancelled) return;
         setSearchParams((prev) => {
           const next = new URLSearchParams(prev);
@@ -388,8 +373,8 @@ export function ImportPage() {
         branch: selectedBranch,
       });
       setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: selectedBranch });
-      // `replace`: the project exists now, so the picker is no longer a state
-      // worth going back to — Back there would only invite a duplicate import.
+      // `replace`: the project exists now, so Back to the picker would only invite
+      // a duplicate import.
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set("project", project.id);
@@ -405,9 +390,8 @@ export function ImportPage() {
       // after — point the user at it instead of stranding them with only an
       // error message and no way back to what was already created.
       if (createdProject) setStrandedProjectId(createdProject.id);
-      // #74/F4: "Project already exists for this repo" with nowhere to go was
-      // the whole complaint. The 409 now carries the existing project's id
-      // (null only if the lookup behind it failed), so say where it went.
+      // The 409 carries the existing project's id — null only if the lookup behind
+      // it failed — so the message can say where the repo went.
       if (err instanceof ApiError && err.status === 409 && typeof err.body?.project_id === "string") {
         setExistingProjectId(err.body.project_id);
       }
@@ -454,8 +438,8 @@ export function ImportPage() {
     }
   }
 
-  // Restoring step 2 from ?project=: showing the picker first and swapping it
-  // out mid-read would be its own bug (a click could land on the wrong step).
+  // Restoring step 2 from ?project=: showing the picker and swapping it out mid-read
+  // would let a click land on the wrong step.
   if (restoring) {
     return (
       <>

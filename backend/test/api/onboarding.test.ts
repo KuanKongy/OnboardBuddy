@@ -333,12 +333,7 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
 describe("GET /api/projects/:id/onboarding/packages", () => {
   afterEach(resetTestHarness);
 
-  /**
-   * #74/B13 rewrote this query — six correlated subqueries became two lateral
-   * aggregates, plus a LIMIT. The frontend card grid reads these exact keys, so
-   * the shape is the contract; the counts themselves were checked against the
-   * live schema (old and new forms return identical rows for all 13 packages).
-   */
+  // The frontend card grid reads these exact keys, so the shape is the contract.
   it("keeps the card-grid response shape, and caps the list", async () => {
     installTestAuth();
     let packagesSql = "";
@@ -379,8 +374,7 @@ describe("GET /api/projects/:id/onboarding/packages", () => {
       low_confidence_sections: 3, tutorial_count: 6, is_latest_commit: true,
     });
     expect(packagesSql).to.match(/LIMIT 100/);
-    // The rollups come from laterals now; a correlated subquery creeping back in
-    // is the regression this pins.
+    // A correlated subquery creeping back in is the regression this pins.
     expect(packagesSql).to.include("LEFT JOIN LATERAL");
     expect(packagesSql).to.not.include("SELECT count(*)::int FROM package_sections");
   });

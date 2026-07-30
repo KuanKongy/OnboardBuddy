@@ -216,13 +216,8 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
   }
 });
 
-/**
- * #74/B13: the card grid was uncapped, and a project accumulates a package per
- * (scope, role, commit) — so a long-lived repo could send hundreds of rows to
- * render a grid nobody scrolls. 100 matches the sibling /staleness cap and is
- * far past what the UI shows; the ORDER BY puts the newest first, so the cap
- * only ever drops the least interesting end.
- */
+// Matches the sibling /staleness cap. The ORDER BY is newest-first, so the cap
+// only ever drops the least interesting end.
 const PACKAGE_LIST_LIMIT = 100;
 
 /**

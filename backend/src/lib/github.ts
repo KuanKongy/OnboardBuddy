@@ -267,9 +267,8 @@ export async function exchangeGitHubAppOAuthCode(
     error_description?: string;
   };
   if (!data.access_token) {
-    // GitHub's own words for a rejected code ("The code passed is incorrect or
-    // expired.") are the most useful thing the user can be told, so this one is
-    // whitelisted for reflection rather than swallowed into a 500.
+    // GitHubLinkError, so GitHub's own words for a rejected code are reflected to
+    // the caller rather than swallowed into a 500.
     throw new GitHubLinkError(
       data.error_description ?? data.error ?? "GitHub OAuth did not return an access token",
     );

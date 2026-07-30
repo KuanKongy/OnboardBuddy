@@ -59,11 +59,8 @@ describe("ProjectCard", () => {
     expect(screen.getByText("PROJECT PAGE")).toBeInTheDocument();
   });
 
-  // #74/F15: this card's delete used to be a plain Cancel/Delete pair while the
-  // settings page guarded the identical action with type-to-confirm — the weaker
-  // guard sat on the surface where a stray click is likeliest. Silent
-  // regression: dropping the gate leaves a dialog that still looks like a
-  // confirmation.
+  // Dropping the type-to-confirm gate leaves a dialog that still looks like a
+  // confirmation, so the guard is what gets asserted.
   it("owner: deletes only after the repo name is typed, and without navigating", async () => {
     const user = userEvent.setup();
     const onDeleted = vi.fn();
@@ -86,9 +83,8 @@ describe("ProjectCard", () => {
     expect(screen.queryByText("PROJECT PAGE")).not.toBeInTheDocument();
   });
 
-  // `DELETE /api/projects/:id` is owner-only, so an admin's menu item could
-  // only ever 403. Delete is the menu's one item, so both non-owner tiers lose
-  // the trigger rather than open an empty popover.
+  // `DELETE /api/projects/:id` is owner-only, so an admin's menu item could only ever
+  // 403. Delete is the menu's one item, so the trigger goes with it.
   it.each(["admin", "developer"])("offers no delete to an %s", (tier) => {
     renderCard({ ...PROJECT, permission_tier: tier });
 

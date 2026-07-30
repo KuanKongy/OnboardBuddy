@@ -4,15 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { AppTour } from "./AppTour";
 
 /**
- * #74/G11. The tour pulls focus into its card on every step; when it closed it
- * unmounted that card, which resets focus to <body> — so the next Tab press
- * restarted at the top of the document instead of at the button the reader
- * pressed to open the tour. Nothing about that is visible: the page looks
- * correct, the tour looks correct, and only a keyboard tells you.
- *
- * jsdom has no layout, so AppTour's own visibility filter (a non-zero rect and
- * a non-null offsetParent) would drop every step and the tour would close
- * before rendering. Both are stubbed for this file only.
+ * jsdom has no layout, so AppTour's own visibility filter (a non-zero rect and a
+ * non-null offsetParent) would drop every step and close the tour before it
+ * rendered. Both are stubbed for this file only.
  */
 beforeAll(() => {
   Element.prototype.getBoundingClientRect = function () {

@@ -1,6 +1,7 @@
 import { CheckCircle2, CircleDashed, Loader2, MinusCircle, PauseCircle, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
+import { formatDuration } from "@/lib/format";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
@@ -73,13 +74,8 @@ const STATUS_WORDS: Record<string, string> = {
 };
 
 /**
- * A phase's status, said as well as drawn.
- *
- * #74/G7 (#71): the status lived entirely in the glyph's shape and colour, so a
- * screen reader read each row as its label and its timings and nothing else —
- * "AI: verify claims, 12s" with no way to learn it had failed. The word rides
- * along sr-only (invisible, so the row is pixel-identical) and the glyph is
- * aria-hidden so the status is announced once rather than twice.
+ * A phase's status, said as well as drawn. The word rides along sr-only so the row
+ * stays pixel-identical, and the glyph is aria-hidden so it is announced once.
  */
 export function StatusIcon({ status }: { status: string }) {
   return (
@@ -96,17 +92,7 @@ function timeOf(iso: string | null): string {
 
 function durationOf(p: PhaseRow): string {
   if (!p.started_at || !p.finished_at) return "";
-  const secs = Math.round((new Date(p.finished_at).getTime() - new Date(p.started_at).getTime()) / 1000);
-  if (secs < 1) return "<1s";
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-}
-
-/** Ticking elapsed for the phase still running. */
-function liveElapsed(startedAt: string, nowTs: number): string {
-  const secs = Math.max(0, Math.round((nowTs - new Date(startedAt).getTime()) / 1000));
-  if (secs < 60) return `${secs}s`;
-  return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  return formatDuration(new Date(p.finished_at).getTime() - new Date(p.started_at).getTime());
 }
 
 /** Pick the metrics worth a glance per phase; the full JSON stays a tooltip. */
@@ -249,7 +235,7 @@ export function AnalysisRunPanel({
                   <span className="shrink-0 text-[0.6875rem] tabular-nums text-muted-foreground">
                     {p?.started_at ? `${timeOf(p.started_at)}${p.finished_at ? ` → ${timeOf(p.finished_at)}` : "…"}` : ""}
                     {p && durationOf(p) ? ` (${durationOf(p)})` : ""}
-                    {running && p?.started_at && !p.finished_at ? ` (${liveElapsed(p.started_at, nowTs)})` : ""}
+                    {running && p?.started_at && !p.finished_at ? ` (${formatDuration(nowTs - new Date(p.started_at).getTime())})` : ""}
                   </span>
                 </li>
               );

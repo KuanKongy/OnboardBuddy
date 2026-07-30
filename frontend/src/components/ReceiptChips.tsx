@@ -70,7 +70,8 @@ export function InlineReceiptRef({
   return (
     <button
       onClick={() => onClick(receipt)}
-      className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-border bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-muted-foreground transition-colors hover:border-primary/50 hover:bg-accent hover:text-foreground"
+      // Primary tone, not muted: muted is the inert `prose-code` chips around it.
+      className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-primary/40 bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-primary transition-colors hover:border-primary hover:bg-accent"
       title={`${receipt.filePath}${receipt.lineStart ? `:${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}${
         receipt.symbolName ? ` · ${receipt.symbolName}` : ""
       }`}

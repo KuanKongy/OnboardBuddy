@@ -1,24 +1,11 @@
 import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
 
 /**
- * The first tabbable thing in every shell (#74/G1, #71 item 1).
- *
- * Both shells open with a ten-item sidebar, so reaching the page a keyboard
- * user actually navigated to cost ten-plus Tab presses on every single route —
- * and the sidebar is rebuilt on each one, so the cost was paid again every time.
- *
- * Hidden until focused, and `focus:` overrides every property `sr-only` sets
- * rather than using `not-sr-only`: both would be focus-variant utilities
- * competing on `position`, and which of two same-specificity utilities wins is
- * Tailwind's internal ordering, not the order written here. Against the base
- * `sr-only` the `:focus` variants win on specificity, which is decided by CSS.
- *
- * The clip-path override is not decoration: Tailwind v4's `sr-only` hides with
- * `clip-path: inset(50%)` where v3 used the older `clip` property, so undoing
- * `clip` — the pattern most skip-link snippets still carry — leaves the focused
- * link clipped to nothing. Verified against the built stylesheet: the v3-style
- * override emitted no matching rule at all, this one lands at a later offset
- * than `.sr-only` and outranks it on specificity.
+ * The first tabbable thing in every shell. Hidden until focused via `focus:` overrides
+ * of every `sr-only` property rather than `not-sr-only`, because two focus-variant
+ * utilities competing on `position` are resolved by Tailwind's internal ordering, not
+ * the order written here. `[clip-path:none]` is load-bearing — Tailwind v4's `sr-only`
+ * hides with `clip-path`, so the v3-style `clip` override emits nothing.
  */
 export function SkipToContent() {
   return (

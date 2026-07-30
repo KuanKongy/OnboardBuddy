@@ -44,7 +44,7 @@ interface PackagesContextValue {
   packagesError: boolean;
   /** Same, for the analysis-status poll. */
   statusError: boolean;
-  /** True after the last "make this my default" PUT failed (#74/H7). */
+  /** True after the last "make this my default" PUT failed. */
   defaultPackageError: boolean;
 }
 
@@ -222,11 +222,8 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   }, [project?.default_package_id, project, projectId, navigate, selectPackage]);
 
   const setDefaultPackage = useCallback(async (id: string | null) => {
-    // #74/H7: the only caller fires this as `void setDefaultPackage(...)` from a
-    // click handler, so a failed PUT became an unhandled promise rejection — a
-    // red line in the console and a star that quietly stayed where it was. The
-    // user is told the default moved by the absence of any complaint.
-    // Cleared on each attempt so a retry does not read as still-broken.
+    // The caller fires this as `void setDefaultPackage(...)`, so a rejection would
+    // be silent. Cleared on each attempt so a retry does not read as still-broken.
     setDefaultPackageError(false);
     try {
       await apiFetch(`/projects/${projectId}/default-package`, {

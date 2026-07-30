@@ -11,14 +11,8 @@ export interface ErrorBannerProps {
 }
 
 /**
- * The destructive banner, with `role="alert"` wired in.
- *
- * #74/G3 (#71): these six classes were pasted at 19 sites and only four of
- * them carried the role. A save that failed on button press painted red text
- * that a screen-reader user was never told about — the request came back, the
- * page looked answered, and nothing was announced. Centralised the same way
- * `empty-state.tsx` centralised the "nothing here" block, so the role cannot
- * be dropped by the next caller.
+ * The destructive banner, with `role="alert"` wired in so the next caller cannot
+ * drop it — the same reason `empty-state.tsx` exists.
  */
 export function ErrorBanner({ children, className, ref }: ErrorBannerProps) {
   return (

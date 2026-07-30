@@ -4,11 +4,8 @@ import { Card } from "@/components/ui/card";
 
 export type GraphHintVariant = "files" | "classes";
 
-/**
- * One key per view. `files` keeps the original key so readers who already
- * dismissed it never see it again; `classes` is new copy and has never been
- * dismissed by anyone, so it needs its own.
- */
+// `files` keeps the original key so readers who already dismissed it never see it
+// again; `classes` is copy nobody has dismissed and needs its own.
 const HINT_DISMISSED_KEYS: Record<GraphHintVariant, string> = {
   files: "onboardbuddy:graph-hint-dismissed",
   classes: "onboardbuddy:class-graph-hint-dismissed",
@@ -56,8 +53,7 @@ export function GraphFirstVisitHint({
             This is a map of the classes and interfaces in this project — arrows are
             extends/implements links.
           </p>
-          {/* No GitHub offer here: bug #74 (F21) — this view's panel has no
-              repository link, so the files copy promised something absent. */}
+          {/* No GitHub offer: this view's panel has no repository link. */}
           <p className="text-muted-foreground">
             Click one to see what it does, where it is declared and what calls it.
           </p>

@@ -198,7 +198,9 @@ export function DependencyGraphView({
           markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: stroke },
           style: {
             opacity: endpointHidden ? 0.03 : neighborIds === null || isActive ? 1 : 0.1,
-            strokeWidth: isActive ? 2 : 1,
+            // Resting 1.25, not 1: a hairline in --border measures 1.56:1 against
+            // the page and reads as absent.
+            strokeWidth: isActive ? 2 : 1.25,
             stroke,
           },
         };

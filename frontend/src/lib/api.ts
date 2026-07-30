@@ -22,20 +22,11 @@ async function getAccessToken(): Promise<string | null> {
   return session?.access_token ?? null;
 }
 
-/**
- * #74/H3: a session that could not be refreshed left every page half-alive —
- * each request threw its own 401 into whatever error state the caller happened
- * to have, and the user sat on a shell of a page with no idea they were signed
- * out. One signOut converts that into the state the app already handles:
- * AuthContext's onAuthStateChange sees SIGNED_OUT and clears `user`,
- * ProtectedRoute redirects to /login carrying the location to come back to.
- *
- * Latched because a page load fires several requests at once and they all get
- * the same 401 — without it, each one calls signOut and the redirect fights
- * itself. Cleared on the next request that succeeds (not on SIGNED_IN: this
- * module deliberately has no subscription to unsubscribe, and a successful
- * request is the stronger proof that the credentials work again).
- */
+// One signOut on an unrefreshable session, handing the problem to the chain that
+// already exists: AuthContext sees SIGNED_OUT, ProtectedRoute redirects to /login.
+// Latched because a page load fires several requests that all 401 together, and each
+// calling signOut makes the redirect fight itself. Cleared on the next request that
+// succeeds rather than on SIGNED_IN — this module has no subscription.
 let signedOutOnFinal401 = false;
 
 async function signOutOnce(): Promise<void> {

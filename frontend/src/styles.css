@@ -30,16 +30,22 @@
   --destructive: oklch(0.55 0.22 27);
   --border: oklch(0.62 0.01 265);
   --input: oklch(0.62 0.01 265);
+  /* Separate from --input because --input is a BORDER strength (it has to clear
+     3.0 against the card) while the field's tint is applied at /30 and must stay
+     subtle. Only the dark block's fills use it — light fields are transparent. */
+  --input-fill: oklch(0.62 0.01 265);
   --ring: oklch(0.54 0.2 259);
   --radius: 0.5rem;
 
-  --success: oklch(0.52 0.14 158);
+  /* These four are the TEXT color on their own `-soft` chip, so they carry the AA
+     bar: darkened from L 0.52–0.55 to measure 5.36–6.22:1 rather than 3.7–4.3:1. */
+  --success: oklch(0.44 0.15 158);
   --success-soft: oklch(0.55 0.14 158 / 0.12);
-  --warning: oklch(0.55 0.13 75);
+  --warning: oklch(0.45 0.13 75);
   --warning-soft: oklch(0.72 0.15 75 / 0.15);
-  --danger: oklch(0.55 0.22 27);
+  --danger: oklch(0.47 0.22 27);
   --danger-soft: oklch(0.55 0.22 27 / 0.1);
-  --info: oklch(0.54 0.16 235);
+  --info: oklch(0.45 0.17 235);
   --info-soft: oklch(0.54 0.16 235 / 0.12);
 
   /* Categorical palette: graph node kinds, cluster kinds, chart series. */
@@ -50,6 +56,9 @@
   --node-config: oklch(0.58 0.12 195);
   --node-test: oklch(0.6 0.14 340);
   --node-shared: oklch(0.52 0.03 265);
+  /* Its own hue, not `ui`'s purple — the two would be indistinguishable on the
+     architecture map. */
+  --node-state: oklch(0.57 0.14 200);
 
   --chart-1: var(--node-api);
   --chart-2: var(--node-data);
@@ -67,15 +76,17 @@
   --sidebar-ring: var(--ring);
 }
 
-/* Dark theme (default reference). Surfaces step 0.17 → 0.215 → 0.245 so
-   cards read as raised panels instead of blending into the page; borders sit
-   another step up (0.33) and text contrast is tuned for small sizes. */
+/* Dark theme (default reference). Surfaces step 0.21 → 0.27 → 0.30 so cards read as
+   raised panels rather than blending into the page; borders sit a step up at 0.42.
+   WCAG 1.4.11's 3.0 bar applies to boundaries that IDENTIFY a control, so `--input`
+   is the one that has to clear it and does at 3.10:1 against the card. The surface
+   and decorative-border steps are perceptual lifts, not 1.4.11 passes. */
 .dark {
-  --background: oklch(0.17 0.015 264);
+  --background: oklch(0.21 0.015 264);
   --foreground: oklch(0.95 0.007 264);
-  --card: oklch(0.215 0.018 264);
+  --card: oklch(0.27 0.018 264);
   --card-foreground: oklch(0.95 0.007 264);
-  --popover: oklch(0.245 0.02 265);
+  --popover: oklch(0.30 0.02 265);
   --popover-foreground: oklch(0.95 0.007 264);
   --primary: oklch(0.66 0.19 259);
   --primary-foreground: oklch(0.13 0.02 264);
@@ -86,8 +97,12 @@
   --accent: oklch(0.3 0.028 264);
   --accent-foreground: oklch(0.95 0.007 264);
   --destructive: oklch(0.64 0.21 27);
-  --border: oklch(0.33 0.028 264);
-  --input: oklch(0.33 0.028 264);
+  --border: oklch(0.42 0.03 264);
+  --input: oklch(0.55 0.03 264);
+  /* The field TINT, kept at the old --input lightness: --input itself went to
+     0.55 to clear 3.0 as a control boundary, which as a /30 fill would have
+     made every input read as a filled block. */
+  --input-fill: oklch(0.33 0.028 264);
   --ring: oklch(0.66 0.19 259);
   --radius: 0.5rem;
 
@@ -107,6 +122,7 @@
   --node-config: oklch(0.74 0.11 195);
   --node-test: oklch(0.72 0.14 340);
   --node-shared: oklch(0.7 0.02 265);
+  --node-state: oklch(0.72 0.13 200);
 
   --chart-1: var(--node-api);
   --chart-2: var(--node-data);
@@ -114,13 +130,13 @@
   --chart-4: var(--node-worker);
   --chart-5: var(--node-config);
 
-  --sidebar: oklch(0.19 0.016 264);
+  --sidebar: oklch(0.235 0.016 264);
   --sidebar-foreground: oklch(0.95 0.007 264);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: oklch(0.3 0.028 264);
   --sidebar-accent-foreground: oklch(0.95 0.007 264);
-  --sidebar-border: oklch(0.28 0.024 264);
+  --sidebar-border: oklch(0.40 0.026 264);
   --sidebar-ring: var(--ring);
 }
 
@@ -142,6 +158,7 @@
   --color-destructive: var(--destructive);
   --color-border: var(--border);
   --color-input: var(--input);
+  --color-input-fill: var(--input-fill);
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-success-soft: var(--success-soft);
@@ -158,6 +175,7 @@
   --color-node-config: var(--node-config);
   --color-node-test: var(--node-test);
   --color-node-shared: var(--node-shared);
+  --color-node-state: var(--node-state);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
@@ -227,23 +245,13 @@
   }
 
   /* Honour "reduce motion" app-wide.
-     ───────────────────────────────
-     #74/G5 (#71 item 5): nothing in this app read the OS setting except the
-     graph drill camera. Everything else moved regardless — spinners, pulsing
-     "generating" dots, the tour's spotlight glide, every hover transition, the
-     marching dashes on graph edges — which for a reader with vestibular
-     motion sensitivity is not a preference being ignored, it is the product
-     being unusable.
 
-     Flattened to 0.01ms rather than 0s on purpose: a duration of zero skips the
-     `transitionend`/`animationend` event in some engines, and code that waits
-     for one would hang. Kept in `@layer base` so `!important` here outranks an
-     `!important` utility (for important declarations the cascade reverses layer
-     order, and base is the first layer Tailwind emits).
+     0.01ms rather than 0s: a duration of zero skips the
+     `transitionend`/`animationend` event in some engines, and code waiting for one
+     would hang. Kept in `@layer base` so `!important` here outranks an `!important`
+     utility — for important declarations the cascade reverses layer order.
 
-     Motion that CSS cannot reach is handled in `lib/motion.ts`: a JS
-     `scrollIntoView` with an explicit `behavior` outranks `scroll-behavior`,
-     and React Flow's `animated` edges come from a data flag. */
+     Motion CSS cannot reach is handled in `lib/motion.ts`. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,

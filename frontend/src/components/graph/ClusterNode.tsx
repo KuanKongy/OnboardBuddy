@@ -60,12 +60,16 @@ export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
 
       <div className="flex items-center gap-2 px-3 pt-2.5">
         <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: color }} />
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-semibold text-foreground">
+        {/* Clamped, not truncated: sibling labels share long prefixes, so one line
+            clips them all to the same string. */}
+        <span className="min-w-0 flex-1 line-clamp-2 break-words text-[0.8125rem] font-semibold leading-tight text-foreground">
           {data.label}
         </span>
+        {/* The tint carries the category, not the 10px text: the node hue on its own
+            14% tint measures below AA at this size. */}
         <span
-          className="shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide"
-          style={{ color, background: `color-mix(in oklab, ${color} 14%, transparent)` }}
+          className="shrink-0 rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-foreground"
+          style={{ background: `color-mix(in oklab, ${color} 14%, transparent)` }}
         >
           {CLUSTER_KIND_LABELS[data.kind] ?? data.kind}
         </span>
@@ -169,7 +173,7 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-muted-foreground/60" />
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-muted-foreground/60" />
 
-      <p className="truncate text-[0.8125rem] font-medium text-foreground">{data.label}</p>
+      <p className="line-clamp-2 break-words text-[0.8125rem] font-medium leading-tight text-foreground">{data.label}</p>
       <p className="truncate font-mono text-[0.65625rem] text-muted-foreground">
         {data.filePath ?? " "}
       </p>

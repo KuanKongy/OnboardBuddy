@@ -62,8 +62,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  // Bug #74 (F20): the raw box value fed the union-find/layout memo, so every
-  // keystroke re-laid out the level. Same 200ms budget as the Files view.
+  // The raw box value feeds the union-find/layout memo, so it has to settle first.
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS, "");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -84,9 +83,8 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   const levelKey = (frame: DrillFrame | null) =>
     `${projectId}::${selectedPackageId ?? ""}::${frame?.id ?? ""}::${focusNodeId ?? ""}`;
   const loadedKeyRef = useRef<string | null>(null);
-  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
-  // can be in flight and response order is not selection order. `runId` idiom
-  // from useGraphDrill's live().
+  // `loadedKeyRef` guards refetching, not staleness: two loads can be in flight and
+  // response order is not selection order.
   const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(

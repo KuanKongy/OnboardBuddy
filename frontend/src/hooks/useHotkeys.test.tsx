@@ -51,12 +51,8 @@ describe("useHotkeys", () => {
     expect(screen.getByTestId("count")).toHaveTextContent("0");
   });
 
-  /**
-   * #74/G12. The preference is read at keypress time, not captured when the hook
-   * mounted — which is the whole reason the toggle needs no reload. A refactor to
-   * a mounted `useState` would still pass every test above and silently make the
-   * setting apply only to components mounted after it was changed.
-   */
+  // Read at keypress time, not at mount. A refactor to a mounted `useState` passes
+  // every test above and silently limits the setting to newly mounted components.
   describe("the hotkeys preference", () => {
     afterEach(() => localStorage.removeItem("onboardbuddy:hotkeys"));
 

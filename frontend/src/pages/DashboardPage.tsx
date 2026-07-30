@@ -112,17 +112,21 @@ function StatCard({
   label,
   value,
   tone,
+  spin = false,
 }: {
   icon: typeof Activity;
   label: string;
   value: number;
   tone: string;
+  /** Only ever true when the count is non-zero: a spinner over "0" claims work
+      that is not happening. */
+  spin?: boolean;
 }) {
   return (
     <Card>
       <CardContent className="flex items-center gap-3 p-3">
         <div className={`flex h-8 w-8 items-center justify-center rounded-md bg-muted ${tone}`}>
-          <Icon className="h-4 w-4" />
+          <Icon className={`h-4 w-4 ${spin ? "animate-spin" : ""}`} />
         </div>
         <div>
           <div className="text-lg font-semibold leading-none text-foreground">{value}</div>
@@ -211,8 +215,7 @@ export function DashboardPage() {
     setTourOpen(false);
   }
 
-  // Memoized so the effect below can name it as a dependency rather than
-  // running on every render, which is what it did with no dep array at all.
+  // Memoized so the effect below can name it as a dependency.
   const startTour = useCallback(() => {
     if (user) resetTour("dashboard", user.id);
     setTourOpen(true);
@@ -283,7 +286,7 @@ export function DashboardPage() {
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-tour="stats-row">
             <StatCard icon={FolderGit2} label="Projects" value={stats.total} tone="text-foreground" />
-            <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" />
+            <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" spin={stats.analyzing > 0} />
             {/* "Stale content" only matters when nonzero — otherwise show
                 something informative instead of a permanent 0. */}
             {stats.stale > 0 ? (
@@ -330,7 +333,11 @@ export function DashboardPage() {
                   </Button>
                 </div>
               ) : (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <div
+                  // Track count follows the available width, so cards keep an 18rem
+                  // measure at every window size rather than only at sm/xl.
+                  className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-3"
+                >
                   {recentProjects.map((project) => (
                     <ProjectCard
                       key={project.id}

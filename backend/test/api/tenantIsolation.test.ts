@@ -138,10 +138,8 @@ describe("Bug #65 — routes must scope child objects to the project in the path
     expect(unscopedWrites, JSON.stringify(unscopedWrites)).to.have.lengthOf(0);
   });
 
-  // #72: ownership transfer rewrites `projects.user_id` and both tiers, so it is
-  // owner-only. An admin can already manage members, which makes "admin can
-  // transfer" the plausible mistake — and the way it would fail is silent, since
-  // the transfer itself looks like an ordinary member write.
+  // Owner-only, but an admin can already manage members, so "admin can transfer"
+  // is the plausible mistake — and it looks like an ordinary member write.
   it("POST …/members/:userId/transfer-ownership is refused to admins and developers", async () => {
     for (const tier of ["admin", "developer"]) {
       executed = [];

@@ -40,8 +40,6 @@ function stubProjectList(): void {
 describe("app middleware", () => {
   afterEach(resetTestHarness);
 
-  // #74/B13: the JSON payloads here are large and highly repetitive (the same
-  // paths and keys over and over), and nothing was compressing them.
   it("gzips a JSON response when the client offers gzip, and not when it does not", async () => {
     stubProjectList();
     const gzipped = await request(app)
@@ -65,12 +63,8 @@ describe("app middleware", () => {
     expect(plain.body.projects).to.have.length(60);
   });
 
-  /**
-   * #74/B12 regression pin. The error handler used to answer 500 for every
-   * framework-thrown error, so body-parser's 400 and 413 both reached the
-   * client as "Internal server error" — a client mistake reported as a server
-   * failure, with no test holding the fix in place.
-   */
+  // The error handler answers 500 for anything it does not recognise, so a
+  // framework-thrown 4xx reaching the client is the thing worth pinning.
   it("forwards body-parser's own 4xx as JSON rather than flattening it to a 500", async () => {
     const malformed = await request(app)
       .post("/api/projects")

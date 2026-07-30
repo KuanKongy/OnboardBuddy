@@ -15,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
+import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { applyFontSize, readStoredFontSize, type FontSizeChoice } from "@/lib/fontSize";
 import { hotkeysEnabled, setHotkeysEnabled } from "@/hooks/useHotkeys";
 
@@ -32,10 +33,8 @@ export function AccountSettingsPage() {
     setFontSize(choice);
   }
 
-  // #74/G12: the preference is read per keypress, so this write is the whole
-  // apply step — every open tab and every already-mounted useHotkeys picks it up
-  // on the next key, with no reload and nothing to subscribe to. Mirrored into
-  // state only so the buttons can show which one is active.
+  // useHotkeys reads the preference per keypress, so the write below is the whole
+  // apply step. Mirrored into state only so the buttons can show which is active.
   const [hotkeys, setHotkeys] = useState(() => hotkeysEnabled());
 
   function chooseHotkeys(enabled: boolean) {
@@ -129,13 +128,8 @@ export function AccountSettingsPage() {
   const [unlinking, setUnlinking] = useState(false);
   const [unlinkError, setUnlinkError] = useState("");
   const [linkingGithub, setLinkingGithub] = useState(false);
-  /**
-   * #74/F9: both unlinks fired on the first click. Removing the wrong sign-in
-   * method is how you lose access to an account — the GitHub App disconnect
-   * next to them has been behind a confirm since M3, and these two are the more
-   * consequential of the three. Plain confirm, not type-to-confirm: unlinking is
-   * reversible (link it again) unlike deleting a project.
-   */
+  // Removing the wrong sign-in method is how you lose access to an account. Plain
+  // confirm, not type-to-confirm: unlinking is reversible, deleting a project isn't.
   const [unlinkGithubConfirmOpen, setUnlinkGithubConfirmOpen] = useState(false);
   const [unlinkEmailConfirmOpen, setUnlinkEmailConfirmOpen] = useState(false);
 
@@ -183,8 +177,7 @@ export function AccountSettingsPage() {
   const [emailLoginError, setEmailLoginError] = useState("");
   const [emailLoginNotice, setEmailLoginNotice] = useState("");
 
-  // #74/F10: the dialog was a div of inputs, so Enter did nothing — a sign-up
-  // shaped form that only submitted by mouse.
+  // Takes a FormEvent so the dialog can be a real <form> and Enter submits.
   async function handleAddEmailLogin(e?: React.FormEvent) {
     e?.preventDefault();
     const newEmail = loginEmail.trim();
@@ -304,355 +297,382 @@ export function AccountSettingsPage() {
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from;
 
+  const sections: SettingsSection[] = [
+    {
+      id: "settings-profile",
+      label: "Profile",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-xs font-medium text-foreground">Profile</h3>
+                {!editingProfile && (
+                  <Button variant="outline" size="xs" onClick={startEditProfile}>
+                    <Pencil className="h-3 w-3" />
+                    Edit
+                  </Button>
+                )}
+              </div>
+
+              {editingProfile ? (
+                <>
+                  <div className="flex items-start gap-3">
+                    <Avatar className="mt-1 size-12">
+                      {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
+                      <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div>
+                        <Label htmlFor="profile-name" className="text-[0.6875rem] text-muted-foreground">Full name</Label>
+                        <Input
+                          id="profile-name"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          placeholder="Your name"
+                          className="mt-1 h-8 text-[0.8125rem]"
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor="profile-avatar" className="text-[0.6875rem] text-muted-foreground">Avatar URL</Label>
+                        <Input
+                          id="profile-avatar"
+                          value={avatarUrl}
+                          onChange={(e) => setAvatarUrl(e.target.value)}
+                          placeholder="https://…/avatar.png"
+                          className="mt-1 h-8 text-[0.8125rem]"
+                        />
+                        <p className="mt-1 text-[0.625rem] text-muted-foreground">{AVATAR_URL_HELP}</p>
+                      </div>
+                    </div>
+                  </div>
+                  {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
+                  <div className="mt-2 flex items-center justify-end gap-1.5">
+                    <Button variant="ghost" size="xs" onClick={cancelEditProfile} disabled={profileSaving}>
+                      Cancel
+                    </Button>
+                    <Button size="xs" onClick={handleSaveProfile} disabled={profileSaving}>
+                      {profileSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      Save profile
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3">
+                    <Avatar className="size-12">
+                      {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
+                      <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {fullName || <span className="text-muted-foreground">No name set</span>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
+                    </div>
+                  </div>
+                  {profileNotice && <p className="mt-2 text-[0.6875rem] text-success">{profileNotice}</p>}
+                  {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-signin",
+      label: "Sign-in methods",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">GitHub Login</h3>
+              {githubIdentity ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <Github className="h-3.5 w-3.5 text-foreground" />
+                    <span className="font-medium text-foreground">
+                      Signed in as{" "}
+                      {(githubIdentity.identity_data as Record<string, string>)?.user_name ?? "GitHub User"}
+                    </span>
+                  </div>
+                  <Tooltip>
+                    {/* The span keeps hover working while the button is disabled —
+                        disabled buttons swallow pointer events. */}
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => { setUnlinkError(""); setUnlinkGithubConfirmOpen(true); }}
+                          disabled={!canUnlinkGithub || unlinking}
+                        >
+                          {unlinking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                          Unlink
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64">
+                      {canUnlinkGithub
+                        ? "Removes GitHub as a sign-in method; your email sign-in keeps working. You can link a different GitHub account afterwards."
+                        : "GitHub is currently your only way to sign in, so unlinking would lock you out. Set up email sign-in below first."}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">Not linked — you can sign in with GitHub after linking</span>
+                  <Button variant="outline" size="xs" onClick={handleLinkGithub} disabled={linkingGithub}>
+                    {linkingGithub ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />}
+                    Link GitHub account
+                  </Button>
+                </div>
+              )}
+              {/* While the confirm is open the failure belongs inside it — the
+                  overlay covers the page behind. */}
+              {unlinkError && !unlinkGithubConfirmOpen && <p className="mt-2 text-[0.6875rem] text-destructive">{unlinkError}</p>}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Email Login</h3>
+              {hasEmailLogin ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2 text-xs">
+                    <Mail className="h-3.5 w-3.5 shrink-0 text-foreground" />
+                    <span className="truncate font-medium text-foreground">
+                      Signed in as{" "}
+                      {((emailIdentity?.identity_data as Record<string, string> | undefined)?.email) ?? user?.email}
+                    </span>
+                  </div>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="inline-flex">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          onClick={() => { setEmailLoginError(""); setUnlinkEmailConfirmOpen(true); }}
+                          disabled={!canUnlinkEmail || emailLoginBusy}
+                        >
+                          {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
+                          Unlink
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64">
+                      {canUnlinkEmail
+                        ? "Removes email/password as a sign-in method; your GitHub sign-in keeps working."
+                        : !githubIdentity
+                          ? "Email is currently your only way to sign in, so unlinking would lock you out. Link GitHub above first."
+                          : "This account's email sign-in can't be unlinked (it has no separate identity record)."}
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">
+                    Not set up — add an email &amp; password so you can sign in without GitHub
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => {
+                      setLoginEmail("");
+                      setLoginPassword("");
+                      setLoginPasswordConfirm("");
+                      setEmailLoginError("");
+                      setEmailLoginNotice("");
+                      setEmailDialogOpen(true);
+                    }}
+                  >
+                    <Mail className="h-3 w-3" />
+                    Add email sign-in
+                  </Button>
+                </div>
+              )}
+              {pendingEmail && pendingEmail !== user?.email && (
+                <p className="mt-2 text-[0.6875rem] text-warning">
+                  Pending confirmation: {pendingEmail} — check that inbox to finish.
+                </p>
+              )}
+              {emailLoginNotice && <p className="mt-2 text-[0.6875rem] text-success">{emailLoginNotice}</p>}
+              {emailLoginError && !emailDialogOpen && !unlinkEmailConfirmOpen && (
+                <p className="mt-2 text-[0.6875rem] text-destructive">{emailLoginError}</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">GitHub App (Repo Import)</h3>
+              {appConnectionLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Checking connection...
+                </div>
+              ) : appConnected ? (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs">
+                    <Github className="h-3.5 w-3.5 text-foreground" />
+                    <span className="font-medium text-foreground">
+                      Connected as @{appUsername}
+                    </span>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                      Re-authorize
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => { setDisconnectError(""); setDisconnectConfirmOpen(true); }}
+                      disabled={disconnecting}
+                    >
+                      <Unplug className="h-3 w-3" />
+                      Disconnect
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">Not connected — required for repo import</span>
+                  <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                    <Github className="h-3 w-3" />
+                    Authorize GitHub App
+                  </Button>
+                </div>
+              )}
+              {appConnectionError && (
+                <p className="mt-2 text-[0.6875rem] text-destructive">
+                  Couldn't check GitHub App connection: {appConnectionError}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-preferences",
+      label: "Preferences",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              {/* "Preferences" is the section name the settings shell rail uses. */}
+              <h3 className="mb-2 text-xs font-medium text-foreground">Preferences</h3>
+              <Label className="text-[0.6875rem] text-muted-foreground">Base font size</Label>
+              <div className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5" role="group" aria-label="Base font size">
+                {(
+                  [
+                    { key: "default", label: "Default" },
+                    { key: "large", label: "Large" },
+                    { key: "xlarge", label: "Extra large" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => chooseFontSize(opt.key)}
+                    aria-pressed={fontSize === opt.key}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      fontSize === opt.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* `[`, `]`, `?` and 1-9 fire on a bare keypress — the keys a switch
+                  device or speech recognition emits while doing something else. */}
+              <Label className="mt-3 block text-[0.6875rem] text-muted-foreground">Keyboard shortcuts</Label>
+              <div
+                className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5"
+                role="group"
+                aria-label="Keyboard shortcuts"
+              >
+                {(
+                  [
+                    { on: true, label: "On" },
+                    { on: false, label: "Off" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => chooseHotkeys(opt.on)}
+                    aria-pressed={hotkeys === opt.on}
+                    className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                      hotkeys === opt.on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                Single-key shortcuts like <kbd className="font-mono">[</kbd>, <kbd className="font-mono">]</kbd> and{" "}
+                <kbd className="font-mono">?</kbd>. Turning them off leaves every button and link working.
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Help &amp; privacy</h3>
+              <div className="space-y-1.5">
+                <Link to="/help" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  Help &amp; FAQ
+                </Link>
+                <Link to="/help#privacy" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
+                  <Shield className="h-3.5 w-3.5" />
+                  What we send to the AI
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-danger",
+      label: "Danger zone",
+      children: (
+        <>
+          <Card className="border-destructive/30">
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-destructive">Danger Zone</h3>
+              <Separator className="mb-2" />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => signOut()}>
+                  <LogOut className="h-3 w-3" />
+                  Sign Out
+                </Button>
+                <Button variant="destructive" size="sm" onClick={() => { setDeleteConfirm(""); setDeleteError(""); setDeleteOpen(true); }}>
+                  <Trash2 className="h-3 w-3" />
+                  Delete account
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+  ];
+
   return (
     <div>
-      {/* Header spans the full page like every other tab; only the card
-          column below is centered and narrow. */}
+      {/* Header spans the full page; the shell below owns the rail and column. */}
       <PageHeader
         title="Account Settings"
         subtitle="Your profile, GitHub connection, and account access."
         actions={<BackLink to={from ?? "/dashboard"} label={from ? "Back" : "Back to dashboard"} />}
       />
-      <div className="mx-auto max-w-xl">
 
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-xs font-medium text-foreground">Profile</h2>
-            {!editingProfile && (
-              <Button variant="outline" size="xs" onClick={startEditProfile}>
-                <Pencil className="h-3 w-3" />
-                Edit
-              </Button>
-            )}
-          </div>
-
-          {editingProfile ? (
-            <>
-              <div className="flex items-start gap-3">
-                <Avatar className="mt-1 size-12">
-                  {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
-                  <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1 space-y-2">
-                  <div>
-                    <Label htmlFor="profile-name" className="text-[0.6875rem] text-muted-foreground">Full name</Label>
-                    <Input
-                      id="profile-name"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      placeholder="Your name"
-                      className="mt-1 h-8 text-[0.8125rem]"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="profile-avatar" className="text-[0.6875rem] text-muted-foreground">Avatar URL</Label>
-                    <Input
-                      id="profile-avatar"
-                      value={avatarUrl}
-                      onChange={(e) => setAvatarUrl(e.target.value)}
-                      placeholder="https://…/avatar.png"
-                      className="mt-1 h-8 text-[0.8125rem]"
-                    />
-                    <p className="mt-1 text-[0.625rem] text-muted-foreground">{AVATAR_URL_HELP}</p>
-                  </div>
-                </div>
-              </div>
-              {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
-              <div className="mt-2 flex items-center justify-end gap-1.5">
-                <Button variant="ghost" size="xs" onClick={cancelEditProfile} disabled={profileSaving}>
-                  Cancel
-                </Button>
-                <Button size="xs" onClick={handleSaveProfile} disabled={profileSaving}>
-                  {profileSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                  Save profile
-                </Button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-center gap-3">
-                <Avatar className="size-12">
-                  {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
-                  <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-foreground">
-                    {fullName || <span className="text-muted-foreground">No name set</span>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
-                </div>
-              </div>
-              {profileNotice && <p className="mt-2 text-[0.6875rem] text-success">{profileNotice}</p>}
-              {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">GitHub Login</h2>
-          {githubIdentity ? (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs">
-                <Github className="h-3.5 w-3.5 text-foreground" />
-                <span className="font-medium text-foreground">
-                  Signed in as{" "}
-                  {(githubIdentity.identity_data as Record<string, string>)?.user_name ?? "GitHub User"}
-                </span>
-              </div>
-              <Tooltip>
-                {/* The span keeps hover working while the button is disabled
-                    (disabled buttons swallow pointer events), so the "why" is
-                    always one hover away. */}
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => { setUnlinkError(""); setUnlinkGithubConfirmOpen(true); }}
-                      disabled={!canUnlinkGithub || unlinking}
-                    >
-                      {unlinking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
-                      Unlink
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-64">
-                  {canUnlinkGithub
-                    ? "Removes GitHub as a sign-in method; your email sign-in keeps working. You can link a different GitHub account afterwards."
-                    : "GitHub is currently your only way to sign in, so unlinking would lock you out. Set up email sign-in below first."}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">Not linked — you can sign in with GitHub after linking</span>
-              <Button variant="outline" size="xs" onClick={handleLinkGithub} disabled={linkingGithub}>
-                {linkingGithub ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />}
-                Link GitHub account
-              </Button>
-            </div>
-          )}
-          {/* While the confirm is open the failure belongs inside it — the
-              overlay covers the page behind. */}
-          {unlinkError && !unlinkGithubConfirmOpen && <p className="mt-2 text-[0.6875rem] text-destructive">{unlinkError}</p>}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">Email Login</h2>
-          {hasEmailLogin ? (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex min-w-0 items-center gap-2 text-xs">
-                <Mail className="h-3.5 w-3.5 shrink-0 text-foreground" />
-                <span className="truncate font-medium text-foreground">
-                  Signed in as{" "}
-                  {((emailIdentity?.identity_data as Record<string, string> | undefined)?.email) ?? user?.email}
-                </span>
-              </div>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => { setEmailLoginError(""); setUnlinkEmailConfirmOpen(true); }}
-                      disabled={!canUnlinkEmail || emailLoginBusy}
-                    >
-                      {emailLoginBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unplug className="h-3 w-3" />}
-                      Unlink
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-64">
-                  {canUnlinkEmail
-                    ? "Removes email/password as a sign-in method; your GitHub sign-in keeps working."
-                    : !githubIdentity
-                      ? "Email is currently your only way to sign in, so unlinking would lock you out. Link GitHub above first."
-                      : "This account's email sign-in can't be unlinked (it has no separate identity record)."}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">
-                Not set up — add an email &amp; password so you can sign in without GitHub
-              </span>
-              <Button
-                variant="outline"
-                size="xs"
-                onClick={() => {
-                  setLoginEmail("");
-                  setLoginPassword("");
-                  setLoginPasswordConfirm("");
-                  setEmailLoginError("");
-                  setEmailLoginNotice("");
-                  setEmailDialogOpen(true);
-                }}
-              >
-                <Mail className="h-3 w-3" />
-                Add email sign-in
-              </Button>
-            </div>
-          )}
-          {pendingEmail && pendingEmail !== user?.email && (
-            <p className="mt-2 text-[0.6875rem] text-warning">
-              Pending confirmation: {pendingEmail} — check that inbox to finish.
-            </p>
-          )}
-          {emailLoginNotice && <p className="mt-2 text-[0.6875rem] text-success">{emailLoginNotice}</p>}
-          {emailLoginError && !emailDialogOpen && !unlinkEmailConfirmOpen && (
-            <p className="mt-2 text-[0.6875rem] text-destructive">{emailLoginError}</p>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">GitHub App (Repo Import)</h2>
-          {appConnectionLoading ? (
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> Checking connection...
-            </div>
-          ) : appConnected ? (
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs">
-                <Github className="h-3.5 w-3.5 text-foreground" />
-                <span className="font-medium text-foreground">
-                  Connected as @{appUsername}
-                </span>
-              </div>
-              <div className="flex gap-1">
-                <Button variant="outline" size="xs" onClick={() => connectGithub()}>
-                  Re-authorize
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => { setDisconnectError(""); setDisconnectConfirmOpen(true); }}
-                  disabled={disconnecting}
-                >
-                  <Unplug className="h-3 w-3" />
-                  Disconnect
-                </Button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-muted-foreground">Not connected — required for repo import</span>
-              <Button variant="outline" size="xs" onClick={() => connectGithub()}>
-                <Github className="h-3 w-3" />
-                Authorize GitHub App
-              </Button>
-            </div>
-          )}
-          {appConnectionError && (
-            <p className="mt-2 text-[0.6875rem] text-destructive">
-              Couldn't check GitHub App connection: {appConnectionError}
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          {/* Was "Appearance"; the keyboard preference below is not appearance,
-              and "Preferences" is the section name the settings shell uses. */}
-          <h2 className="mb-2 text-xs font-medium text-foreground">Preferences</h2>
-          <Label className="text-[0.6875rem] text-muted-foreground">Base font size</Label>
-          <div className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5" role="group" aria-label="Base font size">
-            {(
-              [
-                { key: "default", label: "Default" },
-                { key: "large", label: "Large" },
-                { key: "xlarge", label: "Extra large" },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => chooseFontSize(opt.key)}
-                aria-pressed={fontSize === opt.key}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  fontSize === opt.key ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {/* #74/G12: `[`, `]`, `?` and 1-9 fired on a bare keypress with no way
-              to turn them off — exactly the keys a switch device, a dwell
-              selector or speech recognition emits while doing something else, so
-              landing on another tab mid-task was a hazard with no opt-out. */}
-          <Label className="mt-3 block text-[0.6875rem] text-muted-foreground">Keyboard shortcuts</Label>
-          <div
-            className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5"
-            role="group"
-            aria-label="Keyboard shortcuts"
-          >
-            {(
-              [
-                { on: true, label: "On" },
-                { on: false, label: "Off" },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.label}
-                type="button"
-                onClick={() => chooseHotkeys(opt.on)}
-                aria-pressed={hotkeys === opt.on}
-                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  hotkeys === opt.on ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-            Single-key shortcuts like <kbd className="font-mono">[</kbd>, <kbd className="font-mono">]</kbd> and{" "}
-            <kbd className="font-mono">?</kbd>. Turning them off leaves every button and link working.
-          </p>
-        </CardContent>
-      </Card>
-
-      <Card className="mb-3">
-        <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-foreground">Help &amp; privacy</h2>
-          <div className="space-y-1.5">
-            <Link to="/help" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-              <HelpCircle className="h-3.5 w-3.5" />
-              Help &amp; FAQ
-            </Link>
-            <Link to="/help#privacy" className="flex items-center gap-1.5 text-xs text-primary hover:underline">
-              <Shield className="h-3.5 w-3.5" />
-              What we send to the AI
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
-      <Card className="border-destructive/30">
-        <CardContent className="p-3">
-          <h2 className="mb-2 text-xs font-medium text-destructive">Danger Zone</h2>
-          <Separator className="mb-2" />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => signOut()}>
-              <LogOut className="h-3 w-3" />
-              Sign Out
-            </Button>
-            <Button variant="destructive" size="sm" onClick={() => { setDeleteConfirm(""); setDeleteError(""); setDeleteOpen(true); }}>
-              <Trash2 className="h-3 w-3" />
-              Delete account
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-      </div>
+      <SettingsShell sections={sections} />
 
       <Dialog open={emailDialogOpen} onOpenChange={(open) => !emailLoginBusy && setEmailDialogOpen(open)}>
         <DialogContent className="sm:max-w-md">

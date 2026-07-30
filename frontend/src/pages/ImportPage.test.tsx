@@ -55,8 +55,8 @@ vi.mock("@/components/PreflightPreview", async () => {
 
 /**
  * Server state the tests drive. GET and POST /projects are DIFFERENT calls with
- * different shapes — the old mock answered both with the POST body, which is
- * what let the page's new projects cross-reference read `undefined`.
+ * different shapes — one mock answering both makes the page's cross-reference read
+ * `undefined`.
  */
 const apiState: {
   projects: Array<Record<string, unknown>>;
@@ -289,19 +289,11 @@ describe("ImportPage — the oversized-repo cost gate (bug #67)", () => {
   });
 });
 
-/**
- * Bug #67 remainder, tracked as #74/F4 and #74/F5 — the import flow's three
- * dead ends: a picker that offers repositories you already imported, a 409 that
- * names the problem and nowhere to go, and a step 2 that only existed in React
- * state, so a refresh dropped you back onto the picker with the project already
- * created (which then 409'd).
- */
 describe("ImportPage — already-imported repositories (#74/F4)", () => {
   it("badges and disables a repo the user already owns a project for", async () => {
     apiState.projects = [
       { id: "p-000", repo_owner: "acme", repo_name: "service-000", permission_tier: "owner" },
-      // Someone else's project the user was invited to. UNIQUE (user_id,
-      // repo_owner, repo_name) is per owner, so this one is still importable.
+      // Someone else's project: the UNIQUE is per owner, so this stays importable.
       { id: "p-001", repo_owner: "acme", repo_name: "service-001", permission_tier: "viewer" },
     ];
     const user = userEvent.setup();
@@ -359,8 +351,7 @@ describe("ImportPage — step 2 survives a reload (#74/F5)", () => {
   it("writes the created project id into the URL when step 2 begins", async () => {
     const user = userEvent.setup();
     await reachConfigureStep(user);
-    // reachConfigureStep asserts step 2 is on screen; this id is what makes it
-    // reachable again after a reload.
+    // The id in the URL is what makes step 2 reachable again after a reload.
     expect(screen.getByTestId("url")).toHaveTextContent("/import?project=proj-1");
   });
 });

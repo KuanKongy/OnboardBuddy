@@ -116,11 +116,8 @@ export function ProjectCard({
   const navigate = useNavigate();
   const status = statusConfig[project.status] ?? defaultStatus;
   const StatusIcon = status.icon;
-  // #74/F15: deleting a project is owner-only on the backend
-  // (`DELETE /api/projects/:id` runs `requireProjectAccess("owner")`), but this
-  // menu offered it to admins too — one click from a grid of cards, into a 403.
-  // Delete is the menu's only item, so the gate is on the whole menu: an empty
-  // popover would be worse than no trigger.
+  // `DELETE /api/projects/:id` is owner-only, so an admin's menu item could only
+  // ever 403. Delete is the menu's one item, so the gate is on the whole menu.
   const canDelete = project.permission_tier === "owner";
 
   // While analyzing, show the SAME combined pipeline % and stage as the
@@ -258,13 +255,17 @@ export function ProjectCard({
         <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
           <span className="min-w-0 shrink truncate tabular-nums text-muted-foreground">{progressText}</span>
           <Tooltip>
+            {/* A Badge, not an underlined span — a dotted underline reads as a link
+                and "Complete" navigates nowhere. Still focusable, since the tooltip
+                is the only place the hint lives. */}
             <TooltipTrigger asChild>
-              <span
+              <Badge
+                variant="outline"
                 tabIndex={0}
-                className={`min-w-0 shrink-0 cursor-help truncate underline decoration-dotted underline-offset-2 ${status.tone}`}
+                className={`min-w-0 shrink-0 cursor-help truncate text-[0.6875rem] ${status.tone}`}
               >
                 {statusLabel}
-              </span>
+              </Badge>
             </TooltipTrigger>
             <TooltipContent side="top">{status.hint}</TooltipContent>
           </Tooltip>
@@ -295,8 +296,7 @@ export function ProjectCard({
       </CardContent>
     </Card>
 
-      {/* Same guard as the settings page's danger zone — the two used to differ,
-          and the weaker one was on the card (#74/F15). */}
+      {/* Same guard as the settings page's danger zone, for the same delete. */}
       <ConfirmDangerDialog
         open={deleteDialogOpen}
         onOpenChange={setDeleteDialogOpen}

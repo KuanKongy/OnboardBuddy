@@ -120,11 +120,7 @@ describe('restart resilience — orphan recovery and graceful shutdown', () => {
     expect(isRecoverable('regenerate_section', 1, 2)).to.equal(false);
   });
 
-  /**
-   * #74/B5. The 'running' claim cannot see a submission that never landed —
-   * there is no heartbeat to go dead — so the row sat 'queued' forever behind
-   * the concurrency guard. Both halves matter: aged AND absent from the queue.
-   */
+  // Both halves matter: aged AND absent from the queue.
   describe("stranded 'queued' rows", () => {
     /** Claim returns nothing; the stranded SELECT returns `candidates`. */
     function stubStrandedDb(candidates: Array<{ id: string; project_id: string }>): QueryLogEntry[] {
@@ -157,8 +153,8 @@ describe('restart resilience — orphan recovery and graceful shutdown', () => {
 
       const select = log.find((q) => q.text.includes('SELECT id, project_id FROM analysis_jobs'))!;
       expect(select.text).to.include("status = 'queued'");
-      // Same COALESCE idiom as the running sweep, so a row this sweep just
-      // re-queued (fresh heartbeat) is not mistaken for a stranded one.
+      // Same COALESCE idiom as the running sweep, so a freshly re-queued row is
+      // not mistaken for a stranded one.
       expect(select.text).to.include('COALESCE(last_heartbeat_at, started_at, created_at)');
       expect(select.params).to.deep.equal([300]);
 
@@ -167,7 +163,6 @@ describe('restart resilience — orphan recovery and graceful shutdown', () => {
       expect(String(fail.params![1])).to.include('never reached the job queue');
       // Guarded, so a worker that picked it up mid-sweep is not stomped.
       expect(fail.text).to.include("WHERE id = $1 AND status = 'queued'");
-      // The card must stop claiming an analysis that does not exist.
       expect(log.some((q) => q.text.includes('UPDATE projects'))).to.equal(true);
     });
 
@@ -178,8 +173,7 @@ describe('restart resilience — orphan recovery and graceful shutdown', () => {
         log: () => {},
         requeueAnalysis: async () => {},
         requeueGeneration: async () => {},
-        // Waiting behind a backlog is not the same as never submitted, and a
-        // long queue is normal here — analyses take minutes.
+        // Waiting behind a backlog is not the same as never submitted.
         liveQueuedJobIds: async () => new Set(['job-backlogged']),
       });
 

@@ -66,9 +66,8 @@ export function GraphPage() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  // `searchInput` is what the box shows (it has to echo every keystroke or
-  // typing feels broken); `search` is the settled query everything expensive
-  // keys off. See SEARCH_DEBOUNCE_MS.
+  // `searchInput` echoes every keystroke; `search` is the settled query everything
+  // expensive keys off. See SEARCH_DEBOUNCE_MS.
   const [searchInput, setSearchInput] = useState("");
   const search = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS, "");
   const [allEdges, setAllEdges] = useState(false);
@@ -81,9 +80,9 @@ export function GraphPage() {
   const [focusNotFoundId, setFocusNotFoundId] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const stack = useDrillStack();
-  // Bug #74 (F18): a `?focus=` left in the URL is re-resolved by every later
-  // load, so Back and breadcrumb-root bounced into the focused cluster again.
-  // `replace` — consuming a param is not a place the reader navigated to.
+  // A `?focus=` left in the URL is re-resolved by every later load, so Back and
+  // breadcrumb-root drill back in. `replace` — consuming a param is not a place
+  // the reader navigated to.
   const clearFocusParam = useCallback(() => {
     setSearchParams(
       (prev) => {
@@ -119,8 +118,8 @@ export function GraphPage() {
   // so ViewportFocus is the sole viewport writer while resolving a
   // ?focus= deep link — see DependencyGraphView's suppressInitialFit doc.
   // Latched: the param is deleted in the same batch that selects the node, so
-  // reading it live would un-suppress the fit in the render that first draws
-  // the focused graph — the two-writer race this prop exists to prevent.
+  // reading it live would un-suppress the fit in the render that first draws the
+  // focused graph — the two-writer race this prop exists to prevent.
   const hasFocusTargetRef = useRef(false);
   if (searchParams.get("focus")) hasFocusTargetRef.current = true;
   const hasFocusTarget = hasFocusTargetRef.current;
@@ -140,13 +139,11 @@ export function GraphPage() {
     `${id ?? ""}::${selectedPackageId ?? ""}::${frame ? `${frame.kind}:${frame.id}` : ""}`;
   const loadedKeyRef = useRef<string | null>(null);
   const pendingFocusDrillRef = useRef<string | null>(null);
-  // Bug #74 (F18): deleting the param is not enough on its own — the router
-  // defers that write through a transition, so a jump landing in the same tick
-  // still reads the old `focus` and drills back in. A target is resolved once.
+  // Deleting the param is not enough: the router defers that write through a
+  // transition, so a jump in the same tick still reads the old `focus`.
   const resolvedFocusRef = useRef<string | null>(null);
-  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
-  // can be in flight and response order is not selection order. `runId` idiom
-  // from useGraphDrill's live().
+  // `loadedKeyRef` guards refetching, not staleness: two loads can be in flight and
+  // response order is not selection order.
   const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(
@@ -190,8 +187,8 @@ export function GraphPage() {
           (n) => n.id.startsWith("cluster:") && clusterContains(n.id, focus),
         );
         if (owningGroup) {
-          // Not resolved yet — the next level still has to read the param, so
-          // it stays in the URL for exactly one more hop.
+          // Not resolved yet: the next level still has to read the param, so it
+          // stays in the URL for exactly one more hop.
           pendingFocusDrillRef.current = clusterDirectory(owningGroup.id);
           return;
         }

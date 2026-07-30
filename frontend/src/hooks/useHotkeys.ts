@@ -11,18 +11,10 @@ import { useEffect, useRef } from "react";
 const PREFERENCE_KEY = "onboardbuddy:hotkeys";
 
 /**
- * Whether the reader wants single-key shortcuts at all (#74/G12, #71).
- *
- * There was no way to turn these off, and `[`, `]`, `?` and `1`-`9` on a bare
- * keypress are exactly the keys a switch device, a dwell selector or a
- * speech-recognition tool emits while doing something else — so navigating one
- * tab away was a hazard with no opt-out. Absent means on; only the explicit
- * string "off" disables, so a corrupted or partly-written value fails safe.
- *
- * Read per keypress rather than held in state or a context: the flag is only
- * consulted when a bound key is actually pressed (a handful of times a minute
- * at most), and reading it at the point of use is what makes the toggle take
- * effect in every open tab with no reload and no subscription to wire up.
+ * Whether the reader wants single-key shortcuts at all. Absent means on; only the
+ * explicit string "off" disables, so a partly-written value fails safe. Read per
+ * keypress rather than held in state, which is what makes the toggle take effect in
+ * every open tab with no reload and nothing to subscribe to.
  */
 export function hotkeysEnabled(): boolean {
   try {

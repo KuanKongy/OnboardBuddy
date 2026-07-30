@@ -184,7 +184,7 @@ export interface ArchitectureResponse {
 /** Cluster kind → categorical node palette token (see styles.css). */
 export const CLUSTER_KIND_PALETTE: Record<string, string> = {
   frontend_ui: "ui",
-  frontend_state: "ui",
+  frontend_state: "state",
   api_layer: "api",
   auth_layer: "api",
   database_layer: "data",

@@ -31,19 +31,11 @@ const STATUS_DOT: Record<string, string> = {
 };
 
 /**
- * The star was mouse-only (#74/#71 item 4). It is a nested `<button>` inside a
- * Radix `DropdownMenuItem`, and Radix's menu roves focus between items with the
- * arrow keys and traps Tab — probed against this component: with the menu open,
- * Tab leaves focus on the highlighted menuitem and never reaches the button, so
- * there was no keyboard path to your own default package at all.
- *
- * The item itself takes the keypress instead. `*` rather than a mnemonic letter
- * because Radix runs typeahead on every single printable character it sees on
- * the content, so `d` would jump the highlight to a `dev@…` row on the way; `*`
- * matches no branch name (git refs cannot contain it) and reads as the star.
- * `aria-keyshortcuts` on the item is how it is announced, which costs no pixels
- * — the menu label was deliberately not lengthened, since a second wrapped line
- * would move the list. ShortcutsHelpDialog carries it for sighted users.
+ * The keyboard route to your own default package: the star button is unreachable, since
+ * Radix traps Tab inside the menu, so the item itself takes the keypress. `*` rather
+ * than a mnemonic letter because Radix runs typeahead on every printable character —
+ * `d` would jump the highlight to a `dev@…` row on the way — and git refs cannot
+ * contain it. Announced via `aria-keyshortcuts`.
  */
 const SET_DEFAULT_KEY = "*";
 
@@ -115,8 +107,8 @@ export function PackageSelector() {
           <DropdownMenuLabel className="text-[0.6875rem] font-normal text-muted-foreground">
             Every tab follows this selection · ★ = your default
           </DropdownMenuLabel>
-          {/* #74/H7: a failed PUT used to say nothing at all. Sized down to the
-              dropdown rather than restyled, so it is the one banner shape. */}
+          {/* Sized down to the dropdown rather than restyled, so it stays the one
+              banner shape. */}
           {defaultPackageError && (
             <ErrorBanner className="mx-1 mb-1 px-2 py-1 text-[0.625rem]">
               Couldn&apos;t save your default — it is unchanged.
@@ -161,9 +153,8 @@ export function PackageSelector() {
               className="gap-2"
             >
               <Check className={cn("h-3.5 w-3.5 shrink-0", selectedPackageId === pkg.id ? "opacity-100" : "opacity-0")} />
-              {/* #74/G7: the dot's colour was the only carrier of the package's
-                  state, and a `title` on a bare span is not an accessible name.
-                  The tooltip stays for the mouse; the word rides along sr-only. */}
+              {/* A `title` on a bare span is not an accessible name, so the tooltip
+                  is for the mouse and the word rides along sr-only. */}
               <span
                 className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[pkg.status] ?? "bg-muted-foreground/40")}
                 title={pkg.status}

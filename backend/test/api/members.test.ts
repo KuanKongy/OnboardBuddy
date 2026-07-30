@@ -35,10 +35,8 @@ describe("GET /api/projects/:id/members", () => {
     expect(res.body).to.have.property("error");
   });
 
-  // #74/F16: approvals and read marks are different facts from different tables,
-  // and the page reported only the first under a label that sounded like the
-  // second. One statement carries both — a second round trip per member is how
-  // this kind of column usually arrives.
+  // Approvals and read marks are different facts from different tables; the
+  // one-statement part is what a second round trip per member would undo.
   it("carries approvals and read marks for each member in one statement", async () => {
     installTestAuth();
     const statements: string[] = [];
@@ -67,9 +65,7 @@ describe("GET /api/projects/:id/members", () => {
 
     const list = statements.find((s) => s.includes("sections_read"))!;
     expect(statements.filter((s) => s.includes("sections_read"))).to.have.lengthOf(1);
-    // Scoped to this project and this member, and guarded against a
-    // non-array readSections (jsonb_array_length raises 22023 on a scalar,
-    // which would 500 the whole list).
+    // jsonb_typeof guard: a scalar readSections would 22023 the whole list.
     expect(list).to.include("up.user_id = pm.user_id AND up.project_id = pm.project_id");
     expect(list).to.include("jsonb_typeof(up.position -> 'readSections') = 'array'");
   });
@@ -86,10 +82,8 @@ describe("GET /api/projects/:id/members/invitations", () => {
     expect(res.status).to.equal(401);
   });
 
-  // #74/B4: the owner-side list has to agree with the accept path about what is
-  // still redeemable — the predicate is copied from it verbatim, and this pins
-  // that. (Postgres evaluates the filter, so what a route test can assert is the
-  // predicate itself; real expired rows are exercised by the live probe.)
+  // Postgres evaluates the filter, so the predicate itself is what a route test
+  // can assert; real expired rows are exercised by the live probe.
   it("filters expired invitations with the accept path's own predicate", async () => {
     installTestAuth();
     const seen: string[] = [];
@@ -151,9 +145,8 @@ describe("POST /api/projects/:id/members/invitations", () => {
     expect(writes, "no invitation row may be written for a rejected tier").to.have.lengthOf(0);
   });
 
-  // Bug #74/B9 + #74/B4. Every case here produced an invitation that looked
-  // sent and could never be redeemed — the silent kind: the inviter gets a 201
-  // and a pending row, the invitee gets nothing.
+  // The silent failure: the inviter gets a 201 and a pending row, the invitee
+  // never gets an invitation they can redeem.
   it("stores a trimmed address and stamps the 14-day expiry", async () => {
     installTestAuth();
     const inserts: Array<{ text: string; params: unknown[] }> = [];
@@ -175,8 +168,7 @@ describe("POST /api/projects/:id/members/invitations", () => {
 
     expect(res.status).to.equal(201);
     expect(inserts).to.have.lengthOf(1);
-    // The address reaches the row without the whitespace that would make
-    // `LOWER(email) = LOWER($1)` on the invitee's inbox miss it.
+    // Untrimmed, `LOWER(email) = LOWER($1)` on the invitee's inbox would miss it.
     expect(inserts[0]!.params[1]).to.equal("Bob@Acme.test");
     expect(inserts[0]!.text).to.include("expires_at");
     expect(inserts[0]!.params[5], "TTL in days").to.equal(14);
@@ -213,9 +205,8 @@ describe("POST /api/projects/:id/members/invitations", () => {
     expect(writes, "none of these may write an invitation row").to.have.lengthOf(0);
   });
 
-  // An expired-but-still-'pending' row is invisible in both lists yet the
-  // partial unique index blocks its replacement, so re-inviting the address was
-  // a permanent 409 with nothing on screen to revoke. It gets retired here.
+  // An expired-but-still-'pending' row is invisible in both lists, yet the partial
+  // unique index blocks its replacement — a 409 with nothing on screen to revoke.
   it("replaces an expired pending invitation instead of refusing forever", async () => {
     installTestAuth();
     const statements: string[] = [];
@@ -271,10 +262,8 @@ describe("PATCH /api/projects/:id/members/:userId", () => {
 
 /**
  * `pool.connect()` has no injection seam, so the transactional route gets its
- * client swapped on the pool for the length of one test — the pattern from
- * `projects.test.ts`, plus the parameters, because what this route has to get
- * right is *which rows* each statement touches and in what order. Restored in a
- * `finally`: a leaked stub silently breaks every later suite that uses the pool.
+ * client swapped on the pool for one test. Always restore in a `finally` — a
+ * leaked stub silently breaks every later suite that uses the pool.
  */
 function stubPoolClient(
   handler: (text: string, params: unknown[]) => { rows: unknown[] },
@@ -322,10 +311,8 @@ describe("POST /api/projects/:id/members/:userId/transfer-ownership", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Bug #72, and the assertion that matters most: `projects.user_id` moves with
-  // the tiers. Account deletion cascades owned projects and reassigns other
-  // members' RESTRICT rows to `projects.user_id`, so an old owner left there
-  // would take the project with them when they delete their account.
+  // `projects.user_id` has to move with the tiers: account deletion cascades owned
+  // projects through it, so an old owner left there takes the project with them.
   it("swaps both tiers and moves projects.user_id, demoting before promoting", async () => {
     installOwnerCaller();
     const client = stubPoolClient((text) => {
@@ -353,8 +340,7 @@ describe("POST /api/projects/:id/members/:userId/transfer-ownership", () => {
 
       const demote = client.statements.findIndex((s) => s.text.includes("SET permission_tier = 'admin'"));
       const promote = client.statements.findIndex((s) => s.text.includes("SET permission_tier = 'owner'"));
-      // Two owners must never coexist, not even inside the transaction: the
-      // remove/PATCH guards elsewhere assume exactly one.
+      // Two owners must never coexist, not even inside the transaction.
       expect(demote).to.be.greaterThan(-1);
       expect(promote).to.be.greaterThan(demote);
       expect(client.statements[demote]!.params).to.deep.equal([PROJECT_ID, TEST_USER.id]);
@@ -398,9 +384,8 @@ describe("POST /api/projects/:id/members/:userId/transfer-ownership", () => {
     }
   });
 
-  // A concurrent transfer already moved ownership: the demote matches no row
-  // because the caller is no longer the owner. Promoting anyway would mint a
-  // second owner.
+  // A concurrent transfer leaves the demote matching no row; promoting anyway
+  // would mint a second owner.
   it("rolls back and answers 409 when the caller is no longer the owner", async () => {
     installOwnerCaller();
     const client = stubPoolClient((text) => {
@@ -424,9 +409,8 @@ describe("POST /api/projects/:id/members/:userId/transfer-ownership", () => {
     }
   });
 
-  // UNIQUE (user_id, repo_owner, repo_name): the new owner imported this repo
-  // themselves. Nothing rolls forward from here, and a 500 would tell them
-  // nothing about what to do.
+  // UNIQUE (user_id, repo_owner, repo_name): nothing rolls forward from here, so
+  // the 409 has to name what is in the way.
   it("rolls back and explains the 409 when the new owner already has this repo", async () => {
     installOwnerCaller();
     const client = stubPoolClient((text) => {
@@ -482,9 +466,8 @@ describe("DELETE /api/projects/:id/members/me", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Bug #72. A 404 here means `/me` fell through to `delete("/:userId")`, whose
-  // requireUuidParam rejects the literal segment — the route-order hazard this
-  // endpoint has to keep passing.
+  // A 404 here means `/me` fell through to `delete("/:userId")`, whose
+  // requireUuidParam rejects the literal segment.
   it("removes a developer's own membership", async () => {
     const executed = installMemberOfTier("developer");
 
@@ -496,9 +479,7 @@ describe("DELETE /api/projects/:id/members/me", () => {
     expect(deletes[0]!.params).to.deep.equal([PROJECT_ID, TEST_USER.id]);
   });
 
-  // The owner is also `projects.user_id`, which the account-deletion cascade and
-  // orphan reassignment both key on: an ownerless project is not a state the
-  // rest of the system has an answer for.
+  // An ownerless project is not a state the rest of the system answers for.
   it("refuses to let the owner walk out, and deletes nothing", async () => {
     const executed = installMemberOfTier("owner");
 
@@ -521,8 +502,6 @@ describe("DELETE /api/projects/:id/members/:userId", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Bug #74/B11: `WHERE user_id = 'some-user-id'` is a uuid cast error, which
-  // came back as a 500 for a member who cannot exist under that spelling.
   it("answers a non-uuid :userId with 404, not a 500 from a uuid cast", async () => {
     installTestAuth();
     const queries: string[] = [];

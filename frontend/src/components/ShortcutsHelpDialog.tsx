@@ -15,9 +15,8 @@ const PROJECT_SHORTCUT_GROUPS: ShortcutGroups = [
     ],
   },
   {
-    // #74/#71 item 4: this one is not a global hotkey but a key on the open
-    // package menu, and it was the only route to your default package that a
-    // keyboard could take — so it has to be written down somewhere.
+    // Not a global hotkey but a key on the open package menu, and the only
+    // keyboard route to your default package — so it has to be written down.
     group: "Package chooser (sidebar)",
     rows: [
       { keys: ["↑", "↓"], action: "Move through the packages" },

@@ -230,8 +230,8 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
       ))}
       <div className="flex items-center gap-2">
         <span
-          className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold"
-          style={{ color, background: `color-mix(in oklab, ${color} 16%, transparent)` }}
+          className="flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-bold text-foreground"
+          style={{ background: `color-mix(in oklab, ${color} 16%, transparent)` }}
         >
           {data.order}
         </span>
@@ -243,8 +243,8 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
           {data.title}
         </span>
         <span
-          className="shrink-0 rounded px-1 py-0.5 text-[0.59375rem] font-semibold uppercase tracking-wide"
-          style={{ color, background: `color-mix(in oklab, ${color} 14%, transparent)` }}
+          className="shrink-0 rounded px-1 py-0.5 text-[0.59375rem] font-semibold uppercase tracking-wide text-foreground"
+          style={{ background: `color-mix(in oklab, ${color} 14%, transparent)` }}
         >
           {data.stepKind.replace(/_/g, " ")}
         </span>
@@ -335,9 +335,8 @@ export function WorkflowsPage() {
     setError("");
     setStepsError("");
     setSelectedNodeId(null);
-    // Bug #74 (F19): clicking down the rail leaves several of these in flight
-    // and response order is not click order, so the abandoned flow's steps
-    // could land last under the selected flow's title.
+    // Clicking down the rail leaves several of these in flight, and response order
+    // is not click order.
     let cancelled = false;
     // The walkthrough route, not the folded workflow graph: it serves one row
     // per step, which is the number the rail beside this canvas advertises.

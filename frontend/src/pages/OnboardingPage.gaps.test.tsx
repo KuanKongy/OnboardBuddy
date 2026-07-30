@@ -3,12 +3,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { PackageGapsDisclosure } from "./OnboardingPage";
 import type { OnboardingSection, PackageCoverage } from "@/types/onboarding";
 
-/**
- * Bug #85's carried-forward half, closed under #74: the package-level gap count
- * was hover-only while the itemised gaps lived per section, so a reader could
- * see that 3 gaps existed and not what they were without opening every section.
- */
-
 const SECTIONS: OnboardingSection[] = [
   {
     id: "guardrails-ops",

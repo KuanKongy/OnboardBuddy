@@ -9,8 +9,8 @@ vi.mock("@/lib/supabase", () => ({
       onAuthStateChange: vi.fn().mockReturnValue({
         data: { subscription: { unsubscribe: vi.fn() } },
       }),
-      // Never settles: the real one navigates away instead of returning, which
-      // is exactly the window the in-flight state has to cover.
+      // Never settles: the real one navigates away instead of returning, which is
+      // exactly the window the in-flight state has to cover.
       signInWithOAuth: vi.fn().mockReturnValue(new Promise(() => {})),
     },
   },
@@ -50,11 +50,7 @@ describe("SignupPage", () => {
     expect(screen.getByRole("link", { name: /sign in/i })).toBeInTheDocument();
   });
 
-  /**
-   * Bug #74/F11 — the GitHub button had no in-flight state at all, so during
-   * the redirect the page still invited a second click and a form submit.
-   * LoginPage has spun and mutually disabled since M2; this is the same shape.
-   */
+  // Same shape LoginPage has had since M2.
   it("shows the GitHub sign-up as in flight and locks the form while it redirects", async () => {
     const user = userEvent.setup();
     await renderSignup();

@@ -3,10 +3,8 @@ import { Input } from "@/components/ui/input";
 
 /**
  * How long this box waits after the last keystroke before the graph re-filters.
- *
- * Bug #70(2): every keystroke re-ran filter → edge cap → dagre layout, which on
- * a 200-node level is a full re-layout per character. Long enough to swallow a
- * burst of typing, short enough that the result still feels immediate.
+ * Filter → edge cap → dagre layout is a full re-layout, so it must not run per
+ * character.
  */
 export const SEARCH_DEBOUNCE_MS = 200;
 

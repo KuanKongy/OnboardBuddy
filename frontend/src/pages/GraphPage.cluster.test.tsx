@@ -348,19 +348,16 @@ describe("GraphPage drill-down", () => {
     expect(fetchClassGraph).toHaveBeenCalledWith("proj-1", null, "backend/src");
   });
 
-  /**
-   * ASSERTION 4 — bug #74 (F18): a `?focus=` that outlives its resolution is
-   * re-resolved by every later load, so Back and breadcrumb-root auto-drill
-   * into the focused cluster again and the reader cannot leave it.
-   */
+  // A `?focus=` that outlives its resolution is re-resolved by every later load, so
+  // the reader cannot leave the cluster.
   it("drops a resolved ?focus= so the breadcrumb root can escape the cluster", async () => {
     renderGraphPage("/projects/proj-1/dependencies?focus=src%2Flib%2Findex.ts");
 
-    // Root cannot show the file, so one auto-drill resolves it. Two matches for
-    // the label: the node on the canvas and the panel the focus opened.
+    // Root cannot show the file, so one auto-drill resolves it. Two matches for the
+    // label: the canvas node and the panel the focus opened.
     await waitFor(() => expect(fetchDependencyGraph).toHaveBeenCalledWith("proj-1", "src/lib", null));
     await screen.findAllByText("index");
-    // Consumed, and gone from the URL — the drill it performed stays shareable.
+    // Consumed, but the drill it performed stays shareable.
     await waitFor(() => expect(currentSearch()).not.toContain("focus"));
     expect(currentSearch()).toContain("drill=");
 
@@ -370,7 +367,7 @@ describe("GraphPage drill-down", () => {
     await waitFor(() => expect(currentSearch()).toBe(""));
     await waitFor(() => expect(screen.getByText("src/api/ (40 files)")).toBeInTheDocument());
     expect(screen.queryByText("lib")).not.toBeInTheDocument();
-    // One src/lib fetch for the whole visit — the arrival hop, not a re-drill.
+    // One src/lib fetch for the whole visit: the arrival hop, not a re-drill.
     expect(vi.mocked(fetchDependencyGraph).mock.calls.filter(([, c]) => c === "src/lib")).toHaveLength(1);
   });
 

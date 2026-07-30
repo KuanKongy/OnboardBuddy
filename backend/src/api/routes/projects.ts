@@ -260,12 +260,9 @@ projectsRouter.post("/", async (req, res) => {
       primaryLanguage = repoInfo.language ?? null;
       repoPushedAt = repoInfo.pushed_at ?? null;
     } catch (err) {
-      // #74/B7: only a missing branch makes this fetch load-bearing, and then a
-      // repo GitHub won't show us is the caller's installation problem, not a
-      // server fault — it used to rethrow into the generic 500 below. 401, 403
-      // and 404 all mean the same thing from here (GitHub answers 404 rather
-      // than 403 for a private repo the token cannot see), so they share one
-      // message that names the thing to go fix.
+      // Only a missing branch makes this fetch load-bearing. 401/403/404 all mean
+      // the same thing here — GitHub answers 404 for a private repo it won't show
+      // us — so they share one message naming the installation to go fix.
       if (!defaultBranch) {
         if (err instanceof GitHubApiError && [401, 403, 404].includes(err.status)) {
           console.warn(`Repo fetch denied for ${repo_owner}/${repo_name}:`, err);
@@ -324,11 +321,9 @@ projectsRouter.post("/", async (req, res) => {
       err instanceof Error &&
       err.message.includes("duplicate key")
     ) {
-      // #74/F4: the bare 409 left the importer stuck — the repo is already
-      // theirs but nothing said where. UNIQUE (user_id, repo_owner, repo_name)
-      // firing means that row exists, so look up its id and hand it back for
-      // the "open it" link. A failed lookup is not worth losing the 409 over:
-      // omit the id and the client falls back to the plain message.
+      // UNIQUE (user_id, repo_owner, repo_name) firing means the row exists, so
+      // hand its id back for an "open it" link. A failed lookup omits the id
+      // rather than losing the 409.
       const { repo_owner, repo_name } = req.body as { repo_owner: string; repo_name: string };
       const existing = await query(
         `SELECT id FROM projects WHERE user_id = $1 AND repo_owner = $2 AND repo_name = $3`,

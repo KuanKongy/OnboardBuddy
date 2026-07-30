@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Handle, MarkerType, Position, type Edge, type Node, type NodeProps } from "reactflow";
 import "reactflow/dist/style.css";
+import { CodeRef } from "@/components/CodeRef";
 import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -388,8 +389,8 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
       <div className="flex items-center gap-2">
         {data.order !== null && (
           <span
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[0.59375rem] font-bold"
-            style={{ color, background: `color-mix(in oklab, ${color} 16%, transparent)` }}
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[0.59375rem] font-bold text-foreground"
+            style={{ background: `color-mix(in oklab, ${color} 16%, transparent)` }}
           >
             {data.order}
           </span>
@@ -398,8 +399,8 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
           {data.label}
         </span>
         <span
-          className="shrink-0 rounded px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide"
-          style={{ color, background: `color-mix(in oklab, ${color} 14%, transparent)` }}
+          className="shrink-0 rounded px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-foreground"
+          style={{ background: `color-mix(in oklab, ${color} 14%, transparent)` }}
         >
           {data.stepKind.replace(/_/g, " ")}
         </span>
@@ -496,8 +497,8 @@ export function CapabilitiesPage() {
   const loadedKeyRef = useRef<string | null>(null);
   const levelKeyOf = (frame: { kind: string; id: string } | null) =>
     `${id ?? ""}::${selectedPackageId ?? ""}::${frame?.kind ?? ""}:${frame?.id ?? ""}`;
-  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — a package
-  // switch starts a second load and response order is not selection order.
+  // `loadedKeyRef` guards refetching, not staleness: a package switch starts a
+  // second load and response order is not selection order.
   const loadRunRef = useRef(0);
 
   /** Fetches whatever a level needs; resolves only once it can be rendered. */
@@ -1229,13 +1230,13 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
                   {/* The link is already the tab stop. */}
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <Link
+                      <CodeRef
                         to={`/projects/${projectId}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
-                        className="flex min-w-0 items-center gap-1.5 font-mono text-primary hover:underline"
+                        className="flex min-w-0 items-center gap-1.5"
                       >
                         <FileCode2 className="h-3 w-3 shrink-0" />
                         <span className="min-w-0 truncate">{s.stable_key}</span>
-                      </Link>
+                      </CodeRef>
                     </TooltipTrigger>
                     <TooltipContent side="top" className="max-w-xs break-all text-left">
                       {s.stable_key}

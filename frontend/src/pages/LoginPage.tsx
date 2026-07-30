@@ -11,10 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 
 /**
- * Where ProtectedRoute wanted the user to be, as a path GitHub can be asked to
- * come back to (#74/F7). ProtectedRoute hands over a Location; AccountCard-style
- * callers hand over a plain string — accept both rather than putting
- * "[object Object]" in a redirect URL.
+ * Where ProtectedRoute wanted the user, as a path GitHub can be asked to come back
+ * to. ProtectedRoute hands over a Location and other callers a plain string — accept
+ * both rather than putting "[object Object]" in a redirect URL.
  */
 function nextPathOf(from: Location | string | undefined): string | undefined {
   if (!from) return undefined;

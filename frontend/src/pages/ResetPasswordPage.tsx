@@ -18,13 +18,9 @@ import { Label } from "@/components/ui/label";
 
 /** GoTrue's code for a recovery link past its TTL (`#error_code=otp_expired`). */
 const EXPIRED_LINK_MESSAGE = "This reset link has expired — request a new one.";
-/**
- * #74/F6: a link that produces neither a session nor an error param (already
- * consumed, opened on a different device, hash stripped by a mail client) left
- * this page on the "Waiting for your reset link…" line forever. Same 10s guard
- * as AuthCallbackPage — long enough for a real recovery round-trip, short
- * enough that a dead link stops pretending to be in progress.
- */
+// For a link that produces neither a session nor an error param — already consumed,
+// opened elsewhere, hash stripped by a mail client. Same 10s guard as
+// AuthCallbackPage: long enough for a real recovery round-trip.
 const LINK_TIMEOUT_MESSAGE =
   "This reset link didn't sign you in — it may have already been used, or been opened on another device.";
 
