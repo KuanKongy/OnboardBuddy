@@ -1,6 +1,7 @@
-import { AlertTriangle, CalendarDays, FileCheck2, Github, Loader2, Mail, RefreshCw, Trash2, UserPlus, X } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, CalendarDays, Crown, FileCheck2, Github, Loader2, LogOut, Mail, RefreshCw, Trash2, UserPlus, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
+import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { useProject } from "@/contexts/ProjectContext";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -33,7 +34,10 @@ interface Member {
   developer_role: string;
   joined_at: string;
   github_username: string | null;
+  /** Editorial: sections this member approved (owner/admin action). */
   sections_reviewed: number;
+  /** Personal: sections this member marked as read in the reader (any tier). */
+  sections_read: number;
 }
 
 interface PendingInvitation {
@@ -43,6 +47,8 @@ interface PendingInvitation {
   developer_role: string | null;
   invited_by_email: string | null;
   created_at: string;
+  /** #74/B4: null on invitations created before the 14-day TTL — those never expire. */
+  expires_at: string | null;
 }
 
 /**
@@ -88,8 +94,9 @@ const tierBadgeVariant: Record<string, "default" | "secondary" | "outline"> = {
 };
 
 export function TeamPage() {
-  const { project } = useProject();
+  const { project, refetch } = useProject();
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [members, setMembers] = useState<Member[]>([]);
   const [invitations, setInvitations] = useState<PendingInvitation[]>([]);
   const [invitationsError, setInvitationsError] = useState(false);
@@ -108,6 +115,10 @@ export function TeamPage() {
   const [removeConfirm, setRemoveConfirm] = useState<Member | null>(null);
   const [removing, setRemoving] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [transferTarget, setTransferTarget] = useState<Member | null>(null);
+  const [transferring, setTransferring] = useState(false);
 
   const canManage =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
@@ -222,6 +233,52 @@ export function TeamPage() {
     }
   }
 
+  // Bug #72: ownership had no way to move, so the only exit for an owner was
+  // deleting the project. Both tiers swap in one request; the local swap keeps
+  // the table honest without a refetch, and `refetch()` re-reads the CALLER's
+  // tier — every owner-only control on this page (and the danger zone on
+  // settings) is gated on it, so without that the demoted owner keeps an
+  // owner's UI until the next full page load.
+  async function handleTransfer(member: Member) {
+    setTransferring(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/members/${member.user_id}/transfer-ownership`, {
+        method: "POST",
+      });
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.user_id === member.user_id) return { ...m, permission_tier: "owner" };
+          if (m.permission_tier === "owner") return { ...m, permission_tier: "admin" };
+          return m;
+        }),
+      );
+      setTransferTarget(null);
+      setManageMember(null);
+      refetch();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to transfer ownership");
+    } finally {
+      setTransferring(false);
+    }
+  }
+
+  // Bug #72: a member could not get out of a project — removal is an
+  // owner/admin action on somebody else, and it refuses self-removal. The
+  // owner's way out is a transfer, so they get no button here.
+  async function handleLeave() {
+    setLeaving(true);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/members/me`, { method: "DELETE" });
+      navigate("/dashboard");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to leave the project");
+    } finally {
+      setLeaving(false);
+    }
+  }
+
   // Backend: owners manage anyone but the owner; admins manage developers only.
   function canManageMember(member: Member): boolean {
     if (!canManage || member.permission_tier === "owner") return false;
@@ -238,12 +295,24 @@ export function TeamPage() {
           !loading ? ` · ${members.length} member${members.length !== 1 ? "s" : ""}` : ""
         }`}
         actions={
-          canManage && (
-            <Button size="sm" onClick={() => { setError(""); setInviteOpen(true); }}>
-              <UserPlus className="h-3.5 w-3.5" />
-              Invite
-            </Button>
-          )
+          <>
+            {canManage && (
+              <Button size="sm" onClick={() => { setError(""); setInviteOpen(true); }}>
+                <UserPlus className="h-3.5 w-3.5" />
+                Invite
+              </Button>
+            )}
+            {!isOwner && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setError(""); setLeaveOpen(true); }}
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                Leave project
+              </Button>
+            )}
+          </>
         }
       />
 
@@ -337,7 +406,7 @@ export function TeamPage() {
         </Dialog>
       )}
 
-      {error && !inviteOpen && manageMember === null && removeConfirm === null && (
+      {error && !inviteOpen && !leaveOpen && manageMember === null && removeConfirm === null && transferTarget === null && (
         <div className="mb-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {error}
         </div>
@@ -346,9 +415,9 @@ export function TeamPage() {
       {/* A four-column grid of avatar tiles spent a 1493px viewport on two
           members and still had nowhere to put what a reader wants to know
           about them. A bounded table holds the same people, their role, tier,
-          when they joined and how many sections they have approved (an
-          editorial count, not reading progress — #74/F16) — and the empty two
-          thirds of the screen stop being empty. */}
+          when they joined, and both progress counts — approvals (editorial)
+          and read marks (personal), which #74/F16 kept confusing for each
+          other — and the empty two thirds of the screen stop being empty. */}
       <div className="mx-auto max-w-2xl">
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -362,7 +431,23 @@ export function TeamPage() {
                 <th scope="col" className="px-3 py-2 font-medium">Member</th>
                 <th scope="col" className="px-3 py-2 font-medium">Role</th>
                 <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">Joined</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Approvals</th>
+                {/* Two columns because they are two different facts, and the
+                    titles say which is which — an approval is editorial, a read
+                    mark is the member's own progress (#74/F16). */}
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-right font-medium"
+                  title="Sections this member approved (owner/admin review)"
+                >
+                  Approvals
+                </th>
+                <th
+                  scope="col"
+                  className="px-3 py-2 text-right font-medium"
+                  title="Sections this member marked as read in the reader"
+                >
+                  Read
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -407,11 +492,14 @@ export function TeamPage() {
                   <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
                     {member.sections_reviewed}
                   </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                    {member.sections_read}
+                  </td>
                 </tr>
               ))}
               {members.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
                     No members yet.
                   </td>
                 </tr>
@@ -461,6 +549,15 @@ export function TeamPage() {
                         {inv.developer_role ? ` · ${inv.developer_role}` : ""}
                         {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}
                       </p>
+                      {/* Invitations now expire (#74/B4), and a pending row that
+                          nobody can redeem is indistinguishable from a fresh one
+                          without the date. Older rows carry no expiry and say
+                          nothing rather than guess one. */}
+                      {inv.expires_at && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          Expires {fmtDate(inv.expires_at)}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <Button
@@ -543,6 +640,12 @@ export function TeamPage() {
                     {manageMember.sections_reviewed} section{manageMember.sections_reviewed === 1 ? "" : "s"} approved
                   </span>
                 </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <BookOpenCheck className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {manageMember.sections_read} section{manageMember.sections_read === 1 ? "" : "s"} marked read
+                  </span>
+                </div>
               </div>
 
               {canManageMember(manageMember) ? (
@@ -579,16 +682,32 @@ export function TeamPage() {
                     </div>
                   </div>
                   <Separator />
-                  <div className="flex items-center justify-between">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => { setError(""); setRemoveConfirm(manageMember); }}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                      Remove
-                    </Button>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => { setError(""); setRemoveConfirm(manageMember); }}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                        Remove
+                      </Button>
+                      {/* Owner-only, and never on the owner's own row — the
+                          backend answers both cases 403/400, but the point is
+                          that ownership moves from here rather than through the
+                          tier dropdown, which refuses to assign it (#72). */}
+                      {isOwner && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => { setError(""); setTransferTarget(manageMember); }}
+                        >
+                          <Crown className="h-3 w-3" />
+                          Transfer ownership
+                        </Button>
+                      )}
+                    </div>
                     <div className="flex gap-2">
                       <Button variant="outline" size="sm" onClick={() => { setManageMember(null); setError(""); }}>Cancel</Button>
                       <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
@@ -648,6 +767,64 @@ export function TeamPage() {
             >
               {removing && <Loader2 className="h-3 w-3 animate-spin" />}
               Remove
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Transfer is the one action on this page that cannot be undone by the
+          person taking it — afterwards the caller is an admin and only the new
+          owner can hand it back — so it gets the type-to-confirm treatment the
+          project delete uses. */}
+      <ConfirmDangerDialog
+        open={transferTarget !== null}
+        onOpenChange={(open) => { if (!open) { setTransferTarget(null); setError(""); } }}
+        title="Transfer ownership"
+        description={
+          <>
+            Make <span className="font-medium text-foreground">{transferTarget?.email}</span> the
+            owner of {project.repo_name}? You will become an admin. Type{" "}
+            <span className="font-mono font-medium text-foreground">{project.repo_name}</span> to confirm.
+          </>
+        }
+        confirmWord={project.repo_name}
+        confirmLabel="Transfer ownership"
+        pending={transferring}
+        error={error}
+        onConfirm={() => transferTarget && handleTransfer(transferTarget)}
+      />
+
+      {/* Leave confirmation: same shape as remove-member. Deliberately a plain
+          confirm rather than type-to-confirm — nothing is destroyed, and the
+          member can be re-invited. */}
+      <Dialog
+        open={leaveOpen}
+        onOpenChange={(open) => { if (!leaving) { setLeaveOpen(open); if (!open) setError(""); } }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-sm">Leave project</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Leave <span className="font-medium text-foreground">{project.repo_name}</span>? You'll
+            lose access to its onboarding content until someone invites you back. Sections you
+            approved and your reading progress are kept.
+          </p>
+          {error && (
+            <div
+              className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+              role="alert"
+            >
+              {error}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" size="sm" disabled={leaving} onClick={() => { setLeaveOpen(false); setError(""); }}>
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" disabled={leaving} onClick={handleLeave}>
+              {leaving && <Loader2 className="h-3 w-3 animate-spin" />}
+              Leave project
             </Button>
           </div>
         </DialogContent>

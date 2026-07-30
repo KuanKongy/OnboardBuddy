@@ -96,3 +96,66 @@ describe("InvitationsPage error lifecycle (#14)", () => {
     );
   });
 });
+
+/**
+ * Bug #72: Decline was a permanently disabled button whose tooltip asked the
+ * invitee to go and ask the inviter to cancel it. An unwanted invitation stayed
+ * pending forever — in their inbox, and blocking a re-invitation of the address.
+ */
+describe("InvitationsPage decline (#72)", () => {
+  function renderPage() {
+    return render(
+      <MemoryRouter>
+        <TooltipProvider>
+          <InvitationsPage />
+        </TooltipProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  // Block body on purpose: `mockReset()` returns the mock, and a hook that
+  // returns a function has that function called as the test's teardown — which
+  // here means `apiFetch()` with no arguments and an unhandled rejection.
+  beforeEach(() => { mockApi.mockReset(); });
+
+  it("drops the declined invitation and selects the next one", async () => {
+    const user = userEvent.setup();
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: INVITATIONS })
+        : Promise.resolve({ invitation: { id: "inv-1", status: "revoked" } }),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Join alpha" });
+    await user.click(screen.getByRole("button", { name: /^Decline$/ }));
+
+    expect(mockApi).toHaveBeenCalledWith("/invitations/inv-1/decline", { method: "POST" });
+    // The declined one is gone from the list and the pane follows to the next.
+    expect(await screen.findByRole("heading", { name: "Join beta" })).toBeInTheDocument();
+    expect(screen.queryByText("alpha")).toBeNull();
+  });
+
+  it("reports a failed decline and clears it when another invitation is selected", async () => {
+    const user = userEvent.setup();
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: INVITATIONS })
+        : Promise.reject(new Error("Invitation has already been accepted")),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Join alpha" });
+    await user.click(screen.getByRole("button", { name: /^Decline$/ }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/already been accepted/i)).toBeInTheDocument(),
+    );
+    // The invitation stays — nothing was removed on a failure.
+    expect(screen.getByRole("heading", { name: "Join alpha" })).toBeInTheDocument();
+
+    // #14's rule applies to this operation too.
+    await user.click(screen.getByText("beta"));
+    expect(screen.queryByText(/already been accepted/i)).toBeNull();
+  });
+});

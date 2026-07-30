@@ -9,6 +9,10 @@ invitationsRouter.get("/", async (req, res) => {
   try {
     const email = req.user!.email;
 
+    // #74/F13: the same expiry predicate the accept path uses. Without it this
+    // inbox listed invitations whose Accept button could only answer "not found
+    // or expired" — an invitee staring at a project they cannot join.
+    // The IS NULL arm keeps rows written before invitations had a TTL.
     const result = await query(
       `SELECT pi.*, p.repo_owner, p.repo_name, p.branch,
               u.email AS invited_by_email
@@ -16,6 +20,7 @@ invitationsRouter.get("/", async (req, res) => {
        INNER JOIN projects p ON p.id = pi.project_id
        LEFT JOIN users u ON u.id = pi.invited_by
        WHERE LOWER(pi.email) = LOWER($1) AND pi.status = 'pending'
+         AND (pi.expires_at IS NULL OR pi.expires_at > NOW())
        ORDER BY pi.created_at DESC`,
       [email],
     );
@@ -54,6 +59,75 @@ invitationsRouter.get("/:invitationId", requireUuidParam("invitationId"), async 
     res.json({ invitation: result.rows[0] });
   } catch (err) {
     console.error("Get invitation error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * Bug #72: the invitee had no way to say no. The Decline button was disabled
+ * with a tooltip asking them to go and find the inviter, so an invitation they
+ * did not want sat pending forever, blocking a re-invitation of that address
+ * (the pending-unique index) and cluttering their inbox.
+ *
+ * Terminal status is 'revoked', not 'declined' (#72/W3): the
+ * `project_invitations.status` CHECK is frozen for M5 and has no 'declined'
+ * value. Downstream behaviour is identical — both mean "cannot be redeemed,
+ * gone from every list" — and the one-line CHECK migration is recorded as a
+ * post-freeze follow-up.
+ *
+ * Deliberately no expiry guard, unlike accept: the invitation is being thrown
+ * away either way, and refusing to discard a stale one would leave the invitee
+ * holding a row they can neither redeem nor clear.
+ */
+invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"), async (req, res) => {
+  try {
+    const { invitationId } = req.params;
+    const email = req.user!.email;
+
+    const invResult = await query(
+      `SELECT id, email, status FROM project_invitations WHERE id = $1`,
+      [invitationId],
+    );
+
+    if (invResult.rows.length === 0) {
+      res.status(404).json({ error: "Invitation not found" });
+      return;
+    }
+
+    const invitation = invResult.rows[0] as { email: string; status: string };
+
+    // Same guard as accept and the detail route: an invitation is addressed to
+    // one address, and its id is not a capability for anyone else.
+    if (invitation.email.toLowerCase() !== email.toLowerCase()) {
+      res.status(403).json({ error: "This invitation is not for your account" });
+      return;
+    }
+
+    if (invitation.status !== "pending") {
+      res.status(409).json({ error: `Invitation has already been ${invitation.status}` });
+      return;
+    }
+
+    // `AND status = 'pending'` makes the write the arbiter: an accept that
+    // landed between the read above and here must not be overwritten with a
+    // decline, which would leave a member of a project whose invitation says
+    // they refused it.
+    const result = await query(
+      `UPDATE project_invitations
+       SET status = 'revoked'
+       WHERE id = $1 AND status = 'pending'
+       RETURNING *`,
+      [invitationId],
+    );
+
+    if (result.rows.length === 0) {
+      res.status(409).json({ error: "Invitation is no longer pending" });
+      return;
+    }
+
+    res.json({ invitation: result.rows[0] });
+  } catch (err) {
+    console.error("Decline invitation error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
 });

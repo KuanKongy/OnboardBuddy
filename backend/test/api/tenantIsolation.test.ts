@@ -28,6 +28,7 @@ const app = createApp();
 const PROJECT_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 const FOREIGN_SECTION = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
 const FOREIGN_WORKFLOW = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+const FOREIGN_MEMBER = "dddddddd-dddd-dddd-dddd-dddddddddddd";
 const SECRET_SNIPPET = "const STRIPE_SECRET = process.env.STRIPE_SECRET;";
 
 /** Every statement the route executed, so a write can be proven absent. */
@@ -135,6 +136,40 @@ describe("Bug #65 — routes must scope child objects to the project in the path
       (q) => /^\s*UPDATE/i.test(q.text) && !scopedToProjectA(q.params),
     );
     expect(unscopedWrites, JSON.stringify(unscopedWrites)).to.have.lengthOf(0);
+  });
+
+  // #72: ownership transfer rewrites `projects.user_id` and both tiers, so it is
+  // owner-only. An admin can already manage members, which makes "admin can
+  // transfer" the plausible mistake — and the way it would fail is silent, since
+  // the transfer itself looks like an ordinary member write.
+  it("POST …/members/:userId/transfer-ownership is refused to admins and developers", async () => {
+    for (const tier of ["admin", "developer"]) {
+      executed = [];
+      installTestAuth();
+      mockQuery((text, params = []) => {
+        executed.push({ text, params: params as unknown[] });
+        if (text.includes("FROM project_members")) {
+          return {
+            rows: [{
+              project_id: PROJECT_A,
+              user_id: TEST_USER.id,
+              permission_tier: tier,
+              developer_role: "general",
+              default_package_id: null,
+            }],
+          };
+        }
+        return { rows: [] };
+      });
+
+      const res = await request(app)
+        .post(`/api/projects/${PROJECT_A}/members/${FOREIGN_MEMBER}/transfer-ownership`)
+        .set(authHeader());
+
+      expect(res.status, tier).to.equal(403);
+      const writes = executed.filter((q) => /^\s*(UPDATE|BEGIN)/i.test(q.text));
+      expect(writes, `${tier}: ${JSON.stringify(writes)}`).to.have.lengthOf(0);
+    }
   });
 
   it("GET …/workflows/:workflowId/walkthrough does not serve another project's walkthrough", async () => {

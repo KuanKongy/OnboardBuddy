@@ -1,11 +1,10 @@
-import { CheckCircle, Loader2, Users } from "lucide-react";
+import { CheckCircle, Loader2, Users, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
@@ -30,6 +29,7 @@ export function InvitationsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<string>(FALLBACK_ROLE);
   const [accepting, setAccepting] = useState(false);
+  const [declining, setDeclining] = useState(false);
 
   useEffect(() => {
     apiFetch("/invitations")
@@ -54,6 +54,27 @@ export function InvitationsPage() {
     setError("");
     setSelectedId(inv.id);
     if (inv.developer_role) setSelectedRole(inv.developer_role);
+  }
+
+  // Bug #72: declining used to be impossible — the button was disabled and the
+  // tooltip told the invitee to ask the inviter to cancel it. The invitation is
+  // dropped from the list on success and the next one is selected through
+  // selectInvitation, so the #14 error-clearing rule holds here too.
+  async function handleDecline(invitation: Invitation) {
+    setDeclining(true);
+    setError("");
+    try {
+      await apiFetch(`/invitations/${invitation.id}/decline`, { method: "POST" });
+      const remaining = invitations.filter((inv) => inv.id !== invitation.id);
+      setInvitations(remaining);
+      const next = remaining[0];
+      if (next) selectInvitation(next);
+      else setSelectedId(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to decline invitation");
+    } finally {
+      setDeclining(false);
+    }
   }
 
   async function handleAccept(invitation: Invitation) {
@@ -219,20 +240,20 @@ export function InvitationsPage() {
                 )}
 
                 <div className="mt-4 flex justify-end gap-2">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span tabIndex={0} className="inline-flex">
-                        <Button variant="outline" size="sm" disabled>
-                          Decline
-                        </Button>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-64">
-                      Declining isn't supported yet — this invitation stays pending. Ask the
-                      inviter to cancel it if you don't want to join.
-                    </TooltipContent>
-                  </Tooltip>
-                  <Button size="sm" disabled={accepting} onClick={() => handleAccept(selected)}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={declining || accepting}
+                    onClick={() => handleDecline(selected)}
+                  >
+                    {declining ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <XCircle className="h-3 w-3" />
+                    )}
+                    Decline
+                  </Button>
+                  <Button size="sm" disabled={accepting || declining} onClick={() => handleAccept(selected)}>
                     {accepting ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
