@@ -58,7 +58,7 @@ describe("InvitationsPage error lifecycle (#14)", () => {
     );
 
     await screen.findByText("alpha");
-    await user.click(screen.getByRole("button", { name: /join project/i }));
+    await user.click(screen.getByRole("button", { name: /accept invitation/i }));
     await waitFor(() =>
       expect(screen.getByText(/already a member of this project/i)).toBeInTheDocument(),
     );
@@ -79,7 +79,7 @@ describe("InvitationsPage error lifecycle (#14)", () => {
     );
 
     await screen.findByText("alpha");
-    await user.click(screen.getByRole("button", { name: /join project/i }));
+    await user.click(screen.getByRole("button", { name: /accept invitation/i }));
     await waitFor(() =>
       expect(screen.getByText(/already a member of this project/i)).toBeInTheDocument(),
     );
@@ -90,7 +90,7 @@ describe("InvitationsPage error lifecycle (#14)", () => {
         ? Promise.resolve({ invitations: INVITATIONS })
         : Promise.resolve({}),
     );
-    await user.click(screen.getByRole("button", { name: /join project/i }));
+    await user.click(screen.getByRole("button", { name: /accept invitation/i }));
     await waitFor(() =>
       expect(screen.queryByText(/already a member of this project/i)).toBeNull(),
     );

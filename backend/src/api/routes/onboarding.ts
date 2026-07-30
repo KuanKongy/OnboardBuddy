@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
-import { getSummaryQueue, type SummaryJobData } from "../../lib/queue.js";
+import { enqueueSummaryRun } from "../services/analysisStarter.js";
 import { buildWeightTableProvenance } from "../services/scoreProvenance.js";
 import { CHAPTERS, SECTION_SPECS, SECTION_TYPES, type SectionType } from "../../worker/generation/sectionSpecs.js";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../lib/receiptPresentation.js";
 import { groupGaps, summarizeGaps, type RawGap } from "../lib/gapSummary.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import { BadPackageParamError, readPackageParam, resolveForRequest } from "../services/packageResolver.js";
 import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
@@ -27,7 +28,7 @@ export const onboardingRouter = Router({ mergeParams: true });
  * revalidates, and replaces the content in the same package; old
  * generation runs stay for audit.
  */
-onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), async (req, res) => {
+onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), requireUuidParam("sectionId"), async (req, res) => {
   try {
     const projectId = String(req.params.id);
     const { sectionId } = req.params;
@@ -80,7 +81,7 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
        section.package_branch, JSON.stringify({ sectionType: section.type })],
     )).rows[0] as { id: string }).id;
 
-    await getSummaryQueue().add("regenerate_section", {
+    await enqueueSummaryRun(jobId, projectId, "regenerate_section", {
       jobId,
       snapshotId: targetSnapshotId,
       projectId,
@@ -88,11 +89,6 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
       role: section.role ?? "general",
       sectionType: section.type,
       packageId: section.package_id,
-    } satisfies SummaryJobData, {
-      attempts: 2,
-      backoff: { type: "fixed", delay: 3000 },
-      removeOnComplete: { count: 10 },
-      removeOnFail: { count: 10 },
     });
 
     res.status(202).json({ job: { id: jobId, status: "queued", section_type: section.type } });
@@ -204,18 +200,13 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
       [projectId, snapshot.id, userId, role, branch, snapshot.commit_hash, snapshot.scope_id],
     )).rows[0] as { id: string }).id;
 
-    await getSummaryQueue().add(`generate_summary_${role}`, {
+    await enqueueSummaryRun(jobId, projectId, `generate_summary_${role}`, {
       jobId,
       snapshotId: snapshot.id,
       projectId,
       triggeredBy: userId,
       role,
       branch: branch ?? undefined,
-    } satisfies SummaryJobData, {
-      attempts: 2,
-      backoff: { type: "fixed", delay: 3000 },
-      removeOnComplete: { count: 10 },
-      removeOnFail: { count: 10 },
     });
 
     res.status(202).json({ job: { id: jobId, status: "queued", role } });
@@ -224,6 +215,15 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+/**
+ * #74/B13: the card grid was uncapped, and a project accumulates a package per
+ * (scope, role, commit) — so a long-lived repo could send hundreds of rows to
+ * render a grid nobody scrolls. 100 matches the sibling /staleness cap and is
+ * far past what the UI shows; the ORDER BY puts the newest first, so the cap
+ * only ever drops the least interesting end.
+ */
+const PACKAGE_LIST_LIMIT = 100;
 
 /**
  * Package cards (doc/PLAN.md "Onboarding package = (scope, role, commit)"):
@@ -242,14 +242,9 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
               op.created_at, op.updated_at,
               sc.display_name AS scope_name, sc.path_prefix, sc.kind AS scope_kind,
               s.semantic_depth, s.privacy_mode,
-              (SELECT count(*)::int FROM package_sections ps WHERE ps.package_id = op.id) AS section_count,
-              (SELECT count(*)::int FROM package_sections ps
-                WHERE ps.package_id = op.id AND ps.review_status = 'stale') AS stale_sections,
-              (SELECT count(*)::int FROM package_sections ps
-                WHERE ps.package_id = op.id AND ps.review_status = 'approved') AS approved_sections,
-              (SELECT count(*)::int FROM package_sections ps
-                WHERE ps.package_id = op.id AND ps.confidence = 'low') AS low_confidence_sections,
-              (SELECT count(*)::int FROM tutorials t WHERE t.package_id = op.id) AS tutorial_count,
+              sec.section_count, sec.stale_sections, sec.approved_sections,
+              sec.low_confidence_sections,
+              tut.tutorial_count,
               (op.analyzed_commit = COALESCE(
                 (SELECT aj.commit_hash FROM analysis_jobs aj
                  WHERE aj.project_id = op.project_id AND aj.scope_id = op.scope_id
@@ -264,8 +259,22 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
        FROM onboarding_packages op
        JOIN analysis_scopes sc ON sc.id = op.scope_id
        JOIN analysis_snapshots s ON s.id = op.snapshot_id
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS section_count,
+                (count(*) FILTER (WHERE ps.review_status = 'stale'))::int AS stale_sections,
+                (count(*) FILTER (WHERE ps.review_status = 'approved'))::int AS approved_sections,
+                (count(*) FILTER (WHERE ps.confidence = 'low'))::int AS low_confidence_sections
+         FROM package_sections ps
+         WHERE ps.package_id = op.id
+       ) sec ON true
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS tutorial_count
+         FROM tutorials t
+         WHERE t.package_id = op.id
+       ) tut ON true
        WHERE op.project_id = $1
-       ORDER BY op.updated_at DESC`,
+       ORDER BY op.updated_at DESC
+       LIMIT ${PACKAGE_LIST_LIMIT}`,
       [projectId],
     )).rows;
     res.json({ packages: rows });
@@ -837,7 +846,7 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
   }
 });
 
-onboardingRouter.get("/sections/:sectionId/receipts", requireProjectAccess(), async (req, res) => {
+onboardingRouter.get("/sections/:sectionId/receipts", requireProjectAccess(), requireUuidParam("sectionId"), async (req, res) => {
   try {
     const { sectionId } = req.params;
     const projectId = String(req.params.id);
@@ -1018,7 +1027,7 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
   }
 });
 
-onboardingRouter.patch("/sections/:sectionId/review", requireProjectAccess("owner", "admin"), async (req, res) => {
+onboardingRouter.patch("/sections/:sectionId/review", requireProjectAccess("owner", "admin"), requireUuidParam("sectionId"), async (req, res) => {
   try {
     const { sectionId } = req.params;
     const projectId = String(req.params.id);

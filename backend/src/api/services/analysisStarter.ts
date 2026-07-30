@@ -9,8 +9,8 @@
  */
 
 import { query } from "../../lib/db.js";
-import { getAnalysisQueue } from "../../lib/queue.js";
-import type { AnalysisJobData } from "../../lib/queue.js";
+import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
+import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 
 /** Minimal transactional client surface (pg PoolClient or a test fake). */
@@ -183,6 +183,57 @@ export async function enqueuePreflightRun(jobId: string, data: AnalysisJobData):
     });
   } catch (err) {
     await failUnsubmittedJob(jobId, data.projectId, err);
+    throw err;
+  }
+}
+
+/**
+ * Seam for the summary queue, mirroring `__setQueuePublishForTests` above and
+ * for the same reason: `Queue.add` against an unreachable Redis reconnects
+ * forever instead of rejecting, so the failure path is only reachable by
+ * substituting the publish.
+ */
+type SummaryPublish = (name: string, data: SummaryJobData, opts: Record<string, unknown>) => Promise<unknown>;
+let summaryPublishOverride: SummaryPublish | null = null;
+export function __setSummaryPublishForTests(fn: SummaryPublish | null): void {
+  summaryPublishOverride = fn;
+}
+
+/**
+ * The retry budget every package-generation submission uses. One constant
+ * because the three routes calling this were three copies of the same literal.
+ */
+const SUMMARY_ENQUEUE_OPTS = {
+  attempts: 2,
+  backoff: { type: "fixed", delay: 3000 },
+  removeOnComplete: { count: 10 },
+  removeOnFail: { count: 10 },
+} as const;
+
+/**
+ * Summary-queue twin of `enqueueAnalysisRun` (#74/B5).
+ *
+ * The generation routes published straight to the queue, so all three carried
+ * the exact hang bug #69(1) fixed for analysis runs: submission happens after
+ * the row is committed 'queued', so a Redis outage left a row no worker would
+ * ever see — the UI polling "waiting for worker" indefinitely while the
+ * per-package concurrency guard rejected every retry as already in progress.
+ * Failing the row frees that guard and turns the hang into a visible error.
+ */
+export async function enqueueSummaryRun(
+  jobId: string,
+  projectId: string,
+  name: string,
+  data: SummaryJobData,
+): Promise<void> {
+  try {
+    if (summaryPublishOverride) {
+      await summaryPublishOverride(name, data, SUMMARY_ENQUEUE_OPTS);
+    } else {
+      await getSummaryQueue().add(name, data, SUMMARY_ENQUEUE_OPTS);
+    }
+  } catch (err) {
+    await failUnsubmittedJob(jobId, projectId, err);
     throw err;
   }
 }

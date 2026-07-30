@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { GitHubLinkError } from "./githubErrors.js";
 
 interface InstallationStatePayload {
   userId: string;
@@ -36,7 +37,7 @@ export function createInstallationState(userId: string): string {
 export function verifyInstallationState(state: string, expectedUserId: string): void {
   const [encodedPayload, signature] = state.split(".");
   if (!encodedPayload || !signature) {
-    throw new Error("Invalid installation state");
+    throw new GitHubLinkError("Invalid installation state");
   }
 
   const expectedSignature = sign(encodedPayload);
@@ -45,15 +46,15 @@ export function verifyInstallationState(state: string, expectedUserId: string): 
     crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature));
 
   if (!validSignature) {
-    throw new Error("Invalid installation state signature");
+    throw new GitHubLinkError("Invalid installation state signature");
   }
 
   const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as InstallationStatePayload;
   if (payload.userId !== expectedUserId) {
-    throw new Error("Installation state belongs to a different user");
+    throw new GitHubLinkError("Installation state belongs to a different user");
   }
 
   if (payload.exp < Math.floor(Date.now() / 1000)) {
-    throw new Error("Installation state expired");
+    throw new GitHubLinkError("Installation state expired");
   }
 }

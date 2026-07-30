@@ -87,13 +87,13 @@ export function ProjectListPage() {
             <Button variant="outline" size="sm" asChild>
               <Link to="/invitations">
                 <Mail className="h-3.5 w-3.5" />
-                Join Project
+                Invitations
               </Link>
             </Button>
             <Button size="sm" asChild>
               <Link to="/import">
                 <Plus className="h-3.5 w-3.5" />
-                Add Project
+                Import repository
               </Link>
             </Button>
           </>
@@ -152,7 +152,7 @@ export function ProjectListPage() {
           <Button size="sm" className="mt-3" asChild>
             <Link to="/import">
               <Plus className="h-3.5 w-3.5" />
-              Import Repository
+              Import repository
             </Link>
           </Button>
         </div>
@@ -161,7 +161,7 @@ export function ProjectListPage() {
       {!loading && !error && projects.length > 0 && (
         filteredProjects.length === 0 ? (
           // One combined empty state: message + actions in a single box, so a
-          // filter with no matches never shows a lonely "Add repository" tile
+          // filter with no matches never shows a lonely "Import repository" tile
           // next to a separate "no matches" box.
           <div className="rounded-lg border border-dashed border-border py-10 text-center">
             <p className="text-[0.8125rem] text-muted-foreground">
@@ -178,7 +178,7 @@ export function ProjectListPage() {
               <Button size="sm" asChild>
                 <Link to="/import">
                   <Plus className="h-3.5 w-3.5" />
-                  Add New Repository
+                  Import repository
                 </Link>
               </Button>
             </div>
@@ -204,10 +204,10 @@ export function ProjectListPage() {
                   <Plus className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <p className="text-[0.8125rem] font-medium text-foreground">
-                  Add New Repository
+                  Import repository
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Import from GitHub
+                  From GitHub
                 </p>
               </Link>
             </div>

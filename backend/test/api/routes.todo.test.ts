@@ -12,6 +12,10 @@ import {
 
 const app = createApp();
 
+// Real uuid: #74/B11 validates id path params before they reach SQL, so a
+// stand-in like "sec-1" is now a 404 rather than a row that does not exist.
+const TEST_SECTION_ID = "44444444-4444-4444-4444-444444444444";
+
 describe("backend API integration (mocked auth + db)", () => {
   beforeEach(() => {
     installTestAuth();
@@ -135,7 +139,7 @@ describe("backend API integration (mocked auth + db)", () => {
     });
 
     const invalidReview = await request(app)
-      .patch(`/api/projects/${TEST_PROJECT_ID}/onboarding/sections/sec-1/review`)
+      .patch(`/api/projects/${TEST_PROJECT_ID}/onboarding/sections/${TEST_SECTION_ID}/review`)
       .set(authHeader())
       .send({ review_status: "invalid" });
     expect(invalidReview.status).to.equal(400);
@@ -148,7 +152,7 @@ describe("backend API integration (mocked auth + db)", () => {
     expect(exportRes.text).to.include("# OnboardBuddy");
 
     const approve = await request(app)
-      .patch(`/api/projects/${TEST_PROJECT_ID}/onboarding/sections/sec-1/review`)
+      .patch(`/api/projects/${TEST_PROJECT_ID}/onboarding/sections/${TEST_SECTION_ID}/review`)
       .set(authHeader())
       .send({ review_status: "approved" });
     expect(approve.status).to.equal(200);

@@ -330,6 +330,62 @@ describe("GET /api/projects/:id/onboarding/provenance", () => {
   });
 });
 
+describe("GET /api/projects/:id/onboarding/packages", () => {
+  afterEach(resetTestHarness);
+
+  /**
+   * #74/B13 rewrote this query — six correlated subqueries became two lateral
+   * aggregates, plus a LIMIT. The frontend card grid reads these exact keys, so
+   * the shape is the contract; the counts themselves were checked against the
+   * live schema (old and new forms return identical rows for all 13 packages).
+   */
+  it("keeps the card-grid response shape, and caps the list", async () => {
+    installTestAuth();
+    let packagesSql = "";
+    mockQuery((text) => {
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: TEST_PROJECT_ID, user_id: TEST_USER.id,
+            permission_tier: "developer", developer_role: "general", default_package_id: null,
+          }],
+        };
+      }
+      if (text.includes("FROM onboarding_packages op")) {
+        packagesSql = text;
+        return {
+          rows: [{
+            id: "pkg-1", snapshot_id: "snap-1", role: "general", status: "complete",
+            analyzed_commit: "abc", branch: "main", created_at: "2026-07-01T00:00:00Z",
+            updated_at: "2026-07-02T00:00:00Z", scope_name: "Whole repository",
+            path_prefix: "", scope_kind: "repo", semantic_depth: "standard",
+            privacy_mode: "full_ai", section_count: 12, stale_sections: 1,
+            approved_sections: 2, low_confidence_sections: 3, tutorial_count: 6,
+            is_latest_commit: true,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .get(`/api/projects/${TEST_PROJECT_ID}/onboarding/packages`)
+      .set(authHeader());
+
+    expect(res.status).to.equal(200);
+    expect(res.body.packages).to.have.length(1);
+    expect(res.body.packages[0]).to.include({
+      section_count: 12, stale_sections: 1, approved_sections: 2,
+      low_confidence_sections: 3, tutorial_count: 6, is_latest_commit: true,
+    });
+    expect(packagesSql).to.match(/LIMIT 100/);
+    // The rollups come from laterals now; a correlated subquery creeping back in
+    // is the regression this pins.
+    expect(packagesSql).to.include("LEFT JOIN LATERAL");
+    expect(packagesSql).to.not.include("SELECT count(*)::int FROM package_sections");
+  });
+});
+
 describe("GET /api/projects/:id/onboarding/export", () => {
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).get(`/api/projects/${PROJECT_ID}/onboarding/export?role=general`);

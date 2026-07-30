@@ -306,6 +306,13 @@ export function TeamPage() {
               <p className="text-[0.6875rem] text-muted-foreground">
                 Permission tier controls what they can manage; developer role tailors their onboarding content by specialty.
               </p>
+              {/* #74/W1: no mail provider is provisioned, so "Send" was a lie —
+                  the invitation only surfaces once the invitee signs in with
+                  this address. Say so rather than leave them waiting on mail. */}
+              <p className="text-[0.6875rem] text-muted-foreground">
+                No email is sent — the invitation appears on their Invitations page when they sign
+                in with this address.
+              </p>
               {error && (
                 <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {error}
@@ -322,7 +329,7 @@ export function TeamPage() {
                 </Button>
                 <Button type="submit" size="sm" disabled={inviting || !inviteEmail.trim()}>
                   {inviting && <Loader2 className="h-3 w-3 animate-spin" />}
-                  Send
+                  Create invitation
                 </Button>
               </div>
             </form>
@@ -339,8 +346,9 @@ export function TeamPage() {
       {/* A four-column grid of avatar tiles spent a 1493px viewport on two
           members and still had nowhere to put what a reader wants to know
           about them. A bounded table holds the same people, their role, tier,
-          when they joined and how much of the package they have reviewed —
-          and the empty two thirds of the screen stop being empty. */}
+          when they joined and how many sections they have approved (an
+          editorial count, not reading progress — #74/F16) — and the empty two
+          thirds of the screen stop being empty. */}
       <div className="mx-auto max-w-2xl">
       {loading ? (
         <div className="flex items-center justify-center py-12">
@@ -354,7 +362,7 @@ export function TeamPage() {
                 <th scope="col" className="px-3 py-2 font-medium">Member</th>
                 <th scope="col" className="px-3 py-2 font-medium">Role</th>
                 <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">Joined</th>
-                <th scope="col" className="px-3 py-2 text-right font-medium">Reviewed</th>
+                <th scope="col" className="px-3 py-2 text-right font-medium">Approvals</th>
               </tr>
             </thead>
             <tbody>
@@ -532,7 +540,7 @@ export function TeamPage() {
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
                   <span>
-                    {manageMember.sections_reviewed} onboarding section{manageMember.sections_reviewed === 1 ? "" : "s"} reviewed
+                    {manageMember.sections_reviewed} section{manageMember.sections_reviewed === 1 ? "" : "s"} approved
                   </span>
                 </div>
               </div>

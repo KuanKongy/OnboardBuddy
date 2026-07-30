@@ -56,7 +56,7 @@ describe("HelpRoute chrome picker", () => {
 
     const header = within(screen.getByRole("banner"));
     expect(header.getByRole("link", { name: /sign up/i })).toBeInTheDocument();
-    expect(header.getByRole("link", { name: /log in/i })).toBeInTheDocument();
+    expect(header.getByRole("link", { name: /sign in/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("Sidebar navigation")).not.toBeInTheDocument();
     // The page itself still renders — public chrome, same content.
     expect(screen.getByRole("heading", { name: /help & faq/i })).toBeInTheDocument();

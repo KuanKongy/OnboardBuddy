@@ -115,7 +115,7 @@ export function SignupPage() {
               </div>
               <Button type="submit" className="w-full" size="sm" disabled={loading}>
                 {loading && <Loader2 className="h-3 w-3 animate-spin" />}
-                Create Account
+                Create account
               </Button>
             </form>
 

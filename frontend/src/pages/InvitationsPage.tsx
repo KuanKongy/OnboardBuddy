@@ -82,7 +82,7 @@ export function InvitationsPage() {
   return (
     <div>
       <PageHeader
-        title="Pending Invitations"
+        title="Pending invitations"
         subtitle="Project invitations from teammates, waiting for you to accept."
         actions={<BackLink />}
       />
@@ -106,7 +106,7 @@ export function InvitationsPage() {
           {/* Left panel */}
           <div className="space-y-2">
             <p className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
-              Active Invitations ({invitations.length})
+              Pending invitations ({invitations.length})
             </p>
             {invitations.map((inv) => (
               <Card
@@ -238,7 +238,7 @@ export function InvitationsPage() {
                     ) : (
                       <CheckCircle className="h-3 w-3" />
                     )}
-                    Join Project
+                    Accept invitation
                   </Button>
                 </div>
               </CardContent>

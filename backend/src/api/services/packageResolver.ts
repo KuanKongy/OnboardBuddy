@@ -24,6 +24,7 @@
 import type { Request, Response } from 'express';
 import { query } from '../../lib/db.js';
 import { latestSnapshotOrderSql } from '../../lib/snapshotOrdering.js';
+import { isUuid } from '../lib/uuid.js';
 
 export interface ResolvedPackageContext {
   /** Null when resolution landed on a bare snapshot with no package (e.g. generation still running). */
@@ -56,12 +57,10 @@ export interface ResolvedPackageContext {
 export class PackageNotFoundError extends Error {}
 export class BadPackageParamError extends Error {}
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** Validated package id from a query/body value. undefined = absent. */
 export function readPackageParam(raw: unknown): string | undefined {
   if (raw === undefined || raw === null || raw === '') return undefined;
-  if (typeof raw !== 'string' || !UUID_RE.test(raw)) {
+  if (!isUuid(raw)) {
     throw new BadPackageParamError('package_id must be a UUID');
   }
   return raw;

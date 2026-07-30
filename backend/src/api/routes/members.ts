@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import {
   DEVELOPER_ROLES,
   INVITABLE_TIERS,
@@ -114,7 +115,7 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
   }
 });
 
-membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", "admin"), async (req, res) => {
+membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", "admin"), requireUuidParam("invitationId"), async (req, res) => {
   try {
     const { invitationId } = req.params;
     const projectId = req.params.id;
@@ -139,7 +140,7 @@ membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", 
   }
 });
 
-membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
+membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), requireUuidParam("userId"), async (req, res) => {
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;
@@ -226,7 +227,7 @@ membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), async (r
   }
 });
 
-membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), async (req, res) => {
+membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), requireUuidParam("userId"), async (req, res) => {
   try {
     const projectId = req.params.id;
     const targetUserId = req.params.userId;

@@ -2,14 +2,16 @@ import { Router } from "express";
 import type { PoolClient } from "pg";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import { parseInstallationId } from "../lib/installationId.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
 import { getRepo, isValidGitRef } from "../../lib/github.js";
+import { GitHubApiError } from "../../lib/githubErrors.js";
 import { recomputeProjectStatus } from "../../lib/projectStatus.js";
 import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
-import { enqueueAnalysisRun, enqueuePreflightRun, failUnsubmittedJob, prepareAnalysisRun } from "../services/analysisStarter.js";
+import { enqueueAnalysisRun, enqueuePreflightRun, enqueueSummaryRun, failUnsubmittedJob, prepareAnalysisRun } from "../services/analysisStarter.js";
 import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 const VALID_DEPTHS = ["cheap", "standard", "full"] as const;
@@ -258,7 +260,22 @@ projectsRouter.post("/", async (req, res) => {
       primaryLanguage = repoInfo.language ?? null;
       repoPushedAt = repoInfo.pushed_at ?? null;
     } catch (err) {
-      if (!defaultBranch) throw err;
+      // #74/B7: only a missing branch makes this fetch load-bearing, and then a
+      // repo GitHub won't show us is the caller's installation problem, not a
+      // server fault — it used to rethrow into the generic 500 below. 401, 403
+      // and 404 all mean the same thing from here (GitHub answers 404 rather
+      // than 403 for a private repo the token cannot see), so they share one
+      // message that names the thing to go fix.
+      if (!defaultBranch) {
+        if (err instanceof GitHubApiError && [401, 403, 404].includes(err.status)) {
+          console.warn(`Repo fetch denied for ${repo_owner}/${repo_name}:`, err);
+          res.status(422).json({
+            error: "Repository not accessible — check the GitHub App installation has access to it",
+          });
+          return;
+        }
+        throw err;
+      }
       console.warn("Repo metadata fetch failed (project created without it):", err instanceof Error ? err.message : err);
     }
 
@@ -307,7 +324,20 @@ projectsRouter.post("/", async (req, res) => {
       err instanceof Error &&
       err.message.includes("duplicate key")
     ) {
-      res.status(409).json({ error: "Project already exists for this repo" });
+      // #74/F4: the bare 409 left the importer stuck — the repo is already
+      // theirs but nothing said where. UNIQUE (user_id, repo_owner, repo_name)
+      // firing means that row exists, so look up its id and hand it back for
+      // the "open it" link. A failed lookup is not worth losing the 409 over:
+      // omit the id and the client falls back to the plain message.
+      const { repo_owner, repo_name } = req.body as { repo_owner: string; repo_name: string };
+      const existing = await query(
+        `SELECT id FROM projects WHERE user_id = $1 AND repo_owner = $2 AND repo_name = $3`,
+        [req.user!.id, repo_owner, repo_name],
+      ).catch(() => null);
+      res.status(409).json({
+        error: "Project already exists for this repo",
+        project_id: existing?.rows[0]?.id ?? null,
+      });
       return;
     }
     console.error("Create project error:", err);
@@ -446,7 +476,7 @@ projectsRouter.put("/:id/settings", requireProjectAccess("owner", "admin"), asyn
  * per-phase metrics + checkpoints, live budget counters, and per-model
  * LLM call/token/cost aggregates from ai_generation_runs.
  */
-projectsRouter.get("/:id/snapshots/:snapshotId/metrics", requireProjectAccess(), async (req, res) => {
+projectsRouter.get("/:id/snapshots/:snapshotId/metrics", requireProjectAccess(), requireUuidParam("snapshotId"), async (req, res) => {
   try {
     const projectId = req.params.id;
     const snapshotId = req.params.snapshotId;
@@ -548,17 +578,12 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
     );
     const dbJobId: string = jobResult.rows[0].id;
 
-    await getSummaryQueue().add('generate_summary', {
+    await enqueueSummaryRun(dbJobId, projectId, 'generate_summary', {
       jobId: dbJobId,
       snapshotId: snap.id,
       projectId,
       triggeredBy: userId,
       branch: snap.branch ?? undefined,
-    } satisfies SummaryJobData, {
-      attempts: 2,
-      backoff: { type: 'fixed', delay: 3000 },
-      removeOnComplete: { count: 10 },
-      removeOnFail: { count: 10 },
     });
 
     res.status(202).json({ jobId: dbJobId, snapshotId: snap.id });
@@ -791,7 +816,7 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
 // never re-paid.
 
 
-projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("owner", "admin"), requireUuidParam("jobId"), async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const jobId = String(req.params.jobId);
@@ -813,7 +838,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/pause", requireProjectAccess("own
   }
 });
 
-projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owner", "admin"), requireUuidParam("jobId"), async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const jobId = String(req.params.jobId);
@@ -840,7 +865,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owne
 
 // Resume a paused run — or retry a failed/stalled one — on the SAME job row:
 // checkpoints live there, so the worker skips everything already persisted.
-projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), requireUuidParam("jobId"), async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const jobId = String(req.params.jobId);
