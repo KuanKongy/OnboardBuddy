@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -59,7 +59,12 @@ describe("ProjectCard", () => {
     expect(screen.getByText("PROJECT PAGE")).toBeInTheDocument();
   });
 
-  it("always renders the actions menu for managers and deletes without navigating", async () => {
+  // #74/F15: this card's delete used to be a plain Cancel/Delete pair while the
+  // settings page guarded the identical action with type-to-confirm — the weaker
+  // guard sat on the surface where a stray click is likeliest. Silent
+  // regression: dropping the gate leaves a dialog that still looks like a
+  // confirmation.
+  it("owner: deletes only after the repo name is typed, and without navigating", async () => {
     const user = userEvent.setup();
     const onDeleted = vi.fn();
     renderCard(PROJECT, onDeleted);
@@ -68,17 +73,24 @@ describe("ProjectCard", () => {
     await user.click(screen.getByRole("button", { name: "Project actions" }));
     await user.click(await screen.findByText("Delete project"));
 
-    // Confirm dialog gates the actual delete call.
-    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    const confirm = await screen.findByRole("button", { name: /Delete permanently/ });
+    expect(confirm).toBeDisabled();
+    expect(vi.mocked(apiFetch)).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("Type rocket to confirm"), "rocket");
+    await user.click(confirm);
 
     expect(vi.mocked(apiFetch)).toHaveBeenCalledWith(`/projects/${PROJECT.id}`, { method: "DELETE" });
-    expect(onDeleted).toHaveBeenCalledWith(PROJECT.id);
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledWith(PROJECT.id));
     // stopPropagation kept us on the dashboard.
     expect(screen.queryByText("PROJECT PAGE")).not.toBeInTheDocument();
   });
 
-  it("hides the actions menu for plain developers", () => {
-    renderCard({ ...PROJECT, permission_tier: "developer" });
+  // `DELETE /api/projects/:id` is owner-only, so an admin's menu item could
+  // only ever 403. Delete is the menu's one item, so both non-owner tiers lose
+  // the trigger rather than open an empty popover.
+  it.each(["admin", "developer"])("offers no delete to an %s", (tier) => {
+    renderCard({ ...PROJECT, permission_tier: tier });
 
     expect(screen.queryByRole("button", { name: "Project actions" })).not.toBeInTheDocument();
   });

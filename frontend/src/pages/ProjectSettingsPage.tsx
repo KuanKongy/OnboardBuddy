@@ -6,12 +6,6 @@ import { usePackages } from "@/contexts/PackagesContext";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -24,6 +18,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
+import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
 import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
@@ -133,7 +128,10 @@ export function ProjectSettingsPage() {
   const [error, setError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [deleteConfirm, setDeleteConfirm] = useState("");
+  // #74/H1: kept apart from `error`. The page banner is behind the modal
+  // overlay, so a failed delete reported there was invisible to the only
+  // person looking at it.
+  const [deleteError, setDeleteError] = useState("");
 
   // BYO LLM key
   const [keyInfo, setKeyInfo] = useState<{ exists: boolean; created_by?: string | null; updated_at?: string } | null>(null);
@@ -341,11 +339,12 @@ export function ProjectSettingsPage() {
 
   async function handleDelete() {
     setDeleting(true);
+    setDeleteError("");
     try {
       await apiFetch(`/projects/${id}`, { method: "DELETE" });
       navigate("/dashboard");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to delete");
+      setDeleteError(err instanceof Error ? err.message : "Failed to delete");
       setDeleting(false);
     }
   }
@@ -877,40 +876,22 @@ export function ProjectSettingsPage() {
         }}
       />
 
-      <Dialog
+      <ConfirmDangerDialog
         open={deleteOpen}
-        onOpenChange={(open) => {
-          setDeleteOpen(open);
-          if (!open) setDeleteConfirm("");
-        }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-sm">Delete project</DialogTitle>
-          </DialogHeader>
-          <p className="text-xs text-muted-foreground">
-            This action cannot be undone. Type <span className="font-mono font-medium text-foreground">{project.repo_name}</span> to confirm.
-          </p>
-          <Input
-            value={deleteConfirm}
-            onChange={(e) => setDeleteConfirm(e.target.value)}
-            placeholder={project.repo_name}
-            className="h-8 text-[0.8125rem]"
-          />
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => { setDeleteOpen(false); setDeleteConfirm(""); }}>Cancel</Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              disabled={deleteConfirm !== project.repo_name || deleting}
-              onClick={handleDelete}
-            >
-              {deleting && <Loader2 className="h-3 w-3 animate-spin" />}
-              Delete permanently
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+        onOpenChange={(open) => { setDeleteOpen(open); if (!open) setDeleteError(""); }}
+        title="Delete project"
+        description={
+          <>
+            This action cannot be undone. Type{" "}
+            <span className="font-mono font-medium text-foreground">{project.repo_name}</span> to confirm.
+          </>
+        }
+        confirmWord={project.repo_name}
+        confirmLabel="Delete permanently"
+        pending={deleting}
+        error={deleteError}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

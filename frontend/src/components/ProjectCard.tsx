@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -116,7 +116,12 @@ export function ProjectCard({
   const navigate = useNavigate();
   const status = statusConfig[project.status] ?? defaultStatus;
   const StatusIcon = status.icon;
-  const canManage = project.permission_tier === "owner" || project.permission_tier === "admin";
+  // #74/F15: deleting a project is owner-only on the backend
+  // (`DELETE /api/projects/:id` runs `requireProjectAccess("owner")`), but this
+  // menu offered it to admins too — one click from a grid of cards, into a 403.
+  // Delete is the menu's only item, so the gate is on the whole menu: an empty
+  // popover would be worse than no trigger.
+  const canDelete = project.permission_tier === "owner";
 
   // While analyzing, show the SAME combined pipeline % and stage as the
   // project overview page (bug: the card showed a hardcoded 45%). With
@@ -228,7 +233,7 @@ export function ProjectCard({
             <StatusIcon
               className={`h-4 w-4 ${status.tone} ${project.status === "analyzing" ? "animate-spin" : ""}`}
             />
-            {canManage && (
+            {canDelete && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon-xs" aria-label="Project actions" onClick={(e) => e.stopPropagation()}>
@@ -290,29 +295,25 @@ export function ProjectCard({
       </CardContent>
     </Card>
 
-      <Dialog open={deleteDialogOpen} onOpenChange={(open) => !deleting && setDeleteDialogOpen(open)}>
-        <DialogContent className="sm:max-w-sm" onClick={(e) => e.stopPropagation()}>
-          <DialogHeader>
-            <DialogTitle className="text-sm">Delete project</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Delete <strong className="text-foreground">{project.repo_owner}/{project.repo_name}</strong>?
-              This removes all analyses and onboarding content and cannot be undone.
-            </p>
-            {deleteError && <p className="text-[0.6875rem] text-destructive">{deleteError}</p>}
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setDeleteDialogOpen(false)} disabled={deleting}>
-                Cancel
-              </Button>
-              <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={deleting}>
-                {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                Delete
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Same guard as the settings page's danger zone — the two used to differ,
+          and the weaker one was on the card (#74/F15). */}
+      <ConfirmDangerDialog
+        open={deleteDialogOpen}
+        onOpenChange={setDeleteDialogOpen}
+        title="Delete project"
+        description={
+          <>
+            Deleting <strong className="text-foreground">{project.repo_owner}/{project.repo_name}</strong>{" "}
+            removes all analyses and onboarding content and cannot be undone. Type{" "}
+            <span className="font-mono font-medium text-foreground">{project.repo_name}</span> to confirm.
+          </>
+        }
+        confirmWord={project.repo_name}
+        confirmLabel="Delete permanently"
+        pending={deleting}
+        error={deleteError}
+        onConfirm={confirmDelete}
+      />
     </>
   );
 }
