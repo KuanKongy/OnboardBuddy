@@ -479,12 +479,13 @@ export function CapabilitiesPage() {
             modules: c.modules ?? [],
           })),
         };
-        setData(normalized);
         return normalized;
       });
       listRef.current = promise;
       return promise;
     },
+    // `loadLevel` commits the list: this promise is shared across drills, so a
+    // staleness guard captured here would belong to whichever run created it.
     [id, packageQuery],
   );
 
@@ -495,23 +496,34 @@ export function CapabilitiesPage() {
   const loadedKeyRef = useRef<string | null>(null);
   const levelKeyOf = (frame: { kind: string; id: string } | null) =>
     `${id ?? ""}::${selectedPackageId ?? ""}::${frame?.kind ?? ""}:${frame?.id ?? ""}`;
+  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — a package
+  // switch starts a second load and response order is not selection order.
+  const loadRunRef = useRef(0);
 
   /** Fetches whatever a level needs; resolves only once it can be rendered. */
   const loadLevel = useCallback(
     async (frame: { kind: string; id: string } | null): Promise<void> => {
       if (!id) return;
+      const myRun = ++loadRunRef.current;
+      const live = () => loadRunRef.current === myRun;
       setError("");
       setSelectedNodeId(null);
       try {
-        await loadList();
+        const list = await loadList();
+        if (!live()) return;
+        setData(list);
         // The walkthrough route, not the folded workflow graph: it serves one
         // row per step, which is the count the flow node above it advertises.
         if (frame?.kind === "workflow") {
-          setFlowGraph((await apiFetch(`/projects/${id}/workflows/${encodeURIComponent(frame.id)}/walkthrough`)) as WalkthroughResponse);
+          const walkthrough = (await apiFetch(
+            `/projects/${id}/workflows/${encodeURIComponent(frame.id)}/walkthrough`,
+          )) as WalkthroughResponse;
+          if (!live()) return;
+          setFlowGraph(walkthrough);
         } else setFlowGraph(null);
         loadedKeyRef.current = levelKeyOf(frame);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load capabilities");
+        if (live()) setError(err instanceof Error ? err.message : "Failed to load capabilities");
         throw err;
       }
     },

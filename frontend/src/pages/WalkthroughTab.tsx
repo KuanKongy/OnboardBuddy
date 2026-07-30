@@ -506,7 +506,45 @@ export function WalkthroughTab() {
 
   // Tutorials follow the sidebar package selection (a package implies its
   // role); with nothing selected the server resolves member default → latest.
-  const { packageQuery, selectedPackageId } = usePackages();
+  const { packageQuery } = usePackages();
+
+  // Named function expression so the retry closure can recurse without
+  // `openTutorial` becoming a dependency of its own memo.
+  const openTutorial = useCallback(async function open(tutorialId: string, startStep = 0) {
+    if (!id) return;
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setLoadingDetail(true);
+    setDetailError(null);
+    setCurrentStep(0);
+    try {
+      const data = await apiFetch(`/projects/${id}/tutorials/${tutorialId}`, { signal: controller.signal });
+      if (!controller.signal.aborted) {
+        const loaded = data as TutorialDetail;
+        setDetail(loaded);
+        if (startStep > 0) {
+          setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
+          // A walkthrough has no pager to move, so the deep link scrolls — but
+          // only once the document has rendered its anchors.
+          if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
+        }
+      }
+    } catch (err: unknown) {
+      // The list stays, but the pane now says why it is empty instead of
+      // silently reverting to the "pick something" prompt (bug #68).
+      if (!controller.signal.aborted) {
+        setDetail(null);
+        setDetailError({
+          message: err instanceof Error ? err.message : "Failed to load this tutorial",
+          retry: () => void open(tutorialId, startStep),
+        });
+      }
+    }
+    finally {
+      if (!controller.signal.aborted) setLoadingDetail(false);
+    }
+  }, [id]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -541,45 +579,11 @@ export function WalkthroughTab() {
     } finally {
       setLoading(false);
     }
-  }, [id, packageQuery, selectedPackageId]);
+    // `packageQuery` already encodes the package selection; `searchParams`
+    // is here so a `?tutorial=` deep link arriving on a mounted tab opens it.
+  }, [id, packageQuery, openTutorial, searchParams]);
 
   useEffect(() => { load(); }, [load]);
-
-  async function openTutorial(tutorialId: string, startStep = 0) {
-    if (!id) return;
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setLoadingDetail(true);
-    setDetailError(null);
-    setCurrentStep(0);
-    try {
-      const data = await apiFetch(`/projects/${id}/tutorials/${tutorialId}`, { signal: controller.signal });
-      if (!controller.signal.aborted) {
-        const loaded = data as TutorialDetail;
-        setDetail(loaded);
-        if (startStep > 0) {
-          setCurrentStep(Math.min(startStep, loaded.steps.length - 1));
-          // A walkthrough has no pager to move, so the deep link scrolls — but
-          // only once the document has rendered its anchors.
-          if (loaded.steps.some((s) => s.mode === "walkthrough")) setPendingScroll(startStep + 1);
-        }
-      }
-    } catch (err: unknown) {
-      // The list stays, but the pane now says why it is empty instead of
-      // silently reverting to the "pick something" prompt (bug #68).
-      if (!controller.signal.aborted) {
-        setDetail(null);
-        setDetailError({
-          message: err instanceof Error ? err.message : "Failed to load this tutorial",
-          retry: () => void openTutorial(tutorialId, startStep),
-        });
-      }
-    }
-    finally {
-      if (!controller.signal.aborted) setLoadingDetail(false);
-    }
-  }
 
   /**
    * Bug #36: rebuild the open tutorial against the newest analysis.

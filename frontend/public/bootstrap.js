@@ -7,18 +7,24 @@
 // (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.1). It is loaded synchronously in
 // <head>, so it still runs before the first paint.
 (function () {
+  var prefersDark = function () {
+    return !!(
+      window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    );
+  };
   try {
     var stored = localStorage.getItem("onboardbuddy:theme");
-    var dark =
-      stored === "dark" ||
-      (stored !== "light" &&
-        window.matchMedia &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches);
-    if (dark) {
+    if (stored === "dark" || (stored !== "light" && prefersDark())) {
       document.documentElement.classList.add("dark");
     }
   } catch (e) {
-    document.documentElement.classList.add("dark");
+    // Only localStorage can throw here (bug #74/I2). Unconditional dark forced
+    // the wrong theme on a light-mode reader with storage disabled.
+    try {
+      if (prefersDark()) document.documentElement.classList.add("dark");
+    } catch (e2) {
+      // No matchMedia either — the light default in styles.css applies.
+    }
   }
 })();
 

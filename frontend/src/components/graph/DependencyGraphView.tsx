@@ -2,7 +2,7 @@ import { useMemo, type MutableRefObject } from "react";
 import { MarkerType, Panel, type Edge, type Node, type NodeProps, type Viewport } from "reactflow";
 import "reactflow/dist/style.css";
 import { GraphCanvas } from "@/components/graph/GraphCanvas";
-import { GraphFirstVisitHint } from "@/components/graph/GraphFirstVisitHint";
+import { GraphFirstVisitHint, type GraphHintVariant } from "@/components/graph/GraphFirstVisitHint";
 import { GraphLegend } from "@/components/graph/GraphLegend";
 import type { FocusMode } from "@/components/graph/ViewportFocus";
 import { ModuleNode, type ModuleNodeData } from "@/components/graph/ModuleNode";
@@ -82,6 +82,8 @@ interface DependencyGraphViewProps {
   minZoom?: number;
   /** See `MINIMAP_MIN_NODES` — under it the minimap only covers the canvas. */
   showMiniMap?: boolean;
+  /** Which graph the first-visit hint is describing. */
+  hintVariant?: GraphHintVariant;
 }
 
 export function DependencyGraphView({
@@ -101,6 +103,7 @@ export function DependencyGraphView({
   viewportRef,
   minZoom,
   showMiniMap,
+  hintVariant = "files",
 }: DependencyGraphViewProps) {
   const isDark = useIsDarkMode();
   const entryPointSet = useMemo(() => new Set(entryPoints), [entryPoints]);
@@ -227,7 +230,7 @@ export function DependencyGraphView({
           {...(minZoom !== undefined ? { minZoom, fitMinZoom: minZoom } : {})}
         >
           <Panel position="bottom-center">
-            <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} />
+            <GraphFirstVisitHint hasEntryPoints={entryPoints.length > 0} variant={hintVariant} />
           </Panel>
         </GraphCanvas>
       </div>

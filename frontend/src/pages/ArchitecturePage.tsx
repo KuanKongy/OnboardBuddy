@@ -72,22 +72,29 @@ export function ArchitecturePage() {
   const levelKey = (cluster: string | null) =>
     `${id ?? ""}::${selectedPackageId ?? ""}::${cluster ?? ""}`;
   const loadedKeyRef = useRef<string | null>(null);
+  // Bug #74 (F19): `loadedKeyRef` guards refetching, not staleness — two loads
+  // can be in flight and response order is not selection order. `runId` idiom
+  // from useGraphDrill's live().
+  const loadRunRef = useRef(0);
 
   const loadLevel = useCallback(
     async (cluster: string | null): Promise<void> => {
       if (!id) return;
+      const myRun = ++loadRunRef.current;
+      const live = () => loadRunRef.current === myRun;
       setLoading(true);
       setError("");
       setSelectedId(null);
       try {
         const next = await fetchArchitecture(id, selectedPackageId, cluster);
+        if (!live()) return;
         setData(next);
         loadedKeyRef.current = levelKey(cluster);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load the architecture map");
+        if (live()) setError(err instanceof Error ? err.message : "Failed to load the architecture map");
         throw err;
       } finally {
-        setLoading(false);
+        if (live()) setLoading(false);
       }
     },
     [id, selectedPackageId],
