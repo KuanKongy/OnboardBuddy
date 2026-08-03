@@ -18,7 +18,7 @@ export function ClosingSection() {
           <div className="relative overflow-hidden rounded-2xl border border-foreground/10 px-6 py-14 text-center dark:border-white/10 sm:px-12 sm:py-16">
             <div
               aria-hidden="true"
-              className="absolute inset-0 -z-10"
+              className="pointer-events-none absolute inset-0 -z-10"
               style={{
                 background:
                   "radial-gradient(ellipse 80% 120% at 50% 130%, color-mix(in oklab, #2659f4 20%, transparent), transparent 70%)",
