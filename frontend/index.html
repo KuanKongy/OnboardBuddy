@@ -4,6 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- crossorigin is mandatory on font preloads even same-origin; without it
+         the browser fetches the font twice (preload and CSS use different
+         credential modes). Only the roman face is preloaded; italic is rare
+         and loads on demand. -->
+    <link rel="preload" href="/fonts/InterVariable.woff2" as="font" type="font/woff2" crossorigin />
     <title>OnboardBuddy</title>
     <meta
       name="description"

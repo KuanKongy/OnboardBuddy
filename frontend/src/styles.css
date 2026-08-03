@@ -3,6 +3,28 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Inter, self-hosted (CSP allows only font-src 'self'). The body font-family
+   has named Inter since day one; these files make it actually load instead of
+   silently falling through to the system stack. Variable weight axis covers
+   100-900; `swap` keeps first paint on the fallback. The files are unhashed
+   release assets: if one is ever replaced, rename it (see nginx.conf /fonts/). */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+/* The italic face is real, not synthesized: `font-synthesis: none` below means
+   without this file every <em> in the reader would render upright. */
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* ── Design tokens ───────────────────────────────────────────────────────────
    Slate-blue system, dark-first. The dark theme is a three-step surface
    ladder (background → card → popover) with visibly separated steps and
