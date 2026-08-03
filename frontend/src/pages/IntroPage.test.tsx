@@ -1,35 +1,81 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { PHASE_ORDER } from "@/lib/pipelinePhases";
 
-// The showcase card was MOVED into the hero, not copied. Two copies a page scroll
-// apart would read fine in isolation, which is why the count is asserted.
-
+let mockUser: { id: string } | null = null;
 vi.mock("@/contexts/AuthContext", () => ({
-  useAuth: () => ({ user: null, loading: false, signOut: vi.fn() }),
+  useAuth: () => ({ user: mockUser, loading: false, signOut: vi.fn() }),
 }));
 
 const { IntroPage } = await import("./IntroPage");
 
-describe("IntroPage hero (#74/V18)", () => {
-  it("renders the showcase card exactly once, in the hero", () => {
-    render(
-      <TooltipProvider>
-        <MemoryRouter>
-          <IntroPage />
-        </MemoryRouter>
-      </TooltipProvider>,
-    );
+function renderPage() {
+  return render(
+    <TooltipProvider>
+      <MemoryRouter>
+        <IntroPage />
+      </MemoryRouter>
+    </TooltipProvider>,
+  );
+}
 
-    expect(screen.getAllByText(/Package section · Backend architecture/)).toHaveLength(1);
-    // Nothing was deleted to make room: "See what you get" keeps a card of its own.
-    expect(screen.getByText("See what you get")).toBeInTheDocument();
-    expect(screen.getAllByText(/Tutorial · 3 of 6 in the package/)).toHaveLength(1);
+beforeEach(() => {
+  mockUser = null;
+});
 
-    // Above the features anchor, so it really was hoisted rather than just deduped.
-    const showcase = screen.getByText(/Package section · Backend architecture/);
-    const features = document.getElementById("features");
-    expect(features).not.toBeNull();
-    expect(showcase.compareDocumentPosition(features!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+describe("IntroPage", () => {
+  it("keeps the pinned h1 phrase and never overclaims", () => {
+    renderPage();
+    // App.test pins the same phrase on "/"; both must move together.
+    expect(screen.getByRole("heading", { level: 1, name: /onboard developers/i })).toBeInTheDocument();
+    // Only TS/JS are parsed to symbols, so "any codebase" would be a lie.
+    expect(document.body.textContent).not.toMatch(/any codebase|all codebases/i);
+  });
+
+  it("renders no em dash anywhere, including aria labels", () => {
+    const { container } = renderPage();
+    expect(container.textContent).not.toContain("—");
+    for (const el of Array.from(container.querySelectorAll("[aria-label]"))) {
+      expect(el.getAttribute("aria-label")).not.toContain("—");
+    }
+  });
+
+  it("sends signed-out visitors to signup and signed-in visitors to the dashboard", () => {
+    const { unmount } = renderPage();
+    expect(screen.getAllByRole("link", { name: /get started/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /go to dashboard/i })).toBeNull();
+    unmount();
+
+    // The audit ledger flagged the old page for inviting signed-in users to
+    // sign up; the whole surface must flip, not just the header.
+    mockUser = { id: "user-1" };
+    renderPage();
+    expect(screen.getAllByRole("link", { name: /go to dashboard/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("link", { name: /get started/i })).toBeNull();
+    expect(document.querySelector('a[href="/signup"]')).toBeNull();
+  });
+
+  it("computes the stat strip from the source modules", () => {
+    renderPage();
+    // A phase-list change must fail HERE loudly rather than silently
+    // rewriting the marketing numbers.
+    expect(PHASE_ORDER).toHaveLength(16);
+    const facts = screen.getByRole("region", { name: "Product facts" });
+    expect(within(facts).getByText(String(PHASE_ORDER.length))).toBeInTheDocument();
+    expect(within(facts).getByText("pipeline phases")).toBeInTheDocument();
+    expect(within(facts).getByText("handbook sections")).toBeInTheDocument();
+  });
+
+  it("has the a11y frame the rest of the app already got", () => {
+    renderPage();
+    expect(screen.getByRole("link", { name: /skip to content/i })).toHaveAttribute("href", "#main");
+    const main = document.getElementById("main");
+    expect(main).not.toBeNull();
+    expect(main).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("navigation", { name: "Landing sections" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Footer" })).toBeInTheDocument();
+    expect(document.querySelector('a[href="/help"]')).not.toBeNull();
+    expect(document.querySelector('a[href="/help#privacy"]')).not.toBeNull();
   });
 });

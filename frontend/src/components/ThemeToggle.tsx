@@ -74,7 +74,7 @@ export function ThemeToggle() {
   };
 
   const Icon = mode === "dark" ? Moon : Sun;
-  const label = `Theme: ${mode === "dark" ? "Dark" : "Light"} — click for ${mode === "dark" ? "light" : "dark"}`;
+  const label = `Theme: ${mode === "dark" ? "Dark" : "Light"}. Click for ${mode === "dark" ? "light" : "dark"}.`;
 
   return (
     <Tooltip>
