@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { activityTime } from "@/pages/DashboardPage";
-import { PRIVACY_MODES } from "@/pages/ProjectSettingsPage";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
 import { scrollBehavior } from "@/lib/motion";
 import { requestTour, type TourName } from "@/lib/tourState";
