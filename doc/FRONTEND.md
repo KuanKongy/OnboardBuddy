@@ -75,7 +75,7 @@ frontend/src/
 
 | Path | Page | Purpose |
 |---|---|---|
-| `/` | IntroPage | Landing page (redirects to dashboard if logged in) |
+| `/` | IntroPage | Public landing page; signed-in visitors are not redirected (header, hero and closing band offer "Go to dashboard") |
 | `/login` | LoginPage | Email/password + GitHub OAuth login |
 | `/signup` | SignupPage | Account creation |
 | `/auth/callback` | AuthCallbackPage | OAuth redirect handler |
@@ -103,15 +103,14 @@ frontend/src/
 
 ## Theming
 
-The app uses a dark-only Supabase-inspired theme. Colors are defined as CSS custom properties in `styles.css` and consumed by shadcn/ui components automatically:
+Light and dark themes, both OKLCH token systems defined in `src/styles.css` (`:root` and `.dark`) and mapped to Tailwind v4 utilities via `@theme inline`. The `.dark` class lands on `<html>` before first paint via `public/bootstrap.js` (localStorage `onboardbuddy:theme`, falling back to the OS preference) and is toggled at runtime by `ThemeToggle`.
 
-- **Background**: near-black (`oklch(0.145 0 0)`)
-- **Card/Surface**: slightly lighter dark
-- **Primary accent**: emerald green (Supabase brand-style)
-- **Text**: light gray foreground with muted secondary
-- **Destructive**: rose red for danger actions
-
-Font: Inter (system font stack fallback).
+- **Light background**: pure white (`oklch(1 0 0)`); cards separate via border + shadow
+- **Dark**: a slate-blue surface ladder (background 0.21 → card 0.27 → popover 0.30) with borders a step above
+- **Semantic tokens**: success/warning/danger/info plus `-soft` chip fills; the categorical `--node-*` palette drives the graph, the architecture map and the landing visuals from one place
+- **Brand hexes**: `#2659f4` blue and `#0c1c3b` navy live only in `BrandLogo.tsx` and the favicon; the landing's decorative gradients reuse the blue
+- **Font**: Inter, self-hosted as variable woff2 files in `public/fonts/` (roman preloaded, italic loads on demand)
+- **Motion**: the landing's `landing-*` keyframes, story stage system and `.reveal` scroll transitions live in `styles.css`; a global `prefers-reduced-motion` rule collapses every animation and transition to an instant end state
 
 ## Page Details
 

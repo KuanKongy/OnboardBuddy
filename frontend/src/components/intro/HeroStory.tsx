@@ -74,7 +74,7 @@ export function HeroStory() {
       <div className="relative mx-auto max-w-4xl">
         <div
           aria-hidden="true"
-          className="absolute -inset-x-10 -bottom-8 -top-12 -z-10"
+          className="pointer-events-none absolute -inset-x-10 -bottom-8 -top-12 -z-10"
           style={{
             background:
               "radial-gradient(ellipse 65% 60% at 50% 45%, color-mix(in oklab, #2659f4 14%, transparent), transparent 72%)",

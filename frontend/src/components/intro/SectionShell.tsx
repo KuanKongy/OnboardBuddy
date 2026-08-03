@@ -29,7 +29,11 @@ export function SectionShell({
     <section
       id={id}
       aria-labelledby={headingId}
-      className={cn("scroll-mt-24 px-4 py-20 sm:px-6 sm:py-24", className)}
+      /* Fragment-focusable so an anchor jump moves focus INTO the section
+         instead of dropping it on <body> (the audit flagged every anchor as
+         FOCUS-LOST without this). */
+      tabIndex={-1}
+      className={cn("scroll-mt-24 px-4 py-20 outline-none sm:px-6 sm:py-24", className)}
     >
       <div className="mx-auto max-w-6xl">
         <Reveal className="mx-auto max-w-2xl text-center">

@@ -290,6 +290,22 @@
     outline-offset: 2px;
   }
 
+  /* Anything programmatically scrolled into view must clear sticky chrome:
+     sections already carry scroll-mt for anchor jumps; controls get a global
+     margin so a scrollIntoView'd button never lands under a sticky header
+     (the audit probe hit-tests the exact point it scrolled to, and a control
+     parked under the landing header read as OCCLUDED). Scroll margins only
+     affect scroll targeting, never layout. */
+  a,
+  button,
+  input,
+  select,
+  textarea,
+  summary {
+    scroll-margin-top: 4.5rem;
+    scroll-margin-bottom: 1.5rem;
+  }
+
   /* A tooltip must never be able to take a click.
      ────────────────────────────────────────────
      Bug #84 (VISUAL QA M4 #5): the Files ⇄ "Classes & interfaces" toggle on
