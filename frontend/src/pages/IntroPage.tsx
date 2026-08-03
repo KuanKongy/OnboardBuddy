@@ -16,8 +16,8 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { PublicPageHeader } from "@/components/PublicPageHeader";
-import { PHASE_ORDER } from "@/components/AnalysisRunPanel";
-import { PRIVACY_MODES } from "@/pages/ProjectSettingsPage";
+import { PHASE_ORDER, stripAiPrefix } from "@/lib/pipelinePhases";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -48,13 +48,6 @@ const SHOWCASE_PHASE_KEYS = [
  * in that mode. `validation` only re-checks citations against the source.
  */
 const AI_PHASE_KEYS = new Set(["semantic_symbols", "critique", "embeddings", "generation"]);
-
-/** The badge beside the label already says "AI"; drop the prefix PHASE_ORDER
- *  carries for the run panel, and recase what it left mid-sentence. */
-function stripAiPrefix(label: string): string {
-  const stripped = label.replace(/^AI: /, "");
-  return stripped === label ? label : stripped.charAt(0).toUpperCase() + stripped.slice(1);
-}
 
 export function IntroPage() {
   // Filtered, not asserted: renaming a phase key in AnalysisRunPanel should

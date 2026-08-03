@@ -10,7 +10,7 @@ import {
 } from "@/components/AnalyzeConfigForm";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
 import type { ProjectData } from "@/contexts/ProjectContext";
-import { PRIVACY_MODES } from "@/pages/ProjectSettingsPage";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";

@@ -24,13 +24,12 @@ import { PageHeader } from "@/components/PageHeader";
 import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { apiFetch } from "@/lib/api";
 import { scrollBehavior } from "@/lib/motion";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
 
-export const PRIVACY_MODES = [
-  { key: "full_ai", label: "Full AI", hint: "Code snippets + facts go to the LLM — best quality." },
-  { key: "facts_only_ai", label: "Facts-only AI", hint: "No code leaves the system — only extracted facts and structure." },
-  { key: "ai_disabled", label: "AI disabled", hint: "No LLM calls at all; deterministic outputs only." },
-];
+/** The canonical mode list lives in lib/privacyModes (public pages import it
+ *  too); re-exported so existing importers keep working. */
+export { PRIVACY_MODES };
 
 // Must match the backend's SEMANTIC_VIEWS keys exactly — the old short names
 // ("runtime") never matched the API's "critical_for_runtime" keys, so every

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PHASE_ORDER } from "@/lib/pipelinePhases";
 
 /**
  * The one panel for an analysis run: every pipeline step in order with its
@@ -35,26 +36,10 @@ interface StepLogEntry {
   ts: string;
 }
 
-/** Pipeline order + labels; phases the backend hasn't reached yet render as upcoming.
- *  Exported so a partial run's own step list names its steps identically. */
-export const PHASE_ORDER: Array<{ key: string; label: string; desc: string }> = [
-  { key: "ingest", label: "Download & inventory", desc: "Clones the repo and inventories files — nothing is sent to any AI" },
-  { key: "parse", label: "Parse code (AST)", desc: "Builds a syntax tree per file to extract symbols deterministically" },
-  { key: "graph", label: "Build evidence graph", desc: "Links imports, calls and dependencies into an evidence graph" },
-  { key: "workflows", label: "Trace workflows", desc: "Traces end-to-end flows through the graph (routes, jobs, handlers)" },
-  { key: "candidate_ranking", label: "Rank critical code", desc: "Scores files/symbols on the seven criticality signals" },
-  { key: "clustering", label: "Cluster architecture", desc: "Groups modules into architecture components" },
-  { key: "incremental_diff", label: "Diff vs previous commit", desc: "Compares against the previous analyzed commit to find what changed" },
-  { key: "semantic_symbols", label: "AI: explain symbols", desc: "AI reads extracted facts (and code under Full AI) to explain symbols" },
-  { key: "synthesis", label: "AI: file → system synthesis", desc: "AI composes file-level explanations into a system narrative" },
-  { key: "capabilities", label: "AI: extract capabilities", desc: "AI names the product capabilities the code implements" },
-  { key: "refinement", label: "AI: refine top items", desc: "AI rewrites the highest-ranked explanations for clarity" },
-  { key: "critique", label: "AI: verify claims", desc: "AI cross-checks claims against the evidence graph" },
-  { key: "semantic_ranking", label: "AI: blend rankings", desc: "Blends AI judgment into the deterministic ranking" },
-  { key: "embeddings", label: "Index for retrieval", desc: "Indexes content for retrieval (OpenAI-compatible embeddings endpoint)" },
-  { key: "generation", label: "Generate onboarding", desc: "Assembles the onboarding package sections" },
-  { key: "validation", label: "Validate citations", desc: "Verifies every citation still points at real code" },
-];
+/** The canonical phase list lives in lib/pipelinePhases (public pages import
+ *  it too, plus per-phase AI flags); re-exported so a partial run's own step
+ *  list and existing importers keep naming steps identically. */
+export { PHASE_ORDER };
 
 function statusGlyph(status: string) {
   if (status === "complete") return <CheckCircle2 className="h-3.5 w-3.5 text-success" aria-hidden="true" />;
