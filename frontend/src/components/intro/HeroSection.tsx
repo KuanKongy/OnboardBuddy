@@ -1,11 +1,9 @@
-import { ArrowRight, CheckCircle2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
-import { LogoMark } from "@/components/BrandLogo";
+import { HeroStory } from "@/components/intro/HeroStory";
 import { Reveal } from "@/components/intro/Reveal";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
-import { cn } from "@/lib/utils";
 
 /**
  * The centered hero: claim, proof line, CTAs, and the product-story window as
@@ -70,88 +68,9 @@ export function HeroSection() {
         </div>
 
         <Reveal index={2} className="mt-14 sm:mt-16">
-          <StoryWindow>
-            <StoryPlaceholder />
-          </StoryWindow>
+          <HeroStory />
         </Reveal>
       </div>
     </section>
-  );
-}
-
-/**
- * The app-window frame around the hero story: brand mark, the real project
- * tab names, and the fictional repo it analyzes. The tabs are plain spans on
- * purpose: nothing inside the frame may be a censusable control (the e2e
- * audit probe hard-fails on census drift while the story plays).
- */
-export function StoryWindow({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative mx-auto max-w-4xl">
-      <div
-        aria-hidden="true"
-        className="absolute -inset-x-10 -bottom-8 -top-12 -z-10"
-        style={{
-          background:
-            "radial-gradient(ellipse 65% 60% at 50% 45%, color-mix(in oklab, #2659f4 14%, transparent), transparent 72%)",
-        }}
-      />
-      <div className="overflow-hidden rounded-2xl border border-foreground/10 bg-card/85 shadow-2xl shadow-[#2659f4]/10 backdrop-blur-sm dark:border-white/10 dark:bg-card/70">
-        <div className="flex items-center gap-3 border-b border-foreground/10 px-4 py-2.5 dark:border-white/10">
-          <LogoMark className="h-4 w-4" />
-          <div aria-hidden="true" className="flex items-center gap-1">
-            {["Overview", "Dependencies", "Tutorials"].map((tab, i) => (
-              <span
-                key={tab}
-                className={cn(
-                  "rounded-md px-2.5 py-1 text-[0.6875rem] font-medium",
-                  i === 0 ? "bg-accent/70 text-foreground" : "text-muted-foreground",
-                )}
-              >
-                {tab}
-              </span>
-            ))}
-          </div>
-          <span className="ml-auto hidden font-mono text-[0.6875rem] text-muted-foreground sm:block">
-            acme/storefront @ main
-          </span>
-        </div>
-        <div className="relative aspect-[16/10] sm:aspect-[16/9]">{children}</div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Static stand-in until the animated story lands: the analysis checklist as a
- * finished still, inside the same frame the story will use.
- */
-function StoryPlaceholder() {
-  const stages = [
-    "Cloning repository",
-    "Parsing TypeScript",
-    "Building the dependency graph",
-    "Tracing workflows",
-    "Generating the onboarding handbook",
-  ];
-  return (
-    <div className="flex h-full items-center justify-center p-6">
-      <div className="w-full max-w-sm">
-        <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Analyzing acme/storefront
-        </p>
-        <div className="space-y-2.5">
-          {stages.map((stage) => (
-            <div key={stage} className="flex items-center gap-2.5 text-[0.8125rem] text-foreground">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
-              {stage}
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 h-1 overflow-hidden rounded-full bg-muted">
-          <div className="h-full w-full rounded-full bg-primary" />
-        </div>
-      </div>
-    </div>
   );
 }
