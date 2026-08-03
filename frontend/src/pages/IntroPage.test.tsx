@@ -1,7 +1,8 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { PHASE_ORDER } from "@/lib/pipelinePhases";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
 
 let mockUser: { id: string } | null = null;
 vi.mock("@/contexts/AuthContext", () => ({
@@ -65,6 +66,53 @@ describe("IntroPage", () => {
     expect(within(facts).getByText(String(PHASE_ORDER.length))).toBeInTheDocument();
     expect(within(facts).getByText("pipeline phases")).toBeInTheDocument();
     expect(within(facts).getByText("handbook sections")).toBeInTheDocument();
+  });
+
+  it("renders all 16 phases and dims the skipped seven under AI disabled", () => {
+    renderPage();
+    const section = document.getElementById("pipeline")!;
+    expect(section).not.toBeNull();
+
+    const chips = within(section).getAllByRole("button", { name: /phase/i });
+    expect(chips).toHaveLength(PHASE_ORDER.length);
+
+    fireEvent.click(within(section).getByRole("radio", { name: "AI disabled" }));
+    const skipped = within(section).getAllByRole("button", { name: /skipped under AI disabled/i });
+    // Mirrors the backend's SEMANTIC_PHASES: exactly seven phases skip, and
+    // generation is NOT among them (it runs LLM-free instead).
+    expect(PHASE_ORDER.filter((p) => p.skippedWhenAiDisabled)).toHaveLength(7);
+    expect(skipped).toHaveLength(7);
+    expect(skipped.map((el) => el.getAttribute("aria-label"))).not.toContain(
+      expect.stringMatching(/generate onboarding/i),
+    );
+  });
+
+  it("shows a phase's real description when its chip is clicked", () => {
+    renderPage();
+    const section = document.getElementById("pipeline")!;
+    const workflows = PHASE_ORDER.find((p) => p.key === "workflows")!;
+    fireEvent.click(within(section).getByRole("button", { name: /trace workflows/i }));
+    expect(within(section).getByText(workflows.desc)).toBeInTheDocument();
+  });
+
+  it("renders the three privacy modes from the shared module", () => {
+    renderPage();
+    const section = document.getElementById("privacy")!;
+    expect(section).not.toBeNull();
+    for (const mode of PRIVACY_MODES) {
+      expect(within(section).getByText(mode.label)).toBeInTheDocument();
+      expect(within(section).getByText(mode.hint)).toBeInTheDocument();
+    }
+  });
+
+  it("gives every anchor-linked section a labelled landmark", () => {
+    renderPage();
+    for (const id of ["product", "how", "privacy", "pipeline"]) {
+      const section = document.getElementById(id);
+      expect(section, id).not.toBeNull();
+      expect(section!.getAttribute("aria-labelledby"), id).toBe(`${id}-title`);
+      expect(document.getElementById(`${id}-title`), id).not.toBeNull();
+    }
   });
 
   it("has the a11y frame the rest of the app already got", () => {
