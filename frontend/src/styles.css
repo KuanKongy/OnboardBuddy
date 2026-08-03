@@ -479,14 +479,22 @@
      while their container fades out. */
   .story-chip {
     position: absolute;
-    left: 0;
-    top: 0;
-    transform: translate(var(--gx), var(--gy));
-    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
-    will-change: transform;
+    /* left/top rather than translate: the coordinates are percentages OF THE
+       STAGE, and translate percentages are relative to the chip itself. The
+       centering translate makes the coordinate the chip's center, which is
+       what the edge lines point at. Twelve small chips keep this cheap. */
+    left: var(--gx);
+    top: var(--gy);
+    transform: translate(-50%, -50%);
+    transition:
+      left 700ms cubic-bezier(0.22, 1, 0.36, 1),
+      top 700ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
   }
   .story-stage[data-scene="architecture"] .story-chip {
-    transform: translate(var(--ax), var(--ay)) scale(0.82);
+    left: var(--ax);
+    top: var(--ay);
+    transform: translate(-50%, -50%) scale(0.82);
   }
   .story-stage[data-scene="graph"] .story-chip-body {
     animation: landing-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
