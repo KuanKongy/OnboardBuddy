@@ -218,6 +218,53 @@
   --font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
+/* ── Landing-page motion ─────────────────────────────────────────────────────
+   Keyframes are top-level on purpose: the story rules below reference them by
+   name from @layer components, and a top-level @keyframes always ships,
+   whereas one nested in @theme is only emitted when its --animate token is
+   used as a utility. The global reduced-motion rule in @layer base collapses
+   all of these to an instant end state ("both" fills land on the final frame),
+   which is exactly the static rendering the landing story wants. */
+
+@keyframes landing-drift {
+  from { transform: translate3d(-6%, -4%, 0) scale(1); }
+  50%  { transform: translate3d(5%, 7%, 0) scale(1.12); }
+  to   { transform: translate3d(-2%, 3%, 0) scale(1.04); }
+}
+@keyframes landing-fade-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes landing-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes landing-pop {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes landing-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes landing-bar {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+@keyframes landing-select {
+  to { background-color: color-mix(in oklab, var(--primary) 12%, transparent); }
+}
+@keyframes landing-press {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(0.95); }
+}
+
+/* Only the utilities actually written in markup need tokens (the aurora
+   blobs); everything else animates via the component rules below. */
+@theme {
+  --animate-landing-drift: landing-drift 36s ease-in-out infinite alternate;
+  --animate-landing-drift-slow: landing-drift 48s ease-in-out infinite alternate-reverse;
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -282,8 +329,10 @@
     *::before,
     *::after {
       animation-duration: 0.01ms !important;
+      animation-delay: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      transition-delay: 0.01ms !important;
       scroll-behavior: auto !important;
     }
   }
@@ -320,5 +369,165 @@
   .graph-shell {
     @apply flex min-h-0 flex-col;
     height: max(420px, calc(100dvh - var(--graph-chrome, 220px)));
+  }
+
+  /* ── Landing: scroll reveals ──────────────────────────────────────────────
+     JS (useInView) adds .reveal-in once; the stagger comes from --reveal-i set
+     inline per child. Transitions, not keyframes, so an element that mounts
+     already in view just sits at its end state. */
+  .reveal {
+    opacity: 0;
+    transform: translateY(16px);
+    transition:
+      opacity 700ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 700ms cubic-bezier(0.16, 1, 0.3, 1);
+    transition-delay: calc(var(--reveal-i, 0) * 80ms);
+  }
+  .reveal-in {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* Mouse-position spotlight for the bento cards: the card's onMouseMove sets
+     --mx/--my inline; the glow lives on a pseudo-element so it never catches
+     the pointer and needs no extra DOM. */
+  .spot-card {
+    position: relative;
+  }
+  .spot-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 300ms ease;
+    background: radial-gradient(
+      240px circle at var(--mx, 50%) var(--my, 50%),
+      color-mix(in oklab, #2659f4 9%, transparent),
+      transparent 70%
+    );
+  }
+  .spot-card:hover::after {
+    opacity: 1;
+  }
+
+  /* ── Landing: hero story stage ────────────────────────────────────────────
+     One always-mounted layer per scene, crossfaded by the stage's data-scene
+     attribute; a layer can belong to two scenes (data-for="graph architecture")
+     via the ~= match. Scene-internal keyframes hang off data-scene so flipping
+     the attribute restarts them without any remounting; nothing in here may be
+     a censusable control (no buttons, links, titles, tabindex) and the visible
+     TEXT of the stage must stay constant while scenes change, because the e2e
+     audit probe fingerprints innerText and hard-fails on census drift. */
+  .story-stage {
+    position: relative;
+    overflow: hidden;
+  }
+  .story-layer {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    transition: opacity 500ms ease;
+    pointer-events: none;
+  }
+  .story-stage[data-scene="import"] .story-layer[data-for~="import"],
+  .story-stage[data-scene="analysis"] .story-layer[data-for~="analysis"],
+  .story-stage[data-scene="graph"] .story-layer[data-for~="graph"],
+  .story-stage[data-scene="architecture"] .story-layer[data-for~="architecture"],
+  .story-stage[data-scene="tutorial"] .story-layer[data-for~="tutorial"] {
+    opacity: 1;
+  }
+
+  /* Scene A: a repo row highlights, then the fake start button presses. */
+  .story-stage[data-scene="import"] .story-row-select {
+    animation: landing-select 400ms ease-out both;
+    animation-delay: 800ms;
+  }
+  .story-stage[data-scene="import"] .story-press {
+    animation: landing-press 450ms ease-in-out both;
+    animation-delay: 1800ms;
+  }
+
+  /* Scene B: per-row pending→done glyph crossfade and one scaleX progress
+     bar. Both glyphs stay mounted; --i staggers the handoff. */
+  .story-tick-done {
+    opacity: 0;
+  }
+  .story-stage[data-scene="analysis"] .story-tick-done {
+    animation: landing-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    animation-delay: calc(var(--i, 0) * 550ms + 300ms);
+  }
+  .story-stage[data-scene="analysis"] .story-tick-pending {
+    animation: landing-fade-out 300ms ease-out both;
+    animation-delay: calc(var(--i, 0) * 550ms + 300ms);
+  }
+  .story-bar-fill {
+    transform-origin: left;
+    transform: scaleX(0);
+  }
+  .story-stage[data-scene="analysis"] .story-bar-fill {
+    animation: landing-bar 2900ms cubic-bezier(0.3, 0, 0.4, 1) both;
+  }
+
+  /* Scenes C+D: chips carry their graph position as --gx/--gy and their
+     architecture position as --ax/--ay (inline, design-time constants). The
+     OUTER element owns translate so the morph is one transform transition;
+     entrance pops animate the INNER body only, so the two transforms never
+     fight. Edges draw once in C and hold through D (the comma selector keeps
+     the computed animation identical across the flip, so it never restarts)
+     while their container fades out. */
+  .story-chip {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translate(var(--gx), var(--gy));
+    transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+  .story-stage[data-scene="architecture"] .story-chip {
+    transform: translate(var(--ax), var(--ay)) scale(0.82);
+  }
+  .story-stage[data-scene="graph"] .story-chip-body {
+    animation: landing-pop 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+    animation-delay: calc(var(--i, 0) * 80ms);
+  }
+  .story-edge {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+  }
+  .story-stage[data-scene="graph"] .story-edge,
+  .story-stage[data-scene="architecture"] .story-edge {
+    animation: landing-draw 800ms cubic-bezier(0.4, 0, 0.2, 1) both;
+    animation-delay: calc(var(--i, 0) * 70ms + 350ms);
+  }
+  .story-edges {
+    transition: opacity 400ms ease;
+  }
+  .story-stage[data-scene="architecture"] .story-edges {
+    opacity: 0;
+  }
+
+  /* Scene D cluster cards and scene E tutorial rows share one staggered
+     entrance; anything with .story-rise fades up when its own layer's scene
+     is active. */
+  .story-rise {
+    opacity: 0;
+  }
+  .story-stage[data-scene="architecture"] .story-layer[data-for~="architecture"] .story-rise,
+  .story-stage[data-scene="tutorial"] .story-layer[data-for~="tutorial"] .story-rise {
+    animation: landing-fade-up 550ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(var(--i, 0) * 140ms + 200ms);
+  }
+
+  /* Captions live OUTSIDE the stage, stacked in one grid cell and crossfaded;
+     all of them stay in the DOM so the page's text census never changes. */
+  .story-caption {
+    grid-area: 1 / 1;
+    opacity: 0;
+    transition: opacity 400ms ease;
+  }
+  .story-caption[data-active="true"] {
+    opacity: 1;
   }
 }
