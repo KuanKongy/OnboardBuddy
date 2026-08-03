@@ -13,7 +13,10 @@
 
 /* Light theme */
 :root {
-  --background: oklch(0.975 0.004 265);
+  /* Pure white, not an off-white tint: the near-white oklch(0.975 0.004 265)
+     read as "actually gray" next to white cards while separating nothing (a
+     2.5% delta). Separation is the border + shadow's job. */
+  --background: oklch(1 0 0);
   --foreground: oklch(0.22 0.02 265);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.22 0.02 265);
