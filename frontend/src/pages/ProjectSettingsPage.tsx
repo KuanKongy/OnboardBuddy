@@ -179,9 +179,11 @@ export function ProjectSettingsPage() {
 
   // Surface a save/delete/etc. failure wherever the user currently is on
   // this long page — the banner renders right under the header, easy to
-  // miss from a bottom-of-page action.
+  // miss from a bottom-of-page action. `block: "nearest"` so this cannot
+  // scroll anything already in view: from lg up the banner is a pinned row
+  // and the only scroller is the shell's column, which must not move.
   useEffect(() => {
-    if (error) errorRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: "center" });
+    if (error) errorRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   }, [error]);
 
   // Slider state lives here, not in `project.settings`, so the footer Cancel
@@ -867,7 +869,11 @@ export function ProjectSettingsPage() {
   ];
 
   return (
-    <div>
+    // `lg:h-full`: the shell's `<main>` has a definite height, so the page fills
+    // it exactly and only the shell's column scrolls — which is what keeps the
+    // header, the error banner and the save bar on screen from anywhere in the
+    // settings. Below lg the page is normal flow and `<main>` scrolls, as before.
+    <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       <PageHeader
         title="Project settings"
         subtitle="Analysis, privacy, budgets, and ranking configuration for this project."

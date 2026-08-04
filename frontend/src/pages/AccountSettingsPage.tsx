@@ -669,7 +669,10 @@ export function AccountSettingsPage() {
   ];
 
   return (
-    <div>
+    // `lg:h-full`: the shell's `<main>` has a definite height, so the page fills
+    // it exactly and only the shell's column scrolls. Below lg the page is
+    // normal flow and `<main>` scrolls, as before.
+    <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
       {/* Header spans the full page; the shell below owns the rail and column. */}
       <PageHeader
         title="Account Settings"

@@ -3,9 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { SettingsShell, type SettingsSection } from "./SettingsShell";
 
 beforeAll(() => {
-  // jsdom implements neither, and the rail scrolls on click.
+  // jsdom implements neither, and the rail scrolls on click. Both branches are
+  // stubbed even though the matchMedia stub in src/test/setup.ts reports
+  // `matches: false`, so clicks here always take the mobile scrollIntoView path.
   const proto = window.HTMLElement.prototype as unknown as Record<string, unknown>;
   proto.scrollIntoView ??= () => {};
+  if (!Element.prototype.scrollTo) Element.prototype.scrollTo = () => {};
 });
 
 const sections: SettingsSection[] = [
@@ -41,6 +44,18 @@ describe("SettingsShell", () => {
 
     expect(within(rail).getByRole("button", { name: "Danger zone" })).toHaveAttribute("aria-current", "true");
     expect(within(rail).getByRole("button", { name: "General" })).not.toHaveAttribute("aria-current");
+  });
+
+  it("keeps the footer out of the column that holds the sections", () => {
+    // The footer is the save bar: inside the column it scrolls away with the
+    // sections, which is the layout this shell exists to prevent.
+    render(<SettingsShell sections={sections} footer={<button type="button">Save changes</button>} />);
+
+    const save = screen.getByRole("button", { name: "Save changes" });
+    const column = screen.getByText("repository facts").closest("section")!.parentElement!;
+
+    expect(column).toContainElement(document.getElementById("settings-danger"));
+    expect(column).not.toContainElement(save);
   });
 
   it("follows scrolling via the observer, so the rail is right even when a short last section can't reach the top", async () => {
