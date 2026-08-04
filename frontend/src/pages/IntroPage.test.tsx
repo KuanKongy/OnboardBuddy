@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { PHASE_ORDER } from "@/lib/pipelinePhases";
+import { PHASE_ORDER, phaseDesc } from "@/lib/pipelinePhases";
 import { PRIVACY_MODES } from "@/lib/privacyModes";
 
 let mockUser: { id: string } | null = null;
@@ -11,14 +11,20 @@ vi.mock("@/contexts/AuthContext", () => ({
 
 const { IntroPage } = await import("./IntroPage");
 
-function renderPage() {
+function renderPage(entries: string[] = ["/"]) {
   return render(
     <TooltipProvider>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={entries}>
         <IntroPage />
       </MemoryRouter>
     </TooltipProvider>,
   );
+}
+
+/** Every span in #pipeline whose text is exactly "AI": the mode radios read
+ *  "Full AI"/"AI disabled" and never match. */
+function aiPills(section: HTMLElement) {
+  return Array.from(section.querySelectorAll("span")).filter((el) => el.textContent === "AI");
 }
 
 beforeEach(() => {
@@ -108,6 +114,76 @@ describe("IntroPage", () => {
     expect(within(section).getByText(/code never leaves the system/)).toBeInTheDocument();
   });
 
+  it("recolors the AI pills for facts-only and drops them under AI disabled", () => {
+    renderPage();
+    const section = document.getElementById("pipeline")!;
+    const full = aiPills(section);
+    expect(full.length).toBe(PHASE_ORDER.filter((p) => p.ai).length);
+    for (const pill of full) expect(pill.className).toContain("text-primary");
+
+    fireEvent.click(within(section).getByRole("radio", { name: "Facts-only AI" }));
+    const facts = aiPills(section);
+    expect(facts).toHaveLength(full.length);
+    for (const pill of facts) expect(pill.className).toContain("text-info");
+
+    // Nothing reaches a model in this mode, so no badge may still say "AI" —
+    // generation included, which runs but runs deterministically.
+    fireEvent.click(within(section).getByRole("radio", { name: "AI disabled" }));
+    expect(aiPills(section)).toHaveLength(0);
+  });
+
+  it("swaps a phase's description when the privacy mode changes", () => {
+    renderPage();
+    const section = document.getElementById("pipeline")!;
+    const symbols = PHASE_ORDER.find((p) => p.key === "semantic_symbols")!;
+    const perMode = PRIVACY_MODES.map((m) => phaseDesc(symbols, m.key));
+    // Three modes, three different sentences: identical copy would make the
+    // mode toggle a lie.
+    expect(new Set(perMode).size).toBe(3);
+
+    fireEvent.click(within(section).getByRole("button", { name: /explain symbols/i }));
+    expect(within(section).getByText(perMode[0]!)).toBeInTheDocument();
+
+    fireEvent.click(within(section).getByRole("radio", { name: "Facts-only AI" }));
+    expect(within(section).getByText(perMode[1]!)).toBeInTheDocument();
+
+    fireEvent.click(within(section).getByRole("radio", { name: "AI disabled" }));
+    expect(within(section).getByText(perMode[2]!)).toBeInTheDocument();
+  });
+
+  it("keeps every phase description em-dash-free and every AI phase mode-complete", () => {
+    for (const phase of PHASE_ORDER) {
+      for (const [field, value] of Object.entries(phase)) {
+        if (!field.startsWith("desc") || typeof value !== "string") continue;
+        expect(value, `${phase.key}.${field}`).not.toContain("—");
+      }
+      // A phase that reaches a model must say what it does when it cannot:
+      // falling back to the neutral desc would claim a model call.
+      if (phase.ai) {
+        expect(phase.descFactsOnly, phase.key).toBeTruthy();
+        expect(phase.descAiDisabled, phase.key).toBeTruthy();
+      }
+    }
+  });
+
+  it("scrolls to the section named in the location hash", () => {
+    // React Router does not scroll on hash navigation and jsdom has no
+    // scrollIntoView at all, so the effect is only observable through a stub.
+    const proto = HTMLElement.prototype as unknown as { scrollIntoView?: () => void };
+    const original = proto.scrollIntoView;
+    const scrolledTo: Element[] = [];
+    proto.scrollIntoView = function (this: Element) {
+      scrolledTo.push(this);
+    };
+    try {
+      renderPage(["/#how"]);
+      expect(scrolledTo).toContain(document.getElementById("how"));
+    } finally {
+      if (original) proto.scrollIntoView = original;
+      else delete proto.scrollIntoView;
+    }
+  });
+
   it("renders the three privacy modes from the shared module", () => {
     renderPage();
     const section = document.getElementById("privacy")!;
@@ -136,7 +212,7 @@ describe("IntroPage", () => {
     expect(main).toHaveAttribute("tabindex", "-1");
     expect(screen.getByRole("navigation", { name: "Landing sections" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Footer" })).toBeInTheDocument();
-    expect(document.querySelector('a[href="/help"]')).not.toBeNull();
+    expect(document.querySelector('a[href="/faq"]')).not.toBeNull();
     expect(document.querySelector('a[href="/privacy"]')).not.toBeNull();
     expect(document.querySelector('a[href="/terms"]')).not.toBeNull();
   });

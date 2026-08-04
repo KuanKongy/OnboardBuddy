@@ -19,8 +19,8 @@ export function IntroFooter() {
           aria-label="Footer"
           className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs sm:justify-self-end"
         >
-          <Link to="/help" className="text-muted-foreground transition-colors hover:text-foreground">
-            Help &amp; FAQ
+          <Link to="/faq" className="text-muted-foreground transition-colors hover:text-foreground">
+            FAQ
           </Link>
           <Link to="/privacy" className="text-muted-foreground transition-colors hover:text-foreground">
             Privacy

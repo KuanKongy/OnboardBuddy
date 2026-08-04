@@ -43,6 +43,7 @@ const SURFACES: Surface[] = [
   { name: "invitations", path: "/invitations" },
   { name: "account-settings", path: "/settings" },
   { name: "help", path: "/help" },
+  { name: "faq", path: "/faq" },
   { name: "overview", path: `/projects/${P}` },
   { name: "onboarding-cards", path: `/projects/${P}/onboarding` },
   { name: "onboarding-reader", path: `/projects/${P}/onboarding?view=reader&role=backend` },
@@ -216,7 +217,6 @@ for (const surface of SURFACES) {
 
     // ── operate every control ─────────────────────────────────────────────
     const ledger: string[] = [];
-    const baseline = await fp(page);
 
     for (const ctrl of controls) {
       const rec: Record<string, unknown> = { surface: surface.name, tier: TIER, variant: VARIANT, cid: ctrl.cid, name: ctrl.name, role: ctrl.role };
