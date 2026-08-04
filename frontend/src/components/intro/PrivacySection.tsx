@@ -37,7 +37,15 @@ export function PrivacySection() {
       </div>
 
       <Reveal index={1} className="mt-4">
-        <div className="rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm dark:border-white/10">
+        {/* The whole card is the link to /privacy; the row below is a span,
+            because an anchor inside an anchor is invalid HTML. The aria-label
+            keeps the accessible name short instead of reading out the three
+            guarantees. */}
+        <Link
+          to="/privacy"
+          aria-label="Full privacy breakdown, mode by mode"
+          className="group block rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
+        >
           <ul className="space-y-3">
             <IconRow icon={<Lock className="h-4 w-4" aria-hidden="true" />}>
               Read-only access; secrets are filtered and no full repository copy is stored.
@@ -55,14 +63,11 @@ export function PrivacySection() {
               shared one.
             </IconRow>
           </ul>
-          <Link
-            to="/privacy"
-            className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline"
-          >
+          <span className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary group-hover:underline">
             Full privacy breakdown, mode by mode
             <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-          </Link>
-        </div>
+          </span>
+        </Link>
       </Reveal>
     </SectionShell>
   );

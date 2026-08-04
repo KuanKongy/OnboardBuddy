@@ -67,6 +67,22 @@ describe("HeroStory playback", () => {
     }
   });
 
+  it("moves the window tab bar onto the tab each scene opens", () => {
+    render(<HeroStory />);
+    expect(screen.getByText("Overview")).toHaveAttribute("data-active");
+    // One act per scene: the next timer is only armed once React has flushed
+    // the scene change, so both durations in a single advance would stall.
+    act(() => {
+      vi.advanceTimersByTime(STORY_SCENES[0]!.duration);
+    });
+    act(() => {
+      vi.advanceTimersByTime(STORY_SCENES[1]!.duration);
+    });
+    expect(currentScene()).toBe("graph");
+    expect(screen.getByText("Dependencies")).toHaveAttribute("data-active");
+    expect(screen.getByText("Overview")).not.toHaveAttribute("data-active");
+  });
+
   it("arms exactly one timer under StrictMode's double mount", () => {
     render(
       <StrictMode>

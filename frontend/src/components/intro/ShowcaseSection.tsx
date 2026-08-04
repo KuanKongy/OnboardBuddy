@@ -19,7 +19,7 @@ export function ShowcaseSection() {
     >
       <div className="grid gap-4 md:grid-cols-2">
         <Reveal>
-          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-5 backdrop-blur-sm dark:border-white/10">
+          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-5 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card dark:border-white/10">
             <p className="section-label mb-3">Package section &middot; Backend architecture</p>
             <div className="mb-3 rounded-md border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-[0.8125rem] leading-relaxed text-foreground">
               <span className="mr-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide text-primary/80">
@@ -39,7 +39,7 @@ export function ShowcaseSection() {
         </Reveal>
 
         <Reveal index={1}>
-          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-5 backdrop-blur-sm dark:border-white/10">
+          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-5 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card dark:border-white/10">
             <p className="section-label mb-3">Tutorial &middot; 3 of 6 in the package</p>
             <h3 className="mb-4 text-[0.9375rem] font-semibold text-foreground">
               Resume analysis job and export onboarding package
@@ -74,7 +74,7 @@ export function ShowcaseSection() {
 
 function Citation({ file, line }: { file: string; line: number }) {
   return (
-    <span className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-foreground/15 bg-muted/40 px-1.5 py-0.5 align-baseline font-mono text-[0.6875rem] text-foreground dark:border-white/15">
+    <span className="mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md border border-foreground/15 bg-muted/40 px-1.5 py-0.5 align-baseline font-mono text-[0.6875rem] text-foreground transition-colors hover:border-[#2659f4]/40 hover:text-primary dark:border-white/15">
       <FileCode2 className="h-2.5 w-2.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       {file}:{line}
     </span>

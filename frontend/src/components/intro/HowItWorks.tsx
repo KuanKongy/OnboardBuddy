@@ -47,8 +47,8 @@ export function HowItWorks() {
 
 function Step({ n, icon, title, children }: { n: number; icon: ReactNode; title: string; children: ReactNode }) {
   return (
-    <div className="relative text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm dark:border-white/10">
+    <div className="group relative text-center">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm transition-colors duration-300 group-hover:border-[#2659f4]/40 group-hover:bg-card/80 dark:border-white/10">
         {icon}
       </div>
       <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-primary">Step {n}</p>

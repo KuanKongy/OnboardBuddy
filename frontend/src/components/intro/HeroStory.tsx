@@ -9,11 +9,23 @@ import {
   STORY_REPOS,
   STORY_SCENES,
   STORY_SR_DESCRIPTION,
+  type StorySceneId,
 } from "@/components/intro/heroStoryData";
 import { Button } from "@/components/ui/button";
 import { CLUSTER_KIND_LABELS, CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
 import { prefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+
+/** Which tab of the fake app window each scene "opens": the dependency graph
+ *  belongs to Dependencies and the walkthrough to Tutorials; import, analysis
+ *  and architecture all happen on Overview. */
+const SCENE_TAB: Record<StorySceneId, number> = {
+  import: 0,
+  analysis: 0,
+  graph: 1,
+  architecture: 0,
+  tutorial: 2,
+};
 
 /**
  * The hero centerpiece: a five-scene product story on a ~15s loop, inside an
@@ -69,6 +81,8 @@ export function HeroStory() {
     return () => window.clearTimeout(id);
   }, [playing, scene]);
 
+  const activeTab = SCENE_TAB[STORY_SCENES[scene]!.id];
+
   return (
     <div>
       <div className="relative mx-auto max-w-4xl">
@@ -87,9 +101,10 @@ export function HeroStory() {
               {["Overview", "Dependencies", "Tutorials"].map((tab, i) => (
                 <span
                   key={tab}
+                  data-active={i === activeTab || undefined}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-[0.6875rem] font-medium",
-                    i === 0 ? "bg-accent/70 text-foreground" : "text-muted-foreground",
+                    "rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors duration-300",
+                    i === activeTab ? "bg-accent/70 text-foreground" : "text-muted-foreground",
                   )}
                 >
                   {tab}
