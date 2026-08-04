@@ -6,6 +6,7 @@ import { apiFetch } from "@/lib/api";
 import { supabase } from "@/lib/supabase";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AVATAR_URL_HELP, isSafeAvatarUrl, safeAvatarSrc } from "@/lib/avatarUrl";
+import { displayName } from "@/lib/displayName";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -320,7 +321,7 @@ export function AccountSettingsPage() {
                   <div className="flex items-start gap-3">
                     <Avatar className="mt-1 size-12">
                       {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
-                      <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
+                      <AvatarFallback className="text-sm">{initials(fullName || displayName(user))}</AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1 space-y-2">
                       <div>
@@ -362,11 +363,15 @@ export function AccountSettingsPage() {
                   <div className="flex items-center gap-3">
                     <Avatar className="size-12">
                       {safeAvatarSrc(avatarUrl) && <AvatarImage src={safeAvatarSrc(avatarUrl)} alt="" />}
-                      <AvatarFallback className="text-sm">{initials(fullName || user?.email || "?")}</AvatarFallback>
+                      <AvatarFallback className="text-sm">{initials(fullName || displayName(user))}</AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1">
+                      {/* The form value stays empty until the user sets a name;
+                          only the VIEW falls back (GitHub username, then email
+                          local part), so "No name set" never shows when
+                          something is known. */}
                       <p className="truncate text-sm font-medium text-foreground">
-                        {fullName || <span className="text-muted-foreground">No name set</span>}
+                        {fullName || displayName(user)}
                       </p>
                       <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
                     </div>

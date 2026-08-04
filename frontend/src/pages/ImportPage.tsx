@@ -1,6 +1,5 @@
 import {
   ExternalLink,
-  Github,
   Loader2,
   Rocket,
   Search,
@@ -23,7 +22,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import {
   AnalyzeConfigForm,
   DEFAULT_ANALYZE_CONFIG,
@@ -75,6 +73,20 @@ interface ConfigureContext {
  */
 const TYPEAHEAD_MIN_OPTIONS = 8;
 
+/**
+ * Mirrors the project_settings.ignored_paths column default
+ * (backend/supabase/migrations/001_initial_schema.sql), so the chips show
+ * the project's real starting list. The engine additionally always excludes
+ * dependencies, build output, fixtures and secret files regardless of this
+ * list (worker/engine/repoIngester.ts IGNORE_PATTERNS + the privacy filter).
+ */
+const DEFAULT_IGNORED_PATHS = ["node_modules", "dist", ".git", ".env"];
+
+/** A dead stored GitHub connection, as the API reports it. */
+function isReconnectRequired(err: unknown): boolean {
+  return err instanceof ApiError && (err.body?.code === "github_reconnect_required" || err.status === 403);
+}
+
 /** Case-insensitive substring match — the same rule the graph search uses. */
 function matchesFilter(haystack: string, needle: string): boolean {
   return haystack.toLowerCase().includes(needle.trim().toLowerCase());
@@ -101,7 +113,7 @@ const IMPORT_TOUR_STEPS: TourStep[] = [
 
 export function ImportPage() {
   const navigate = useNavigate();
-  const { connectGithub, user } = useAuth();
+  const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
@@ -167,9 +179,11 @@ export function ImportPage() {
    */
   const [repoFilter, setRepoFilter] = useState("");
 
-  const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
+  const [ignoredPaths, setIgnoredPaths] = useState<string[]>([...DEFAULT_IGNORED_PATHS]);
   const [ignoreInput, setIgnoreInput] = useState("");
-  const [showIgnored, setShowIgnored] = useState(false);
+  // A dead stored GitHub connection (expired/revoked token) renders as the
+  // connect state with a one-line notice, never as a red error banner.
+  const [connectionExpired, setConnectionExpired] = useState(false);
 
   // Step 2 survives a reload because the created id lives in the URL and the repo
   // context is rebuilt from the project row. `handledProjectId` keeps this to one fetch
@@ -223,6 +237,7 @@ export function ImportPage() {
   useEffect(() => {
     setInstallationsLoading(true);
     setError("");
+    setConnectionExpired(false);
     Promise.all([
       apiFetch("/github/app").catch(() => null),
       apiFetch("/github/installations"),
@@ -250,7 +265,13 @@ export function ImportPage() {
         setSelectedInstallation("");
         setRepos([]);
         setSelectedRepo("");
-        setError(err.message);
+        if (isReconnectRequired(err)) {
+          // The connect box IS the fix: the combined install re-authorizes
+          // and returns in one hop. No red banner for an expired token.
+          setConnectionExpired(true);
+        } else {
+          setError(err.message);
+        }
       })
       .finally(() => setInstallationsLoading(false));
   }, [refreshKey]);
@@ -280,7 +301,16 @@ export function ImportPage() {
       .catch((err) => {
         setRepos([]);
         setSelectedRepo("");
-        setError(err.message);
+        if (isReconnectRequired(err)) {
+          // Token died between the installations call and this one: same
+          // degradation as above, back to the connect state.
+          setInstallations([]);
+          setSelectedInstallation("");
+          setGithubAppConnected(false);
+          setConnectionExpired(true);
+        } else {
+          setError(err.message);
+        }
       })
       .finally(() => setReposLoading(false));
   }, [selectedInstallation, refreshKey]);
@@ -361,15 +391,14 @@ export function ImportPage() {
       }) as { project: { id: string; branch?: string } };
       createdProject = project;
 
-      // Persist privacy choices. Only send ignored_paths when the user added
-      // some, so we don't overwrite the backend's sensible default ignore list.
-      const settings: { privacy_mode: string; ignored_paths?: string[] } = {
-        privacy_mode: "full_ai",
-      };
-      if (ignoredPaths.length > 0) settings.ignored_paths = ignoredPaths;
+      // Persist privacy choices. The chips start from the column defaults, so
+      // the full list is always sent: the stored list is exactly what the
+      // user saw (the old only-when-nonempty rule silently DROPPED the
+      // defaults the moment one custom path was added). The engine's always-on
+      // exclusions apply regardless.
       await apiFetch(`/projects/${project.id}/settings`, {
         method: "PUT",
-        body: JSON.stringify(settings),
+        body: JSON.stringify({ privacy_mode: "full_ai", ignored_paths: ignoredPaths }),
       });
 
       // Import ≠ analyze: move to the configuration step, where the first
@@ -585,16 +614,6 @@ export function ImportPage() {
           {error && (
             <ErrorBanner className="mt-3">
               {error}
-              {error.includes("reconnect") && (
-                <Button
-                  variant="link"
-                  size="xs"
-                  className="ml-2 h-auto p-0 text-destructive underline"
-                  onClick={() => connectGithub("/import")}
-                >
-                  Reconnect GitHub
-                </Button>
-              )}
               {strandedProjectId && (
                 <div className="mt-1.5">
                   <Button variant="link" size="xs" className="h-auto p-0 text-destructive underline" asChild>
@@ -633,10 +652,17 @@ export function ImportPage() {
                 </div>
               ) : installations.length === 0 ? (
                 <div className="rounded-md border border-dashed border-border p-4 text-center">
+                  {connectionExpired && (
+                    <p className="mb-1 text-xs font-medium text-foreground">
+                      Your GitHub connection expired. Connecting again takes one click.
+                    </p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     {githubAppConnected
                       ? "No repositories are shared with the app yet."
-                      : "GitHub isn't connected yet; importing needs the read-only GitHub App."}
+                      : connectionExpired
+                        ? "Reconnecting restores the repositories you already shared."
+                        : "GitHub isn't connected yet; importing needs the read-only GitHub App."}
                   </p>
                   <p className="mt-1 text-[0.6875rem] text-muted-foreground">
                     {githubAppConnected
@@ -654,26 +680,20 @@ export function ImportPage() {
                 </div>
               ) : (
                 <>
-                  {installations.length === 1 ? (
-                    // One installation is not a choice; show it, don't ask it.
-                    <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 text-[0.8125rem] text-foreground">
-                      <Github className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                      {installations[0]!.account.login}
-                    </div>
-                  ) : (
-                    <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
-                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="GitHub account">
-                        <SelectValue placeholder="Select account" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {installations.map((inst) => (
-                          <SelectItem key={inst.id} value={String(inst.id)}>
-                            {inst.account.login}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
+                  {/* Auto-selected when there is exactly one, but always a
+                      real picker: the account list can grow. */}
+                  <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
+                    <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="GitHub account">
+                      <SelectValue placeholder="Select account" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {installations.map((inst) => (
+                        <SelectItem key={inst.id} value={String(inst.id)}>
+                          {inst.account.login}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <div className="flex items-center justify-between">
                     {installUrl && (
                       <a
@@ -771,67 +791,56 @@ export function ImportPage() {
               </div>
             )}
 
-            {/* Ignored paths */}
+            {/* Ignored paths: always visible, prefilled with the project's
+                real starting list. */}
             {selectedRepo && (
-              <>
-                <Separator />
-                <div>
-                  <Button
-                    variant="link"
-                    size="xs"
-                    className="h-auto p-0 text-xs font-medium"
-                    onClick={() => setShowIgnored(!showIgnored)}
-                  >
-                    {showIgnored ? "- Hide" : "+ Show"} ignored paths
+              <div className="space-y-2">
+                <Label className="text-xs">Ignored paths</Label>
+                <div className="flex gap-2">
+                  <Input
+                    value={ignoreInput}
+                    onChange={(e) => setIgnoreInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addIgnoredPath())}
+                    placeholder="e.g. fixtures/"
+                    className="h-8 flex-1 text-[0.8125rem]"
+                  />
+                  {/* size sm = h-8, matching the input; xs was h-6 pinned
+                      to the row top. */}
+                  <Button variant="outline" size="sm" onClick={addIgnoredPath}>
+                    Add
                   </Button>
-                  {showIgnored && (
-                    <div className="mt-2 space-y-2">
-                      <div className="flex gap-2">
-                        <Input
-                          value={ignoreInput}
-                          onChange={(e) => setIgnoreInput(e.target.value)}
-                          onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addIgnoredPath())}
-                          placeholder="e.g. node_modules/"
-                          className="h-8 flex-1 text-[0.8125rem]"
-                        />
-                        {/* size sm = h-8, matching the input; xs was h-6 pinned
-                            to the row top. */}
-                        <Button variant="outline" size="sm" onClick={addIgnoredPath}>
-                          Add
-                        </Button>
-                      </div>
-                      {ignoredPaths.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {ignoredPaths.map((p) => (
-                            <Badge
-                              key={p}
-                              variant="secondary"
-                              className="gap-0.5 pr-1 font-mono text-xs transition-colors hover:border-primary/50 hover:bg-accent"
-                            >
-                              {p}
-                              <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                aria-label={`Remove ${p}`}
-                                onClick={() => setIgnoredPaths((prev) => prev.filter((x) => x !== p))}
-                                className="ml-0.5 size-4 rounded-sm p-0 hover:bg-background/60"
-                              >
-                                <X className="h-2.5 w-2.5" />
-                              </Button>
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
-              </>
+                {ignoredPaths.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {ignoredPaths.map((p) => (
+                      <Badge
+                        key={p}
+                        variant="secondary"
+                        className="gap-0.5 pr-1 font-mono text-xs transition-colors hover:border-primary/50 hover:bg-accent"
+                      >
+                        {p}
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          aria-label={`Remove ${p}`}
+                          onClick={() => setIgnoredPaths((prev) => prev.filter((x) => x !== p))}
+                          className="ml-0.5 size-4 rounded-sm p-0 transition-colors hover:bg-danger-soft hover:text-danger"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </Button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <p className="text-[0.6875rem] text-muted-foreground">
+                  Secret files, dependencies and build output are always excluded, even if removed
+                  here.
+                </p>
+              </div>
             )}
 
             {/* Privacy & AI */}
             {selectedRepo && (
-              <>
-                <Separator />
                 <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/30 px-3 py-2">
                   <Shield className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <p className="text-xs text-muted-foreground">
@@ -841,7 +850,6 @@ export function ImportPage() {
                     <span className="block">The browser never receives full repository source.</span>
                   </p>
                 </div>
-              </>
             )}
           </div>
 

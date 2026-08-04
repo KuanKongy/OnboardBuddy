@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { safeAvatarSrc } from "@/lib/avatarUrl";
+import { displayName } from "@/lib/displayName";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/SidebarShell";
 
@@ -21,11 +22,7 @@ export function AccountCard() {
   const location = useLocation();
 
   const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
-  const name =
-    (meta.full_name as string) ||
-    (meta.name as string) ||
-    user?.email?.split("@")[0] ||
-    "Account";
+  const name = displayName(user);
   const title = (meta.title as string) || (meta.role as string) || "Member";
 
   return (
