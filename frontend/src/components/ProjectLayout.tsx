@@ -272,14 +272,6 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
         <Separator />
       </div>
       <div className="px-2 pt-1.5">
-        <Link
-          to="/help"
-          onClick={() => setOpen(false)}
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <HelpCircle className="h-3.5 w-3.5" />
-          Help &amp; FAQ
-        </Link>
         <button
           type="button"
           onClick={onStartTour}
