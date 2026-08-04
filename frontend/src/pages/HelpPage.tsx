@@ -261,7 +261,7 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
       question: "Where are keyboard shortcuts?",
       answer: (
         <>
-          Press <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[0.6875rem]">?</kbd> anywhere
+          Press <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[0.6875rem]">/</kbd> anywhere
           in the app, or open them from the "Keyboard shortcuts" button in the sidebar.
         </>
       ),

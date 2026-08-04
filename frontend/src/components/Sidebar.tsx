@@ -6,7 +6,7 @@ import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarShell, useSidebar } from "@/components/SidebarShell";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
-/** Shell pages in hotkey order ([ / ] cycle, 1..4 jump — see AuthenticatedLayout). */
+/** Shell pages in hotkey order (↑ / ↓ cycle, 1..5 jump — see AuthenticatedLayout). */
 export const dashboardNavItems = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { to: "/list", label: "Project list", icon: List },
@@ -26,7 +26,7 @@ export function Sidebar({
 
   return (
     <SidebarShell>
-      <div className="px-3 py-3">
+      <div className="flex items-center justify-between px-3 py-3">
         <Link
           to="/dashboard"
           onClick={() => setOpen(false)}
@@ -36,6 +36,7 @@ export function Sidebar({
           <LogoMark className="h-7 w-7" />
           <LogoWordmark />
         </Link>
+        <ThemeToggle />
       </div>
 
       <nav className="flex-1 space-y-0.5 px-2 py-1" data-tour="sidebar-nav">
@@ -74,18 +75,15 @@ export function Sidebar({
         </button>
         <button
           onClick={onShowShortcuts}
-          title="Also opens with ?"
+          title="Also opens with /"
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <Keyboard className="h-3.5 w-3.5" />
           Keyboard shortcuts
         </button>
       </div>
-      <div className="flex items-center gap-2 px-2 py-2">
-        <div className="min-w-0 flex-1">
-          <AccountCard />
-        </div>
-        <ThemeToggle />
+      <div className="px-2 py-2">
+        <AccountCard />
       </div>
     </SidebarShell>
   );

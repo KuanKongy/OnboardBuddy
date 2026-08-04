@@ -1,10 +1,8 @@
-import { Settings } from "lucide-react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { safeAvatarSrc } from "@/lib/avatarUrl";
 import { displayName } from "@/lib/displayName";
-import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/SidebarShell";
 
 function initials(name: string): string {
@@ -26,7 +24,17 @@ export function AccountCard() {
   const title = (meta.title as string) || (meta.role as string) || "Member";
 
   return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5">
+    // The whole card is the control: the gear button that used to sit beside it
+    // made the card look clickable while only a 24px target actually was. Carry
+    // the origin so the settings page's Back returns to the tab you came from
+    // (e.g. deep inside a project), not the dashboard.
+    <NavLink
+      to="/settings"
+      state={{ from: location.pathname + location.search }}
+      onClick={() => setOpen(false)}
+      aria-label="Account settings"
+      className="flex items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 transition-colors hover:bg-accent/50"
+    >
       <Avatar className="size-7">
         {/* Guarded: values stored before the allowlist existed are still
             in Supabase, and only this check stops them beaconing (§5.3). */}
@@ -36,22 +44,9 @@ export function AccountCard() {
         <AvatarFallback className="text-xs">{initials(name)}</AvatarFallback>
       </Avatar>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[0.8125rem] font-medium text-foreground" title={name}>{name}</div>
-        <div className="truncate text-xs text-muted-foreground" title={title}>{title}</div>
+        <div className="truncate text-[0.8125rem] font-medium text-foreground">{name}</div>
+        <div className="truncate text-xs text-muted-foreground">{title}</div>
       </div>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        asChild
-        aria-label="Account settings"
-        title="Account settings"
-      >
-        {/* Carry the origin so the settings page's Back returns to the tab
-            you came from (e.g. deep inside a project), not the dashboard. */}
-        <NavLink to="/settings" state={{ from: location.pathname + location.search }} onClick={() => setOpen(false)}>
-          <Settings className="h-3.5 w-3.5" />
-        </NavLink>
-      </Button>
-    </div>
+    </NavLink>
   );
 }

@@ -2,6 +2,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  CircleDashed,
   Clock,
   FolderGit2,
   Loader2,
@@ -124,7 +125,8 @@ function StatCard({
   value: number;
   tone: string;
   /** Only ever true when the count is non-zero: a spinner over "0" claims work
-      that is not happening. */
+      that is not happening. Which is also why an idle caller passes a still
+      glyph rather than a frozen Loader2. */
   spin?: boolean;
 }) {
   return (
@@ -291,7 +293,15 @@ export function DashboardPage() {
         <div className="space-y-5">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-tour="stats-row">
             <StatCard icon={FolderGit2} label="Projects" value={stats.total} tone="text-foreground" />
-            <StatCard icon={Loader2} label="Analyzing" value={stats.analyzing} tone="text-primary" spin={stats.analyzing > 0} />
+            {/* A motionless Loader2 over "0" reads as a spinner that has hung —
+                idle gets its own glyph instead. */}
+            <StatCard
+              icon={stats.analyzing > 0 ? Loader2 : CircleDashed}
+              label="Analyzing"
+              value={stats.analyzing}
+              tone="text-primary"
+              spin={stats.analyzing > 0}
+            />
             {/* "Stale content" only matters when nonzero — otherwise show
                 something informative instead of a permanent 0. */}
             {stats.stale > 0 ? (

@@ -42,4 +42,37 @@ describe("SettingsShell", () => {
     expect(within(rail).getByRole("button", { name: "Danger zone" })).toHaveAttribute("aria-current", "true");
     expect(within(rail).getByRole("button", { name: "General" })).not.toHaveAttribute("aria-current");
   });
+
+  it("follows scrolling via the observer, so the rail is right even when a short last section can't reach the top", async () => {
+    type IoCallback = (entries: Array<{ isIntersecting: boolean; boundingClientRect: { top: number }; target: { id: string } }>) => void;
+    const callbacks: IoCallback[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IoCallback) {
+          callbacks.push(callback);
+        }
+        observe = vi.fn();
+        disconnect = vi.fn();
+        unobserve = vi.fn();
+      },
+    );
+    try {
+      const { act } = await import("@testing-library/react");
+      render(<SettingsShell sections={sections} />);
+      const rail = screen.getByRole("navigation", { name: "Settings sections" });
+
+      act(() => {
+        for (const callback of callbacks) {
+          callback([
+            { isIntersecting: true, boundingClientRect: { top: 40 }, target: { id: "settings-danger" } },
+          ]);
+        }
+      });
+
+      expect(within(rail).getByRole("button", { name: "Danger zone" })).toHaveAttribute("aria-current", "true");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
