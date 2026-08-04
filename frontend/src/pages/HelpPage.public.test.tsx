@@ -51,16 +51,17 @@ describe("HelpRoute chrome picker", () => {
     authState.current = { user: null, loading: false, signOut: vi.fn() };
   });
 
-  it("renders the public header for a signed-out visitor", async () => {
+  it("renders the public shell for a signed-out visitor", async () => {
     await renderHelp();
 
+    // The shared public chrome (IntroHeader): auth-aware actions, no sidebar.
     const header = within(screen.getByRole("banner"));
-    expect(header.getByRole("link", { name: /sign up/i })).toBeInTheDocument();
+    expect(header.getByRole("link", { name: /get started/i })).toBeInTheDocument();
     expect(header.getByRole("link", { name: /sign in/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("Sidebar navigation")).not.toBeInTheDocument();
     // The page itself still renders — public chrome, same content.
     expect(screen.getByRole("heading", { name: /help & faq/i })).toBeInTheDocument();
-    expect(screen.getByText(/privacy & ai transparency/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/privacy & ai transparency/i).length).toBeGreaterThan(0);
   });
 
   it("does not fetch projects while signed out", async () => {

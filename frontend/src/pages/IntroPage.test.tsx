@@ -95,6 +95,19 @@ describe("IntroPage", () => {
     expect(within(section).getByText(workflows.desc)).toBeInTheDocument();
   });
 
+  it("visibly distinguishes Full AI from Facts-only AI", () => {
+    renderPage();
+    const section = document.getElementById("pipeline")!;
+    // Select an AI phase, then flip modes: the data chip and caption change.
+    fireEvent.click(within(section).getByRole("button", { name: /explain symbols/i }));
+    expect(within(section).getByText("Sends code snippets + facts")).toBeInTheDocument();
+
+    fireEvent.click(within(section).getByRole("radio", { name: "Facts-only AI" }));
+    expect(within(section).getByText("Sends extracted facts only, no code")).toBeInTheDocument();
+    expect(within(section).queryByText("Sends code snippets + facts")).toBeNull();
+    expect(within(section).getByText(/code never leaves the system/)).toBeInTheDocument();
+  });
+
   it("renders the three privacy modes from the shared module", () => {
     renderPage();
     const section = document.getElementById("privacy")!;
@@ -124,6 +137,7 @@ describe("IntroPage", () => {
     expect(screen.getByRole("navigation", { name: "Landing sections" })).toBeInTheDocument();
     expect(screen.getByRole("navigation", { name: "Footer" })).toBeInTheDocument();
     expect(document.querySelector('a[href="/help"]')).not.toBeNull();
-    expect(document.querySelector('a[href="/help#privacy"]')).not.toBeNull();
+    expect(document.querySelector('a[href="/privacy"]')).not.toBeNull();
+    expect(document.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 });

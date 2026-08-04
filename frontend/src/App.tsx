@@ -5,7 +5,7 @@ import { LogoMark } from "@/components/BrandLogo";
 import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { PublicPageHeader } from "@/components/PublicPageHeader";
+import { PublicPageShell } from "@/components/PublicPageShell";
 import { SkipToContent } from "@/components/SkipToContent";
 import { MAIN_REGION_ID, usePageChrome } from "@/hooks/usePageChrome";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
@@ -25,6 +25,8 @@ import { GraphPage } from "@/pages/GraphPage";
 import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
 import { GitHubOAuthCallbackPage } from "@/pages/GitHubOAuthCallbackPage";
 import { HelpPage } from "@/pages/HelpPage";
+import { PrivacyPage } from "@/pages/PrivacyPage";
+import { TermsPage } from "@/pages/TermsPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
@@ -187,8 +189,8 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
  *
  * The chrome is picked by session, not by route: a signed-in reader gets the
  * usual sidebar shell (nothing about /help changes for them), a signed-out one
- * gets the landing page's public header. Waiting out `loading` first avoids
- * painting the public header and then swapping it for the sidebar.
+ * gets the public shell shared with /privacy and /terms. Waiting out `loading`
+ * first avoids painting the public chrome and then swapping it for the sidebar.
  */
 export function HelpRoute() {
   const { user, loading } = useAuth();
@@ -208,13 +210,12 @@ export function HelpRoute() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <SkipToContent />
-      <PublicPageHeader />
-      <main id={MAIN_REGION_ID} tabIndex={-1} className="px-4 py-8 outline-none">
-        <HelpPage signedOut />
-      </main>
-    </div>
+    <PublicPageShell
+      title="Help & FAQ"
+      subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
+    >
+      <HelpPage signedOut />
+    </PublicPageShell>
   );
 }
 
@@ -235,6 +236,8 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/help" element={<HelpRoute />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
 
           {import.meta.env.DEV && <Route path="/dev/graph/:id" element={<GraphPage />} />}
 

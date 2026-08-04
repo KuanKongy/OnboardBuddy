@@ -56,7 +56,7 @@ export function PrivacySection() {
             </IconRow>
           </ul>
           <Link
-            to="/help#privacy"
+            to="/privacy"
             className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline"
           >
             Full privacy breakdown, mode by mode

@@ -5,19 +5,21 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 
+// Absolute (/#x) rather than bare (#x) anchors so the same header works on
+// every public page: on the landing they still smooth-jump in place, from
+// /privacy or /terms they navigate home to the section.
 const SECTION_LINKS = [
-  { href: "#product", label: "Product" },
-  { href: "#how", label: "How it works" },
-  { href: "#privacy", label: "Privacy" },
-  { href: "#pipeline", label: "Pipeline" },
+  { href: "/#product", label: "Product" },
+  { href: "/#how", label: "How it works" },
+  { href: "/#privacy", label: "Privacy" },
+  { href: "/#pipeline", label: "Pipeline" },
 ];
 
 /**
- * Landing-local header. PublicPageHeader stays as /help's chrome; the landing
- * needs section anchors and a sticky translucent bar it shouldn't impose on
- * every public page. A signed-in visitor is offered the way back into the
- * app, never bounced (bug #59's no-redirect decision) and never invited to
- * sign up for an account they already have.
+ * The public chrome: the landing page and every public content page
+ * (PublicPageShell) share this sticky header. A signed-in visitor is offered
+ * the way back into the app, never bounced (bug #59's no-redirect decision)
+ * and never invited to sign up for an account they already have.
  */
 export function IntroHeader() {
   const { user, loading } = useAuth();

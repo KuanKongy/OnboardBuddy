@@ -18,6 +18,7 @@ export function PipelineSection() {
   const radioRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const selected = PHASE_ORDER.find((phase) => phase.key === selectedKey) ?? PHASE_ORDER[0]!;
+  const factsOnly = mode === "facts_only_ai";
   const isSkipped = (phase: PipelinePhase) => mode === "ai_disabled" && phase.skippedWhenAiDisabled;
   const selectedSkipped = isSkipped(selected);
   const selectedRunsWithoutAi = mode === "ai_disabled" && selected.ai && !selected.skippedWhenAiDisabled;
@@ -103,13 +104,18 @@ export function PipelineSection() {
                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                   {stripAiPrefix(phase.label)}
                 </span>
+                {/* Facts-only recolors the AI badges: same phases run, but
+                    they receive facts without code, and the section must show
+                    that the mode changes something. */}
                 <span
                   className={cn(
                     "rounded px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide",
                     skipped
                       ? "bg-warning-soft text-warning"
                       : phase.ai
-                        ? "bg-primary/10 text-primary"
+                        ? factsOnly
+                          ? "bg-info-soft text-info"
+                          : "bg-primary/10 text-primary"
                         : "bg-muted text-muted-foreground",
                   )}
                 >
@@ -145,12 +151,26 @@ export function PipelineSection() {
                 Runs without AI in this mode
               </span>
             ) : null}
+            {selected.ai && mode === "full_ai" ? (
+              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-primary">
+                Sends code snippets + facts
+              </span>
+            ) : null}
+            {selected.ai && factsOnly ? (
+              <span className="rounded bg-info-soft px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-info">
+                Sends extracted facts only, no code
+              </span>
+            ) : null}
           </div>
           <p className="mt-1.5 text-[0.875rem] leading-relaxed text-muted-foreground">{selected.desc}</p>
         </div>
         <p className="mt-4 text-center text-xs leading-relaxed text-muted-foreground">
-          Deterministic phases run first. Under AI disabled the semantic phases are skipped
-          entirely, and generation assembles the package from the deterministic output instead.
+          {mode === "full_ai" &&
+            "Deterministic phases run first. Under Full AI, the AI phases read code snippets plus the extracted facts for the best quality."}
+          {mode === "facts_only_ai" &&
+            "Deterministic phases run first. Under Facts-only AI, the AI phases receive extracted facts and structure; code never leaves the system."}
+          {mode === "ai_disabled" &&
+            "Deterministic phases run first. Under AI disabled the semantic phases are skipped entirely, and generation assembles the package from the deterministic output instead."}
         </p>
       </Reveal>
     </SectionShell>

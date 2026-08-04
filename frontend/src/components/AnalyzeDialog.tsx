@@ -125,7 +125,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
                   <Link to={`/projects/${projectId}/settings`} className="text-primary hover:underline">
                     Change in Project Settings
                   </Link>
-                  <Link to="/help#privacy" className="text-primary hover:underline">
+                  <Link to="/privacy" className="text-primary hover:underline">
                     Learn more
                   </Link>
                 </div>
