@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { Reveal } from "@/components/intro/Reveal";
 import { SectionShell } from "@/components/intro/SectionShell";
-import { PHASE_ORDER, stripAiPrefix, type PipelinePhase } from "@/lib/pipelinePhases";
+import { PHASE_ORDER, phaseDesc, stripAiPrefix, type PipelinePhase } from "@/lib/pipelinePhases";
 import { PRIVACY_MODES, type PrivacyMode } from "@/lib/privacyModes";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +19,7 @@ export function PipelineSection() {
 
   const selected = PHASE_ORDER.find((phase) => phase.key === selectedKey) ?? PHASE_ORDER[0]!;
   const factsOnly = mode === "facts_only_ai";
+  const aiOff = mode === "ai_disabled";
   const isSkipped = (phase: PipelinePhase) => mode === "ai_disabled" && phase.skippedWhenAiDisabled;
   const selectedSkipped = isSkipped(selected);
   const selectedRunsWithoutAi = mode === "ai_disabled" && selected.ai && !selected.skippedWhenAiDisabled;
@@ -81,13 +82,18 @@ export function PipelineSection() {
           {PHASE_ORDER.map((phase, i) => {
             const skipped = isSkipped(phase);
             const active = phase.key === selectedKey;
+            // One decision drives the badge, its colour and the announced
+            // name. Under AI disabled a phase either skips or genuinely runs
+            // without a model, so calling anything "AI" there would claim a
+            // model call the run never makes.
+            const kind = skipped ? "skip" : phase.ai && !aiOff ? "ai" : "det";
             return (
               <button
                 key={phase.key}
                 type="button"
                 aria-pressed={active}
-                aria-label={`${stripAiPrefix(phase.label)}, ${phase.ai ? "AI" : "deterministic"} phase${
-                  skipped ? ", skipped under AI disabled" : ""
+                aria-label={`${stripAiPrefix(phase.label)}, ${kind === "det" ? "deterministic" : "AI"} phase${
+                  kind === "skip" ? ", skipped under AI disabled" : ""
                 }`}
                 onClick={() => setSelectedKey(phase.key)}
                 className={cn(
@@ -104,22 +110,22 @@ export function PipelineSection() {
                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
                   {stripAiPrefix(phase.label)}
                 </span>
-                {/* Facts-only recolors the AI badges: same phases run, but
-                    they receive facts without code, and the section must show
-                    that the mode changes something. */}
+                {/* Facts-only recolors the AI badges (same phases run, but on
+                    facts without code); AI disabled removes them, so the grid
+                    shows no "AI" badge anywhere in that mode. */}
                 <span
                   className={cn(
-                    "rounded px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide",
-                    skipped
+                    "rounded px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide transition-colors",
+                    kind === "skip"
                       ? "bg-warning-soft text-warning"
-                      : phase.ai
+                      : kind === "ai"
                         ? factsOnly
                           ? "bg-info-soft text-info"
                           : "bg-primary/10 text-primary"
                         : "bg-muted text-muted-foreground",
                   )}
                 >
-                  {skipped ? "skip" : phase.ai ? "AI" : "det"}
+                  {kind === "skip" ? "skip" : kind === "ai" ? "AI" : "det"}
                 </span>
               </button>
             );
@@ -128,19 +134,27 @@ export function PipelineSection() {
       </Reveal>
 
       <Reveal index={2} className="mt-4">
-        <div className="min-h-[5.5rem] rounded-xl border border-foreground/10 bg-card/70 p-4 backdrop-blur-sm dark:border-white/10">
+        <div className="min-h-[5.5rem] rounded-xl border border-foreground/10 bg-card/70 p-4 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card dark:border-white/10">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[0.9375rem] font-semibold text-foreground">
               {stripAiPrefix(selected.label)}
             </span>
-            <span
-              className={cn(
-                "rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide",
-                selected.ai ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
-              )}
-            >
-              {selected.ai ? "AI" : "Deterministic"}
-            </span>
+            {/* A skipped phase gets no kind badge: the amber "Skipped in this
+                mode" chip below already says what happens to it. */}
+            {selectedSkipped ? null : (
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide transition-colors",
+                  selected.ai && !aiOff
+                    ? factsOnly
+                      ? "bg-info-soft text-info"
+                      : "bg-primary/10 text-primary"
+                    : "bg-muted text-muted-foreground",
+                )}
+              >
+                {selected.ai && !aiOff ? "AI" : "Deterministic"}
+              </span>
+            )}
             {selectedSkipped ? (
               <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-warning">
                 Skipped in this mode
@@ -162,7 +176,9 @@ export function PipelineSection() {
               </span>
             ) : null}
           </div>
-          <p className="mt-1.5 text-[0.875rem] leading-relaxed text-muted-foreground">{selected.desc}</p>
+          <p className="mt-1.5 text-[0.875rem] leading-relaxed text-muted-foreground">
+            {phaseDesc(selected, mode)}
+          </p>
         </div>
         <p className="mt-4 text-center text-xs leading-relaxed text-muted-foreground">
           {mode === "full_ai" &&
