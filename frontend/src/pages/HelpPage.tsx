@@ -269,27 +269,18 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
   ];
 
   return (
-    <div className="mx-auto max-w-3xl">
-      {signedOut ? (
-        // PageHeader leads with the sidebar toggle, and there is no sidebar on
-        // the public route — the same title block without a control that
-        // toggles nothing.
-        <div className="page-header">
-          <div className="min-w-0">
-            <h1 className="page-title">Help &amp; FAQ</h1>
-            <div className="page-subtitle">
-              Tours, frequently asked questions, and what OnboardBuddy sends to the AI.
-            </div>
-          </div>
-        </div>
-      ) : (
+    <>
+      {/* Signed out, PublicPageShell owns the title block; signed in, the
+          header spans the full main width like every other tab, left-aligned,
+          while only the cards column below is centered. */}
+      {!signedOut && (
         <PageHeader
           title="Help & FAQ"
           subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
         />
       )}
 
-      <div className="space-y-4">
+      <div className="mx-auto max-w-3xl space-y-4">
         <Card id="tours">
           <CardContent className="p-4">
             <h2 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-foreground">
@@ -441,9 +432,15 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
               <li>Exclude paths from analysis with <code className="rounded bg-muted px-1 py-0.5 text-[0.6875rem]">ignored_paths</code> in Project Settings.</li>
               <li>Bring your own OpenRouter API key so calls run under your account, not the shared one.</li>
             </ul>
+            <Link
+              to="/privacy"
+              className="mt-3 inline-flex items-center gap-1 text-[0.78125rem] font-medium text-primary hover:underline"
+            >
+              Full privacy policy
+            </Link>
           </CardContent>
         </Card>
       </div>
-    </div>
+    </>
   );
 }

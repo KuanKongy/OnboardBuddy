@@ -1,0 +1,172 @@
+import { Link } from "react-router-dom";
+import { PublicPageShell } from "@/components/PublicPageShell";
+import { Card, CardContent } from "@/components/ui/card";
+import { PRIVACY_MODES } from "@/lib/privacyModes";
+
+/**
+ * The full privacy explanation, public by design: the landing page links here
+ * and the answer must not sit behind a login. Every claim on this page states
+ * something the code actually does; the compact in-app version lives at
+ * /help#privacy. Copy rule: no em dashes.
+ */
+
+function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
+  return (
+    <section id={id} aria-labelledby={`${id}-h`} className="scroll-mt-24">
+      <Card>
+        <CardContent className="p-5">
+          <h2 id={`${id}-h`} className="text-sm font-semibold text-foreground">
+            {title}
+          </h2>
+          <div className="mt-2 space-y-2.5 text-[0.875rem] leading-relaxed text-muted-foreground">
+            {children}
+          </div>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+export function PrivacyPage() {
+  return (
+    <PublicPageShell
+      title="Privacy & AI transparency"
+      subtitle="What OnboardBuddy reads, what reaches a model, what is stored, and what never leaves."
+    >
+      <div className="space-y-4">
+        <Section id="access" title="What OnboardBuddy can access">
+          <p>
+            Repositories connect through a GitHub App installation with read-only permissions
+            (repository contents and metadata). You choose exactly which repositories the app can
+            see, and you can change or revoke that selection on GitHub at any time. OnboardBuddy
+            never has write access to your code and never sees repositories you did not share.
+          </p>
+          <p>
+            Analysis works from a temporary archive of the repository that is extracted for the
+            run and discarded afterwards. No full permanent copy of your repository is stored.
+          </p>
+        </Section>
+
+        <Section id="modes" title="The three privacy modes">
+          <p>
+            Each project chooses how much reaches a model. The mode applies to every run and is
+            enforced mechanically in the pipeline, not promised in a prompt: evidence bundles are
+            assembled with code snippets stripped before anything reaches a provider when the mode
+            forbids them.
+          </p>
+          <ul className="list-disc space-y-1.5 pl-5">
+            {PRIVACY_MODES.map((mode) => (
+              <li key={mode.key}>
+                <span className="font-medium text-foreground">{mode.label}:</span> {mode.hint}
+              </li>
+            ))}
+          </ul>
+          <p>
+            The mode used for a run is stamped on that analysis, so older results keep the promise
+            they were made under even if the project's mode changes later.
+          </p>
+        </Section>
+
+        <Section id="always" title="Protections that apply in every mode">
+          <ul className="list-disc space-y-1.5 pl-5">
+            <li>
+              Secret-bearing files are filtered out during ingestion, always: environment files
+              (.env and variants), private keys and certificates (.pem, .key, .p12 and similar),
+              credential files, and paths matching secret patterns (.ssh, .aws, anything named
+              secret or credential). Example and template files like .env.example stay readable.
+            </li>
+            <li>
+              Your ignore rules apply first: .gitignore-style exclusions plus per-project ignored
+              paths, and a built-in list that always excludes dependencies, build output, and
+              test fixtures.
+            </li>
+            <li>The browser never receives full repository source; it sees generated documentation and the specific cited lines.</li>
+            <li>Every generated claim carries a citation to the file and line it came from, so nothing has to be taken on trust.</li>
+          </ul>
+        </Section>
+
+        <Section id="providers" title="Where AI requests go">
+          <p>
+            AI calls run through OpenRouter with <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.75rem] text-foreground">data_collection: deny</code>{" "}
+            set on every request, and routing restricted to zero-data-retention providers. What a
+            given model provider then does with a request is governed by{" "}
+            <a
+              href="https://openrouter.ai/docs/features/privacy-and-logging"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              OpenRouter's privacy policy
+            </a>
+            . Embeddings for retrieval use an OpenAI-compatible endpoint under the same
+            configuration. With a project-level API key, calls run under your own OpenRouter
+            account instead of a shared one.
+          </p>
+          <p className="font-medium text-foreground">
+            Your code and the documentation generated from it are never used to train models and
+            never sold.
+          </p>
+        </Section>
+
+        <Section id="stored" title="What is stored">
+          <p>
+            OnboardBuddy stores the artifacts it generates and the facts needed to keep citations
+            honest: extracted symbols and relationships (the evidence graph), traced workflows,
+            rankings, generated handbook sections and tutorials with their citations, analysis
+            run metadata (phases, timings, spend), and the specific cited code lines that back
+            receipts. Account data is limited to your sign-in identity, email, and per-project
+            membership and settings.
+          </p>
+        </Section>
+
+        <Section id="services" title="Services involved">
+          <ul className="list-disc space-y-1.5 pl-5">
+            <li>
+              <span className="font-medium text-foreground">Supabase:</span> authentication and
+              the database holding generated artifacts and account data.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">GitHub:</span> sign-in identity and
+              the read-only App installation used to fetch repositories you selected.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">OpenRouter:</span> AI model routing;
+              request and response logs exist only on its dashboard under the account whose key is
+              used.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Upstash Redis:</span> the job queue;
+              holds transient job identifiers, not repository content.
+            </li>
+          </ul>
+        </Section>
+
+        <Section id="control" title="Your controls and deletion">
+          <ul className="list-disc space-y-1.5 pl-5">
+            <li>Switch a project's privacy mode at any time in Project Settings; it applies to every following run.</li>
+            <li>Add ignored paths so specific directories never enter analysis at all.</li>
+            <li>Bring your own OpenRouter key so AI calls run under your account.</li>
+            <li>Disconnect GitHub or uninstall the App to cut repository access immediately.</li>
+            <li>
+              Deleting your account permanently deletes your sign-in, your profile, and every
+              project you own, including all analyses, onboarding packages, and team memberships.
+              Runs you started in other people's projects are re-attributed to those projects'
+              owners. This cannot be undone.
+            </li>
+          </ul>
+          <p>
+            Questions the FAQ answers in product terms live in{" "}
+            <Link to="/help" className="text-primary hover:underline">
+              Help &amp; FAQ
+            </Link>
+            ; the terms governing use of the service are on the{" "}
+            <Link to="/terms" className="text-primary hover:underline">
+              Terms
+            </Link>{" "}
+            page.
+          </p>
+        </Section>
+      </div>
+    </PublicPageShell>
+  );
+}
