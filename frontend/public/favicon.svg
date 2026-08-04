@@ -1,6 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="110 5 164 156">
-  <circle cx="140" cy="41" r="22" fill="#2659f4"/>
-  <circle cx="244" cy="40" r="21" fill="#0c1c3b"/>
-  <path d="M249.4 83.1 A58 58 0 0 1 204.1 131.7" fill="none" stroke="#0c1c3b" stroke-width="28" stroke-linecap="round"/>
-  <path d="M134.6 83.1 A58 58 0 0 0 198.1 132.7" fill="none" stroke="#2659f4" stroke-width="28" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+  <rect width="240" height="240" rx="52" fill="#15181f"/>
+  <g transform="translate(-72 37)">
+    <circle cx="140" cy="41" r="22" fill="#2659f4"/>
+    <circle cx="244" cy="40" r="21" fill="#ffffff"/>
+    <path d="M249.4 83.1 A58 58 0 0 1 204.1 131.7" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round"/>
+    <path d="M134.6 83.1 A58 58 0 0 0 198.1 132.7" fill="none" stroke="#2659f4" stroke-width="28" stroke-linecap="round"/>
+  </g>
 </svg>

@@ -108,7 +108,7 @@ Light and dark themes, both OKLCH token systems defined in `src/styles.css` (`:r
 - **Light background**: pure white (`oklch(1 0 0)`); cards separate via border + shadow
 - **Dark**: a slate-blue surface ladder (background 0.21 → card 0.27 → popover 0.30) with borders a step above
 - **Semantic tokens**: success/warning/danger/info plus `-soft` chip fills; the categorical `--node-*` palette drives the graph, the architecture map and the landing visuals from one place
-- **Brand hexes**: `#2659f4` blue and `#0c1c3b` navy live only in `BrandLogo.tsx` and the favicon; the landing's decorative gradients reuse the blue
+- **Brand hexes**: `#2659f4` blue and `#0c1c3b` navy live only in `BrandLogo.tsx`; the favicon draws the mark blue and white on a `#15181f` rounded square (one design for both themes), and the landing's decorative gradients reuse the blue
 - **Font**: Inter, self-hosted as variable woff2 files in `public/fonts/` (roman preloaded, italic loads on demand)
 - **Motion**: the landing's `landing-*` keyframes, story stage system and `.reveal` scroll transitions live in `styles.css`; a global `prefers-reduced-motion` rule collapses every animation and transition to an instant end state
 
