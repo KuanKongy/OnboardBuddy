@@ -1,6 +1,6 @@
 import { query } from "./db.js";
 import { decrypt, encrypt } from "./encryption.js";
-import { GitHubLinkError } from "./githubErrors.js";
+import { GitHubApiError, GitHubLinkError } from "./githubErrors.js";
 import {
   getInstallationToken,
   listUserInstallations,
@@ -87,7 +87,12 @@ export async function listInstallationsForUser(
       ),
     };
   } catch (err) {
-    if (err instanceof Error && err.message.includes("authorized to a GitHub App")) {
+    // GitHub rejecting the stored user token (revoked, or expired without a
+    // usable refresh) must surface as the reconnect signal, not a 500. The
+    // old guard matched on message text that GitHubApiError deliberately
+    // never carries (its body is log-only), so every GitHub-side 401/403
+    // escaped as "Failed to list GitHub installations".
+    if (err instanceof GitHubApiError && (err.status === 401 || err.status === 403)) {
       throw new GitHubReconnectRequiredError();
     }
     throw err;

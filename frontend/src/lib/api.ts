@@ -1,3 +1,4 @@
+import { clearGithubReturnTarget } from "./githubReturnTarget";
 import { runtimeConfig } from "./runtimeConfig";
 import { supabase } from "./supabase";
 
@@ -32,6 +33,9 @@ let signedOutOnFinal401 = false;
 async function signOutOnce(): Promise<void> {
   if (signedOutOnFinal401) return;
   signedOutOnFinal401 = true;
+  // A pending GitHub return target must not outlive the session that set it
+  // (a stale one once routed the NEXT sign-in's GitHub return to /settings).
+  clearGithubReturnTarget();
   await supabase.auth.signOut().catch(() => {
     // Best effort: the throw below is what the caller acts on either way.
   });

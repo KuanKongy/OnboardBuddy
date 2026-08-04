@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiFetch } from "@/lib/api";
-
-/**
- * Where a GitHub round trip should land afterwards. Written by
- * `connectGithub(next)` before leaving; read (and cleared once consumed) by
- * the return handler. sessionStorage on purpose: the target is meaningful
- * only to the tab that left.
- */
-export const GITHUB_NEXT_KEY = "onboardbuddy.github.next";
+import { takeGithubReturnTarget } from "@/lib/githubReturnTarget";
 
 export type GitHubReturnPhase =
   | "working"
@@ -51,12 +44,11 @@ export function useGitHubReturn(): GitHubReturnState {
   const [params] = useSearchParams();
   const [phase, setPhase] = useState<GitHubReturnPhase>("working");
   const [error, setError] = useState("");
-  // Read WITHOUT clearing: StrictMode mounts twice and the second mount must
-  // see the same target. Cleared once the flow actually consumes it.
-  const [next] = useState(() => {
-    const raw = sessionStorage.getItem(GITHUB_NEXT_KEY);
-    return raw && raw.startsWith("/") && !raw.startsWith("//") ? raw : "/import";
-  });
+  // Consumed on EVERY arrival, whatever the outcome: a stale target from an
+  // abandoned earlier flow once routed a fresh registration to /settings.
+  // takeGithubReturnTarget clears storage on first read and caches for
+  // StrictMode's second mount.
+  const [next] = useState(() => takeGithubReturnTarget());
   const requestedRef = useRef(false);
 
   useEffect(() => {
@@ -99,7 +91,6 @@ export function useGitHubReturn(): GitHubReturnState {
               body: JSON.stringify({ installation_id: installationId, state }),
             });
           }
-          sessionStorage.removeItem(GITHUB_NEXT_KEY);
           navigate(next, { replace: true });
           return;
         }
@@ -124,7 +115,6 @@ export function useGitHubReturn(): GitHubReturnState {
             }
             throw err;
           }
-          sessionStorage.removeItem(GITHUB_NEXT_KEY);
           navigate(next, { replace: true });
           return;
         }

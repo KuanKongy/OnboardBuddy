@@ -54,6 +54,30 @@ describe("GET /api/github/installations", () => {
     expect(res.body.installations.map((inst: { account: { login: string } }) => inst.account.login))
       .to.deep.equal([MOCK_GITHUB_ACCOUNTS.owner.login]);
   });
+
+  it("surfaces a GitHub-rejected token as reconnect-required, not a 500", async () => {
+    installTestAuth();
+    mockGithubConnection();
+    // A stored token GitHub no longer accepts (revoked, or expired without a
+    // usable refresh). The old message-substring guard let this escape as
+    // 500 "Failed to list GitHub installations".
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (input.toString() === "https://api.github.com/user/installations") {
+        return new Response(JSON.stringify({ message: "Bad credentials" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      throw new Error(`Unexpected GitHub fetch: ${input.toString()}`);
+    }) as typeof fetch;
+
+    const res = await request(app)
+      .get("/api/github/installations")
+      .set(authHeader());
+
+    expect(res.status).to.equal(403);
+    expect(res.body.code).to.equal("github_reconnect_required");
+  });
 });
 
 describe("POST /api/github/oauth/complete", () => {

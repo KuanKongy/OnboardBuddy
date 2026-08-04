@@ -66,12 +66,14 @@ const apiState: {
   projectRow: Record<string, unknown> | null;
   installations: Array<{ id: number; account: { login: string } }>;
   githubConnected: boolean;
+  installationsFailure: "reconnect" | null;
 } = {
   projects: [],
   conflictProjectId: null,
   projectRow: null,
   installations: SINGLE_INSTALLATION,
   githubConnected: true,
+  installationsFailure: null,
 };
 
 vi.mock("@/lib/api", () => {
@@ -90,6 +92,13 @@ vi.mock("@/lib/api", () => {
       const method = options?.method ?? "GET";
       if (path === "/github/app") return { name: "OnboardBuddy", install_url: "https://github.test/install" };
       if (path === "/github/installations") {
+        if (apiState.installationsFailure === "reconnect") {
+          throw new ApiError(
+            "Authorize the GitHub App from Account Settings, then refresh installations.",
+            403,
+            { code: "github_reconnect_required" },
+          );
+        }
         return {
           github_connected: apiState.githubConnected,
           github_username: apiState.githubConnected ? "acme-bot" : null,
@@ -171,15 +180,14 @@ function renderImportPage(entry = "/import") {
 }
 
 /**
- * A single installation auto-selects and renders as a static value, not a
- * combobox; the repo list follows without any click. This helper just waits
- * for that settled state.
+ * A single installation auto-selects (the repo list follows without any
+ * click) but stays a real, choosable picker. This helper waits for that
+ * settled state.
  */
 async function awaitAccountReady() {
   renderImportPage();
   await waitFor(() => expect(screen.getByLabelText("Filter repositories")).toBeInTheDocument());
-  expect(screen.queryByRole("combobox", { name: "GitHub account" })).not.toBeInTheDocument();
-  expect(screen.getByText("acme")).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveTextContent("acme");
 }
 
 /** Walk step 1 (repo → Import; no branch step anymore) into step 2. */
@@ -195,13 +203,18 @@ async function reachConfigureStep(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() => expect(screen.getByText(/Configure the first analysis/i)).toBeInTheDocument());
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Call history only (not the implementation): capture-style assertions must
+  // never match a previous test's requests.
+  const { apiFetch } = await import("@/lib/api");
+  vi.mocked(apiFetch).mockClear();
   analyzeCalls.length = 0;
   apiState.projects = [];
   apiState.conflictProjectId = null;
   apiState.projectRow = null;
   apiState.installations = SINGLE_INSTALLATION;
   apiState.githubConnected = true;
+  apiState.installationsFailure = null;
 });
 
 /**
@@ -351,14 +364,16 @@ describe("ImportPage — already-imported repositories (#74/F4)", () => {
 });
 
 describe("ImportPage — streamlined step 1", () => {
-  it("auto-selects a single installation and shows it as a value, not a question", async () => {
+  it("auto-selects a single installation but keeps it a choosable picker", async () => {
     await awaitAccountReady();
-    // The links row still offers the escape hatches.
+    // Still a combobox (the account list can grow), pre-filled with the only
+    // option; the links row keeps the escape hatches.
+    expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveTextContent("acme");
     expect(screen.getByRole("link", { name: /configure repositories/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   });
 
-  it("renders the account picker only when there is a real choice", async () => {
+  it("does not auto-select when several installations exist", async () => {
     apiState.installations = [
       { id: 42, account: { login: "acme" } },
       { id: 43, account: { login: "acme-labs" } },
@@ -370,6 +385,18 @@ describe("ImportPage — streamlined step 1", () => {
     await user.click(picker);
     await user.click(await screen.findByRole("option", { name: "acme-labs" }));
     await waitFor(() => expect(screen.getByLabelText("Filter repositories")).toBeInTheDocument());
+  });
+
+  it("renders an expired connection as the connect state, not an error banner", async () => {
+    apiState.installationsFailure = "reconnect";
+    renderImportPage();
+
+    expect(
+      await screen.findByText(/Your GitHub connection expired\. Connecting again takes one click\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect GitHub" })).toBeInTheDocument();
+    // The 403 must not surface as a red banner; the connect box IS the fix.
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("refetches repositories on Refresh and keeps a still-valid selection", async () => {
@@ -414,6 +441,31 @@ describe("ImportPage — streamlined step 1", () => {
     expect(body.default_developer_role).toBe("general");
   });
 
+  it("persists exactly the ignored list it showed, including edits to the defaults", async () => {
+    const user = userEvent.setup();
+    await awaitAccountReady();
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
+
+    // The four column defaults render as removable chips from the start.
+    await user.click(screen.getByRole("button", { name: "Remove dist" }));
+    await user.type(screen.getByPlaceholderText("e.g. fixtures/"), "fixtures/");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    await user.click(screen.getByRole("button", { name: /import repository/i }));
+    await waitFor(() => expect(screen.getByText(/Configure the first analysis/i)).toBeInTheDocument());
+
+    const { apiFetch } = await import("@/lib/api");
+    const settingsCall = vi
+      .mocked(apiFetch)
+      .mock.calls.find(([path]) => String(path).endsWith("/settings"));
+    expect(settingsCall).toBeDefined();
+    const body = JSON.parse((settingsCall![1] as { body: string }).body) as { ignored_paths: string[] };
+    // The old only-when-nonempty rule silently dropped the defaults the
+    // moment one custom path was added.
+    expect(body.ignored_paths).toEqual(["node_modules", ".git", ".env", "fixtures/"]);
+  });
+
   it("splits the empty state by whether GitHub is connected at all", async () => {
     apiState.installations = [];
     apiState.githubConnected = false;
@@ -428,26 +480,28 @@ describe("ImportPage — streamlined step 1", () => {
     expect(screen.getByRole("button", { name: "Install OnboardBuddy" })).toBeInTheDocument();
   });
 
-  it("renders ignored paths as an input first, then removable chips with per-path labels", async () => {
+  it("shows ignored paths without a toggle: defaults as chips below the input", async () => {
     const user = userEvent.setup();
     await awaitAccountReady();
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
 
-    await user.click(screen.getByRole("button", { name: /ignored paths/i }));
-    const input = screen.getByPlaceholderText("e.g. node_modules/");
-    await user.type(input, "node_modules/");
-    await user.click(screen.getByRole("button", { name: "Add" }));
-
-    const removeButton = screen.getByRole("button", { name: "Remove node_modules/" });
-    expect(removeButton).toBeInTheDocument();
-    // Input row first, chips below: the input must precede the chip in DOM order.
+    // No "+ Show" toggle: the block is always visible once a repo is picked,
+    // prefilled with the real column defaults.
+    const input = screen.getByPlaceholderText("e.g. fixtures/");
+    const removeDefault = screen.getByRole("button", { name: "Remove node_modules" });
+    // Input row first, chips below.
     expect(
-      input.compareDocumentPosition(removeButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+      input.compareDocumentPosition(removeDefault) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
-    await user.click(removeButton);
-    expect(screen.queryByRole("button", { name: "Remove node_modules/" })).not.toBeInTheDocument();
+    await user.type(input, "docs/");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    const removeAdded = screen.getByRole("button", { name: "Remove docs/" });
+    await user.click(removeAdded);
+    expect(screen.queryByRole("button", { name: "Remove docs/" })).not.toBeInTheDocument();
+    // The always-on engine exclusions are stated, not hidden.
+    expect(screen.getByText(/always excluded, even if removed here/)).toBeInTheDocument();
   });
 });
 

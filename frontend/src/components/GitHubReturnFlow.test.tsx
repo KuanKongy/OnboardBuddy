@@ -2,7 +2,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { GITHUB_NEXT_KEY } from "@/hooks/useGitHubReturn";
+import { clearGithubReturnTarget, setGithubReturnTarget } from "@/lib/githubReturnTarget";
+
+const GITHUB_NEXT_KEY = "onboardbuddy.github.next";
 
 const apiFetch = vi.fn();
 vi.mock("@/lib/api", () => ({
@@ -37,6 +39,8 @@ beforeEach(() => {
   apiFetch.mockReset().mockResolvedValue({});
   connectGithub.mockReset();
   sessionStorage.clear();
+  // Also resets the module-level take-once cache between tests.
+  clearGithubReturnTarget();
 });
 
 describe("GitHubReturnFlow", () => {
@@ -57,12 +61,21 @@ describe("GitHubReturnFlow", () => {
   });
 
   it("handles a pure re-authorize (code+state, no installation) and honors the stored next", async () => {
-    sessionStorage.setItem(GITHUB_NEXT_KEY, "/settings");
+    setGithubReturnTarget("/settings");
     renderAt("?code=c1&state=s1");
     await screen.findByText("SETTINGS PAGE");
 
     expect(callsTo("/github/oauth/complete")).toHaveLength(1);
     expect(callsTo("/github/installations/link")).toHaveLength(0);
+    expect(sessionStorage.getItem(GITHUB_NEXT_KEY)).toBeNull();
+  });
+
+  it("consumes the stored target even when the arrival errors, so it can never go stale", async () => {
+    // The bug this pins: a "/settings" left behind by an abandoned Settings
+    // flow once routed a brand-new registration to Account Settings.
+    setGithubReturnTarget("/settings");
+    renderAt("?error=access_denied");
+    await screen.findByText("You cancelled on GitHub.");
     expect(sessionStorage.getItem(GITHUB_NEXT_KEY)).toBeNull();
   });
 

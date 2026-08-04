@@ -6,8 +6,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { GITHUB_NEXT_KEY } from "../hooks/useGitHubReturn";
 import { apiFetch } from "../lib/api";
+import { clearGithubReturnTarget, setGithubReturnTarget } from "../lib/githubReturnTarget";
 import { supabase } from "../lib/supabase";
 
 interface AuthContextValue {
@@ -61,12 +61,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
-      // The confirmation link signs the user in and continues to import,
-      // instead of stranding them on the landing page to log in a second
-      // time (the callback validates the next param and it survives Supabase's
-      // round trip).
+      // The confirmation link signs the user in and continues to the
+      // dashboard, instead of stranding them on the landing page to log in a
+      // second time. No next param: /dashboard is the callback's default.
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback?next=/import`,
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
       },
     });
     if (error) throw error;
@@ -79,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // best-effort server-side session invalidation
     }
-    sessionStorage.removeItem(GITHUB_NEXT_KEY);
+    clearGithubReturnTarget();
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   }
@@ -97,13 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function connectGithub(next?: string) {
-    // Record where the return leg should land BEFORE leaving; clearing first
-    // drops any stale target from an abandoned earlier attempt. Only local
-    // paths are stored — the return handler validates again on read.
-    sessionStorage.removeItem(GITHUB_NEXT_KEY);
-    if (next && next.startsWith("/") && !next.startsWith("//")) {
-      sessionStorage.setItem(GITHUB_NEXT_KEY, next);
-    }
+    // Record where the return leg should land BEFORE leaving; the module
+    // clears any stale target from an abandoned earlier attempt and the
+    // return handler consumes it single-use.
+    setGithubReturnTarget(next);
     const { authorization_url } = await apiFetch("/github/oauth/start") as {
       authorization_url: string;
     };
