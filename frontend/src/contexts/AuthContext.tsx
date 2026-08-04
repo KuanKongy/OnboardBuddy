@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { GITHUB_NEXT_KEY } from "../hooks/useGitHubReturn";
 import { apiFetch } from "../lib/api";
 import { supabase } from "../lib/supabase";
 
@@ -18,7 +19,8 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   /** `next` = in-app path to land on after the OAuth hop (deep-link preservation). */
   signInWithGithub: (next?: string) => Promise<void>;
-  connectGithub: (preserveAfterOAuthFlag?: boolean) => Promise<void>;
+  /** `next` = in-app path the GitHub return leg lands on (default /import). */
+  connectGithub: (next?: string) => Promise<void>;
   disconnectGithub: () => Promise<void>;
 }
 
@@ -56,7 +58,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signUp(email: string, password: string) {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      // The confirmation link signs the user in and continues to import,
+      // instead of stranding them on the landing page to log in a second
+      // time (the callback validates the next param and it survives Supabase's
+      // round trip).
+      options: {
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=/import`,
+      },
+    });
     if (error) throw error;
     return data.session;
   }
@@ -67,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // best-effort server-side session invalidation
     }
-    sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+    sessionStorage.removeItem(GITHUB_NEXT_KEY);
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   }
@@ -84,12 +96,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (error) throw error;
   }
 
-  async function connectGithub(preserveAfterOAuthFlag = false) {
-    // Callers that just set the flag themselves (e.g. ImportPage staging an
-    // "install" continuation right before this call) pass true so their
-    // flag survives; everyone else gets the defensive clear of any stale
-    // flag left behind by a previous, abandoned OAuth attempt.
-    if (!preserveAfterOAuthFlag) sessionStorage.removeItem("onboardbuddy.github.after_oauth");
+  async function connectGithub(next?: string) {
+    // Record where the return leg should land BEFORE leaving; clearing first
+    // drops any stale target from an abandoned earlier attempt. Only local
+    // paths are stored — the return handler validates again on read.
+    sessionStorage.removeItem(GITHUB_NEXT_KEY);
+    if (next && next.startsWith("/") && !next.startsWith("//")) {
+      sessionStorage.setItem(GITHUB_NEXT_KEY, next);
+    }
     const { authorization_url } = await apiFetch("/github/oauth/start") as {
       authorization_url: string;
     };

@@ -12,6 +12,7 @@ vi.mock("@/lib/supabase", () => ({
       // Never settles: the real one navigates away instead of returning, which is
       // exactly the window the in-flight state has to cover.
       signInWithOAuth: vi.fn().mockReturnValue(new Promise(() => {})),
+      signUp: vi.fn().mockResolvedValue({ data: { session: null }, error: null }),
     },
   },
 }));
@@ -60,5 +61,32 @@ describe("SignupPage", () => {
 
     expect(github).toBeDisabled();
     expect(screen.getByRole("button", { name: /create account/i })).toBeDisabled();
+  });
+
+  // A brand-new account's only meaningful next step is importing a repo, so
+  // both signup paths continue there instead of an empty dashboard.
+  it("routes the GitHub OAuth hop to the import page", async () => {
+    const user = userEvent.setup();
+    await renderSignup();
+    await user.click(screen.getByRole("button", { name: /github/i }));
+
+    const { supabase } = await import("@/lib/supabase");
+    const oauthArgs = vi.mocked(supabase.auth.signInWithOAuth).mock.calls[0]![0];
+    expect(oauthArgs.options?.redirectTo).toContain("/auth/callback?next=%2Fimport");
+  });
+
+  it("points the email confirmation link at the import page", async () => {
+    const user = userEvent.setup();
+    await renderSignup();
+    await user.type(screen.getByLabelText(/email/i), "new@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "longenough1");
+    await user.click(screen.getByRole("button", { name: /create account/i }));
+
+    const { supabase } = await import("@/lib/supabase");
+    const signUpArgs = vi.mocked(supabase.auth.signUp).mock.calls[0]![0] as {
+      options?: { emailRedirectTo?: string };
+    };
+    expect(signUpArgs.options?.emailRedirectTo).toContain("/auth/callback?next=/import");
+    expect(await screen.findByText(/check your email/i)).toBeInTheDocument();
   });
 });
