@@ -21,21 +21,28 @@ function bodies(v: Variant): Array<[RegExp, unknown]> {
   const empty = v === "empty";
   const huge = v === "huge";
 
+  // Shapes mirror backend/src/api/routes/github.ts exactly: installations
+  // carry a nested `account.login` (ImportPage reads `inst.account.login`)
+  // plus the connection flags, and repos come back under `repos` with an
+  // `owner` string. The earlier flat/`repositories` shapes crashed ImportPage
+  // into the error boundary, so every audit of /import censused a crash page.
   const installations = empty
-    ? { installations: [] }
+    ? { github_connected: false, github_username: null, installations: [] }
     : {
+        github_connected: true,
+        github_username: "devexample",
         installations: [
-          { id: 123, account_login: "acme", account_type: "Organization", app_id: 4053634 },
-          ...(huge ? big(40, (i) => ({ id: 900 + i, account_login: `org-${i}`, account_type: "Organization", app_id: 4053634 })) : []),
+          { id: 123, account: { id: 1, login: "acme", type: "Organization" }, app_id: 4053634 },
+          ...(huge ? big(40, (i) => ({ id: 900 + i, account: { id: 2 + i, login: `org-${i}`, type: "Organization" }, app_id: 4053634 })) : []),
         ],
       };
 
   const repos = empty
-    ? { repositories: [] }
+    ? { repos: [] }
     : {
-        repositories: [
-          { id: 1, name: "auth-demo", full_name: "acme/auth-demo", default_branch: "main", private: false, language: "TypeScript", description: "Demo auth service" },
-          ...(huge ? big(60, (i) => ({ id: 100 + i, name: `repo-${i}`, full_name: `acme/repo-${i}`, default_branch: "main", private: false, language: "TypeScript", description: pad(`Repo ${i}`) })) : []),
+        repos: [
+          { id: 1, name: "auth-demo", full_name: "acme/auth-demo", owner: "acme", default_branch: "main", private: false, language: "TypeScript", description: "Demo auth service" },
+          ...(huge ? big(60, (i) => ({ id: 100 + i, name: `repo-${i}`, full_name: `acme/repo-${i}`, owner: "acme", default_branch: "main", private: false, language: "TypeScript", description: pad(`Repo ${i}`) })) : []),
         ],
       };
 
@@ -120,10 +127,10 @@ function bodies(v: Variant): Array<[RegExp, unknown]> {
     }],
 
     // ── github (import wizard) ──────────────────────────────────────────────
-    [/\/api\/github\/app/, { app: { name: "OnboardBuddy", slug: "onboardbuddy", html_url: "https://github.com/apps/onboardbuddy" } }],
+    [/\/api\/github\/app/, { name: "OnboardBuddy", slug: "onboardbuddy", install_url: "https://github.com/apps/onboardbuddy/installations/new?state=mock" }],
     [/\/api\/github\/installations/, installations],
     [/\/api\/github\/repos\/[^/]+\/[^/]+\/branches/, { branches: [{ name: "main", commit: { sha: "abc1234def" } }, { name: "dev", commit: { sha: "def5678abc" } }] }],
-    [/\/api\/github\/repos\/[^/]+\/[^/]+\/commits/, { commits: big(5, (i) => ({ sha: `c${i}0000000`, message: `commit ${i}`, author: "dev", date: "2026-07-20T10:00:00Z" })) }],
+    [/\/api\/github\/repos\/[^/]+\/[^/]+\/commits/, { commits: big(5, (i) => ({ sha: `c${i}0000000`, shortSha: `c${i}00000`, message: `commit ${i}`, author: "dev", date: "2026-07-20T10:00:00Z" })) }],
     [/\/api\/github\/repos/, repos],
   ];
 }

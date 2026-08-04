@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { apiFetch } from "@/lib/api";
+import { roleLabel } from "@/lib/roles";
 import type { PackageProvenance } from "@/types/onboarding";
 import { cn } from "@/lib/utils";
 
@@ -88,7 +89,7 @@ export function ProvenancePanel({
             <>
               <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span className="font-mono">{data.package.branch}@{data.package.analyzedCommit.slice(0, 7)}</span>
-                <span className="capitalize">{data.package.role} role</span>
+                <span>{roleLabel(data.package.role)} role</span>
                 <span>depth: {data.package.semanticDepth}</span>
                 <span>privacy: {data.package.privacyMode.replace(/_/g, " ")}</span>
                 <span>{new Date(data.package.generatedAt).toLocaleString()}</span>

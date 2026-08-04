@@ -93,9 +93,10 @@ test.describe("live import", () => {
       await page.waitForTimeout(300);
     }
 
-    // Progressive walk: the wizard reveals Repository only after an account is
-    // chosen, Branch only after a repository. Each stage is censused so the
-    // controls that only exist mid-flow are recorded too.
+    // Progressive walk: a single installation auto-selects (no account
+    // combobox exists then — pick() returns null and moves on), Repository
+    // reveals Role beside it once chosen; there is no Branch step. Each stage
+    // is censused so the controls that only exist mid-flow are recorded too.
     const pick = async (comboLabel: RegExp, optionText?: RegExp) => {
       const c = page.locator('[role="combobox"]').filter({ hasText: comboLabel }).first();
       if ((await c.count()) === 0) return null;

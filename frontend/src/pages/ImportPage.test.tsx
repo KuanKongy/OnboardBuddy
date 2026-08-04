@@ -58,11 +58,21 @@ vi.mock("@/components/PreflightPreview", async () => {
  * different shapes — one mock answering both makes the page's cross-reference read
  * `undefined`.
  */
+const SINGLE_INSTALLATION = [{ id: 42, account: { login: "acme" } }];
+
 const apiState: {
   projects: Array<Record<string, unknown>>;
   conflictProjectId: string | null;
   projectRow: Record<string, unknown> | null;
-} = { projects: [], conflictProjectId: null, projectRow: null };
+  installations: Array<{ id: number; account: { login: string } }>;
+  githubConnected: boolean;
+} = {
+  projects: [],
+  conflictProjectId: null,
+  projectRow: null,
+  installations: SINGLE_INSTALLATION,
+  githubConnected: true,
+};
 
 vi.mock("@/lib/api", () => {
   class ApiError extends Error {
@@ -80,7 +90,11 @@ vi.mock("@/lib/api", () => {
       const method = options?.method ?? "GET";
       if (path === "/github/app") return { name: "OnboardBuddy", install_url: "https://github.test/install" };
       if (path === "/github/installations") {
-        return { github_connected: true, github_username: "acme-bot", installations: [{ id: 42, account: { login: "acme" } }] };
+        return {
+          github_connected: apiState.githubConnected,
+          github_username: apiState.githubConnected ? "acme-bot" : null,
+          installations: apiState.installations,
+        };
       }
       if (path.startsWith("/github/repos?")) return { repos: REPOS };
       if (path.includes("/branches")) return { branches: BRANCHES };
@@ -91,7 +105,7 @@ vi.mock("@/lib/api", () => {
             project_id: apiState.conflictProjectId,
           });
         }
-        return { project: { id: "proj-1" } };
+        return { project: { id: "proj-1", branch: "main" } };
       }
       if (path.endsWith("/settings")) return {};
       if (path.endsWith("/analyze")) { analyzeCalls.push(path); return { analysis: { id: "job-1" } }; }
@@ -156,21 +170,26 @@ function renderImportPage(entry = "/import") {
   );
 }
 
-/** Picks the GitHub account, which is what makes the repo picker appear. */
-async function selectAccount(user: ReturnType<typeof userEvent.setup>) {
+/**
+ * A single installation auto-selects and renders as a static value, not a
+ * combobox; the repo list follows without any click. This helper just waits
+ * for that settled state.
+ */
+async function awaitAccountReady() {
   renderImportPage();
-  await user.click(await screen.findByRole("combobox", { name: "GitHub account" }));
-  await user.click(await screen.findByRole("option", { name: "acme" }));
   await waitFor(() => expect(screen.getByLabelText("Filter repositories")).toBeInTheDocument());
+  expect(screen.queryByRole("combobox", { name: "GitHub account" })).not.toBeInTheDocument();
+  expect(screen.getByText("acme")).toBeInTheDocument();
 }
 
-/** Walk step 1 (pick account → repo → branch → Import) into step 2. */
+/** Walk step 1 (repo → Import; no branch step anymore) into step 2. */
 async function reachConfigureStep(user: ReturnType<typeof userEvent.setup>) {
-  await selectAccount(user);
+  await awaitAccountReady();
 
   await user.click(screen.getByRole("combobox", { name: "Repository" }));
   await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
-  await waitFor(() => expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument());
+  // Role appears beside the repository once one is picked.
+  await waitFor(() => expect(screen.getByRole("combobox", { name: "Role" })).toBeInTheDocument());
 
   await user.click(screen.getByRole("button", { name: /import repository/i }));
   await waitFor(() => expect(screen.getByText(/Configure the first analysis/i)).toBeInTheDocument());
@@ -181,6 +200,8 @@ beforeEach(() => {
   apiState.projects = [];
   apiState.conflictProjectId = null;
   apiState.projectRow = null;
+  apiState.installations = SINGLE_INSTALLATION;
+  apiState.githubConnected = true;
 });
 
 /**
@@ -193,7 +214,7 @@ beforeEach(() => {
 describe("ImportPage — finding a repository in a large account (bug #67)", () => {
   it("filters a long repository list down to the typed query", async () => {
     const user = userEvent.setup();
-    await selectAccount(user);
+    await awaitAccountReady();
 
     // Every paginated repo reached the picker — the old backend stopped at 100.
     expect(screen.getByText("137 repositories available")).toBeInTheDocument();
@@ -208,7 +229,7 @@ describe("ImportPage — finding a repository in a large account (bug #67)", () 
 
   it("says so instead of showing an empty dropdown when nothing matches", async () => {
     const user = userEvent.setup();
-    await selectAccount(user);
+    await awaitAccountReady();
 
     await user.type(screen.getByLabelText("Filter repositories"), "no-such-repo");
 
@@ -297,7 +318,7 @@ describe("ImportPage — already-imported repositories (#74/F4)", () => {
       { id: "p-001", repo_owner: "acme", repo_name: "service-001", permission_tier: "viewer" },
     ];
     const user = userEvent.setup();
-    await selectAccount(user);
+    await awaitAccountReady();
 
     await user.type(screen.getByLabelText("Filter repositories"), "service-00");
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
@@ -314,11 +335,11 @@ describe("ImportPage — already-imported repositories (#74/F4)", () => {
   it("links to the existing project when create comes back 409", async () => {
     apiState.conflictProjectId = "already-there-9";
     const user = userEvent.setup();
-    await selectAccount(user);
+    await awaitAccountReady();
 
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
     await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Branch" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Role" })).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: /import repository/i }));
 
     expect(await screen.findByText(/Project already exists for this repo/)).toBeInTheDocument();
@@ -326,6 +347,107 @@ describe("ImportPage — already-imported repositories (#74/F4)", () => {
       "href",
       "/projects/already-there-9",
     );
+  });
+});
+
+describe("ImportPage — streamlined step 1", () => {
+  it("auto-selects a single installation and shows it as a value, not a question", async () => {
+    await awaitAccountReady();
+    // The links row still offers the escape hatches.
+    expect(screen.getByRole("link", { name: /configure repositories/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  });
+
+  it("renders the account picker only when there is a real choice", async () => {
+    apiState.installations = [
+      { id: 42, account: { login: "acme" } },
+      { id: 43, account: { login: "acme-labs" } },
+    ];
+    const user = userEvent.setup();
+    renderImportPage();
+
+    const picker = await screen.findByRole("combobox", { name: "GitHub account" });
+    await user.click(picker);
+    await user.click(await screen.findByRole("option", { name: "acme-labs" }));
+    await waitFor(() => expect(screen.getByLabelText("Filter repositories")).toBeInTheDocument());
+  });
+
+  it("refetches repositories on Refresh and keeps a still-valid selection", async () => {
+    const user = userEvent.setup();
+    await awaitAccountReady();
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
+
+    const { apiFetch } = await import("@/lib/api");
+    const repoCallsBefore = vi
+      .mocked(apiFetch)
+      .mock.calls.filter(([path]) => String(path).startsWith("/github/repos?")).length;
+
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitFor(() => {
+      const repoCallsAfter = vi
+        .mocked(apiFetch)
+        .mock.calls.filter(([path]) => String(path).startsWith("/github/repos?")).length;
+      // The old page refetched installations only; the repo list (the thing
+      // "Configure repositories" changes) never reloaded without a page reload.
+      expect(repoCallsAfter).toBeGreaterThan(repoCallsBefore);
+    });
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent(
+      "acme/service-000",
+    );
+  });
+
+  it("omits branch from the create request; the server resolves the repo default", async () => {
+    const user = userEvent.setup();
+    await reachConfigureStep(user);
+
+    const { apiFetch } = await import("@/lib/api");
+    const createCall = vi
+      .mocked(apiFetch)
+      .mock.calls.find(
+        ([path, options]) => path === "/projects" && (options as RequestInit | undefined)?.method === "POST",
+      );
+    expect(createCall).toBeDefined();
+    const body = JSON.parse((createCall![1] as { body: string }).body) as Record<string, unknown>;
+    expect(body).not.toHaveProperty("branch");
+    expect(body.default_developer_role).toBe("general");
+  });
+
+  it("splits the empty state by whether GitHub is connected at all", async () => {
+    apiState.installations = [];
+    apiState.githubConnected = false;
+    const { unmount } = renderImportPage();
+    expect(await screen.findByText(/GitHub isn't connected yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect GitHub" })).toBeInTheDocument();
+    unmount();
+
+    apiState.githubConnected = true;
+    renderImportPage();
+    expect(await screen.findByText(/No repositories are shared with the app yet/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Install OnboardBuddy" })).toBeInTheDocument();
+  });
+
+  it("renders ignored paths as an input first, then removable chips with per-path labels", async () => {
+    const user = userEvent.setup();
+    await awaitAccountReady();
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: "acme/service-000" }));
+
+    await user.click(screen.getByRole("button", { name: /ignored paths/i }));
+    const input = screen.getByPlaceholderText("e.g. node_modules/");
+    await user.type(input, "node_modules/");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    const removeButton = screen.getByRole("button", { name: "Remove node_modules/" });
+    expect(removeButton).toBeInTheDocument();
+    // Input row first, chips below: the input must precede the chip in DOM order.
+    expect(
+      input.compareDocumentPosition(removeButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await user.click(removeButton);
+    expect(screen.queryByRole("button", { name: "Remove node_modules/" })).not.toBeInTheDocument();
   });
 });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
-import { ROLE_OPTIONS } from "@/lib/roles";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleTitle } from "@/lib/roles";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -70,6 +70,10 @@ const DEPTHS = [
   { value: "full", label: "Full — most thorough" },
 ];
 
+/** What a run gets when the project stores no depth: worker/index.ts resolves
+ *  it as COALESCE(ps.analysis_depth, 'standard'). */
+const FALLBACK_DEPTH = DEPTHS.find((d) => d.value === "standard")!;
+
 interface AnalyzeConfigFormProps {
   /** Needed for scope listing; omit before the project exists. */
   projectId?: string;
@@ -78,6 +82,13 @@ interface AnalyzeConfigFormProps {
   installationId: string;
   /** Branch preselected when the form opens (project default). */
   defaultBranch: string;
+  /**
+   * The project's stored depth and role. The two "leave it as configured"
+   * options name the value they resolve to instead of saying "default", which
+   * told the person starting a BILLED run nothing about what it would run at.
+   */
+  projectDepth?: string;
+  projectRole?: string;
   config: AnalyzeConfig;
   onChange: (config: AnalyzeConfig) => void;
 }
@@ -95,6 +106,8 @@ export function AnalyzeConfigForm({
   repoName,
   installationId,
   defaultBranch,
+  projectDepth,
+  projectRole,
   config,
   onChange,
 }: AnalyzeConfigFormProps) {
@@ -163,16 +176,13 @@ export function AnalyzeConfigForm({
           <SelectTrigger id="analyze-branch" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
             {(branches.length > 0 ? branches : [branch]).map((b) => (
-              <SelectItem key={b} value={b}>
-                {b}
-                {b === defaultBranch ? " (default)" : ""}
-              </SelectItem>
+              <SelectItem key={b} value={b}>{b}</SelectItem>
             ))}
           </SelectContent>
         </Select>
         {listErrors.branches && (
           <p className="text-[0.6875rem] text-warning">
-            Branch list couldn&apos;t be loaded — only the default is offered. Other branches may exist.
+            Branch list couldn&apos;t be loaded — only {branch} is offered. Other branches may exist.
           </p>
         )}
       </div>
@@ -249,8 +259,12 @@ export function AnalyzeConfigForm({
         >
           <SelectTrigger id="analyze-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="default">Project default</SelectItem>
-            {DEPTHS.map((d) => (
+            <SelectItem value="default">
+              {(DEPTHS.find((d) => d.value === projectDepth) ?? FALLBACK_DEPTH).label}
+            </SelectItem>
+            {/* Pinning the depth the project already resolves to is the same
+                run; hiding it keeps the list free of two identical labels. */}
+            {DEPTHS.filter((d) => d.value !== (projectDepth || FALLBACK_DEPTH.value)).map((d) => (
               <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>
             ))}
           </SelectContent>
@@ -265,8 +279,10 @@ export function AnalyzeConfigForm({
         >
           <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="default">Project default role</SelectItem>
-            {ROLE_OPTIONS.map((r) => (
+            <SelectItem value="default">{roleTitle(projectRole || FALLBACK_ROLE)}</SelectItem>
+            {/* Same dedupe as depth: generating for the project's own role is
+                the "default" entry above. */}
+            {ROLE_OPTIONS.filter((r) => r.value !== (projectRole || FALLBACK_ROLE)).map((r) => (
               <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
             ))}
           </SelectContent>

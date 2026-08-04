@@ -25,7 +25,7 @@ import { SettingsShell, type SettingsSection } from "@/components/SettingsShell"
 import { apiFetch } from "@/lib/api";
 import { scrollBehavior } from "@/lib/motion";
 import { PRIVACY_MODES } from "@/lib/privacyModes";
-import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 
 /** The canonical mode list lives in lib/privacyModes (public pages import it
  *  too); re-exported so existing importers keep working. */
@@ -46,7 +46,7 @@ const WEIGHT_VIEWS = [
 // providers meet the privacy filter (data_collection: deny).
 const DEFAULT_ANALYSIS_MODEL = "auto";
 const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: "auto", label: "Auto — fastest private provider right now (default)" },
+  { id: "auto", label: "Auto — fastest private provider right now" },
   { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (fast, 1M context)" },
   { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (1M context)" },
   { id: "meta-llama/llama-4-scout", label: "Llama 4 Scout (fastest bursts, smaller context)" },
@@ -312,7 +312,7 @@ export function ProjectSettingsPage() {
       });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
-      setWeightsSaved(`Saved — ${weightRole} scores re-projected.`);
+      setWeightsSaved(`Saved — ${roleLabel(weightRole)} scores re-projected.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to save weights");
@@ -329,7 +329,7 @@ export function ProjectSettingsPage() {
       await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, { method: "DELETE" });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
-      setWeightsSaved(`Reverted — ${weightRole} is back on the built-in defaults.`);
+      setWeightsSaved(`Reverted — ${roleLabel(weightRole)} is back on the built-in weights.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to revert weights");
@@ -378,7 +378,7 @@ export function ProjectSettingsPage() {
 
           <Card>
             <CardContent className="p-3">
-              <h3 className="mb-2 text-xs font-medium text-foreground">Default developer role</h3>
+              <h3 className="mb-2 text-xs font-medium text-foreground">Developer role</h3>
               <Select value={defaultRole} onValueChange={setDefaultRole} disabled={!canEdit}>
                 <SelectTrigger className="h-8 text-[0.8125rem]">
                   <SelectValue />
@@ -389,6 +389,9 @@ export function ProjectSettingsPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Applies to new members and to packages generated without an explicit role.
+              </p>
             </CardContent>
           </Card>
 
@@ -427,7 +430,7 @@ export function ProjectSettingsPage() {
                     type="number"
                     value={budgetCalls}
                     onChange={(e) => setBudgetCalls(e.target.value)}
-                    placeholder={`default: ${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
+                    placeholder={`${DEPTH_BUDGET_DEFAULTS[analysisDepth]?.calls ?? 300}`}
                     disabled={!canEdit}
                     className="h-8 text-[0.8125rem]"
                   />
@@ -439,7 +442,7 @@ export function ProjectSettingsPage() {
                     type="number"
                     value={budgetTokens}
                     onChange={(e) => setBudgetTokens(e.target.value)}
-                    placeholder={`default: ${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
+                    placeholder={`${(DEPTH_BUDGET_DEFAULTS[analysisDepth]?.tokens ?? 4_000_000).toLocaleString()}`}
                     disabled={!canEdit}
                     className="h-8 text-[0.8125rem]"
                   />
@@ -611,7 +614,7 @@ export function ProjectSettingsPage() {
                   <SelectTrigger className="mb-3 h-8 w-[180px] text-[0.8125rem]"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {(weightRoles ?? []).map((r) => (
-                      <SelectItem key={r.role} value={r.role} className="capitalize">{r.role}</SelectItem>
+                      <SelectItem key={r.role} value={r.role}>{roleLabel(r.role)}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -655,7 +658,7 @@ export function ProjectSettingsPage() {
                         {weightsSaved}
                       </p>
                       <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
-                        Revert to defaults
+                        Revert to built-in weights
                       </Button>
                       <Button size="xs" onClick={handleSaveWeights} disabled={weightsSaving}>
                         {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}

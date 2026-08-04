@@ -23,6 +23,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
+import { roleLabel } from "@/lib/roles";
 import { consumeTourRequest, dismissTour, resetTour, tourDismissed } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
 
@@ -84,7 +85,11 @@ function presentActivity(item: ActivityItem): { text: string; icon: typeof Activ
   const where = `${branch}${scope}`;
 
   if (item.kind === "package") {
-    const role = item.role ? item.role[0]!.toUpperCase() + item.role.slice(1) : "";
+    // Upper-casing the stored value is not a display name: it rendered the
+    // `general` role as "General", which is not what the role is called
+    // anywhere else. Absent roles still resolve to "", which the next line
+    // reads as an unlabelled "Package".
+    const role = roleLabel(item.role);
     const what = role ? `${role} package` : "Package";
     if (item.status === "generating")
       return { text: `${what} generating${where}`, icon: Loader2, tone: "text-primary", spin: true };

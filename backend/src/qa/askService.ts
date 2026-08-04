@@ -10,6 +10,7 @@
  */
 
 import { query } from '../lib/db.js';
+import { roleDescriptor } from '../lib/roleDisplay.js';
 import { latestSnapshotOrderSql } from '../lib/snapshotOrdering.js';
 import { AiClient } from '../worker/ai/aiClient.js';
 import { BudgetEnforcer } from '../worker/ai/budgetEnforcer.js';
@@ -298,7 +299,7 @@ async function callQaModel(
     return `- receipt ${r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${snippet}`;
   });
   const prompt = [
-    `Answer this question from a ${role} developer about the ${bundle.repo.owner}/${bundle.repo.name} codebase (scope: ${bundle.scope.displayName}):`,
+    `Answer this question from a ${roleDescriptor(role)} developer about the ${bundle.repo.owner}/${bundle.repo.name} codebase (scope: ${bundle.scope.displayName}):`,
     `QUESTION: ${question}`,
     'Ground every substantive statement in the evidence below and cite receipt ids (the exact UUIDs) in claims and usedReceiptIds. If the evidence does not answer the question, say so plainly and record it in unknowns — never guess. Code receipts win over docs.',
     // Nested/unbalanced fences flip the rest of the answer into a code block

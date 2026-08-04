@@ -150,7 +150,7 @@ Light and dark themes, both OKLCH token systems defined in `src/styles.css` (`:r
 - Remove member (owner/admin) via `DELETE /projects/:id/members/members/:userId`
 
 ### ProjectSettingsPage
-- Single-column layout: repo info, default role, ignored paths, analysis limits, danger zone
+- Single-column layout: repo info, developer role, ignored paths, analysis limits, danger zone
 - Save via `PUT /projects/:id/settings`
 - Delete via `DELETE /projects/:id` with confirmation dialog
 - Read-only for developer tier

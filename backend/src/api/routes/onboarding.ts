@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { query } from "../../lib/db.js";
+import { roleTitle } from "../../lib/roleDisplay.js";
 import { latestSnapshotOrderSql } from "../../lib/snapshotOrdering.js";
 import { enqueueSummaryRun } from "../services/analysisStarter.js";
 import { buildWeightTableProvenance } from "../services/scoreProvenance.js";
@@ -998,7 +999,7 @@ onboardingRouter.get("/export", requireProjectAccess(), async (req, res) => {
       receiptsBySection.get(r.section_id)!.set(r.bundle_receipt_id, { filePath: r.file_path, lineStart: r.line_start });
     }
 
-    const lines: string[] = [`# OnboardBuddy - Onboarding Package (${pkg.role})\n`];
+    const lines: string[] = [`# OnboardBuddy - Onboarding Package (${roleTitle(pkg.role)})\n`];
     let lastChapter: string | null = null;
     for (const sec of sections) {
       const chapter = SECTION_SPECS[sec.type as SectionType]?.chapter ?? null;
