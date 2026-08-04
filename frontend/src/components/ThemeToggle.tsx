@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const THEME_KEY = "onboardbuddy:theme";
 
@@ -77,13 +76,8 @@ export function ThemeToggle() {
   const label = `Theme: ${mode === "dark" ? "Dark" : "Light"}. Click for ${mode === "dark" ? "light" : "dark"}.`;
 
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button variant="ghost" size="icon-xs" onClick={toggle} aria-label={label}>
-          <Icon className="h-3.5 w-3.5" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
-    </Tooltip>
+    <Button variant="ghost" size="icon-xs" onClick={toggle} aria-label={label}>
+      <Icon className="h-3.5 w-3.5" />
+    </Button>
   );
 }

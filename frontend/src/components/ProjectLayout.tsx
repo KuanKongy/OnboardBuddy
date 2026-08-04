@@ -121,7 +121,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "package-selector",
     title: "Pick which package you're viewing",
-    body: "Every tab follows this selection — branch, commit, scope, and role. Star one to make it your personal default; a generation you start selects its new package automatically when it finishes.",
+    body: "Every tab follows this selection — branch, commit, scope, and role. A generation you start selects its new package automatically when it finishes.",
   },
   {
     target: "nav-onboarding",
@@ -180,21 +180,21 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
   return (
     <SidebarShell>
       <div className="px-3 py-3">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              to="/dashboard"
-              onClick={() => setOpen(false)}
-              className="mb-2 flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
-            >
-              <LogoMark className="h-7 w-7" />
-              <LogoWordmark />
-            </Link>
-          </TooltipTrigger>
-          <TooltipContent side="right">Back to main dashboard</TooltipContent>
-        </Tooltip>
+        <div className="flex items-center justify-between">
+          <Link
+            to="/dashboard"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
+          >
+            <LogoMark className="h-7 w-7" />
+            <LogoWordmark />
+          </Link>
+          <ThemeToggle />
+        </div>
         {loading ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          <div className="mt-2">
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+          </div>
         ) : project ? (
           // Owner feedback M2: the repo name and the branch badge that used to
           // sit here are both already stated by the package chooser below
@@ -210,7 +210,7 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
                 <Link
                   to={`/projects/${id}`}
                   onClick={() => setOpen(false)}
-                  className={`mt-1.5 flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] font-medium transition-colors ${
+                  className={`mt-2 flex items-center gap-1.5 rounded-md border px-2 py-1 text-[0.6875rem] font-medium transition-colors ${
                     job.stalled
                       ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15"
                       : "border-border bg-muted/40 text-muted-foreground hover:bg-accent/50 hover:text-foreground"
@@ -272,6 +272,14 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
         <Separator />
       </div>
       <div className="px-2 pt-1.5">
+        <Link
+          to="/help"
+          onClick={() => setOpen(false)}
+          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          Help &amp; FAQ
+        </Link>
         <button
           type="button"
           onClick={onStartTour}
@@ -291,22 +299,11 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
               Keyboard shortcuts
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right">Also opens with ?</TooltipContent>
+          <TooltipContent side="right">Also opens with /</TooltipContent>
         </Tooltip>
-        <Link
-          to="/help"
-          onClick={() => setOpen(false)}
-          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-        >
-          <HelpCircle className="h-3.5 w-3.5" />
-          Help &amp; FAQ
-        </Link>
       </div>
-      <div className="flex items-center gap-2 px-2 py-2">
-        <div className="min-w-0 flex-1">
-          <AccountCard />
-        </div>
-        <ThemeToggle />
+      <div className="px-2 py-2">
+        <AccountCard />
       </div>
     </SidebarShell>
   );
@@ -321,7 +318,7 @@ function ProjectLayoutContent() {
   const [tourOpen, setTourOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Project-wide hotkeys: [ / ] cycle tabs, 1..9 jump, ? opens the keymap.
+  // Project-wide hotkeys: ↑ / ↓ cycle tabs, 1..9 jump, / opens the keymap.
   // Per-page arrows/Esc live in the pages themselves (hooks/useHotkeys.ts).
   const tabPaths = projectNavItems.map((item) => item.to);
   const currentSegment = pathname.replace(/\/+$/, "").split(`/projects/${id}`)[1]?.replace(/^\//, "").split("/")[0] ?? "";
@@ -332,9 +329,9 @@ function ProjectLayoutContent() {
     navigate(`/projects/${id}/${tabPaths[clamped]}`);
   };
   useHotkeys({
-    "[": () => goToTab(currentTab - 1),
-    "]": () => goToTab(currentTab + 1),
-    "?": () => setShortcutsOpen(true),
+    ArrowUp: () => goToTab(currentTab - 1),
+    ArrowDown: () => goToTab(currentTab + 1),
+    "/": () => setShortcutsOpen(true),
     ...Object.fromEntries(tabPaths.slice(0, 9).map((_, i) => [String(i + 1), () => goToTab(i)])),
   });
 
@@ -374,7 +371,13 @@ function ProjectLayoutContent() {
   }
 
   return (
-    <div className="flex h-screen">
+    // `relative overflow-hidden`: the shell is exactly one viewport tall and
+    // <main> owns the scrolling — without this a tall tab also scrolled the
+    // window, moving the fixed sidebar off-screen. `relative` anchors
+    // absolutely-positioned strays (e.g. Radix Select's internal aria
+    // elements) to THIS clipped box; unanchored, they extended the body below
+    // the viewport and scrollIntoView dragged the whole window into the void.
+    <div className="relative flex h-screen overflow-hidden">
       <SkipToContent />
       <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
       {/* `outline-none`: usePageChrome focuses this on every tab change, and a

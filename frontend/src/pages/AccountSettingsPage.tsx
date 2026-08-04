@@ -590,7 +590,7 @@ export function AccountSettingsPage() {
                 ))}
               </div>
 
-              {/* `[`, `]`, `?` and 1-9 fire on a bare keypress — the keys a switch
+              {/* `↑`, `↓`, `/` and 1-9 fire on a bare keypress — the keys a switch
                   device or speech recognition emits while doing something else. */}
               <Label className="mt-3 block text-[0.6875rem] text-muted-foreground">Keyboard shortcuts</Label>
               <div
@@ -618,8 +618,8 @@ export function AccountSettingsPage() {
                 ))}
               </div>
               <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-                Single-key shortcuts like <kbd className="font-mono">[</kbd>, <kbd className="font-mono">]</kbd> and{" "}
-                <kbd className="font-mono">?</kbd>. Turning them off leaves every button and link working.
+                Single-key shortcuts like <kbd className="font-mono">↑</kbd>, <kbd className="font-mono">↓</kbd> and{" "}
+                <kbd className="font-mono">/</kbd>. Turning them off leaves every button and link working.
               </p>
             </CardContent>
           </Card>

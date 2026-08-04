@@ -123,9 +123,9 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
   const { pathname } = useLocation();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Shell-wide hotkeys, mirroring the project layout: [ / ] cycle the sidebar
-  // pages, 1..4 jump, ? opens the keymap. Pages outside the nav (e.g. /import)
-  // count as page 1 so [ / ] still land somewhere sensible.
+  // Shell-wide hotkeys, mirroring the project layout: ↑ / ↓ cycle the sidebar
+  // pages, 1..5 jump, / opens the keymap. Pages outside the nav (e.g. /import)
+  // count as page 1 so ↑ / ↓ still land somewhere sensible.
   const pagePaths = dashboardNavItems.map((item) => item.to);
   const currentPage = Math.max(0, pagePaths.indexOf(pathname));
   const goToPage = (index: number) => {
@@ -135,9 +135,9 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
     navigate(target);
   };
   useHotkeys({
-    "[": () => goToPage(currentPage - 1),
-    "]": () => goToPage(currentPage + 1),
-    "?": () => setShortcutsOpen(true),
+    ArrowUp: () => goToPage(currentPage - 1),
+    ArrowDown: () => goToPage(currentPage + 1),
+    "/": () => setShortcutsOpen(true),
     ...Object.fromEntries(pagePaths.map((_, i) => [String(i + 1), () => goToPage(i)])),
   });
 
@@ -147,7 +147,14 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
 
   return (
     <SidebarProvider>
-      <div className="flex h-screen">
+      {/* `overflow-hidden`: the shell is exactly one viewport tall and <main>
+          owns the scrolling — without this a tall page also scrolled the
+          window, moving the fixed sidebar off-screen. */}
+      {/* relative + overflow-hidden: absolutely-positioned strays (e.g. Radix
+          Select's internal aria elements) must position against THIS clipped
+          box, not the document. Unanchored, they extended the body below the
+          viewport and scrollIntoView dragged the whole window into the void. */}
+      <div className="relative flex h-screen overflow-hidden">
         <SkipToContent />
         <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
         {/* `outline-none`: usePageChrome focuses this on every route change, and a

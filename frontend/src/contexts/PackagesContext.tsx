@@ -32,7 +32,6 @@ interface PackagesContextValue {
   selectedPackage: PackageCard | null;
   selectPackage: (id: string | null) => void;
   defaultPackageId: string | null;
-  setDefaultPackage: (id: string | null) => Promise<void>;
   status: AnalysisStatus | null;
   refreshStatus: () => Promise<void>;
   activeJobs: AnalysisJob[];
@@ -44,8 +43,6 @@ interface PackagesContextValue {
   packagesError: boolean;
   /** Same, for the analysis-status poll. */
   statusError: boolean;
-  /** True after the last "make this my default" PUT failed. */
-  defaultPackageError: boolean;
 }
 
 const PackagesContext = createContext<PackagesContextValue | undefined>(undefined);
@@ -69,7 +66,6 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
   const [packagesError, setPackagesError] = useState(false);
   const [statusError, setStatusError] = useState(false);
-  const [defaultPackageError, setDefaultPackageError] = useState(false);
   // Whether selection still needs initializing from localStorage/default once
   // the package list is known.
   const selectionInitialized = useRef(false);
@@ -221,21 +217,6 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     }
   }, [project?.default_package_id, project, projectId, navigate, selectPackage]);
 
-  const setDefaultPackage = useCallback(async (id: string | null) => {
-    // The caller fires this as `void setDefaultPackage(...)`, so a rejection would
-    // be silent. Cleared on each attempt so a retry does not read as still-broken.
-    setDefaultPackageError(false);
-    try {
-      await apiFetch(`/projects/${projectId}/default-package`, {
-        method: "PUT",
-        body: JSON.stringify({ package_id: id }),
-      });
-      refetchProject();
-    } catch {
-      setDefaultPackageError(true);
-    }
-  }, [projectId, refetchProject]);
-
   const registerSessionJob = useCallback((jobId: string, opts?: { navigateOnDone?: boolean }) => {
     watchedJobs.current.set(jobId, { navigateOnDone: opts?.navigateOnDone === true });
     void refreshStatus();
@@ -255,7 +236,6 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     selectedPackage,
     selectPackage,
     defaultPackageId,
-    setDefaultPackage,
     status,
     refreshStatus,
     activeJobs,
@@ -263,10 +243,9 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     packageQuery,
     packagesError,
     statusError,
-    defaultPackageError,
   }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage,
-       defaultPackageId, setDefaultPackage, status, refreshStatus, activeJobs,
-       registerSessionJob, packageQuery, packagesError, statusError, defaultPackageError]);
+       defaultPackageId, status, refreshStatus, activeJobs,
+       registerSessionJob, packageQuery, packagesError, statusError]);
 
   return <PackagesContext.Provider value={value}>{children}</PackagesContext.Provider>;
 }
