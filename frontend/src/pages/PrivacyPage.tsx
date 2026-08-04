@@ -156,8 +156,8 @@ export function PrivacyPage() {
           </ul>
           <p>
             Questions the FAQ answers in product terms live in{" "}
-            <Link to="/help" className="text-primary hover:underline">
-              Help &amp; FAQ
+            <Link to="/faq" className="text-primary hover:underline">
+              FAQ
             </Link>
             ; the terms governing use of the service are on the{" "}
             <Link to="/terms" className="text-primary hover:underline">

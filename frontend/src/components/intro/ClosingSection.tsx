@@ -46,7 +46,7 @@ export function ClosingSection() {
                 )}
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <Link to="/help">Read the FAQ</Link>
+                <Link to="/faq">Read the FAQ</Link>
               </Button>
             </div>
           </div>

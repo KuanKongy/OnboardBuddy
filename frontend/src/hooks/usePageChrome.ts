@@ -20,6 +20,7 @@ const PATH_TITLES: Record<string, string> = {
   "/reset-password": "Choose a new password",
   "/auth/callback": "Signing you in",
   "/help": "Help & FAQ",
+  "/faq": "FAQ",
   "/privacy": "Privacy & AI transparency",
   "/terms": "Terms of Service",
   "/dashboard": "Dashboard",

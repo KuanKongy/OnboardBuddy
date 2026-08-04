@@ -1,11 +1,10 @@
 import { Component, useState, type ReactNode } from "react";
-import { Link, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { Compass } from "lucide-react";
 import { LogoMark } from "@/components/BrandLogo";
 import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
-import { PublicPageShell } from "@/components/PublicPageShell";
 import { SkipToContent } from "@/components/SkipToContent";
 import { MAIN_REGION_ID, usePageChrome } from "@/hooks/usePageChrome";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
@@ -24,6 +23,7 @@ import { DashboardPage } from "@/pages/DashboardPage";
 import { GraphPage } from "@/pages/GraphPage";
 import { GitHubSetupPage } from "@/pages/GitHubSetupPage";
 import { GitHubOAuthCallbackPage } from "@/pages/GitHubOAuthCallbackPage";
+import { FaqPage } from "@/pages/FaqPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { PrivacyPage } from "@/pages/PrivacyPage";
 import { TermsPage } from "@/pages/TermsPage";
@@ -182,15 +182,15 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
 }
 
 /**
- * /help is the one page that answers "what does this thing send to an AI?", so
- * it is reachable without an account — the landing page links straight to
- * `/help#privacy`, and bouncing that link to /login would hide the answer from
- * exactly the person asking.
+ * /help is picked by session, not by route. A signed-in reader gets the usual
+ * sidebar shell (nothing about /help changes for them); everyone else is sent
+ * to /faq, which carries the same answers on the public shell without the tour
+ * launcher and the project fetch, neither of which works without an account.
  *
- * The chrome is picked by session, not by route: a signed-in reader gets the
- * usual sidebar shell (nothing about /help changes for them), a signed-out one
- * gets the public shell shared with /privacy and /terms. Waiting out `loading`
- * first avoids painting the public chrome and then swapping it for the sidebar.
+ * The redirect rather than a bounce to /login: /help answers "what does this
+ * thing send to an AI?", and hiding that behind a login hides it from exactly
+ * the person asking. Waiting out `loading` first stops a signed-in reader who
+ * deep-links here from being redirected before their session resolves.
  */
 export function HelpRoute() {
   const { user, loading } = useAuth();
@@ -209,14 +209,7 @@ export function HelpRoute() {
     );
   }
 
-  return (
-    <PublicPageShell
-      title="Help & FAQ"
-      subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
-    >
-      <HelpPage signedOut />
-    </PublicPageShell>
-  );
+  return <Navigate to="/faq" replace />;
 }
 
 export default function App() {
@@ -236,6 +229,7 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/auth/callback" element={<AuthCallbackPage />} />
           <Route path="/help" element={<HelpRoute />} />
+          <Route path="/faq" element={<FaqPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
 

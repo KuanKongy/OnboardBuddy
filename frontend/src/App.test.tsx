@@ -69,7 +69,8 @@ describe("App", () => {
   });
 
   it("puts the skip link first in tab order, targeting the main region", async () => {
-    await renderApp("/help");
+    // /faq rather than /help: signed out, /help only redirects here now.
+    await renderApp("/faq");
 
     const skip = screen.getByRole("link", { name: /skip to content/i });
     expect(skip).toHaveAttribute("href", "#main");

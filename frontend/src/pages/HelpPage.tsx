@@ -1,8 +1,8 @@
-import { ChevronDown, ExternalLink, HelpCircle, Route, Shield, Sparkles } from "lucide-react";
+import { ExternalLink, HelpCircle, Route, Shield, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { FAQ_ITEMS, FaqSection } from "@/components/FaqContent";
 import { PageHeader } from "@/components/PageHeader";
-import type { Project } from "@/components/ProjectCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -14,11 +14,9 @@ import {
 } from "@/components/ui/select";
 import { activityTime } from "@/pages/DashboardPage";
 import { PRIVACY_MODES } from "@/lib/privacyModes";
-import { RANKING_EXPLANATION } from "@/lib/rankingCopy";
 import { scrollBehavior } from "@/lib/motion";
 import { requestTour, type TourName } from "@/lib/tourState";
 import { useProjects } from "@/lib/useProjects";
-import { cn } from "@/lib/utils";
 
 interface TourRow {
   name: TourName;
@@ -70,73 +68,19 @@ const TOUR_ROWS: TourRow[] = [
   },
 ];
 
-interface FaqItem {
-  question: string;
-  answer: React.ReactNode;
-}
-
 function scrollToAnchor(id: string) {
   document.getElementById(id)?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
 }
 
-function FaqSection({ items }: { items: FaqItem[] }) {
-  const [open, setOpen] = useState<Set<number>>(new Set());
-
-  function toggle(i: number) {
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(i)) next.delete(i);
-      else next.add(i);
-      return next;
-    });
-  }
-
-  return (
-    <div className="space-y-0.5">
-      {items.map((item, i) => {
-        const isOpen = open.has(i);
-        return (
-          <div key={item.question} className="border-b border-border/60 last:border-b-0">
-            <button
-              type="button"
-              onClick={() => toggle(i)}
-              aria-expanded={isOpen}
-              className="-mx-1 flex w-full items-center gap-2 rounded px-1 py-2 text-left transition-colors hover:bg-accent/40"
-            >
-              <ChevronDown
-                className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150", !isOpen && "-rotate-90")}
-              />
-              <span className="min-w-0 flex-1 text-[0.8125rem] font-medium text-foreground">{item.question}</span>
-            </button>
-            <div className={cn("grid transition-[grid-template-rows] duration-200 ease-in-out", isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-              <div className="overflow-hidden" inert={!isOpen}>
-                <div className="mb-3 pl-5.5 text-[0.78125rem] leading-relaxed text-muted-foreground">{item.answer}</div>
-              </div>
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 /**
- * /help is reachable signed out (see `HelpRoute` in App.tsx), so the projects
- * fetch has to be skippable: with no session `GET /projects` is a guaranteed
- * 401 whose only effect is a red line in a visitor's console. Splitting the
- * hook into a wrapper keeps it out of the signed-out render entirely rather
- * than firing it and swallowing the failure.
+ * The signed-in Help tab: tours plus the shared FAQ answers. A signed-out
+ * visitor never reaches this component (`HelpRoute` in App.tsx sends them to
+ * /faq), which is what lets it fetch `/projects` unconditionally: with no
+ * session that request is a guaranteed 401 whose only effect is a red line in
+ * a visitor's console.
  */
-export function HelpPage({ signedOut = false }: { signedOut?: boolean }) {
-  return signedOut ? <HelpPageView projects={[]} signedOut /> : <AuthedHelpPage />;
-}
-
-function AuthedHelpPage() {
+export function HelpPage() {
   const { projects } = useProjects();
-  return <HelpPageView projects={projects} signedOut={false} />;
-}
-
-function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut: boolean }) {
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -161,124 +105,14 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
     navigate(row.projectScoped ? row.path(selectedProjectId) : row.path(""));
   }
 
-  const faqItems: FaqItem[] = [
-    {
-      question: "What happens when I analyze a repo?",
-      answer: (
-        <>
-          A 16-phase pipeline runs against the repo: deterministic parsing and graph-building phases
-          run first, then AI phases (skipped entirely if the project's privacy mode disables them).
-          The full phase list is visible live on the project Overview while a run is in progress.
-        </>
-      ),
-    },
-    {
-      question: 'What does "Complete" mean?',
-      answer: (
-        <>
-          Analysis produced a parsed snapshot — file, symbol, and workflow counts — plus any
-          generated onboarding packages. From there: read a package, explore the Architecture or
-          Dependencies views, or invite teammates.
-        </>
-      ),
-    },
-    {
-      question: "What is sent to the AI — is my code used for training?",
-      answer: (
-        <>
-          <p className="mb-1.5">Depends on the project's privacy mode:</p>
-          <ul className="mb-1.5 list-disc space-y-0.5 pl-4">
-            <li><strong className="text-foreground">Full AI:</strong> code snippets + facts go to the LLM.</li>
-            <li><strong className="text-foreground">Facts-only:</strong> no code leaves the system — only extracted facts and structure.</li>
-            <li><strong className="text-foreground">AI disabled:</strong> no LLM calls at all.</li>
-          </ul>
-          <p className="mb-1.5">
-            LLM calls go through{" "}
-            <a href="https://openrouter.ai/docs/features/privacy-and-logging" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-              OpenRouter <ExternalLink className="inline h-2.5 w-2.5" />
-            </a>{" "}
-            — see their retention/training policy for what a given model provider does with the data.
-            The hard guarantee: choose Facts-only or AI-disabled and your code never reaches a model.
-          </p>
-          <button type="button" onClick={() => scrollToAnchor("privacy")} className="text-primary hover:underline">
-            See the full privacy breakdown below ↓
-          </button>
-        </>
-      ),
-    },
-    {
-      question: 'How is "critical code" ranked?',
-      answer: (
-        <>
-          {RANKING_EXPLANATION} Adjust the weights per developer role in Project Settings → Ranking weights.
-        </>
-      ),
-    },
-    {
-      question: 'Why do sections go "stale" and what does Regenerate do?',
-      answer: (
-        <>
-          When a new commit is analyzed, sections whose underlying code evidence actually changed
-          get flagged stale (whitespace-only edits flag nothing). Regenerate rebuilds a section or
-          whole package in place at the same commit — it doesn't create a new package, and review
-          history is kept.
-        </>
-      ),
-    },
-    {
-      question: "How do I use the dependency graph?",
-      answer: (
-        <>
-          Entry points are marked with a ▶ badge. The legend in the top-left shows each file kind's
-          color — click a swatch to hide/show that kind. Use the search box to filter by name, and
-          "Strongest edges only" (the default) keeps dense repos readable by drawing each file's top
-          3 connections per direction. Click a node for its evidence panel, including a link to view
-          the file on GitHub.
-        </>
-      ),
-    },
-    {
-      question: "What are receipts?",
-      answer: (
-        <>
-          Every claim in a generated package cites file:line evidence — a "receipt" — with a
-          confidence level and a staleness indicator (whether the source has changed since the
-          claim was written). Click a citation chip to inspect the underlying code, or follow it
-          straight to GitHub.
-        </>
-      ),
-    },
-    {
-      question: "Can I edit the generated text?",
-      answer: (
-        <>
-          Not directly yet. Regenerate a section or a whole package to have it rewritten from the
-          latest analysis, and use the review status (draft/approved) to track what's been checked.
-        </>
-      ),
-    },
-    {
-      question: "Where are keyboard shortcuts?",
-      answer: (
-        <>
-          Press <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[0.6875rem]">/</kbd> anywhere
-          in the app, or open them from the "Keyboard shortcuts" button in the sidebar.
-        </>
-      ),
-    },
-  ];
-
   return (
     <>
-      {/* Signed out, PublicPageShell owns the title block; signed in, the
-          header spans the full main width like every other tab, left-aligned,
-          while only the cards column below is centered. */}
-      {!signedOut && (
-        <PageHeader
-          title="Help & FAQ"
-          subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
-        />
-      )}
+      {/* The header spans the full main width like every other tab,
+          left-aligned, while only the cards column below is centered. */}
+      <PageHeader
+        title="Help & FAQ"
+        subtitle="Tours, frequently asked questions, and what OnboardBuddy sends to the AI."
+      />
 
       <div className="mx-auto max-w-3xl space-y-4">
         <Card id="tours">
@@ -291,24 +125,10 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
               again on its own.
             </p>
 
-            {signedOut ? (
+            {sortedProjects.length === 0 && (
               <p className="mb-3 text-[0.71875rem] text-muted-foreground/80">
-                Tours run inside the app —{" "}
-                <Link to="/login" className="text-primary hover:underline">
-                  log in
-                </Link>{" "}
-                or{" "}
-                <Link to="/signup" className="text-primary hover:underline">
-                  sign up
-                </Link>{" "}
-                to start one.
+                Project-scoped tours need a project to open — import one first.
               </p>
-            ) : (
-              sortedProjects.length === 0 && (
-                <p className="mb-3 text-[0.71875rem] text-muted-foreground/80">
-                  Project-scoped tours need a project to open — import one first.
-                </p>
-              )
             )}
             {sortedProjects.length > 0 && (
               <div className="mb-3">
@@ -329,9 +149,7 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
 
             <div className="space-y-2">
               {TOUR_ROWS.map((row) => {
-                // Every tour target sits behind ProtectedRoute, so a signed-out
-                // visitor pressing Start would only be bounced to /login.
-                const disabled = signedOut || (row.projectScoped && sortedProjects.length === 0);
+                const disabled = row.projectScoped && sortedProjects.length === 0;
                 return (
                   <div key={row.name} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
                     <div className="min-w-0">
@@ -344,13 +162,7 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
                       variant="outline"
                       className="shrink-0"
                       disabled={disabled}
-                      title={
-                        signedOut
-                          ? "Log in to start a tour"
-                          : disabled
-                            ? "Import a project first"
-                            : undefined
-                      }
+                      title={disabled ? "Import a project first" : undefined}
                       onClick={() => startTour(row)}
                     >
                       <HelpCircle className="mr-1 h-3 w-3" />
@@ -366,7 +178,7 @@ function HelpPageView({ projects, signedOut }: { projects: Project[]; signedOut:
         <Card id="faq">
           <CardContent className="p-4">
             <h2 className="mb-3 text-sm font-semibold text-foreground">Frequently asked questions</h2>
-            <FaqSection items={faqItems} />
+            <FaqSection items={FAQ_ITEMS} />
           </CardContent>
         </Card>
 
