@@ -116,19 +116,17 @@ Ephemeral — losing data here only means re-enqueuing pending jobs.
 |---|---|---|
 | `REDIS_URL` | `backend/.env` | TCP/TLS connection string: `rediss://default:<password>@<host>.upstash.io:6379` |
 
-### 3. GitHub OAuth App (for login)
+### 3. GitHub login (via the GitHub App's OAuth)
 
-**What it does:** Supabase delegates GitHub sign-in to this OAuth App. Users see
-a GitHub consent screen and are redirected back to Supabase.
+**What it does:** Supabase delegates GitHub sign-in to the GitHub App's own
+OAuth credentials (see the next section — one app for login AND repo access).
+Users see a single GitHub consent screen and are redirected back to Supabase.
+The separately registered OAuth App this project used before Milestone 5 is
+retired; `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` env vars are gone with it
+(the backend never read them — they only ever lived in the Supabase dashboard).
 
-**What data it holds:** None — it's purely an OAuth bridge.
-
-| Env var | `.env` file | Description |
-|---|---|---|
-| `GITHUB_CLIENT_ID` | `backend/.env` | OAuth App client ID |
-| `GITHUB_CLIENT_SECRET` | `backend/.env` | OAuth App client secret |
-
-The callback URL configured on the OAuth App must be the Supabase callback:
+The Supabase provider config holds the GitHub App's Client ID/secret, and the
+App's callback list must include the Supabase callback (as the SECOND entry):
 
 ```
 https://<ref>.supabase.co/auth/v1/callback
@@ -421,8 +419,6 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `DIRECT_DATABASE_URL` | `backend/.env` | Session-mode string (port 5432), DDL/migrations only | Same page, Session mode |
 | `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string | Upstash Console → Database → Details |
 | `WORKER_POLL_INTERVAL_MS` | `backend/.env` | Worker poll interval in ms (default `5000`) | Set manually |
-| `GITHUB_CLIENT_ID` | `backend/.env` | GitHub OAuth App client ID | github.com → Settings → Developer settings → OAuth Apps |
-| `GITHUB_CLIENT_SECRET` | `backend/.env` | GitHub OAuth App client secret | Same page as above |
 | `GITHUB_APP_ID` | `backend/.env` | GitHub App numeric ID | github.com → Settings → Developer settings → GitHub Apps |
 | `GITHUB_WEBHOOK_SECRET` | `backend/.env` | Push-webhook HMAC secret (optional) | Same page → Webhook secret |
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | GitHub App client ID | Same page as above |
@@ -462,27 +458,31 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
      psql "$DIRECT_DATABASE_URL" -f backend/supabase/migrations/001_initial_schema.sql
      ```
 
-### GitHub OAuth App (for login)
+### GitHub login (the GitHub App's own OAuth — no separate OAuth App)
 
-1. Go to [github.com/settings/developers](https://github.com/settings/developers) → **OAuth Apps** → **New OAuth App**.
-2. Fill in:
-   - **Application name:** OnboardBuddy (or anything)
-   - **Homepage URL:** `http://localhost:5173`
-   - **Authorization callback URL:** the Supabase callback URL copied in step 5 above
-     (`https://<ref>.supabase.co/auth/v1/callback`)
-3. Click **Register application**.
-4. Copy **Client ID** → paste into `GITHUB_CLIENT_ID` in `backend/.env`.
-5. Generate a **Client secret** → paste into `GITHUB_CLIENT_SECRET` in `backend/.env`.
-6. Go back to **Supabase → Authentication → Providers → GitHub** and paste the
-   same Client ID and Client Secret there.
+Login and repo access share ONE GitHub App (the one created in the next
+section). A GitHub App carries its own OAuth credentials and speaks the same
+`login/oauth/authorize` protocol an OAuth App would, so Supabase's GitHub
+provider works with it directly; the separately registered OAuth App this
+project used before Milestone 5 is retired.
 
-> **Troubleshooting — sign-up fails with "Error getting user profile from external provider":**
-> Supabase exchanged the OAuth code but couldn't read the GitHub profile/email.
-> Check that the Client ID pasted into Supabase belongs to this **OAuth App**
-> (not the GitHub App below — GitHub App client IDs start with `Iv1.`). A GitHub
-> App token can't read user emails unless the App has **Account permissions →
-> Email addresses: Read-only**. Also re-check the Client Secret for typos or
-> rotation. See Bug #37 in [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md).
+1. Create the GitHub App first (next section), then on its settings page:
+   - **Account permissions → Email addresses: Read-only** — REQUIRED.
+     Supabase needs a verified email to create the user; without this
+     permission, sign-ups fail for users with private email addresses
+     ("Error getting user profile from external provider", Bug #37 in
+     [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md)).
+   - **Callback URLs**: keep `http://localhost:5173/github/oauth/callback`
+     FIRST (GitHub sends installation-time authorizations to the first one),
+     and add the Supabase callback as a second entry:
+     `https://<ref>.supabase.co/auth/v1/callback`.
+2. In **Supabase → Authentication → Providers → GitHub**, paste the GitHub
+   App's **Client ID** and a generated **Client secret** (the same values as
+   `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` in `backend/.env`).
+3. That's it: signing in with GitHub now consents to the app once, and repo
+   selection happens later, only when the user imports. Existing accounts
+   survive a credential swap (Supabase keys identities by GitHub user ID);
+   users just see one fresh consent on their next login.
 
 ### GitHub App (for repo import)
 
@@ -510,6 +510,32 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 7. **Install the App** on your GitHub account:
    - From the app settings page → **Install App** → select your account → choose
      "All repositories" or select specific ones.
+
+### Combined install + authorize (one GitHub screen)
+
+On the App's **General** page, under "Identifying and authorizing users":
+
+1. Keep the app's own callback (`<origin>/github/oauth/callback`) as the FIRST
+   Callback URL (see the login section above for the Supabase entry).
+2. Tick **Request user authorization (OAuth) during installation**.
+3. The **Setup URL** field becomes unavailable once that box is ticked — that
+   is expected; the `/github/setup` route keeps working for arrivals from
+   configurations that predate the change. Tick **Redirect on update** if the
+   checkbox is still enabled.
+4. Save. No environment variables change.
+
+With this on, installing the app both grants identity and links the
+installation in one round trip: GitHub returns to
+`/github/oauth/callback?code=…&installation_id=…&setup_action=install&state=…`
+and the app completes the OAuth exchange and the installation link in one
+pass. Installs or repository changes started ON github.com (not from an
+in-app button) return without a `state`; the app shows a success notice and
+the Import page picks the change up when focused. Such installs are usable
+immediately — `github_installations` is bookkeeping that nothing reads; the
+live list always comes from the GitHub API.
+
+Deploy order for production: ship the release containing the combined
+callback handling BEFORE flipping the checkbox on the production App.
 
 ### GitHub App webhook (auto re-analysis)
 

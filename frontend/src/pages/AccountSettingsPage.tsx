@@ -520,7 +520,7 @@ export function AccountSettingsPage() {
                     </span>
                   </div>
                   <div className="flex gap-1">
-                    <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                    <Button variant="outline" size="xs" onClick={() => connectGithub("/settings")}>
                       Re-authorize
                     </Button>
                     <Button
@@ -537,7 +537,7 @@ export function AccountSettingsPage() {
               ) : (
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-muted-foreground">Not connected — required for repo import</span>
-                  <Button variant="outline" size="xs" onClick={() => connectGithub()}>
+                  <Button variant="outline" size="xs" onClick={() => connectGithub("/settings")}>
                     <Github className="h-3 w-3" />
                     Authorize GitHub App
                   </Button>

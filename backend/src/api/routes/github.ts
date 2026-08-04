@@ -129,7 +129,6 @@ githubRouter.get("/oauth/start", async (req, res) => {
     url.searchParams.set("client_id", process.env.GITHUB_APP_CLIENT_ID ?? "");
     url.searchParams.set("redirect_uri", githubOAuthRedirectUri());
     url.searchParams.set("state", state);
-    url.searchParams.set("prompt", "select_account");
 
     res.json({ authorization_url: url.toString() });
   } catch (err) {

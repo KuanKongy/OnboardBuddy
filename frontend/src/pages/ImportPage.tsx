@@ -306,16 +306,15 @@ export function ImportPage() {
   async function handleAuthorizeGitHubApp() {
     setError("");
     try {
-      if (githubAppConnected && installUrl) {
-        window.location.href = installUrl;
-        return;
-      }
-
-      sessionStorage.setItem("onboardbuddy.github.after_oauth", "install");
-      await connectGithub(true);
+      // Fetched on click, not reused from page-load state: the install URL
+      // carries a 15-minute state token, and its clock should start when the
+      // user actually leaves for GitHub. One round trip does everything now:
+      // the install screen also grants identity (OAuth during installation),
+      // and the callback completes + links in one pass.
+      const app = (await apiFetch("/github/app")) as { install_url: string };
+      window.location.href = app.install_url;
     } catch (err: unknown) {
-      sessionStorage.removeItem("onboardbuddy.github.after_oauth");
-      setError(err instanceof Error ? err.message : "Failed to connect GitHub App");
+      setError(err instanceof Error ? err.message : "Failed to open the GitHub App install page");
     }
   }
 
@@ -574,7 +573,7 @@ export function ImportPage() {
                   variant="link"
                   size="xs"
                   className="ml-2 h-auto p-0 text-destructive underline"
-                  onClick={() => connectGithub()}
+                  onClick={() => connectGithub("/import")}
                 >
                   Reconnect GitHub
                 </Button>

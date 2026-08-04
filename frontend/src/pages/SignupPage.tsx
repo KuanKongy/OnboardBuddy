@@ -34,9 +34,11 @@ export function SignupPage() {
     try {
       const session = await signUp(email, password);
       if (session) {
-        navigate("/dashboard");
+        // A brand-new account has nothing on the dashboard; importing a
+        // repository is the only meaningful next step.
+        navigate("/import");
       } else {
-        setInfo("Check your email to confirm your account, then sign in.");
+        setInfo("Check your email to confirm your account. The link signs you in and continues.");
       }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Sign up failed");
@@ -51,7 +53,7 @@ export function SignupPage() {
     setError("");
     setGithubLoading(true);
     try {
-      await signInWithGithub();
+      await signInWithGithub("/import");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "GitHub sign up failed");
     } finally {
