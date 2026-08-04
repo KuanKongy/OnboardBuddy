@@ -57,7 +57,7 @@ export function HeroSection() {
                 )}
               </Button>
               <Button size="lg" variant="outline" asChild>
-                <a href="#how">See how it works</a>
+                <Link to="/#how">See how it works</Link>
               </Button>
             </div>
             <p className="mt-5 text-[0.8125rem] leading-relaxed text-muted-foreground">

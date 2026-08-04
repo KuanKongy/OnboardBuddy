@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 
 // Absolute (/#x) rather than bare (#x) anchors so the same header works on
-// every public page: on the landing they still smooth-jump in place, from
-// /privacy or /terms they navigate home to the section.
+// every public page: from /privacy or /terms they route home to the section.
+// Rendered as router Links, so the click is a client-side navigation and
+// IntroPage's hash effect does the scrolling (a plain <a> reloaded the app).
 const SECTION_LINKS = [
   { href: "/#product", label: "Product" },
   { href: "/#how", label: "How it works" },
@@ -33,13 +34,13 @@ export function IntroHeader() {
         </Link>
         <nav aria-label="Landing sections" className="hidden items-center gap-1 md:flex">
           {SECTION_LINKS.map((link) => (
-            <a
+            <Link
               key={link.href}
-              href={link.href}
+              to={link.href}
               className="rounded-md px-3 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
             >
               {link.label}
-            </a>
+            </Link>
           ))}
         </nav>
         <div className="flex items-center gap-2">

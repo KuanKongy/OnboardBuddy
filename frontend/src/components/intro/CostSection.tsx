@@ -22,7 +22,7 @@ export function CostSection() {
     >
       <div className="grid gap-4 md:grid-cols-5">
         <Reveal className="md:col-span-3">
-          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm dark:border-white/10">
+          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card dark:border-white/10">
             <ul className="space-y-3.5">
               <IconRow icon={<Wallet className="h-4 w-4" aria-hidden="true" />}>
                 A preflight preview prices the run at import time: analyzable files, estimated AI
@@ -40,13 +40,13 @@ export function CostSection() {
           </div>
         </Reveal>
         <Reveal index={1} className="md:col-span-2">
-          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm dark:border-white/10">
+          <div className="h-full rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card dark:border-white/10">
             <p className="section-label mb-4">Budget defaults by depth</p>
             <div className="space-y-2.5">
               {DEPTH_BUDGETS.map((row) => (
                 <div
                   key={row.depth}
-                  className="flex items-center justify-between rounded-lg border border-foreground/10 px-3.5 py-2.5 dark:border-white/10"
+                  className="flex items-center justify-between rounded-lg border border-foreground/10 px-3.5 py-2.5 transition-all duration-300 hover:-translate-y-0.5 hover:border-[#2659f4]/30 dark:border-white/10"
                 >
                   <span className="text-[0.8125rem] font-semibold text-foreground">{row.depth}</span>
                   <span className="text-xs text-muted-foreground">
