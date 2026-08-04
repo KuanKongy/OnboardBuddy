@@ -30,7 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { apiFetch } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import { buildGithubRepoUrl } from "@/lib/githubUrl";
-import { ROLE_OPTIONS, roleTitle } from "@/lib/roles";
+import { ROLE_OPTIONS, roleLabel, roleTitle } from "@/lib/roles";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
@@ -892,7 +892,7 @@ export function ProjectOverviewPage() {
               {project.repo_owner}/{project.repo_name}
               <ExternalLink className="h-3 w-3 shrink-0" aria-hidden />
             </a>
-            <Badge variant="outline" className="text-[0.6875rem] capitalize">{project.developer_role}</Badge>
+            <Badge variant="outline" className="text-[0.6875rem]">{roleLabel(project.developer_role)}</Badge>
             {viewedCommit && (
               <span className="font-mono text-[0.6875rem] text-muted-foreground">
                 {selectedPackage ? "viewing" : "latest"}: {viewedRefLabel}

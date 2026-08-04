@@ -9,6 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { query } from '../../lib/db.js';
+import { roleDescriptor } from '../../lib/roleDisplay.js';
 import type { AiClient } from '../ai/aiClient.js';
 import { retrieve, type EvidenceBundleV2 } from '../../retrieval/retrievalService.js';
 import type { DeveloperRole } from '../semantic/projections.js';
@@ -754,7 +755,7 @@ export function renderPrompt(
   ].filter(Boolean).join('\n\n'));
   const repo = `${safeIdentifier(bundle.repo.owner, 60)}/${safeIdentifier(bundle.repo.name, 60)}`;
   return [
-    `You are writing the "${params.sectionType}" onboarding section for a ${params.role} developer joining ${repo} (scope: ${safeIdentifier(bundle.scope.displayName, 120)}).`,
+    `You are writing the "${params.sectionType}" onboarding section for a ${roleDescriptor(params.role)} developer joining ${repo} (scope: ${safeIdentifier(bundle.scope.displayName, 120)}).`,
     spec.instructions.replace(/\bROLE\b/g, params.role),
     previousIssues && previousIssues.length > 0
       ? `Your previous attempt FAILED validation. Fix these problems and cite only receipt ids that exist below:\n- ${previousIssues.join('\n- ')}`

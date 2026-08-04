@@ -19,6 +19,12 @@
  * flattening them would make one of the two read wrong:
  *   - `label` — the short filter word in a form control ("Backend").
  *   - `title` — the person, where the role names a reader ("Backend Developer").
+ *
+ * Both registers are display text and can be reworded. The VALUES cannot: they
+ * are stored in Postgres, validated by the API and keyed on by the weight
+ * table, so `general` stays `general` on the wire while it reads "Full-stack"
+ * on screen. Rendering a stored value raw (or through CSS `capitalize`, which
+ * would write "Full-Stack") is what these helpers exist to prevent.
  */
 
 export const DEVELOPER_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -40,7 +46,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
   { value: "frontend", label: "Frontend", title: "Frontend Developer", description: "UI & client-side code" },
   { value: "devops", label: "DevOps", title: "DevOps Engineer", description: "Infrastructure & deployments" },
   { value: "qa", label: "QA", title: "QA Engineer", description: "Testing & quality assurance" },
-  { value: "general", label: "General", title: "General", description: "End to end — the full-stack superset role" },
+  { value: "general", label: "Full-stack", title: "Full-stack Developer", description: "The whole stack, end to end" },
 ];
 
 /**
@@ -48,6 +54,9 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * build does not know. It is the SUPERSET role, not a default: nothing may use
  * it as the role to rank, score or generate for (doc/REWORK_PLAN.md Phase 10 —
  * "nothing in Phases 1–7 may hardcode `general`").
+ *
+ * It reads as "Full-stack" everywhere a person sees it; the stored value is
+ * frozen, so use this constant rather than typing the value into a surface.
  */
 export const FALLBACK_ROLE: DeveloperRole = "general";
 

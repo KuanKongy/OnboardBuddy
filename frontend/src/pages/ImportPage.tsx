@@ -1,6 +1,6 @@
 import {
   ExternalLink,
-  GitBranch,
+  Github,
   Loader2,
   Rocket,
   Search,
@@ -52,20 +52,21 @@ interface Repo {
   default_branch: string;
 }
 
-interface Branch {
-  name: string;
-}
-
 /**
  * Everything step 2 needs, as one object rather than step 1's picker state: a step 2
  * restored from the URL cannot replay the pickers, since setting
- * `selectedInstallation` alone trips the repos effect and blanks the branch.
+ * `selectedInstallation` alone would trip the repos effect. `branch` is the
+ * server-resolved project branch (step 1 no longer asks for one); `depth` and
+ * `role` are the project's resolved defaults so the form can name real values
+ * instead of saying "default".
  */
 interface ConfigureContext {
   projectId: string;
   repo: Repo;
   installationId: string;
   branch: string;
+  depth?: string;
+  role?: string;
 }
 
 /**
@@ -141,10 +142,6 @@ export function ImportPage() {
   const [reposLoading, setReposLoading] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
 
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [branchesLoading, setBranchesLoading] = useState(false);
-  const [selectedBranch, setSelectedBranch] = useState("");
-
   const [strandedProjectId, setStrandedProjectId] = useState<string | null>(null);
   /** Set from a 409's `project_id`: the repo is already imported, over there. */
   const [existingProjectId, setExistingProjectId] = useState<string | null>(null);
@@ -169,7 +166,6 @@ export function ImportPage() {
    * fits on screen.
    */
   const [repoFilter, setRepoFilter] = useState("");
-  const [branchFilter, setBranchFilter] = useState("");
 
   const [ignoredPaths, setIgnoredPaths] = useState<string[]>([]);
   const [ignoreInput, setIgnoreInput] = useState("");
@@ -189,6 +185,7 @@ export function ImportPage() {
       .then(({ project }: { project: {
         id: string; repo_owner: string; repo_name: string; branch: string;
         github_installation_id: number | string | null;
+        settings?: { analysis_depth?: string; default_developer_role?: string } | null;
       } }) => {
         if (cancelled) return;
         setConfigure({
@@ -201,8 +198,10 @@ export function ImportPage() {
           },
           installationId: String(project.github_installation_id ?? ""),
           branch: project.branch,
+          depth: project.settings?.analysis_depth,
+          role: project.settings?.default_developer_role,
         });
-        setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: project.branch });
+        setAnalyzeConfig(DEFAULT_ANALYZE_CONFIG);
       })
       .catch(() => {
         // A stale or foreign id falls back to step 1 rather than stranding the page.
@@ -239,6 +238,11 @@ export function ImportPage() {
         setGithubAppConnected(Boolean(instData.github_connected));
         setGithubAppUsername((instData as { github_username?: string }).github_username ?? null);
         setInstallations(instData.installations);
+        // Exactly one installation is the overwhelmingly common case; make
+        // it the selection instead of a one-option quiz.
+        if (instData.installations.length === 1) {
+          setSelectedInstallation((prev) => prev || String(instData.installations[0]!.id));
+        }
       })
       .catch((err) => {
         setGithubAppConnected(false);
@@ -246,54 +250,62 @@ export function ImportPage() {
         setSelectedInstallation("");
         setRepos([]);
         setSelectedRepo("");
-        setBranches([]);
-        setSelectedBranch("");
         setError(err.message);
       })
       .finally(() => setInstallationsLoading(false));
   }, [refreshKey]);
 
+  // refreshKey is a dependency ON PURPOSE: Refresh (and the focus refetch)
+  // must re-list repos too, not only installations — the old page refetched
+  // nothing visible, which made the button look broken right next to the
+  // "Configure repositories" link whose changes it exists to pick up.
+  const prevInstallationRef = useRef("");
   useEffect(() => {
     if (!selectedInstallation) return;
+    const accountChanged = prevInstallationRef.current !== selectedInstallation;
+    prevInstallationRef.current = selectedInstallation;
     setReposLoading(true);
-    setSelectedRepo("");
-    setSelectedBranch("");
-    // A filter from the previous account would hide the new one's repos.
-    setRepoFilter("");
-    setBranchFilter("");
+    if (accountChanged) {
+      // A filter or selection from the previous account would hide or
+      // misattribute the new one's repos.
+      setSelectedRepo("");
+      setRepoFilter("");
+    }
     apiFetch(`/github/repos?installation_id=${selectedInstallation}`)
-      .then((data: { repos: Repo[] }) => setRepos(data.repos))
+      .then((data: { repos: Repo[] }) => {
+        setRepos(data.repos);
+        // Keep the selection when the refreshed list still contains it.
+        setSelectedRepo((prev) => (data.repos.some((r) => r.full_name === prev) ? prev : ""));
+      })
       .catch((err) => {
         setRepos([]);
         setSelectedRepo("");
-        setBranches([]);
-        setSelectedBranch("");
         setError(err.message);
       })
       .finally(() => setReposLoading(false));
-  }, [selectedInstallation]);
+  }, [selectedInstallation, refreshKey]);
 
+  // Returning from a GitHub tab (the Configure repositories link, an install
+  // started elsewhere) must show fresh data without hunting for Refresh.
+  // Step-1 only: step 2 shares the error state and needs no GitHub lists.
+  const onStepOneRef = useRef(true);
+  onStepOneRef.current = configure === null && !restoring;
+  const lastFocusRefetchRef = useRef(0);
   useEffect(() => {
-    const repo = repos.find((r) => r.full_name === selectedRepo);
-    if (!repo || !selectedInstallation) return;
-    setBranchesLoading(true);
-    setSelectedBranch("");
-    setBranchFilter("");
-    apiFetch(
-      `/github/repos/${repo.owner}/${repo.name}/branches?installation_id=${selectedInstallation}`,
-    )
-      .then((data: { branches: Branch[] }) => {
-        setBranches(data.branches);
-        const defaultBranch = data.branches.find((b) => b.name === repo.default_branch);
-        if (defaultBranch) setSelectedBranch(defaultBranch.name);
-      })
-      .catch((err) => {
-        setBranches([]);
-        setSelectedBranch("");
-        setError(err.message);
-      })
-      .finally(() => setBranchesLoading(false));
-  }, [selectedRepo, selectedInstallation, repos]);
+    const refetch = () => {
+      if (!onStepOneRef.current || document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (now - lastFocusRefetchRef.current < 500) return;
+      lastFocusRefetchRef.current = now;
+      setRefreshKey((k) => k + 1);
+    };
+    window.addEventListener("focus", refetch);
+    document.addEventListener("visibilitychange", refetch);
+    return () => {
+      window.removeEventListener("focus", refetch);
+      document.removeEventListener("visibilitychange", refetch);
+    };
+  }, []);
 
   function addIgnoredPath() {
     const path = ignoreInput.trim();
@@ -319,15 +331,12 @@ export function ImportPage() {
   }
 
   const repo = repos.find((r) => r.full_name === selectedRepo);
-  const canCreate = selectedInstallation && selectedRepo && selectedBranch;
+  const canCreate = selectedInstallation && selectedRepo;
 
   // The selected option always stays in its own list: filtering it out would
   // leave the trigger showing a value the dropdown claims does not exist.
   const visibleRepos = repos.filter(
     (r) => r.full_name === selectedRepo || matchesFilter(r.full_name, repoFilter),
-  );
-  const visibleBranches = branches.filter(
-    (b) => b.name === selectedBranch || matchesFilter(b.name, branchFilter),
   );
 
   async function handleCreate() {
@@ -338,16 +347,18 @@ export function ImportPage() {
     setExistingProjectId(null);
     let createdProject: { id: string } | undefined;
     try {
+      // No branch: the server resolves the repository's own default branch
+      // (projects POST fills it from GitHub metadata). Any branch can still
+      // be analyzed later; asking here was noise.
       const { project } = await apiFetch("/projects", {
         method: "POST",
         body: JSON.stringify({
           repo_owner: repo.owner,
           repo_name: repo.name,
-          branch: selectedBranch,
           github_installation_id: selectedInstallation,
           default_developer_role: developerRole,
         }),
-      }) as { project: { id: string } };
+      }) as { project: { id: string; branch?: string } };
       createdProject = project;
 
       // Persist privacy choices. Only send ignored_paths when the user added
@@ -369,9 +380,13 @@ export function ImportPage() {
         projectId: project.id,
         repo,
         installationId: selectedInstallation,
-        branch: selectedBranch,
+        branch: project.branch ?? repo.default_branch,
+        // A just-created project carries the depth default and the role
+        // chosen above; step 2 names them instead of saying "default".
+        depth: "standard",
+        role: developerRole,
       });
-      setAnalyzeConfig({ ...DEFAULT_ANALYZE_CONFIG, branch: selectedBranch });
+      setAnalyzeConfig(DEFAULT_ANALYZE_CONFIG);
       // `replace`: the project exists now, so Back to the picker would only invite
       // a duplicate import.
       setSearchParams((prev) => {
@@ -475,6 +490,8 @@ export function ImportPage() {
                   repoName={configuredRepo.name}
                   installationId={configuredInstallationId}
                   defaultBranch={configure.branch}
+                  projectDepth={configure.depth}
+                  projectRole={configure.role}
                   config={analyzeConfig}
                   onChange={(c) => {
                     setAnalyzeConfig(c);
@@ -610,16 +627,25 @@ export function ImportPage() {
             {/* GitHub Installation */}
             <div className="space-y-1">
               <Label className="text-xs">GitHub Account</Label>
-              {installationsLoading ? (
+              {installationsLoading && installations.length === 0 ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3 w-3 animate-spin" /> Loading...
                 </div>
               ) : installations.length === 0 ? (
-                <div className="rounded-md border border-dashed border-border p-3 text-center">
-                  <p className="text-xs text-muted-foreground">No installations found.</p>
-                  <div className="mt-2 flex justify-center gap-2">
+                <div className="rounded-md border border-dashed border-border p-4 text-center">
+                  <p className="text-xs text-muted-foreground">
+                    {githubAppConnected
+                      ? "No repositories are shared with the app yet."
+                      : "GitHub isn't connected yet; importing needs the read-only GitHub App."}
+                  </p>
+                  <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+                    {githubAppConnected
+                      ? `Install ${appName} on the account that owns your repositories.`
+                      : "Installing it connects your GitHub account and grants repository access in one step."}
+                  </p>
+                  <div className="mt-2.5 flex justify-center gap-2">
                     <Button size="xs" onClick={handleAuthorizeGitHubApp}>
-                      {githubAppConnected ? `Install ${appName}` : `Connect ${appName}`}
+                      {githubAppConnected ? `Install ${appName}` : "Connect GitHub"}
                     </Button>
                     <Button variant="outline" size="xs" onClick={() => setRefreshKey((k) => k + 1)}>
                       Refresh
@@ -628,18 +654,26 @@ export function ImportPage() {
                 </div>
               ) : (
                 <>
-                  <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
-                    <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="GitHub account">
-                      <SelectValue placeholder="Select account" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {installations.map((inst) => (
-                        <SelectItem key={inst.id} value={String(inst.id)}>
-                          {inst.account.login}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {installations.length === 1 ? (
+                    // One installation is not a choice; show it, don't ask it.
+                    <div className="flex h-8 items-center gap-2 rounded-md border border-border bg-muted/30 px-3 text-[0.8125rem] text-foreground">
+                      <Github className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                      {installations[0]!.account.login}
+                    </div>
+                  ) : (
+                    <Select value={selectedInstallation} onValueChange={setSelectedInstallation}>
+                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="GitHub account">
+                        <SelectValue placeholder="Select account" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {installations.map((inst) => (
+                          <SelectItem key={inst.id} value={String(inst.id)}>
+                            {inst.account.login}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   <div className="flex items-center justify-between">
                     {installUrl && (
                       <a
@@ -651,14 +685,6 @@ export function ImportPage() {
                         Configure repositories <ExternalLink className="h-2.5 w-2.5" />
                       </a>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={handleAuthorizeGitHubApp}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      Authorize GitHub App
-                    </Button>
                     <Button
                       variant="ghost"
                       size="xs"
@@ -674,113 +700,74 @@ export function ImportPage() {
 
             {/* Repository */}
             {selectedInstallation && (
-              <div className="space-y-1">
-                <Label className="text-xs">Repository</Label>
-                {reposLoading ? (
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Loading...
-                  </div>
-                ) : (
-                  <>
-                    {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={repoFilter}
-                          onChange={(e) => setRepoFilter(e.target.value)}
-                          placeholder={`Filter ${repos.length} repositories…`}
-                          aria-label="Filter repositories"
-                          className="h-8 pl-8 text-[0.8125rem]"
-                        />
-                      </div>
-                    )}
-                    <Select value={selectedRepo} onValueChange={setSelectedRepo}>
-                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Repository">
-                        <SelectValue placeholder="Select repository" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {visibleRepos.map((r) => {
-                          const alreadyImported = importedRepoKeys.has(r.full_name.toLowerCase());
-                          return (
-                            <SelectItem key={r.full_name} value={r.full_name} disabled={alreadyImported}>
-                              {r.full_name}
-                              {alreadyImported && (
-                                <span className="text-muted-foreground"> (already imported)</span>
-                              )}
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
-                    {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
-                      <p className="text-[0.6875rem] text-muted-foreground">
-                        {repoFilter.trim()
-                          ? `${visibleRepos.length} of ${repos.length} match "${repoFilter.trim()}"`
-                          : `${repos.length} repositories available`}
-                        {visibleRepos.length === 0 && " — no match. Check the App is installed on it."}
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
+              <div className="gap-3 space-y-3 sm:flex sm:space-y-0">
+                <div className="min-w-0 space-y-1 sm:flex-1">
+                  <Label className="text-xs">Repository</Label>
+                  {reposLoading && repos.length === 0 ? (
+                    <div className="flex h-8 items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+                    </div>
+                  ) : (
+                    <>
+                      {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={repoFilter}
+                            onChange={(e) => setRepoFilter(e.target.value)}
+                            placeholder={`Filter ${repos.length} repositories…`}
+                            aria-label="Filter repositories"
+                            className="h-8 pl-8 text-[0.8125rem]"
+                          />
+                        </div>
+                      )}
+                      <Select value={selectedRepo} onValueChange={setSelectedRepo}>
+                        <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Repository">
+                          <SelectValue placeholder="Select repository" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {visibleRepos.map((r) => {
+                            const alreadyImported = importedRepoKeys.has(r.full_name.toLowerCase());
+                            return (
+                              <SelectItem key={r.full_name} value={r.full_name} disabled={alreadyImported}>
+                                {r.full_name}
+                                {alreadyImported && (
+                                  <span className="text-muted-foreground"> (already imported)</span>
+                                )}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                      {repos.length >= TYPEAHEAD_MIN_OPTIONS && (
+                        <p className="text-[0.6875rem] text-muted-foreground">
+                          {repoFilter.trim()
+                            ? `${visibleRepos.length} of ${repos.length} match "${repoFilter.trim()}"`
+                            : `${repos.length} repositories available`}
+                          {visibleRepos.length === 0 && " — no match. Check the App is installed on it."}
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
 
-            {/* Branch */}
-            {selectedRepo && (
-              <div className="space-y-1">
-                <Label className="text-xs">Branch</Label>
-                {branchesLoading ? (
-                  <div className="flex h-8 items-center gap-2 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" /> Loading...
-                  </div>
-                ) : (
-                  <>
-                    {branches.length >= TYPEAHEAD_MIN_OPTIONS && (
-                      <div className="relative">
-                        <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                          value={branchFilter}
-                          onChange={(e) => setBranchFilter(e.target.value)}
-                          placeholder={`Filter ${branches.length} branches…`}
-                          aria-label="Filter branches"
-                          className="h-8 pl-8 text-[0.8125rem]"
-                        />
-                      </div>
-                    )}
-                    <Select value={selectedBranch} onValueChange={setSelectedBranch}>
-                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Branch">
-                        <SelectValue placeholder="Select branch" />
+                {selectedRepo && (
+                  <div className="shrink-0 space-y-1 sm:w-44">
+                    <Label className="text-xs">Role</Label>
+                    <Select value={developerRole} onValueChange={setDeveloperRole}>
+                      <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Role">
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {visibleBranches.map((b) => (
-                          <SelectItem key={b.name} value={b.name}>
-                            <GitBranch className="mr-1 inline h-3 w-3" />
-                            {b.name}
+                        {ROLE_OPTIONS.map((role) => (
+                          <SelectItem key={role.value} value={role.value}>
+                            {role.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
-                  </>
+                  </div>
                 )}
-              </div>
-            )}
-
-            {/* Role */}
-            {selectedRepo && (
-              <div className="space-y-1">
-                <Label className="text-xs">Role</Label>
-                <Select value={developerRole} onValueChange={setDeveloperRole}>
-                  <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Role">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ROLE_OPTIONS.map((role) => (
-                      <SelectItem key={role.value} value={role.value}>
-                        {role.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             )}
 
@@ -798,23 +785,7 @@ export function ImportPage() {
                     {showIgnored ? "- Hide" : "+ Show"} ignored paths
                   </Button>
                   {showIgnored && (
-                    <div className="mt-2 space-y-1.5">
-                      <div className="flex flex-wrap gap-1">
-                        {ignoredPaths.map((p) => (
-                          <Badge key={p} variant="secondary" className="gap-0.5 pr-1 text-xs">
-                            {p}
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label="Remove ignored path"
-                              onClick={() => setIgnoredPaths((prev) => prev.filter((x) => x !== p))}
-                              className="ml-0.5 size-4 rounded-sm p-0 hover:bg-accent"
-                            >
-                              <X className="h-2.5 w-2.5" />
-                            </Button>
-                          </Badge>
-                        ))}
-                      </div>
+                    <div className="mt-2 space-y-2">
                       <div className="flex gap-2">
                         <Input
                           value={ignoreInput}
@@ -823,10 +794,34 @@ export function ImportPage() {
                           placeholder="e.g. node_modules/"
                           className="h-8 flex-1 text-[0.8125rem]"
                         />
-                        <Button variant="outline" size="xs" onClick={addIgnoredPath}>
+                        {/* size sm = h-8, matching the input; xs was h-6 pinned
+                            to the row top. */}
+                        <Button variant="outline" size="sm" onClick={addIgnoredPath}>
                           Add
                         </Button>
                       </div>
+                      {ignoredPaths.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {ignoredPaths.map((p) => (
+                            <Badge
+                              key={p}
+                              variant="secondary"
+                              className="gap-0.5 pr-1 font-mono text-xs transition-colors hover:border-primary/50 hover:bg-accent"
+                            >
+                              {p}
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label={`Remove ${p}`}
+                                onClick={() => setIgnoredPaths((prev) => prev.filter((x) => x !== p))}
+                                className="ml-0.5 size-4 rounded-sm p-0 hover:bg-background/60"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </Button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -837,14 +832,14 @@ export function ImportPage() {
             {selectedRepo && (
               <>
                 <Separator />
-                <div className="space-y-2">
-                  <div className="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2">
-                    <Shield className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-                    <p className="text-xs text-muted-foreground">
-                      Read-only access · secrets filtered · no full repository stored.
-                      The browser never receives full repository source.
-                    </p>
-                  </div>
+                <div className="flex items-center gap-2.5 rounded-md border border-border bg-muted/30 px-3 py-2">
+                  <Shield className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <p className="text-xs text-muted-foreground">
+                    <span className="block">
+                      Read-only access &middot; secrets filtered &middot; no full repository stored.
+                    </span>
+                    <span className="block">The browser never receives full repository source.</span>
+                  </p>
                 </div>
               </>
             )}
@@ -864,10 +859,6 @@ export function ImportPage() {
               {creating ? "Importing…" : "Import repository"}
             </Button>
           </div>
-          <p className="mt-2 text-right text-[0.6875rem] text-muted-foreground">
-            Nothing is analyzed yet — the next step configures the first run
-            (branch, commit, scope, depth) with a cost preview before anything starts.
-          </p>
           </CardContent>
         </Card>
       </div>

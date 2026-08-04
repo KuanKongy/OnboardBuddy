@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { apiFetch } from "@/lib/api";
-import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 
 interface Member {
   user_id: string;
@@ -474,7 +474,7 @@ export function TeamPage() {
                       </div>
                     </div>
                   </td>
-                  <td className="px-3 py-2 capitalize text-muted-foreground">{member.developer_role}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{roleLabel(member.developer_role)}</td>
                   <td className="hidden px-3 py-2 tabular-nums text-muted-foreground sm:table-cell">
                     {fmtDate(member.joined_at)}
                   </td>
@@ -528,14 +528,19 @@ export function TeamPage() {
                     <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
                       <p className="truncate text-xs text-foreground" title={inv.email}>{inv.email}</p>
+                      {/* `capitalize` used to sit on the whole line, so it also
+                          title-cased the inviter's address and would render the
+                          role label as "Full-Stack". Only the tier, which is a
+                          stored lowercase value with no label table, is cased
+                          by CSS now. */}
                       <p
-                        className="truncate text-xs capitalize text-muted-foreground"
+                        className="truncate text-xs text-muted-foreground"
                         title={`${inv.permission_tier}${
-                          inv.developer_role ? ` · ${inv.developer_role}` : ""
+                          inv.developer_role ? ` · ${roleLabel(inv.developer_role)}` : ""
                         }${inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}`}
                       >
-                        {inv.permission_tier}
-                        {inv.developer_role ? ` · ${inv.developer_role}` : ""}
+                        <span className="capitalize">{inv.permission_tier}</span>
+                        {inv.developer_role ? ` · ${roleLabel(inv.developer_role)}` : ""}
                         {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}
                       </p>
                       {/* Without the date a pending row nobody can redeem looks like

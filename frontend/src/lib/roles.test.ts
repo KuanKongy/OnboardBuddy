@@ -31,6 +31,8 @@ const CONSUMERS = [
   "src/pages/OnboardingPage.tsx",
   "src/pages/ProjectOverviewPage.tsx",
   "src/components/PackageSelector.tsx",
+  "src/components/ProvenancePanel.tsx",
+  "src/pages/DashboardPage.tsx",
 ];
 
 /** Vitest runs with the package root as cwd (vite.config.ts lives there). */

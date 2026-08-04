@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
-import { FALLBACK_ROLE, ROLE_OPTIONS } from "@/lib/roles";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 
 interface Invitation {
   id: string;
@@ -158,9 +158,9 @@ export function InvitationsPage() {
                   </div>
                   <div className="mt-1.5 flex items-center gap-1.5">
                     <Badge variant="outline" className="text-[0.6875rem]">Pending</Badge>
-                    <Badge variant="outline" className="text-[0.6875rem] capitalize">
+                    <Badge variant="outline" className="text-[0.6875rem]">
                       {inv.developer_role
-                        ? `${inv.developer_role} role`
+                        ? `${roleLabel(inv.developer_role)} role`
                         : "Role not selected"}
                     </Badge>
                   </div>

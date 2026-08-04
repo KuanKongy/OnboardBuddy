@@ -10,6 +10,7 @@
  */
 
 import { query } from '../../lib/db.js';
+import { roleDescriptor } from '../../lib/roleDisplay.js';
 import type { ViewType } from '../semantic/embeddingViews.js';
 import type { DeveloperRole } from '../semantic/projections.js';
 import { loadRoleProjections, critical25, type ProjectedTarget } from './roleProjection.js';
@@ -1046,7 +1047,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'understand',
     mode: 'explanation',
     views: ['purpose', 'dependency'],
-    retrievalTask: (role) => `The files that matter most and why — what each does, its key functions, and how they connect, for a ${role} developer.`,
+    retrievalTask: (role) => `The files that matter most and why — what each does, its key functions, and how they connect, for a ${roleDescriptor(role)} developer.`,
     instructions: withContracts([
       'A guided map of the files that matter, GROUPED BY SUBSYSTEM (the groups come from fileGroups — never present a flat ranked list; ranking selected the entries, grouping presents them).',
       'One "## <subsystem>" per group. Per file: `path` as a sub-heading or bold lead, then 1-2 sentences on why it matters HERE (from its record evidence: what it orchestrates, who depends on it — the dependents number is provided), then its key functions in the micro-format: `name(signature)` — one-liner · params worth knowing · returns · gotcha (only when the evidence shows one). Then one line: what calls it / what it calls (from the evidence).',
@@ -1368,7 +1369,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'do',
     mode: 'tutorial',
     views: ['purpose', 'dependency'],
-    retrievalTask: (role) => `A safe, real first change a new ${role} developer could make: where, what pattern to follow, and how to verify it.`,
+    retrievalTask: (role) => `A safe, real first change a new ${roleDescriptor(role)} developer could make: where, what pattern to follow, and how to verify it.`,
     instructions: withContracts([
       // Measured: OnboardBuddy's first change was "add a tab" by editing
       // `frontend/e2e/fixtures.ts` (a Playwright fixture); UBCPSS's was "add a

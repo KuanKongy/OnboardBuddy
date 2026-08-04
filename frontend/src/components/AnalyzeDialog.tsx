@@ -97,6 +97,8 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           repoName={project.repo_name}
           installationId={project.github_installation_id ?? ""}
           defaultBranch={project.branch}
+          projectDepth={project.settings?.analysis_depth}
+          projectRole={project.settings?.default_developer_role}
           config={config}
           onChange={updateConfig}
         />
