@@ -48,10 +48,15 @@ export function PackageSelector() {
             title="Which package every tab shows — branch, commit, scope, and role"
           >
             <PackageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            {/* Explicit line heights on both lines (14px / 12px, where the
+                inherited normal leading landed at ~13.3 / ~12.1): the sidebar's
+                separator below this button is the line the reader's coverage
+                strip is cut to sit level with, so this button's height has to
+                be arithmetic rather than font-metric. */}
             <span className="min-w-0 flex-1">
               {selectedPackage ? (
                 <>
-                  <span className="flex items-center gap-1 truncate font-mono text-[0.6875rem] text-foreground">
+                  <span className="flex items-center gap-1 truncate font-mono text-[0.6875rem] leading-[0.875rem] text-foreground">
                     <GitBranch className="h-2.5 w-2.5 shrink-0" />
                     {selectedPackage.branch}@{selectedPackage.analyzed_commit.slice(0, 7)}
                     {!selectedPackage.is_latest_commit && (
@@ -63,14 +68,14 @@ export function PackageSelector() {
                       </Tooltip>
                     )}
                   </span>
-                  <span className="block truncate text-[0.625rem] text-muted-foreground">
+                  <span className="block truncate text-[0.625rem] leading-3 text-muted-foreground">
                     {selectedPackage.path_prefix ? `${selectedPackage.path_prefix}/` : "whole repo"} · {roleTitle(selectedPackage.role)}
                   </span>
                 </>
               ) : (
                 <>
-                  <span className="block truncate text-[0.6875rem] font-medium text-foreground">Latest analysis</span>
-                  <span className="block truncate text-[0.625rem] text-muted-foreground">auto-follows the newest run</span>
+                  <span className="block truncate text-[0.6875rem] font-medium leading-[0.875rem] text-foreground">Latest analysis</span>
+                  <span className="block truncate text-[0.625rem] leading-3 text-muted-foreground">auto-follows the newest run</span>
                 </>
               )}
             </span>

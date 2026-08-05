@@ -47,9 +47,9 @@ describe("SettingsShell", () => {
   });
 
   it("renders the footer in the scrolling column, after the last section", () => {
-    // The save bar is only mounted when there is something to save, so it no
-    // longer needs a pinned row of its own: it rides the column and appears
-    // right below the sections the edit was made in.
+    // The save bar is always mounted for editors (disabled until there is
+    // something to save), so it needs no pinned row of its own: it rides the
+    // column and sits right below the sections the edit was made in.
     render(<SettingsShell sections={sections} footer={<button type="button">Save changes</button>} />);
 
     const save = screen.getByRole("button", { name: "Save changes" });

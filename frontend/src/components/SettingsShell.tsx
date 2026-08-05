@@ -74,7 +74,7 @@ export function SettingsShell({
             would hold the chips off the window wall. */}
         <nav
           aria-label="Settings sections"
-          className="border-b px-3 py-2 sm:px-4 lg:w-60 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:py-3 lg:pl-5 lg:pr-2"
+          className="border-b px-3 py-2 sm:px-4 lg:w-40 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:py-3 lg:pl-5 lg:pr-2"
         >
           <div className="flex flex-wrap gap-1 lg:block lg:space-y-0.5">
             <p className="section-label hidden pb-1 lg:block">Sections</p>
@@ -115,7 +115,13 @@ export function SettingsShell({
           </div>
         </nav>
 
-        <div ref={scrollerRef} className="min-w-0 flex-1 lg:overflow-y-auto lg:overscroll-contain">
+        {/* `overflow-y-scroll` + a stable gutter, not `auto`: this column is the
+            only scroll port on the page, and with `auto` the track appears the
+            moment the content grows past the viewport, shifting the centered
+            measure sideways. Best effort only — macOS's "show scroll bars: when
+            scrolling" still hides the thumb until you scroll, so the affordance
+            there is the reserved gutter, not a visible bar. */}
+        <div ref={scrollerRef} className="min-w-0 flex-1 lg:overflow-y-scroll lg:overscroll-contain lg:[scrollbar-gutter:stable]">
           {/* Centered measure, like the reader's column: it sits mid-pane while
               max-w-3xl still caps the line length. */}
           <div className="mx-auto max-w-3xl space-y-6 px-3 py-4 sm:px-4 lg:px-8 lg:py-5">
@@ -126,7 +132,7 @@ export function SettingsShell({
                 aria-labelledby={`${section.id}-heading`}
                 className="scroll-mt-6 space-y-3"
               >
-                <h2 id={`${section.id}-heading`} className="text-sm font-semibold tracking-tight text-foreground">
+                <h2 id={`${section.id}-heading`} className="text-[1.0625rem] font-semibold tracking-tight text-foreground">
                   {section.label}
                 </h2>
                 {section.children}
