@@ -195,20 +195,23 @@ function packageGapRows(
 }
 
 /**
- * Tooltip keeps the arithmetic, the panel carries the items. `w-full` puts the panel
- * on its own line of the strip.
+ * Tooltip keeps the arithmetic, the panel carries the items — split in two
+ * because the coverage strip is `lg:flex-nowrap`: a `w-full` panel inside it
+ * would either wrap the strip (breaking the 31px the sidebar divider is
+ * aligned to) or scroll sideways with the counts. The toggle stays in the
+ * strip, the panel is its own band under it, the page owns the open state.
  */
-export function PackageGapsDisclosure({
+export function PackageGapsToggle({
   coverage,
-  sections,
+  open,
+  onToggle,
 }: {
   coverage: PackageCoverage;
-  sections: OnboardingSection[];
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const total = coverage.gaps?.total ?? coverage.detectionUnknowns?.length ?? 0;
   if (total === 0) return null;
-  const rows = packageGapRows(sections);
   const detection = coverage.detectionUnknowns ?? [];
 
   return (
@@ -218,7 +221,7 @@ export function PackageGapsDisclosure({
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={() => setOpen((v) => !v)}
+            onClick={onToggle}
             aria-expanded={open}
             aria-controls="package-known-gaps"
             className="inline-flex items-center gap-1 rounded text-warning underline decoration-dotted underline-offset-2 hover:text-warning/80"
@@ -243,27 +246,44 @@ export function PackageGapsDisclosure({
           {detection.map(describeDetectionUnknown).join(" · ")}
         </TooltipContent>
       </Tooltip>
-      {open && (
-        <ul id="package-known-gaps" className="w-full space-y-1 pt-1">
-          {rows.map((row) => (
-            <li key={row.kind} className="max-w-[85ch]">
-              <span className="font-medium text-foreground/80">
-                {UNKNOWN_LABELS[row.kind] ?? row.kind.replace(/_/g, " ")}
-              </span>
-              <span className="ml-1.5 rounded bg-muted px-1 tabular-nums">× {row.count}</span>
-              {/* Which sections raised it — the section footers hold the wording. */}
-              <span className="ml-1.5">in {row.sections.join(", ")}</span>
-            </li>
-          ))}
-          {detection.map((u, ui) => (
-            <li key={`detection-${ui}`} className="max-w-[85ch]">
-              <span className="font-medium text-foreground/80">{describeDetectionUnknown(u)}</span>
-              <span className="ml-1.5">found by detection</span>
-            </li>
-          ))}
-        </ul>
-      )}
     </>
+  );
+}
+
+/** The items behind the count, in a band of their own below the strip. */
+export function PackageGapsPanel({
+  coverage,
+  sections,
+}: {
+  coverage: PackageCoverage;
+  sections: OnboardingSection[];
+}) {
+  const total = coverage.gaps?.total ?? coverage.detectionUnknowns?.length ?? 0;
+  if (total === 0) return null;
+  const rows = packageGapRows(sections);
+  const detection = coverage.detectionUnknowns ?? [];
+
+  return (
+    <div className="border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5">
+      <ul id="package-known-gaps" className="space-y-1">
+        {rows.map((row) => (
+          <li key={row.kind} className="max-w-[85ch]">
+            <span className="font-medium text-foreground/80">
+              {UNKNOWN_LABELS[row.kind] ?? row.kind.replace(/_/g, " ")}
+            </span>
+            <span className="ml-1.5 rounded bg-muted px-1 tabular-nums">× {row.count}</span>
+            {/* Which sections raised it — the section footers hold the wording. */}
+            <span className="ml-1.5">in {row.sections.join(", ")}</span>
+          </li>
+        ))}
+        {detection.map((u, ui) => (
+          <li key={`detection-${ui}`} className="max-w-[85ch]">
+            <span className="font-medium text-foreground/80">{describeDetectionUnknown(u)}</span>
+            <span className="ml-1.5">found by detection</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -1008,6 +1028,10 @@ export function OnboardingPage() {
   const [exporting, setExporting] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [provenanceOpen, setProvenanceOpen] = useState(false);
+  // Lives here, not in the strip: the toggle sits inside the nowrap coverage
+  // strip and the panel it opens is a band below it, so the two halves need a
+  // shared owner.
+  const [pkgGapsOpen, setPkgGapsOpen] = useState(false);
   const {
     items: progressItems,
     loaded: progressLoaded,
@@ -1697,28 +1721,44 @@ export function OnboardingPage() {
           and the reader's actions on one row, in a full-width band so the
           divider reaches both window walls.
 
-          The two numbers this band is cut to, both rem-based so the font-size
-          preference moves the reader and the sidebar together:
-          • `items-center` + the top padding alone puts the toggle's top edge at
-            14 / 18 / 22px — exactly where every other page's PageHeader toggle
-            sits (the shell's p-3 / sm:p-4 / lg:p-5 main padding plus the
-            header's own mt-0.5), so switching tabs never jogs it.
-          • At lg the band is 22 (pt) + 32 (toggle) + 14 (pb) + 1 (border) =
-            69px and the coverage strip under it is 30.875px (py-1.5 + 11px
-            text at leading-relaxed + border), so the strip's bottom rule lands
-            at 99.875px against the project sidebar's separator at 100px — the
-            two horizontal lines read as one. The sidebar half of that sum is
-            only stable because PackageSelector pins its two line heights; nudge
-            `lg:pb-3.5` here if the pair ever drifts apart.
+          At lg the band and the coverage strip below it are pinned to 69px
+          (4.3125rem) and 31px (1.9375rem) — 100px, which is exactly what the
+          project sidebar stacks above its own Separator, so the two horizontal
+          rules read as one line. Both heights are rem, so a font-size
+          preference or a browser zoom scales the reader and the sidebar
+          together; pinning them also ends the padding arithmetic that used to
+          land the rule 0.125px short and drift further with rounding. The
+          asymmetric padding (22 top / 14 bottom around a 32px content line)
+          keeps the toggle's top edge at every other page's 22px — the shell's
+          lg:p-5 plus the PageHeader's mt-0.5 — so switching tabs never jogs
+          it. A control taller than that line no longer grows the band either:
+          forced back to ui/select's own 36px, the role Select of a reader
+          opened without ?package= bleeds 2px into each padding and the toggle
+          and the strip stay where they are, so the `data-[size=default]:h-7`
+          below is now belt and braces rather than the only thing holding the
+          divider in place.
 
-          Measured in Chrome at 1440x900, and 77.5 / 34.609 / 112.109 against a
-          separator at 112.25 under the Large font preference — which is why
-          every number here is in rem. Two known, accepted departures: a reader
-          opened without ?package= renders the role Select, whose 36px height
-          (ui/select's `data-[size=default]:h-9` outranks the `h-7` passed
-          below) makes the band 4px taller, and the generation banner below
-          pushes the strip down by its own height on purpose. */}
-      <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 pb-2.5 pt-3.5 sm:px-4 sm:pt-[1.125rem] lg:px-5 lg:pb-3.5 lg:pt-[1.375rem]">
+          `lg:flex-nowrap` is the other half of it, because a wrapped row is
+          taller than whatever height it is pinned to. The h1 truncates to
+          absorb the width; the strip scrolls sideways instead. Honest number:
+          the strip's content is wider than its pane on any real package —
+          1302px against 1216px at a 1440 window, against 800px at lg-min — so
+          the last counts are reached by scrolling the strip, at every width.
+          Nothing is dropped and nothing is hidden behind a menu, but it is a
+          scroll. Same constraint is why the known-gaps panel opens as its own
+          band BELOW the strip rather than on a second line inside it.
+
+          Two accepted departures: while the generation banner below or the
+          sidebar's own active-job pill is up, that side sits lower on purpose.
+
+          Measured in Chrome (1440x900, mocked coverage payload): band 69,
+          strip 31, strip bottom exactly on the sidebar separator; unchanged at
+          browser zoom 90 / 110 / 125%. Under a font-size preference the pair
+          drifts by half a pixel at most (-0.16px at 14.4 / +0.5px at 20), from
+          the sidebar's side of the sum, which is not all rem. At 150% zoom a
+          1440 window falls under lg, where none of this applies and the
+          sidebar is a drawer anyway. */}
+      <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 pb-2.5 pt-3.5 sm:px-4 sm:pt-[1.125rem] lg:h-[4.3125rem] lg:flex-nowrap lg:px-5 lg:pb-3.5 lg:pt-[1.375rem]">
         <SidebarToggle />
         <Button
           variant="ghost"
@@ -1728,10 +1768,10 @@ export function OnboardingPage() {
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
         </Button>
-        <h1 className="truncate text-[0.9375rem] font-semibold">
+        <h1 className="min-w-0 flex-1 truncate text-[0.9375rem] font-semibold">
           {activeSection?.label ?? "Onboarding"}
         </h1>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2 lg:flex-nowrap">
           {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
           {selectedPackageParam ? (
             // Pinned to one exact package — role is part of its identity.
@@ -1741,9 +1781,10 @@ export function OnboardingPage() {
           ) : (
             <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
               {/* data-[size=default]:h-7 because the ui trigger's own h-9 size
-                  variant outranks a bare h-7: at h-9 this becomes the tallest
-                  thing in the band and pushes the strip 4px off the sidebar
-                  divider it is aligned to. */}
+                  variant outranks a bare h-7, and at h-9 this is the tallest
+                  thing in the band. The pinned band height now absorbs that
+                  (measured: 36px here still leaves band 69 / strip 31); this
+                  keeps it the same size as the badge it replaces. */}
               <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs data-[size=default]:h-7"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
@@ -1915,60 +1956,76 @@ export function OnboardingPage() {
           actually cites, and the signals behind the ranking — the honest
           denominators the "critical 25%" story needs. All counts, no prose. */}
       {!isMissing && pkg.coverage && (
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5">
-          <CoverageFiles files={pkg.coverage.files} languages={pkg.coverage.languages} />
-          <span aria-hidden>·</span>
-          <span>
-            cites <span className="font-medium text-foreground">{pkg.coverage.symbols.cited}</span> of{" "}
-            {pkg.coverage.symbols.total} symbols in {pkg.coverage.files.cited} files
-          </span>
-          <span aria-hidden>·</span>
-          <span>
-            <span className="font-medium text-foreground">{pkg.coverage.workflows.covered}</span> of{" "}
-            {pkg.coverage.workflows.total} traced workflows in sections & tutorials
-          </span>
-          {/* The weight table with its formula, served by the API. This line
-              used to restate the ranker's signal names in the frontend and
-              print the weights with no formula around them — two places to
-              keep in sync, and no way to tell what the percentages summed to. */}
-          {pkg.coverage.rankingProvenance && (
-            <>
-              <span aria-hidden>·</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
-                    ranked by{" "}
-                    {pkg.coverage.rankingProvenance.available
-                      ? pkg.coverage.rankingProvenance.inputs.length
-                      : "?"}{" "}
-                    signals
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-sm text-left">
-                  <ScoreProvenance data={pkg.coverage.rankingProvenance} variant="tooltip" />
-                </TooltipContent>
-              </Tooltip>
-            </>
-          )}
-          {/* Honesty rule (DETECTION_COVERAGE.md): what the analysis KNOWS it
-              doesn't know — dead-end traces, unmodeled packages, journey
-              gaps. Findable work, never silent holes.
+        <>
+          {/* One line at lg: `whitespace-nowrap` is inherited by every child
+              (Tooltip content portals out of here, so it is unaffected) and
+              `min-width:auto` on a nowrap flex item keeps the counts from
+              being squished, so no child needs its own shrink-0 — only the
+              ml-auto Link keeps one, to stay whole at the end of the scroll. */}
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:h-[1.9375rem] lg:flex-nowrap lg:overflow-x-auto lg:whitespace-nowrap lg:px-5 lg:py-0 lg:[scrollbar-width:thin]">
+            <CoverageFiles files={pkg.coverage.files} languages={pkg.coverage.languages} />
+            <span aria-hidden>·</span>
+            <span>
+              cites <span className="font-medium text-foreground">{pkg.coverage.symbols.cited}</span> of{" "}
+              {pkg.coverage.symbols.total} symbols in {pkg.coverage.files.cited} files
+            </span>
+            <span aria-hidden>·</span>
+            <span>
+              <span className="font-medium text-foreground">{pkg.coverage.workflows.covered}</span> of{" "}
+              {pkg.coverage.workflows.total} traced workflows in sections & tutorials
+            </span>
+            {/* The weight table with its formula, served by the API. This line
+                used to restate the ranker's signal names in the frontend and
+                print the weights with no formula around them — two places to
+                keep in sync, and no way to tell what the percentages summed to. */}
+            {pkg.coverage.rankingProvenance && (
+              <>
+                <span aria-hidden>·</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={0} className="cursor-help underline decoration-dotted underline-offset-2">
+                      ranked by{" "}
+                      {pkg.coverage.rankingProvenance.available
+                        ? pkg.coverage.rankingProvenance.inputs.length
+                        : "?"}{" "}
+                      signals
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-sm text-left">
+                    <ScoreProvenance data={pkg.coverage.rankingProvenance} variant="tooltip" />
+                  </TooltipContent>
+                </Tooltip>
+              </>
+            )}
+            {/* Honesty rule (DETECTION_COVERAGE.md): what the analysis KNOWS it
+                doesn't know — dead-end traces, unmodeled packages, journey
+                gaps. Findable work, never silent holes.
 
-              A10: this used to print `detectionUnknowns.length` alone and call
-              it "6 known unknowns" while the sections below it listed 89 gap
-              entries under the same word — the strip contradicted its own
-              page. One population now: "known gaps" means anything the
-              analysis recorded as undetermined, the number is the sum of both
-              provenances (API `coverage.gaps`), and the tooltip says which is
-              which. Pre-`gaps` payloads fall back to the detection count. */}
-          <PackageGapsDisclosure coverage={pkg.coverage} sections={pkg.sections} />
-          <Link
-            to={`/projects/${id}/dependencies`}
-            className="ml-auto shrink-0 font-medium text-primary hover:underline"
-          >
-            Everything else → Dependencies
-          </Link>
-        </div>
+                A10: this used to print `detectionUnknowns.length` alone and
+                call it "6 known unknowns" while the sections below it listed
+                89 gap entries under the same word — the strip contradicted its
+                own page. One population now: "known gaps" means anything the
+                analysis recorded as undetermined, the number is the sum of
+                both provenances (API `coverage.gaps`), and the tooltip says
+                which is which. Pre-`gaps` payloads fall back to the detection
+                count. */}
+            <PackageGapsToggle
+              coverage={pkg.coverage}
+              open={pkgGapsOpen}
+              onToggle={() => setPkgGapsOpen((v) => !v)}
+            />
+            <Link
+              to={`/projects/${id}/dependencies`}
+              className="ml-auto shrink-0 font-medium text-primary hover:underline"
+            >
+              Everything else → Dependencies
+            </Link>
+          </div>
+          {/* Below the strip, not inside it: the strip is one pinned line at
+              lg, and the rule under it stays level with the sidebar divider
+              whether this is open or shut. */}
+          {pkgGapsOpen && <PackageGapsPanel coverage={pkg.coverage} sections={pkg.sections} />}
+        </>
       )}
 
       {/* Bug #22: when the live poll gives up, say so where it was reporting
