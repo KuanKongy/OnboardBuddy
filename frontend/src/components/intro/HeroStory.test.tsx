@@ -69,18 +69,31 @@ describe("HeroStory playback", () => {
 
   it("moves the window tab bar onto the tab each scene opens", () => {
     render(<HeroStory />);
-    expect(screen.getByText("Overview")).toHaveAttribute("data-active");
     // One act per scene: the next timer is only armed once React has flushed
-    // the scene change, so both durations in a single advance would stall.
-    act(() => {
-      vi.advanceTimersByTime(STORY_SCENES[0]!.duration);
-    });
-    act(() => {
-      vi.advanceTimersByTime(STORY_SCENES[1]!.duration);
-    });
+    // the scene change, so several durations in a single advance would stall.
+    const nextScene = (i: number) =>
+      act(() => {
+        vi.advanceTimersByTime(STORY_SCENES[i]!.duration);
+      });
+
+    expect(screen.getByText("Overview")).toHaveAttribute("data-active");
+    nextScene(0); // → analysis, still Overview
+    expect(screen.getByText("Overview")).toHaveAttribute("data-active");
+
+    nextScene(1);
     expect(currentScene()).toBe("graph");
     expect(screen.getByText("Dependencies")).toHaveAttribute("data-active");
     expect(screen.getByText("Overview")).not.toHaveAttribute("data-active");
+
+    nextScene(2);
+    expect(currentScene()).toBe("architecture");
+    expect(screen.getByText("Architecture")).toHaveAttribute("data-active");
+    expect(screen.getByText("Dependencies")).not.toHaveAttribute("data-active");
+
+    nextScene(3);
+    expect(currentScene()).toBe("tutorial");
+    expect(screen.getByText("Tutorials")).toHaveAttribute("data-active");
+    expect(screen.getByText("Architecture")).not.toHaveAttribute("data-active");
   });
 
   it("arms exactly one timer under StrictMode's double mount", () => {
