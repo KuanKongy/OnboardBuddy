@@ -28,6 +28,7 @@ import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { PageHeader } from "@/components/PageHeader";
+import { SidebarToggle } from "@/components/SidebarShell";
 import { useFullBleedMain } from "@/components/MainRegion";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
@@ -1692,167 +1693,190 @@ export function OnboardingPage() {
   // ── reader view ─────────────────────────────────────────────────────────────
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Top bar: the standard PageHeader (toggle placement, .page-title) in a
-          full-width band, so its divider reaches both window walls. */}
-      <div className="border-b bg-background px-3 pb-2.5 pt-3 sm:px-4 sm:pt-4 lg:px-5 lg:pt-5">
-        <PageHeader
-          className="mb-0"
-          title={activeSection?.label ?? "Onboarding"}
-          leading={
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => setParams({ view: null, package: null }, { replace: false })}
-              className="gap-1"
-            >
-              <ArrowLeft className="h-3.5 w-3.5" /> Packages
-            </Button>
-          }
-          actions={
+      {/* Top bar: sidebar toggle, back to the package list, the section title
+          and the reader's actions on one row, in a full-width band so the
+          divider reaches both window walls.
+
+          The two numbers this band is cut to, both rem-based so the font-size
+          preference moves the reader and the sidebar together:
+          • `items-center` + the top padding alone puts the toggle's top edge at
+            14 / 18 / 22px — exactly where every other page's PageHeader toggle
+            sits (the shell's p-3 / sm:p-4 / lg:p-5 main padding plus the
+            header's own mt-0.5), so switching tabs never jogs it.
+          • At lg the band is 22 (pt) + 32 (toggle) + 14 (pb) + 1 (border) =
+            69px and the coverage strip under it is 30.875px (py-1.5 + 11px
+            text at leading-relaxed + border), so the strip's bottom rule lands
+            at 99.875px against the project sidebar's separator at 100px — the
+            two horizontal lines read as one. The sidebar half of that sum is
+            only stable because PackageSelector pins its two line heights; nudge
+            `lg:pb-3.5` here if the pair ever drifts apart.
+
+          Measured in Chrome at 1440x900, and 77.5 / 34.609 / 112.109 against a
+          separator at 112.25 under the Large font preference — which is why
+          every number here is in rem. Two known, accepted departures: a reader
+          opened without ?package= renders the role Select, whose 36px height
+          (ui/select's `data-[size=default]:h-9` outranks the `h-7` passed
+          below) makes the band 4px taller, and the generation banner below
+          pushes the strip down by its own height on purpose. */}
+      <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 pb-2.5 pt-3.5 sm:px-4 sm:pt-[1.125rem] lg:px-5 lg:pb-3.5 lg:pt-[1.375rem]">
+        <SidebarToggle />
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setParams({ view: null, package: null }, { replace: false })}
+          className="gap-1"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> Packages
+        </Button>
+        <h1 className="truncate text-[0.9375rem] font-semibold">
+          {activeSection?.label ?? "Onboarding"}
+        </h1>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
+          {selectedPackageParam ? (
+            // Pinned to one exact package — role is part of its identity.
+            <Badge variant="outline" className="h-7 px-2 text-xs">
+              {roleTitle(pkg?.role ?? selectedRole)}
+            </Badge>
+          ) : (
+            <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
+              {/* data-[size=default]:h-7 because the ui trigger's own h-9 size
+                  variant outranks a bare h-7: at h-9 this becomes the tallest
+                  thing in the band and pushes the strip 4px off the sidebar
+                  divider it is aligned to. */}
+              <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs data-[size=default]:h-7"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          )}
+          {!isMissing && (
             <>
-              {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
-              {selectedPackageParam ? (
-                // Pinned to one exact package — role is part of its identity.
-                <Badge variant="outline" className="h-7 px-2 text-xs">
-                  {roleTitle(pkg?.role ?? selectedRole)}
-                </Badge>
-              ) : (
-                <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
-                  <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              )}
-              {!isMissing && (
-                <>
-                  {/* Always-visible per-section regeneration (owner/admin — the
-                      endpoint enforces the same tiers). The stale banner keeps
-                      its own contextual copy of this action. */}
-                  {canManage && activeSection?.sectionId && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          className="gap-1.5"
-                          onClick={handleRegenerateSection}
-                          disabled={regenerating}
-                        >
-                          {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                          {regenerating ? "Regenerating…" : "Regenerate section"}
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
-                    </Tooltip>
-                  )}
-                  {canManage && activeSection?.sectionId && (
+              {/* Always-visible per-section regeneration (owner/admin — the
+                  endpoint enforces the same tiers). The stale banner keeps
+                  its own contextual copy of this action. */}
+              {canManage && activeSection?.sectionId && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
                     <Button
                       size="xs"
-                      variant={markedReviewed ? "secondary" : "outline"}
-                      data-tour="reader-review"
-                      className={cn(
-                        "gap-1.5",
-                        markedReviewed && "border-success/40 bg-success-soft text-success",
-                      )}
-                      onClick={handleToggleReview}
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={handleRegenerateSection}
+                      disabled={regenerating}
                     >
-                      {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                      {markedReviewed ? "Reviewed" : "Mark reviewed"}
+                      {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      {regenerating ? "Regenerating…" : "Regenerate section"}
                     </Button>
-                  )}
-                  {/* Personal progress for everyone else — the tour's "track what
-                      you've read" was previously only true for owners/admins. */}
-                  {!canManage && activeSection && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
-                          <Button
-                            size="xs"
-                            variant={isSectionRead ? "secondary" : "outline"}
-                            data-tour="reader-review"
-                            disabled={readSections === null}
-                            className={cn(
-                              "gap-1.5",
-                              isSectionRead && "border-success/40 bg-success-soft text-success",
-                            )}
-                            onClick={handleToggleRead}
-                          >
-                            {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                            {isSectionRead ? "Read" : "Mark as read"}
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      {/* Bug #68: the control is disabled because the progress
-                          fetch failed, not because the feature is unavailable —
-                          and it stays disabled on purpose, since writing marks
-                          against a history we could not read would erase it. */}
-                      {progressLoadError && (
-                        <TooltipContent side="bottom" className="max-w-xs text-left">
-                          Your reading progress couldn&apos;t be loaded, so marks are paused for this
-                          visit — saving now would overwrite the sections you have already read.
-                          Reload the page to try again.
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                  )}
-                  {/* E8: the emphasis used to be inverted — "Mark as read" (a
-                      progress checkbox) wore the only primary ring in the top bar
-                      while Ask, the reader's highest-value action, was a ghost.
-                      Ask is the emphasized control now; the read/review marks are
-                      quiet outlines. */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button size="xs" variant="default" className="gap-1.5" onClick={() => setAskOpen(true)}>
-                        <MessageSquare className="h-3 w-3" />
-                        Ask
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs text-left">
-                      Ask a question about this codebase — answered from the analyzed evidence with receipts
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        className="gap-1"
-                        onClick={() => setProvenanceOpen(true)}
-                        aria-label="How this package was made"
-                      >
-                        <FlaskConical className="h-3 w-3" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" className="max-w-xs text-left">
-                      How this package was made — models, calls, cost, validation
-                    </TooltipContent>
-                  </Tooltip>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        className="gap-1"
-                        data-tour="reader-actions"
-                        aria-label="Export options"
-                        disabled={exporting}
-                      >
-                        {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                        <ChevronDown className="h-3 w-3" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-40">
-                      <DropdownMenuItem className="text-xs" onSelect={handleExport} disabled={exporting}>
-                        <FileText className="mr-2 h-3 w-3" /> Markdown file
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
+                </Tooltip>
               )}
+              {canManage && activeSection?.sectionId && (
+                <Button
+                  size="xs"
+                  variant={markedReviewed ? "secondary" : "outline"}
+                  data-tour="reader-review"
+                  className={cn(
+                    "gap-1.5",
+                    markedReviewed && "border-success/40 bg-success-soft text-success",
+                  )}
+                  onClick={handleToggleReview}
+                >
+                  {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                  {markedReviewed ? "Reviewed" : "Mark reviewed"}
+                </Button>
+              )}
+              {/* Personal progress for everyone else — the tour's "track what
+                  you've read" was previously only true for owners/admins. */}
+              {!canManage && activeSection && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
+                      <Button
+                        size="xs"
+                        variant={isSectionRead ? "secondary" : "outline"}
+                        data-tour="reader-review"
+                        disabled={readSections === null}
+                        className={cn(
+                          "gap-1.5",
+                          isSectionRead && "border-success/40 bg-success-soft text-success",
+                        )}
+                        onClick={handleToggleRead}
+                      >
+                        {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                        {isSectionRead ? "Read" : "Mark as read"}
+                      </Button>
+                    </span>
+                  </TooltipTrigger>
+                  {/* Bug #68: the control is disabled because the progress
+                      fetch failed, not because the feature is unavailable —
+                      and it stays disabled on purpose, since writing marks
+                      against a history we could not read would erase it. */}
+                  {progressLoadError && (
+                    <TooltipContent side="bottom" className="max-w-xs text-left">
+                      Your reading progress couldn&apos;t be loaded, so marks are paused for this
+                      visit — saving now would overwrite the sections you have already read.
+                      Reload the page to try again.
+                    </TooltipContent>
+                  )}
+                </Tooltip>
+              )}
+              {/* E8: the emphasis used to be inverted — "Mark as read" (a
+                  progress checkbox) wore the only primary ring in the top bar
+                  while Ask, the reader's highest-value action, was a ghost.
+                  Ask is the emphasized control now; the read/review marks are
+                  quiet outlines. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="xs" variant="default" className="gap-1.5" onClick={() => setAskOpen(true)}>
+                    <MessageSquare className="h-3 w-3" />
+                    Ask
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-left">
+                  Ask a question about this codebase — answered from the analyzed evidence with receipts
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="gap-1"
+                    onClick={() => setProvenanceOpen(true)}
+                    aria-label="How this package was made"
+                  >
+                    <FlaskConical className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" className="max-w-xs text-left">
+                  How this package was made — models, calls, cost, validation
+                </TooltipContent>
+              </Tooltip>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="gap-1"
+                    data-tour="reader-actions"
+                    aria-label="Export options"
+                    disabled={exporting}
+                  >
+                    {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-40">
+                  <DropdownMenuItem className="text-xs" onSelect={handleExport} disabled={exporting}>
+                    <FileText className="mr-2 h-3 w-3" /> Markdown file
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
-          }
-        />
+          )}
+        </div>
       </div>
 
       {/* How this package was built. Sits above the coverage strip because it
@@ -1860,7 +1884,10 @@ export function OnboardingPage() {
           package has no explanation in it by design, and without this banner
           switching privacy to "AI disabled" produced a package that looked
           broken rather than deliberately different — the reported "changing to
-          no-AI does not do anything" was partly that the change was invisible. */}
+          no-AI does not do anything" was partly that the change was invisible.
+          While it is up the coverage strip sits below the sidebar's divider
+          rather than level with it: the banner outranks the alignment. The
+          sidebar's own active-job pill drifts the same way, deliberately. */}
       {!isMissing && pkg.generation?.label && pkg.generation.kind !== "ai" && (
         <div
           className="flex items-start gap-2 border-b bg-muted/30 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5"
