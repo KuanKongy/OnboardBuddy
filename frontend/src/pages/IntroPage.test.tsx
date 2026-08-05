@@ -214,7 +214,12 @@ describe("IntroPage", () => {
     expect(screen.getByRole("navigation", { name: "Footer" })).toBeInTheDocument();
     expect(document.querySelector('a[href="/faq"]')).not.toBeNull();
     expect(document.querySelector('a[href="/privacy"]')).not.toBeNull();
-    expect(screen.getByRole("link", { name: "Full privacy breakdown, mode by mode" })).toBeInTheDocument();
+    // The guarantee card and the row inside it share one accessible name: the
+    // card is a role="link" div (so the text stays selectable) and the row is
+    // the real anchor that carries the href.
+    const breakdown = screen.getAllByRole("link", { name: "Full privacy breakdown, mode by mode" });
+    expect(breakdown).toHaveLength(2);
+    expect(breakdown.some((el) => el.getAttribute("href") === "/privacy")).toBe(true);
     expect(document.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 });

@@ -935,8 +935,8 @@ export function ProjectSettingsPage() {
             <h3 className="mb-2 text-xs font-medium text-foreground">Graph clicks</h3>
             {(
               [
-                { surface: "dependencies", label: "Dependency graph drill-down on click" },
                 { surface: "architecture", label: "Architecture map drill-down on click" },
+                { surface: "dependencies", label: "Dependency graph drill-down on click" },
               ] as const
             ).map((pref) => (
               <div key={pref.surface}>

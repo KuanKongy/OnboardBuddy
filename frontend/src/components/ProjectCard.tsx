@@ -199,41 +199,51 @@ export function ProjectCard({
 
   return (
     <>
-    {/* The whole card opens the project (like a GitHub repo card), but as a
-        stretched link rather than a clickable div: a transparent <Link> covers
-        the card and carries the one accessible name plus a real href, so
-        middle-click, cmd-click and the browser's own context menu offer "open
-        in new tab" — a role="link" div offered none of them.
+    {/* The whole card opens the project (like a GitHub repo card), and the
+        card body is a clickable div rather than a stretched link. A stretched
+        link is a transparent anchor covering the card, and covered text pays
+        for it twice: it can't be drag-selected, and its `title` tooltip never
+        fires because the pointer is over the overlay, not the text. The
+        description is the one line on this card people want to copy, so
+        nothing covers it now — `select-text` holds, and the onClick bails when
+        the mouseup merely finished a selection.
 
-        Interactive children (the menu trigger, the tooltip badge) are lifted
-        above the overlay with `relative z-10`; everything else sits under it.
-        Accepted cost: covered text can't be drag-selected, and `title`
-        tooltips on covered text never fire because the pointer is over the
-        overlay, not the text.
+        The repo name is the one real link: it carries the href, the
+        accessible name and the `title`, so middle-click, cmd-click and the
+        browser's own context menu still offer "open in new tab" from the
+        obvious target, and it underlines on its own hover rather than the
+        whole card's.
 
-        The onClick stays because jsdom has no hit-testing — a click on the h3
-        in a test lands on the h3, never on the overlay. In a real browser the
-        overlay's own click bubbles up here too, so the guard drops anything
-        that started on a link or a button to keep one click from navigating
-        twice. */}
+        The onClick's guards, in order: a click that started on a link or a
+        button (the name, the menu trigger) belongs to that element, and its
+        click bubbles up here, so without the guard one click would navigate
+        twice; and a mouseup that merely finished a selection is not a click
+        on the card. With no overlay left, this handler is the only thing that
+        opens the project from the description or the metadata row — in jsdom,
+        where a click lands on whatever element it names, and in a browser,
+        where it lands on whatever is under the pointer. */}
     <Card
       onClick={(e) => {
         if ((e.target as Element).closest("a,button")) return;
+        if (window.getSelection()?.toString()) return;
         openProject();
       }}
-      className="group relative transition-colors focus-within:border-primary/40 hover:border-primary/40"
+      className="group cursor-pointer select-text transition-colors focus-within:border-primary/40 hover:border-primary/40"
     >
-      <Link
-        to={`/projects/${project.id}`}
-        aria-label={`Open ${project.repo_owner}/${project.repo_name}`}
-        className="absolute inset-0 rounded-xl focus-visible:outline-none"
-      />
       <CardContent className="p-3">
         <div className="mb-1.5 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h3 className="truncate text-sm font-semibold text-foreground" title={project.repo_name}>
-                {project.repo_name}
+              <h3 className="truncate text-sm font-semibold">
+                <Link
+                  to={`/projects/${project.id}`}
+                  aria-label={`Open ${project.repo_owner}/${project.repo_name}`}
+                  title={project.repo_name}
+                  onClick={(e) => e.stopPropagation()}
+                  className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {project.repo_name}
+                </Link>
               </h3>
               <Badge className={`text-[0.6875rem] ${tierColors[project.permission_tier] ?? tierColors.developer}`} variant="outline">
                 {project.permission_tier.toUpperCase()}
@@ -247,8 +257,7 @@ export function ProjectCard({
             {canDelete && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  {/* Above the stretched link, or the overlay swallows it. */}
-                  <Button variant="ghost" size="icon-xs" aria-label="Project actions" className="relative z-10" onClick={(e) => e.stopPropagation()}>
+                  <Button variant="ghost" size="icon-xs" aria-label="Project actions" onClick={(e) => e.stopPropagation()}>
                     <MoreVertical className="h-3 w-3" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -272,13 +281,12 @@ export function ProjectCard({
           <Tooltip>
             {/* A Badge, not an underlined span — a dotted underline reads as a link
                 and "Complete" navigates nowhere. Still focusable, since the tooltip
-                is the only place the hint lives, and lifted above the stretched
-                link so hovering it opens the tooltip instead of the card. */}
+                is the only place the hint lives. */}
             <TooltipTrigger asChild>
               <Badge
                 variant="outline"
                 tabIndex={0}
-                className={`relative z-10 min-w-0 shrink-0 cursor-help truncate text-[0.6875rem] ${status.tone}`}
+                className={`min-w-0 shrink-0 cursor-help truncate text-[0.6875rem] ${status.tone}`}
               >
                 {statusLabel}
               </Badge>
