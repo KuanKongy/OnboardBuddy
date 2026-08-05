@@ -46,16 +46,18 @@ describe("SettingsShell", () => {
     expect(within(rail).getByRole("button", { name: "General" })).not.toHaveAttribute("aria-current");
   });
 
-  it("keeps the footer out of the column that holds the sections", () => {
-    // The footer is the save bar: inside the column it scrolls away with the
-    // sections, which is the layout this shell exists to prevent.
+  it("renders the footer in the scrolling column, after the last section", () => {
+    // The save bar is only mounted when there is something to save, so it no
+    // longer needs a pinned row of its own: it rides the column and appears
+    // right below the sections the edit was made in.
     render(<SettingsShell sections={sections} footer={<button type="button">Save changes</button>} />);
 
     const save = screen.getByRole("button", { name: "Save changes" });
     const column = screen.getByText("repository facts").closest("section")!.parentElement!;
 
     expect(column).toContainElement(document.getElementById("settings-danger"));
-    expect(column).not.toContainElement(save);
+    expect(column).toContainElement(save);
+    expect(column.lastElementChild).toContainElement(save);
   });
 
   it("follows scrolling via the observer, so the rail is right even when a short last section can't reach the top", async () => {
