@@ -161,7 +161,7 @@ export function ImportPage() {
 
   // Owner rows only: UNIQUE (user_id, repo_owner, repo_name) is per owner, so a repo
   // visible through someone else's project is still yours to import.
-  const { projects: ownProjects } = useProjects();
+  const { projects: ownProjects, loading: projectsLoading } = useProjects();
   const importedRepoKeys = new Set(
     ownProjects
       .filter((p) => p.permission_tier === "owner")
@@ -368,6 +368,22 @@ export function ImportPage() {
   const visibleRepos = repos.filter(
     (r) => r.full_name === selectedRepo || matchesFilter(r.full_name, repoFilter),
   );
+
+  /**
+   * Import bug B: nothing left to import reads as a broken picker. Every option
+   * is disabled, so clicking the trigger produces a list with no usable row —
+   * and before the popper fix below, no visible list at all. The state is a
+   * success, so say so and point at the projects it produced.
+   *
+   * `projectsLoading` is belt and braces: until GET /projects answers,
+   * `importedRepoKeys` is empty and `every` is already false, so the line
+   * cannot flash before the data lands. The flag makes that intentional rather
+   * than incidental.
+   */
+  const allReposImported =
+    !projectsLoading &&
+    repos.length > 0 &&
+    repos.every((r) => importedRepoKeys.has(r.full_name.toLowerCase()));
 
   async function handleCreate() {
     if (!repo) return;
@@ -745,7 +761,17 @@ export function ImportPage() {
                         <SelectTrigger className="h-8 text-[0.8125rem]" aria-label="Repository">
                           <SelectValue placeholder="Select repository" />
                         </SelectTrigger>
-                        <SelectContent>
+                        {/* popper, not the default item-aligned. Item-aligned
+                            positions the list against an anchor item, and Radix
+                            only ever assigns that anchor to the selected item or
+                            the first NON-disabled one (SelectContentImpl's
+                            itemRefCallback). With every repo already imported —
+                            all options disabled, nothing selected — the anchor
+                            stays null, position() returns early, onPlaced never
+                            fires, and the dropdown is never placed: the trigger
+                            looked dead. popper positions against the trigger, so
+                            the list opens whatever its contents. */}
+                        <SelectContent position="popper">
                           {visibleRepos.map((r) => {
                             const alreadyImported = importedRepoKeys.has(r.full_name.toLowerCase());
                             return (
@@ -765,6 +791,14 @@ export function ImportPage() {
                             ? `${visibleRepos.length} of ${repos.length} match "${repoFilter.trim()}"`
                             : `${repos.length} repositories available`}
                           {visibleRepos.length === 0 && " — no match. Check the App is installed on it."}
+                        </p>
+                      )}
+                      {allReposImported && (
+                        <p className="text-[0.6875rem] text-muted-foreground">
+                          Every repository shared with the app is already imported.{" "}
+                          <Link to="/dashboard" className="text-primary hover:underline">
+                            Open your dashboard
+                          </Link>
                         </p>
                       )}
                     </>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { apiFetch } from "@/lib/api";
+import { Link } from "react-router-dom";
+import { ApiError, apiFetch } from "@/lib/api";
 import { FALLBACK_ROLE, ROLE_OPTIONS, roleTitle } from "@/lib/roles";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -64,6 +65,28 @@ interface Commit {
   date: string;
 }
 
+/**
+ * Why a GitHub-backed list is missing. "reconnect" is the one failure the user
+ * can fix themselves, so it gets its own copy and a route to the fix; "error"
+ * is everything else (network, 404, rate limit) and stays a plain warning.
+ */
+type ListFailure = false | "error" | "reconnect";
+
+/**
+ * A dead stored GitHub connection, as the API reports it. Deliberate duplicate
+ * of ImportPage's `isReconnectRequired` (ImportPage.tsx) rather than a shared
+ * export: ImportPage imports this module, and ImportPage's test replaces the
+ * whole module with a stub form — a classifier exported from here would be
+ * mocked away on the page that needs it most. Keep the two in step.
+ */
+function reconnectRequired(err: unknown): boolean {
+  return err instanceof ApiError && (err.body?.code === "github_reconnect_required" || err.status === 403);
+}
+
+/** Inherits the warning colour of the line it sits in, so the sentence and its
+ *  fix read as one thing rather than a warning with a blue button glued on. */
+const RECONNECT_LINK_CLASS = "font-medium underline underline-offset-2 hover:text-warning/80";
+
 const DEPTHS = [
   { value: "cheap", label: "Cheap — fewest AI calls" },
   { value: "standard", label: "Standard — balanced" },
@@ -122,8 +145,16 @@ export function AnalyzeConfigForm({
    * history / no detected scopes" — a quiet lie on the screen that starts a
    * BILLED run. The run is still startable on the defaults; the form just
    * stops claiming the defaults are all there is.
+   *
+   * The two GitHub-backed lists additionally record WHICH failure it was: a
+   * connection the user can re-authorize deserves the fix, not a shrug. Scopes
+   * come from our own API, where the GitHub connection is not in the picture.
    */
-  const [listErrors, setListErrors] = useState<{ branches: boolean; commits: boolean; scopes: boolean }>({
+  const [listErrors, setListErrors] = useState<{
+    branches: ListFailure;
+    commits: ListFailure;
+    scopes: boolean;
+  }>({
     branches: false,
     commits: false,
     scopes: false,
@@ -138,7 +169,10 @@ export function AnalyzeConfigForm({
         setBranches((data.branches ?? []).map((b) => b.name));
         setListErrors((e) => ({ ...e, branches: false }));
       })
-      .catch(() => { setBranches([]); setListErrors((e) => ({ ...e, branches: true })); });
+      .catch((err: unknown) => {
+        setBranches([]);
+        setListErrors((e) => ({ ...e, branches: reconnectRequired(err) ? "reconnect" : "error" }));
+      });
   }, [repoOwner, repoName, installationId]);
 
   useEffect(() => {
@@ -161,7 +195,10 @@ export function AnalyzeConfigForm({
         setCommits(data.commits ?? []);
         setListErrors((e) => ({ ...e, commits: false }));
       })
-      .catch(() => { setCommits([]); setListErrors((e) => ({ ...e, commits: true })); })
+      .catch((err: unknown) => {
+        setCommits([]);
+        setListErrors((e) => ({ ...e, commits: reconnectRequired(err) ? "reconnect" : "error" }));
+      })
       .finally(() => setLoadingCommits(false));
   }, [repoOwner, repoName, installationId, branch]);
 
@@ -180,11 +217,18 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
-        {listErrors.branches && (
+        {listErrors.branches === "reconnect" ? (
+          <p className="text-[0.6875rem] text-warning">
+            Your GitHub connection needs to be re-authorized, so only {branch} is offered.{" "}
+            <Link to="/settings" className={RECONNECT_LINK_CLASS}>
+              Reconnect GitHub in Account settings
+            </Link>
+          </p>
+        ) : listErrors.branches ? (
           <p className="text-[0.6875rem] text-warning">
             Branch list couldn&apos;t be loaded — only {branch} is offered. Other branches may exist.
           </p>
-        )}
+        ) : null}
       </div>
 
       <div className="min-w-0 space-y-1">
@@ -207,11 +251,19 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
-        {listErrors.commits && (
+        {listErrors.commits === "reconnect" ? (
+          <p className="text-[0.6875rem] text-warning">
+            Your GitHub connection needs to be re-authorized, so recent commits can&apos;t be
+            listed — this will analyze the branch head.{" "}
+            <Link to="/settings" className={RECONNECT_LINK_CLASS}>
+              Reconnect GitHub in Account settings
+            </Link>
+          </p>
+        ) : listErrors.commits ? (
           <p className="text-[0.6875rem] text-warning">
             Commit history couldn&apos;t be loaded — this will analyze the branch head.
           </p>
-        )}
+        ) : null}
       </div>
 
       <div className="min-w-0 space-y-1">
