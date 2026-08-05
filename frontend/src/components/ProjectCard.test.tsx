@@ -50,6 +50,17 @@ describe("ProjectCard", () => {
     expect(screen.queryByText("main")).not.toBeInTheDocument();
   });
 
+  // The card is covered by a stretched <Link>: without a real href, middle-click
+  // and the browser's context menu have nothing to open in a new tab.
+  it("covers the card with a real link to the project", () => {
+    renderCard();
+
+    expect(screen.getByRole("link", { name: "Open acme/rocket" })).toHaveAttribute(
+      "href",
+      `/projects/${PROJECT.id}`,
+    );
+  });
+
   it("opens the project when the card body is clicked", async () => {
     const user = userEvent.setup();
     renderCard();

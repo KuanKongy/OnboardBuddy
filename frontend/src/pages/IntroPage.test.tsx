@@ -214,6 +214,7 @@ describe("IntroPage", () => {
     expect(screen.getByRole("navigation", { name: "Footer" })).toBeInTheDocument();
     expect(document.querySelector('a[href="/faq"]')).not.toBeNull();
     expect(document.querySelector('a[href="/privacy"]')).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Full privacy breakdown, mode by mode" })).toBeInTheDocument();
     expect(document.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 });
