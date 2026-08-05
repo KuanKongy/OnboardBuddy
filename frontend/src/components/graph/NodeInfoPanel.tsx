@@ -1,4 +1,4 @@
-import { AlertCircle, Check, Copy, ExternalLink, Network, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Copy, ExternalLink, Network, Sparkles, X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +33,12 @@ interface NodeInfoPanelProps {
    * therefore an explicit switch, not a drill.
    */
   onSeeInheritance?: () => void;
+  /**
+   * Set only for a group box (a `cluster:` id), and only where the caller has
+   * a level to open. A group click selects rather than navigates, so without
+   * this the panel would describe a door with no handle.
+   */
+  onOpenGroup?: () => void;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -101,10 +107,19 @@ export function NodeInfoPanel({
   githubRepo,
   onClose,
   onSeeInheritance,
+  onOpenGroup,
 }: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
-  const githubUrl = githubRepo ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
+  // A group box stands for a directory, not a file: its id carries the
+  // `cluster:` marker the canvas uses, which is machinery, not a path.
+  const isGroup = node.id.startsWith("cluster:");
+  const displayPath = isGroup ? node.id.slice("cluster:".length) : node.id;
+  const groupNoun = node.metadata.groupNoun ?? "files";
+  // `cluster:src/lib` is not a blob on GitHub, and a link that 404s is worse
+  // than no link.
+  const githubUrl =
+    githubRepo && !isGroup ? buildGithubBlobUrl(githubRepo, detail?.file_path ?? node.id) : null;
   const project = useOptionalProject()?.project ?? null;
   const projectId = project?.id ?? null;
   // UX §9.3 / ledger E10: the link was rendered for every tier and landed on a
@@ -117,7 +132,7 @@ export function NodeInfoPanel({
   const outboundTotal = detail?.relation_totals?.outbound ?? detail?.callees?.length ?? 0;
 
   async function handleCopyPath() {
-    const ok = await copyToClipboard(node.id);
+    const ok = await copyToClipboard(displayPath);
     if (ok) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -135,7 +150,7 @@ export function NodeInfoPanel({
             do its job. */}
         <div className="min-w-0">
           <p className="text-sm font-semibold break-words text-foreground">{node.label}</p>
-          <p className="font-mono text-[0.6875rem] break-all text-muted-foreground">{node.id}</p>
+          <p className="font-mono text-[0.6875rem] break-all text-muted-foreground">{displayPath}</p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {githubUrl && (
@@ -162,7 +177,9 @@ export function NodeInfoPanel({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="top">{copyFailed ? "Couldn't copy the path" : "Copy the file path"}</TooltipContent>
+            <TooltipContent side="top">
+              {copyFailed ? "Couldn't copy the path" : isGroup ? "Copy the folder path" : "Copy the file path"}
+            </TooltipContent>
           </Tooltip>
           {onClose && (
             <Tooltip>
@@ -188,6 +205,42 @@ export function NodeInfoPanel({
               Opens the project-wide class graph focused on {node.label}. It is a separate view, not a level
               inside this file — extends/implements relationships cross files.
             </p>
+          </div>
+        )}
+
+        {/* A group box has no record of its own to show — it is a container
+            the server folded a directory into. What it owes the reader is
+            therefore what it stands for, why its arrow counts are smaller than
+            the contents suggest (the numbers on the box count links CROSSING
+            it), and a way in. */}
+        {isGroup && (
+          <div>
+            <p className="section-label mb-1">Directory group</p>
+            <p className="text-[0.8125rem] leading-relaxed text-foreground">
+              This box stands for the {node.metadata.fileCount ?? 0} {groupNoun} in{" "}
+              <span className="font-mono text-[0.75rem]">{displayPath}</span>, drawn as one node because
+              the level holds too many to read at once. Open it to see them individually.
+            </p>
+            <ul className="mt-2 space-y-0.5 text-[0.71875rem] text-muted-foreground">
+              <li>
+                <span className="tabular-nums text-foreground">{node.metadata.importCount}</span> link
+                {node.metadata.importCount === 1 ? "" : "s"} out of this group
+              </li>
+              <li>
+                <span className="tabular-nums text-foreground">{node.metadata.dependentCount}</span> link
+                {node.metadata.dependentCount === 1 ? "" : "s"} into it
+              </li>
+              <li>
+                <span className="tabular-nums text-foreground">{node.metadata.internalImportCount ?? 0}</span>{" "}
+                inside it, between its own {groupNoun} — not drawn on this canvas
+              </li>
+            </ul>
+            {onOpenGroup && (
+              <Button size="xs" className="mt-3 w-full justify-center" onClick={onOpenGroup}>
+                Open {node.metadata.fileCount ?? 0} {groupNoun}
+                <ChevronRight className="ml-1 h-3 w-3" />
+              </Button>
+            )}
           </div>
         )}
 
@@ -462,10 +515,13 @@ export function NodeInfoPanel({
           </div>
         )}
 
-        {!detail && loading && (
+        {/* A group is never fetched for detail (there is no symbol record for a
+            directory), so these two would otherwise report an empty panel over
+            the group body that is right there above them. */}
+        {!isGroup && !detail && loading && (
           <p className="text-[0.71875rem] text-muted-foreground">Loading details…</p>
         )}
-        {!detail && !loading && (
+        {!isGroup && !detail && !loading && (
           <p className="text-[0.71875rem] text-muted-foreground">No additional details available for this node.</p>
         )}
       </div>

@@ -31,6 +31,7 @@ import {
   type ArchitectureResponse,
 } from "@/lib/architectureData";
 import { layoutGraph } from "@/lib/graphLayout";
+import { autoDrillEnabled } from "@/lib/graphPrefs";
 import { prefersReducedMotion } from "@/lib/motion";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
 import { cn } from "@/lib/utils";
@@ -609,10 +610,19 @@ export function ArchitecturePage() {
                 refitSignal={String(fullscreen)}
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
-                // Nothing on this canvas drills on click any more (owner I1).
-                // A click selects — a component opens its aside, a member
-                // opens its panel — and opening a component is the labelled
-                // button on the card and in that aside.
+                // A click selects — a component opens its aside, a member opens
+                // its panel — and opening a component is the labelled button on
+                // the card and in that aside (owner I1). Readers who want the
+                // old one-click drill back turn it on in account settings; a
+                // MEMBER still never drills, because there is no level below a
+                // file here.
+                onDrillInto={(nodeId) => {
+                  if (insideCluster || !autoDrillEnabled("architecture")) return false;
+                  const cluster = clusterById.get(nodeId);
+                  if (!cluster) return false;
+                  openComponent(cluster.id, cluster.label, nodeId);
+                  return true;
+                }}
                 onSelectNode={setSelectedId}
               />
             </div>

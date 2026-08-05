@@ -173,13 +173,35 @@ function renderGraphPage(entry = "/projects/proj-1/dependencies") {
   );
 }
 
+/**
+ * Opens a group the way a reader does by default: its card's Open button.
+ * Clicking the card itself only selects now (see the selection test below), so
+ * the ladder is exercised through the control that navigates.
+ *
+ * Matched by prefix rather than by full name, because the label is baked into
+ * the aria-label ("Open src/lib/ (40 files) and list its 40 files") and the
+ * panel's own Open button is plain text ("Open 40 files") — a looser matcher
+ * would hit both.
+ *
+ * Queried by label rather than by role+name: React Flow renders a node with
+ * `visibility: hidden` until it has been measured (@reactflow/core NodeWrapper)
+ * and jsdom measures nothing, so every control on the canvas computes an EMPTY
+ * accessible name here — `getByRole(…, { name })` cannot reach one even with
+ * `hidden: true`. In a browser the cards are visible and their buttons are
+ * named; this is a jsdom fact, not a claim about the product.
+ */
 const drillInto = async (label: string) => {
-  await waitFor(() => expect(screen.getByText(label)).toBeInTheDocument());
-  fireEvent.click(screen.getByText(label));
+  const matches = (name: string) => name.startsWith(`Open ${label} and list its`);
+  const button = () => screen.getByLabelText(matches, { selector: "button" });
+  await waitFor(() => expect(button()).toBeInTheDocument());
+  fireEvent.click(button());
 };
 
 describe("GraphPage drill-down", () => {
   beforeEach(() => vi.mocked(fetchDependencyGraph).mockClear());
+  // The auto-drill preference is read per click, so a test that sets it would
+  // otherwise leak the old gesture into every test after it.
+  afterEach(() => localStorage.clear());
 
   it("drills into a group and shows one crumb for the level entered", async () => {
     renderGraphPage();
@@ -243,6 +265,41 @@ describe("GraphPage drill-down", () => {
     expect(vi.mocked(fetchDependencyGraph).mock.calls.length).toBe(callsBefore);
     expect(screen.getByText("lib")).toBeInTheDocument();
     expect(screen.queryByText("index.ts")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The group box is a door that does not open itself (owner I1, the model the
+   * Architecture card already follows): a click selects it and the panel says
+   * what it stands for, the Open button navigates. Auto-drill on a click made
+   * the group's own numbers unreadable — the canvas changed before anyone
+   * could look at them.
+   */
+  it("clicking a group selects and explains it instead of drilling", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("src/lib/ (40 files)")).toBeInTheDocument());
+    const callsBefore = vi.mocked(fetchDependencyGraph).mock.calls.length;
+
+    fireEvent.click(screen.getByText("src/lib/ (40 files)"));
+
+    // No level fetched, no crumb, siblings still drawn: this was a selection.
+    expect(vi.mocked(fetchDependencyGraph).mock.calls.length).toBe(callsBefore);
+    expect(screen.getByText("src/api/ (40 files)")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Dependencies" })).not.toBeInTheDocument();
+    // What the click DID produce: the panel, explaining the box and offering
+    // the way in. Its plain-text name is what tells it apart from the card's
+    // button, whose aria-label carries the group label.
+    expect(screen.getByText("Directory group")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open 40 files" })).toBeInTheDocument();
+  });
+
+  it("restores click-to-open when the account preference is on", async () => {
+    localStorage.setItem("onboardbuddy:graph-auto-drill:dependencies", "on");
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("src/lib/ (40 files)")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText("src/lib/ (40 files)"));
+
+    await waitFor(() => expect(fetchDependencyGraph).toHaveBeenCalledWith("proj-1", "src/lib", null));
   });
 
   /**

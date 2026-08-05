@@ -27,6 +27,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
+import { autoDrillEnabled } from "@/lib/graphPrefs";
 import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge } from "@/types/graph";
 
@@ -215,6 +216,22 @@ export function GraphPage() {
     readViewport: () => viewportRef.current?.() ?? null,
   });
 
+  /**
+   * Opens a directory group. One entry point for the card's Open button, the
+   * panel's, and the canvas gesture when the reader has turned that back on,
+   * so the three can never drift apart.
+   */
+  const openGroup = useCallback(
+    (nodeId: string) => {
+      const path = clusterDirectory(nodeId);
+      drill.drillInto(
+        { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
+        nodeId,
+      );
+    },
+    [drill],
+  );
+
   // The level comes straight from the URL, so the first render already
   // reflects it — including a cold load on a shared link. A real
   // project/package switch invalidates a drill path built from another
@@ -372,10 +389,11 @@ export function GraphPage() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const panelNode: GraphNode | undefined = selectedNode;
-  // A cluster node is never selected (clicking it navigates), so the guard is
-  // simply "is there something to describe" — the old `!data.clustered` test
-  // suppressed the panel for real files sitting next to groups on a
-  // regrouped level.
+  // Every node here is selectable, groups included: a click on a group box
+  // explains it in the panel rather than navigating (see `onDrillInto`). So
+  // the guard is simply "is there something to describe" — the old
+  // `!data.clustered` test suppressed the panel for real files sitting next to
+  // groups on a regrouped level.
   const showPanel = view === "files" && !!panelNode;
   const truncation = data?.truncation ?? null;
   const levelUnit = data?.level?.unit ?? (data?.clustered ? "groups" : "files");
@@ -689,8 +707,9 @@ export function GraphPage() {
               {currentFrame
                 ? `${currentFrame.label} holds ${data.totalNodes} files — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. `
                 : `${data.totalNodes} files, too many to draw at once — showing ${groupCount} directory group${groupCount === 1 ? "" : "s"}. `}
-              Open a group to see its files, each with a line saying what it does. Numbers on a group
-              box count links crossing its boundary, not links inside it.
+              Click a group for its numbers, or use its Open button to list its files, each with a line
+              saying what it does. Numbers on a group box count links crossing its boundary, not links
+              inside it.
             </p>
           ) : (
             <p className="mb-2 text-xs text-muted-foreground">
@@ -784,17 +803,18 @@ export function GraphPage() {
                 focusMode={focusIntent === "deeplink" ? "frame" : "pan-into-view"}
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
-                // A group opens the files inside it — navigation, so it gets
-                // the zoom transition. A FILE is the bottom of the ladder:
-                // clicking it opens the detail panel and leaves the camera
-                // alone. There is no third rung any more (owner E1).
+                // A click SELECTS, groups included: it highlights the box's
+                // edges and explains it in the panel, and the Open button on
+                // the card or in the panel is what navigates into the files.
+                // Owner I1 asked for that split on the Architecture map and
+                // this canvas is the same gesture, so it reads the same way.
+                // The account preference restores the old click-to-open for
+                // readers who want it; a FILE never opens either way, because
+                // it is the bottom of the ladder (owner E1).
+                onOpenGroup={openGroup}
                 onDrillInto={(nodeId) => {
-                  if (!nodeId.startsWith("cluster:")) return false;
-                  const path = clusterDirectory(nodeId);
-                  drill.drillInto(
-                    { kind: "cluster", id: path, label: path.split("/").filter(Boolean).pop() ?? path },
-                    nodeId,
-                  );
+                  if (!nodeId.startsWith("cluster:") || !autoDrillEnabled("dependencies")) return false;
+                  openGroup(nodeId);
                   return true;
                 }}
                 onSelectNode={(nodeId) => {
@@ -812,6 +832,9 @@ export function GraphPage() {
                   loading={detailLoading}
                   githubRepo={githubRepo}
                   onClose={() => setSelectedNodeId(null)}
+                  onOpenGroup={
+                    panelNode.id.startsWith("cluster:") ? () => openGroup(panelNode.id) : undefined
+                  }
                   onSeeInheritance={
                     inheritanceTarget
                       ? () => {

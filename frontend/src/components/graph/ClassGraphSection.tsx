@@ -9,6 +9,7 @@ import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { fetchClassGraph, fetchNodeDetail, type GraphResponse, type NodeDetail } from "@/lib/graphData";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
+import { autoDrillEnabled } from "@/lib/graphPrefs";
 import { cn } from "@/lib/utils";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useLocalDrillStack } from "@/hooks/useDrillStack";
@@ -384,7 +385,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
               ? `${currentFrame.label} holds ${data.totalNodes} classes — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${classCount > 0 ? ` and ${classCount} class${classCount === 1 ? "" : "es"}` : ""}. `
               : `${data.totalNodes} classes and interfaces, too many to draw at once — showing ${groupCount} folder${groupCount === 1 ? "" : "s"}. `}
             {groupCount > 0
-              ? "Open a folder below (or click its box) to see its classes, each with a line saying what it does. "
+              ? "Open a folder below, or use its card's Open button, to see its classes, each with a line saying what it does. "
               : "Each class card carries a line saying what it does. "}
             Arrows are extends/implements links crossing a folder boundary.
           </>
@@ -496,8 +497,13 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
             // Two folder boxes do not need a map of themselves in the corner
             // they are drawn next to.
             showMiniMap={positionedNodes.length >= MINIMAP_MIN_NODES}
+            onOpenGroup={openFolder}
+            // Same click model as the Files tab it shares a page with: a click
+            // selects the folder box and the panel explains it, the Open button
+            // (on the card, in the panel, or in the chip row above) navigates.
+            // The Dependencies preference governs both — one page, one gesture.
             onDrillInto={(nodeId) => {
-              if (!nodeId.startsWith("cluster:")) return false;
+              if (!nodeId.startsWith("cluster:") || !autoDrillEnabled("dependencies")) return false;
               openFolder(nodeId);
               return true;
             }}
@@ -512,6 +518,9 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
               loading={detailLoading}
               githubRepo={githubRepo}
               onClose={() => setSelectedNodeId(null)}
+              onOpenGroup={
+                selectedNode.id.startsWith("cluster:") ? () => openFolder(selectedNode.id) : undefined
+              }
             />
           </aside>
         )}
