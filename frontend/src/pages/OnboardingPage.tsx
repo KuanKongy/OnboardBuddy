@@ -1721,14 +1721,16 @@ export function OnboardingPage() {
           and the reader's actions on one row, in a full-width band so the
           divider reaches both window walls.
 
-          At lg the band and the coverage strip below it are pinned to 69px
-          (4.3125rem) and 31px (1.9375rem) — 100px, which is exactly what the
-          project sidebar stacks above its own Separator, so the two horizontal
-          rules read as one line. Both heights are rem, so a font-size
-          preference or a browser zoom scales the reader and the sidebar
-          together; pinning them also ends the padding arithmetic that used to
-          land the rule 0.125px short and drift further with rounding. The
-          asymmetric padding (22 top / 14 bottom around a 32px content line)
+          At lg the band and the coverage strip below it are pinned to 70px
+          (4.375rem) and 31px (1.9375rem) — 101px, which is the project
+          sidebar's 100px header block PLUS its 1px Separator. The extra pixel
+          matters: the sidebar's line occupies the row BELOW its 100px block,
+          so a 100px reader chrome puts the strip's border-b in the row above
+          it — two adjacent lines, a visible one-pixel stagger at Retina or
+          zoom. At 101px the strip's border-b and the Separator share the same
+          pixel row. Both heights are rem, so a font-size preference or a
+          browser zoom scales the reader and the sidebar together. The
+          asymmetric padding (22 top / 15 bottom around a 32px content line)
           keeps the toggle's top edge at every other page's 22px — the shell's
           lg:p-5 plus the PageHeader's mt-0.5 — so switching tabs never jogs
           it. A control taller than that line no longer grows the band either:
@@ -1751,14 +1753,13 @@ export function OnboardingPage() {
           Two accepted departures: while the generation banner below or the
           sidebar's own active-job pill is up, that side sits lower on purpose.
 
-          Measured in Chrome (1440x900, mocked coverage payload): band 69,
-          strip 31, strip bottom exactly on the sidebar separator; unchanged at
+          Measured in Chrome (live app, dpr 2): band 70, strip 31, the strip's
+          border-b colinear with the Separator's [100, 101] row; stable at
           browser zoom 90 / 110 / 125%. Under a font-size preference the pair
-          drifts by half a pixel at most (-0.16px at 14.4 / +0.5px at 20), from
-          the sidebar's side of the sum, which is not all rem. At 150% zoom a
-          1440 window falls under lg, where none of this applies and the
-          sidebar is a drawer anyway. */}
-      <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 pb-2.5 pt-3.5 sm:px-4 sm:pt-[1.125rem] lg:h-[4.3125rem] lg:flex-nowrap lg:px-5 lg:pb-3.5 lg:pt-[1.375rem]">
+          drifts by half a pixel at most, from the sidebar's side of the sum,
+          which is not all rem. At 150% zoom a 1440 window falls under lg,
+          where none of this applies and the sidebar is a drawer anyway. */}
+      <div className="flex flex-wrap items-center gap-2 border-b bg-background px-3 pb-2.5 pt-3.5 sm:px-4 sm:pt-[1.125rem] lg:h-[4.375rem] lg:flex-nowrap lg:px-5 lg:pb-[0.9375rem] lg:pt-[1.375rem]">
         <SidebarToggle />
         <Button
           variant="ghost"
