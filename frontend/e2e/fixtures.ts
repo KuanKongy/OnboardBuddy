@@ -284,6 +284,9 @@ export async function mockApi(page: Page, opts: { tier?: "owner" | "admin" | "de
     // Before the broader /members pattern, which would otherwise swallow it.
     [/\/api\/projects\/[^/]+\/members\/invitations/, { invitations: [] }],
     [/\/api\/projects\/[^/]+\/members/, { members: [] }],
+    // Before the /:id pattern, which would otherwise treat "activity" as an id
+    // and serve { project } — DashboardPage then crashes on data.activity.
+    [/\/api\/projects\/activity$/, { activity: [] }],
     [/\/api\/projects\/[^/]+$/, { project: proj }],
     [/\/api\/invitations/, { invitations: [] }],
     [/\/api\/projects$/, { projects: [proj] }],
