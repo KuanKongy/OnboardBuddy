@@ -177,8 +177,14 @@ export function DashboardPage() {
   const loadActivity = useCallback(
     (signal?: { cancelled: boolean }) =>
       apiFetch("/projects/activity")
-        .then((data: { activity: ActivityItem[] }) => {
+        .then((data: { activity?: ActivityItem[] }) => {
           if (signal?.cancelled) return;
+          // A malformed success is a failure: rendering it as an empty feed
+          // would read as "no recent activity" when the load actually broke.
+          if (!Array.isArray(data.activity)) {
+            setActivityError(true);
+            return;
+          }
           setActivity(data.activity);
           setActivityError(false);
           setActivityLoaded(true);
