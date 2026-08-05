@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
@@ -640,6 +639,72 @@ function RunHistoryRow({ run, partner, projectId }: { run: RunHistoryEntry; part
   );
 }
 
+// ── Idle analysis status ──────────────────────────────────────────────────────
+
+/**
+ * What the analysis is doing when it is doing nothing: the newest run, said up
+ * front.
+ *
+ * With no active job the page jumped from the quick actions to the run history,
+ * so the state of the last run was only visible to someone who knew to expand a
+ * history row — on a finished project the page never said the pipeline had
+ * finished. This deliberately repeats the newest history row: the block is the
+ * current state, the history below stays a complete ledger.
+ */
+function IdleRunStatus({ run, partner, projectId }: { run: RunHistoryEntry; partner: RunHistoryEntry | null; projectId: string }) {
+  // Open by default (there is one of these, so one metrics fetch), but still a
+  // details: this sits above the packages someone came here to read.
+  const [open, setOpen] = useState(true);
+  // A merged pair speaks as one run, exactly as its history row does.
+  const cost = partner ? sumRunCost(run.cost, partner.cost) : run.cost;
+  const status = partner ? mergedRunStatus(run.status, partner.status) : run.status;
+  const durationMs = partner ? sumDuration(run.duration_ms, partner.duration_ms) : run.duration_ms;
+  const hasCost = cost.llm_calls > 0 || cost.cached_calls > 0 || cost.estimated_cost_usd > 0;
+  const snapshotId = run.snapshot_id ?? partner?.snapshot_id ?? null;
+  // Same accounting as the history row: a regeneration gets its own two steps,
+  // everything else the snapshot's phases cut down to the ones this run is
+  // accountable for. A run with no snapshot at all (it failed before writing
+  // one) has nothing to show, and an empty bordered strip is not nothing.
+  const detail = isPartialRun(run) ? (
+    <PartialRunSteps run={run} />
+  ) : snapshotId ? (
+    <AnalysisRunPanel
+      projectId={projectId}
+      snapshotId={snapshotId}
+      isActive={false}
+      currentStep={null}
+      stepLog={[]}
+      phaseKeys={runPhaseKeys(run.job_type, partner !== null)}
+    />
+  ) : null;
+
+  return (
+    <div className="mb-4">
+      <h2 className="mb-2 flex items-center gap-2 text-[0.8125rem] font-medium text-foreground">
+        <History className="h-3.5 w-3.5 text-muted-foreground" />
+        Analysis status
+        <Badge variant={statusBadgeVariant(status)} className="text-[0.6875rem]">{status}</Badge>
+      </h2>
+      <Card>
+        <CardContent className="p-3">
+          <details open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+            <summary className="flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1">
+              <ChevronDown className={`h-3 w-3 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`} />
+              <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">{runActionLabel(run)}</span>
+              <span className="flex shrink-0 items-center gap-2 text-[0.6875rem] tabular-nums text-muted-foreground">
+                {hasCost && <span>${cost.estimated_cost_usd.toFixed(4)} · {cost.llm_calls} calls</span>}
+                {durationMs !== null && <span>{formatDuration(durationMs)}</span>}
+                <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+              </span>
+            </summary>
+            {open && detail && <div className="mt-2 border-t border-border/60 pt-2">{detail}</div>}
+          </details>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // ── Quick actions ─────────────────────────────────────────────────────────────
 
 /**
@@ -679,10 +744,13 @@ function QuickAction({
           <Icon className="h-4 w-4" />
         </div>
         <div className="min-w-0">
-          <h2 className="text-[0.8125rem] font-medium text-foreground">{title}</h2>
+          <h2 className="truncate text-[0.8125rem] font-medium text-foreground">{title}</h2>
           {to ? (
-            <span className="inline-flex items-center gap-1 truncate text-xs font-medium text-primary">
-              {cta}
+            // `truncate` on the inline-flex row itself was inert (the flex
+            // children set the width), so a long resume label pushed the arrow
+            // out of the card. The text truncates, the icon never shrinks.
+            <span className="flex items-center gap-1 text-xs font-medium text-primary">
+              <span className="min-w-0 truncate">{cta}</span>
               {pending
                 ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
                 : <ArrowRight className="h-3 w-3 shrink-0" />}
@@ -807,6 +875,11 @@ export function ProjectOverviewPage() {
       (j) => (j.status === "paused" || j.status === "failed") && newestOfType.get(j.job_type) === j.id,
     );
   })();
+
+  /** The newest run as a GROUP: raw `runs[0]` is often the package generation
+   *  half of a chained pair, which would report that half's status, spend and
+   *  duration as if they were the whole run's. */
+  const latestRunRow = runs && runs.length > 0 ? groupChainedRuns(runs)[0]! : null;
 
   async function jobControl(jobId: string, action: "pause" | "stop" | "resume") {
     if (!id) return;
@@ -1046,6 +1119,12 @@ export function ProjectOverviewPage() {
         </div>
       )}
 
+      {/* Nothing is running: the newest run IS the current state, so say it
+          here instead of leaving it folded into the history below. */}
+      {activeJobs.length === 0 && latestRunRow && (
+        <IdleRunStatus run={latestRunRow.run} partner={latestRunRow.partner} projectId={id!} />
+      )}
+
       {/* Outside the neverAnalyzed branch: an analyzed project whose packages fetch
           failed renders an empty grid, indistinguishable from "nothing generated
           yet". Same error-with-retry shape as the run-history card below. */}
@@ -1132,9 +1211,7 @@ export function ProjectOverviewPage() {
               </Select>
             </div>
           </div>
-          {/* A lone package gets a readable column rather than a third of a
-              wide row with two empty columns beside it. */}
-          <div className={packages!.length === 1 ? "max-w-md" : "grid gap-3 sm:grid-cols-2 xl:grid-cols-3"}>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {filteredPackages.map((card) => (
               <div key={card.id} className={selectedPackageId === card.id ? "rounded-xl ring-2 ring-primary/50" : ""}>
                 <PackageCardView
@@ -1187,8 +1264,6 @@ export function ProjectOverviewPage() {
           </div>
         )}
       </div>
-
-      <Separator />
 
       <AnalyzeDialog
         project={project}
