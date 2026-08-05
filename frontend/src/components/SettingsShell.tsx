@@ -10,11 +10,11 @@ export interface SettingsSection {
 
 /**
  * Shared layout for the settings pages: a section rail beside one readable
- * column. From `lg` up the page itself does not scroll — the rail and the
- * footer are fixed rows and the column is the only scroll port, so the rail,
- * the save bar and any error banner above the shell stay on screen. Below
- * `lg` the rail is a chip row in flow and the shell's `<main>` scrolls, as
- * before. Each section's `h2` is also the heading level the card `h3`s nest
+ * column, styled like the onboarding reader. From `lg` up the page itself does
+ * not scroll — the rail is a fixed column and the content column is the only
+ * scroll port, so the rail and any error banner above the shell stay on screen.
+ * Below `lg` the rail is a chip row in flow and the shell's `<main>` scrolls,
+ * as before. Each section's `h2` is also the heading level the card `h3`s nest
  * under.
  *
  * The rail highlight is scroll-driven (IntersectionObserver over the section
@@ -29,7 +29,8 @@ export function SettingsShell({
   footer,
 }: {
   sections: SettingsSection[];
-  /** Page-level actions (e.g. Save/Cancel) — kept on the column's measure. */
+  /** Page-level actions (e.g. Save/Cancel) — rendered on the column's measure,
+   *  after the last section. */
   footer?: ReactNode;
 }) {
   const [active, setActive] = useState(sections[0]?.id ?? "");
@@ -66,10 +67,15 @@ export function SettingsShell({
 
   return (
     <div className="lg:flex lg:min-h-0 lg:flex-1 lg:flex-col">
-      <div className="flex flex-col gap-4 lg:min-h-0 lg:flex-1 lg:flex-row">
-        {/* No `sticky`: from lg up the rail is a fixed row of the page frame and
-            has nothing to travel against. */}
-        <nav aria-label="Settings sections" className="lg:w-48 lg:shrink-0">
+      <div className="flex flex-col lg:min-h-0 lg:flex-1 lg:flex-row">
+        {/* No `sticky`: from lg up the rail is a fixed column of the page frame
+            and has nothing to travel against. Below lg the chip row carries its
+            own inset and divider — `<main>` is full-bleed here, so nothing else
+            would hold the chips off the window wall. */}
+        <nav
+          aria-label="Settings sections"
+          className="border-b px-3 py-2 sm:px-4 lg:w-60 lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r lg:py-3 lg:pl-5 lg:pr-2"
+        >
           <div className="flex flex-wrap gap-1 lg:block lg:space-y-0.5">
             <p className="section-label hidden pb-1 lg:block">Sections</p>
             {sections.map((section) => (
@@ -109,12 +115,10 @@ export function SettingsShell({
           </div>
         </nav>
 
-        <div ref={scrollerRef} className="min-w-0 flex-1 lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
-          {/* `lg:pb-24`: slack under the last section so it can rise up the port
-              instead of ending flush against the pinned footer. A short last
-              section still cannot reach the top, which is why the rail
-              highlight is scroll-driven rather than click-position-driven. */}
-          <div className="mx-auto max-w-3xl space-y-6 lg:pb-24">
+        <div ref={scrollerRef} className="min-w-0 flex-1 lg:overflow-y-auto lg:overscroll-contain">
+          {/* Centered measure, like the reader's column: it sits mid-pane while
+              max-w-3xl still caps the line length. */}
+          <div className="mx-auto max-w-3xl space-y-6 px-3 py-4 sm:px-4 lg:px-8 lg:py-5">
             {sections.map((section) => (
               <section
                 key={section.id}
@@ -128,23 +132,10 @@ export function SettingsShell({
                 {section.children}
               </section>
             ))}
+            {footer && <div>{footer}</div>}
           </div>
         </div>
       </div>
-
-      {footer && (
-        // Outside the scroll port so the save bar stays reachable from anywhere
-        // in the column. The row mirrors the body row (rail-width spacer, same
-        // gap, same max-width) so the actions sit on the column's axis.
-        <div className="lg:shrink-0 lg:border-t lg:border-border/60 lg:pt-3">
-          <div className="flex gap-4">
-            <div className="hidden lg:block lg:w-48 lg:shrink-0" />
-            <div className="min-w-0 flex-1 lg:pr-1">
-              <div className="mx-auto max-w-3xl">{footer}</div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

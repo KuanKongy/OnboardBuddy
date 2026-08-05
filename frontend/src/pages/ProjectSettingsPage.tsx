@@ -1,7 +1,7 @@
 import { AlertTriangle, Loader2, RefreshCw, Save, Shield, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useProject } from "@/contexts/ProjectContext";
+import { useProject, type ProjectData } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
+import { useFullBleedMain } from "@/components/MainRegion";
 import { PageHeader } from "@/components/PageHeader";
 import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { apiFetch } from "@/lib/api";
@@ -106,11 +107,59 @@ function totalKeyUsage(rows: KeyUsageRow[]) {
   );
 }
 
+/**
+ * The eleven editable settings fields, in exactly the shape the form state
+ * holds them (every numeric input is a string, because that is what an
+ * `<Input>` gives back). Used twice: to hydrate the form from the server, and
+ * as the baseline the current form is diffed against to decide whether the
+ * save bar has anything to save.
+ *
+ * The no-settings branch must stay identical to the `useState` initial values.
+ * A project whose row carries `settings: null` would otherwise read as dirty
+ * the moment it loads, and the page would offer to save edits nobody made.
+ */
+function settingsFromProject(project: ProjectData) {
+  const settings = project.settings;
+  if (!settings) {
+    return {
+      ignoredPaths: "",
+      defaultRole: FALLBACK_ROLE,
+      privacyMode: "full_ai",
+      analysisDepth: "standard",
+      analysisModel: DEFAULT_ANALYSIS_MODEL,
+      fileLimit: "",
+      locLimit: "",
+      budgetCalls: "",
+      budgetTokens: "",
+      stopBehavior: "pause",
+      autoReanalyze: false,
+    };
+  }
+  const tierOverrides = (settings as { model_tier_overrides?: Record<string, string[]> }).model_tier_overrides ?? {};
+  const budgets = (settings as { budget_overrides?: Record<string, number> }).budget_overrides ?? {};
+  return {
+    ignoredPaths: settings.ignored_paths.join("\n"),
+    defaultRole: settings.default_developer_role,
+    privacyMode: settings.privacy_mode ?? "full_ai",
+    analysisDepth: (settings as { analysis_depth?: string }).analysis_depth ?? "standard",
+    analysisModel: tierOverrides.cheap?.[0] ?? DEFAULT_ANALYSIS_MODEL,
+    fileLimit: settings.file_limit != null ? String(settings.file_limit) : "",
+    locLimit: settings.loc_limit != null ? String(settings.loc_limit) : "",
+    budgetCalls: budgets.max_llm_calls ? String(budgets.max_llm_calls) : "",
+    budgetTokens: budgets.max_input_tokens ? String(budgets.max_input_tokens) : "",
+    stopBehavior: (settings as { budget_stop_behavior?: string }).budget_stop_behavior ?? "pause",
+    autoReanalyze: (settings as { auto_reanalyze_on_push?: boolean }).auto_reanalyze_on_push ?? false,
+  };
+}
+
 export function ProjectSettingsPage() {
   const { project, refetch } = useProject();
   const { registerSessionJob } = usePackages();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // The header divider and the rail's border have to reach both window walls,
+  // which the shell's `<main>` padding makes impossible from in here.
+  useFullBleedMain();
 
   const [ignoredPaths, setIgnoredPaths] = useState("");
   const [defaultRole, setDefaultRole] = useState<string>(FALLBACK_ROLE);
@@ -161,19 +210,18 @@ export function ProjectSettingsPage() {
 
   useEffect(() => {
     if (project?.settings) {
-      setIgnoredPaths(project.settings.ignored_paths.join("\n"));
-      setDefaultRole(project.settings.default_developer_role);
-      setPrivacyMode(project.settings.privacy_mode ?? "full_ai");
-      setAnalysisDepth((project.settings as { analysis_depth?: string }).analysis_depth ?? "standard");
-      const tierOverrides = (project.settings as { model_tier_overrides?: Record<string, string[]> }).model_tier_overrides ?? {};
-      setAnalysisModel(tierOverrides.cheap?.[0] ?? DEFAULT_ANALYSIS_MODEL);
-      setFileLimit(project.settings.file_limit != null ? String(project.settings.file_limit) : "");
-      setLocLimit(project.settings.loc_limit != null ? String(project.settings.loc_limit) : "");
-      const budgets = (project.settings as { budget_overrides?: Record<string, number> }).budget_overrides ?? {};
-      setBudgetCalls(budgets.max_llm_calls ? String(budgets.max_llm_calls) : "");
-      setBudgetTokens(budgets.max_input_tokens ? String(budgets.max_input_tokens) : "");
-      setStopBehavior((project.settings as { budget_stop_behavior?: string }).budget_stop_behavior ?? "pause");
-      setAutoReanalyze((project.settings as { auto_reanalyze_on_push?: boolean }).auto_reanalyze_on_push ?? false);
+      const stored = settingsFromProject(project);
+      setIgnoredPaths(stored.ignoredPaths);
+      setDefaultRole(stored.defaultRole);
+      setPrivacyMode(stored.privacyMode);
+      setAnalysisDepth(stored.analysisDepth);
+      setAnalysisModel(stored.analysisModel);
+      setFileLimit(stored.fileLimit);
+      setLocLimit(stored.locLimit);
+      setBudgetCalls(stored.budgetCalls);
+      setBudgetTokens(stored.budgetTokens);
+      setStopBehavior(stored.stopBehavior);
+      setAutoReanalyze(stored.autoReanalyze);
     }
   }, [project]);
 
@@ -353,6 +401,23 @@ export function ProjectSettingsPage() {
   }
 
   if (!project) return null;
+
+  // What the save bar is for. The ranking weights and the API key are not in
+  // here on purpose: each has its own Save button and its own confirmation, so
+  // a moved slider must not light up the page-level bar.
+  const baseline = settingsFromProject(project);
+  const dirty =
+    ignoredPaths !== baseline.ignoredPaths ||
+    defaultRole !== baseline.defaultRole ||
+    privacyMode !== baseline.privacyMode ||
+    analysisDepth !== baseline.analysisDepth ||
+    analysisModel !== baseline.analysisModel ||
+    fileLimit !== baseline.fileLimit ||
+    locLimit !== baseline.locLimit ||
+    budgetCalls !== baseline.budgetCalls ||
+    budgetTokens !== baseline.budgetTokens ||
+    stopBehavior !== baseline.stopBehavior ||
+    autoReanalyze !== baseline.autoReanalyze;
 
   const spend = totalKeyUsage(keyUsage);
 
@@ -871,23 +936,36 @@ export function ProjectSettingsPage() {
   return (
     // `lg:h-full`: the shell's `<main>` has a definite height, so the page fills
     // it exactly and only the shell's column scrolls — which is what keeps the
-    // header, the error banner and the save bar on screen from anywhere in the
-    // settings. Below lg the page is normal flow and `<main>` scrolls, as before.
+    // header and the error banner on screen from anywhere in the settings.
+    // Below lg the page is normal flow and `<main>` scrolls, as before.
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-      <PageHeader
-        title="Project settings"
-        subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
-        actions={<Badge variant="outline" className="text-[0.6875rem] capitalize">{project.permission_tier}</Badge>}
-      />
+      {/* The band carries the inset so the header's divider touches both walls. */}
+      <div className="border-b px-3 pt-3 sm:px-4 sm:pt-4 lg:px-5 lg:pt-5">
+        <PageHeader
+          className="mb-3"
+          title="Project settings"
+          subtitle="Analysis, privacy, budgets, and ranking configuration for this project."
+          actions={<Badge variant="outline" className="text-[0.6875rem] capitalize">{project.permission_tier}</Badge>}
+        />
+      </div>
 
       {error && (
-        <ErrorBanner ref={errorRef} className="mb-3">{error}</ErrorBanner>
+        // Outside the shell's scroller, so it stays a pinned row; the inset is
+        // its own now that `<main>` is full-bleed.
+        <div className="px-3 pt-3 sm:px-4 lg:px-5">
+          <ErrorBanner ref={errorRef}>{error}</ErrorBanner>
+        </div>
       )}
 
       <SettingsShell
         sections={sections}
         footer={
-          canEdit && (
+          // The bar rides the column now, so it only renders when there is
+          // something to save. `saving || saved` keeps it mounted between the
+          // PUT and the fresh baseline, so the "Saved!" flash survives the
+          // refetch's clean state (ProjectLayout keeps the tab mounted during
+          // a background refetch; only a first load shows the spinner).
+          canEdit && (dirty || saving || saved) ? (
             <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               {/* Cancel used to refetch settings only, so moved ranking sliders —
                   which live in `weightRoles`, not in settings — stayed moved. */}
@@ -909,7 +987,7 @@ export function ProjectSettingsPage() {
                 {saved ? "Saved!" : "Save changes"}
               </Button>
             </div>
-          )
+          ) : undefined
         }
       />
 
