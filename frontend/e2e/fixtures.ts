@@ -281,6 +281,8 @@ export async function mockApi(page: Page, opts: { tier?: "owner" | "admin" | "de
     [/\/api\/projects\/[^/]+\/llm-key/, { key: { exists: true, provider: "openrouter", created_by: "sam@acme.dev", created_at: "2026-07-01", updated_at: "2026-07-01" }, models: {}, usage_by_key_source: [] }],
     [/\/api\/projects\/[^/]+\/ranking-weights/, { views: ["critical_for_runtime", "critical_for_business", "critical_for_onboarding", "critical_for_role", "critical_for_change_risk", "critical_for_architecture", "critical_for_workflow"], roles: ["backend", "frontend", "devops", "qa", "general"].map((role) => ({ role, defaults: { critical_for_runtime: 0.2, critical_for_business: 0.1, critical_for_onboarding: 0.15, critical_for_role: 0.25, critical_for_change_risk: 0.1, critical_for_architecture: 0.1, critical_for_workflow: 0.1 }, weights: { critical_for_runtime: 0.2, critical_for_business: 0.1, critical_for_onboarding: 0.15, critical_for_role: 0.25, critical_for_change_risk: 0.1, critical_for_architecture: 0.1, critical_for_workflow: 0.1 }, customized: false })) }],
     [/\/api\/projects\/[^/]+\/scopes/, { scopes: [{ id: "scope-1", path_prefix: "", display_name: "Whole repository", kind: "whole_repo", detected_from: "default", created_at: "2026-07-01" }] }],
+    // Before the broader /members pattern, which would otherwise swallow it.
+    [/\/api\/projects\/[^/]+\/members\/invitations/, { invitations: [] }],
     [/\/api\/projects\/[^/]+\/members/, { members: [] }],
     [/\/api\/projects\/[^/]+$/, { project: proj }],
     [/\/api\/invitations/, { invitations: [] }],
