@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { PackageGapsDisclosure } from "./OnboardingPage";
+import { PackageGapsPanel, PackageGapsToggle } from "./OnboardingPage";
 import type { OnboardingSection, PackageCoverage } from "@/types/onboarding";
 
 const SECTIONS: OnboardingSection[] = [
@@ -28,15 +29,22 @@ const COVERAGE: PackageCoverage = {
   gaps: { total: 3, sections: 2, detection: 1, groups: 1 },
 };
 
+/** The page's half of the split: it owns `open`, the panel renders below. */
+function Harness() {
+  const [open, setOpen] = useState(false);
+  return (
+    <TooltipProvider>
+      <PackageGapsToggle coverage={COVERAGE} open={open} onToggle={() => setOpen((v) => !v)} />
+      {open && <PackageGapsPanel coverage={COVERAGE} sections={SECTIONS} />}
+    </TooltipProvider>
+  );
+}
+
 const trigger = () => screen.getByRole("button", { name: /3 known gaps in this package/ });
 
 describe("package-level known gaps (#85 remainder)", () => {
   it("expands the count into the gap items", () => {
-    render(
-      <TooltipProvider>
-        <PackageGapsDisclosure coverage={COVERAGE} sections={SECTIONS} />
-      </TooltipProvider>,
-    );
+    render(<Harness />);
 
     expect(trigger()).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("3 traces reached no effect")).toBeNull();
