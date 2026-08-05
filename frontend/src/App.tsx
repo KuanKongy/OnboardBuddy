@@ -6,7 +6,8 @@ import { PageSpinner } from "@/components/ui/page-spinner";
 import { Button } from "@/components/ui/button";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { SkipToContent } from "@/components/SkipToContent";
-import { MAIN_REGION_ID, usePageChrome } from "@/hooks/usePageChrome";
+import { usePageChrome } from "@/hooks/usePageChrome";
+import { MainChromeProvider, MainRegion } from "@/components/MainRegion";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { Sidebar, dashboardNavItems } from "@/components/Sidebar";
 import { SidebarProvider } from "@/components/SidebarShell";
@@ -156,26 +157,22 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
           Select's internal aria elements) must position against THIS clipped
           box, not the document. Unanchored, they extended the body below the
           viewport and scrollIntoView dragged the whole window into the void. */}
-      <div className="relative flex h-screen overflow-hidden">
-        <SkipToContent />
-        <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
-        {/* `outline-none`: usePageChrome focuses this on every route change, and a
-            ring around the whole page would be a new visual on navigation. */}
-        <main
-          id={MAIN_REGION_ID}
-          tabIndex={-1}
-          className="flex-1 overflow-y-auto bg-background p-3 outline-none sm:p-4 lg:p-5"
-        >
-          {/* Bug #24: a render error in one shell page used to unmount the
-              whole app via the top-level boundary. Scoped here, the sidebar
-              survives and the user can navigate out without a reload. */}
-          <RouteErrorBoundary scope="dashboard-shell">
-            {/* Normally a layout route (Outlet); `children` is for /help, which
-                needs this same chrome from outside ProtectedRoute. */}
-            {children ?? <Outlet />}
-          </RouteErrorBoundary>
-        </main>
-      </div>
+      <MainChromeProvider>
+        <div className="relative flex h-screen overflow-hidden">
+          <SkipToContent />
+          <Sidebar onStartTour={startTour} onShowShortcuts={() => setShortcutsOpen(true)} />
+          <MainRegion>
+            {/* Bug #24: a render error in one shell page used to unmount the
+                whole app via the top-level boundary. Scoped here, the sidebar
+                survives and the user can navigate out without a reload. */}
+            <RouteErrorBoundary scope="dashboard-shell">
+              {/* Normally a layout route (Outlet); `children` is for /help, which
+                  needs this same chrome from outside ProtectedRoute. */}
+              {children ?? <Outlet />}
+            </RouteErrorBoundary>
+          </MainRegion>
+        </div>
+      </MainChromeProvider>
       <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} context="dashboard" />
     </SidebarProvider>
   );
