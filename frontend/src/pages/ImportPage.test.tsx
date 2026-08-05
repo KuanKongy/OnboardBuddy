@@ -345,6 +345,40 @@ describe("ImportPage — already-imported repositories (#74/F4)", () => {
     );
   });
 
+  it("names the all-imported dead end and keeps the chooser openable", async () => {
+    // Nothing left to import: every option is disabled. The picker used to be
+    // the only thing on screen, and it looked broken rather than finished.
+    apiState.projects = REPOS.map((r, i) => ({
+      id: `p-${i}`,
+      repo_owner: r.owner,
+      repo_name: r.name,
+      permission_tier: "owner",
+    }));
+    const user = userEvent.setup();
+    await awaitAccountReady();
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Every repository shared with the app is already imported\./),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: "Open your dashboard" })).toHaveAttribute(
+      "href",
+      "/dashboard",
+    );
+
+    // The list still opens with every row disabled. jsdom cannot reproduce the
+    // real failure (item-aligned positioning needs layout, which jsdom has
+    // none of), so this pins the markup only — the popper fix is a live check.
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    const options = await screen.findAllByRole("option");
+    expect(options.length).toBe(REPOS.length);
+    for (const option of options) {
+      expect(option).toHaveAttribute("aria-disabled", "true");
+      expect(option).toHaveTextContent("(already imported)");
+    }
+  });
+
   it("links to the existing project when create comes back 409", async () => {
     apiState.conflictProjectId = "already-there-9";
     const user = userEvent.setup();
