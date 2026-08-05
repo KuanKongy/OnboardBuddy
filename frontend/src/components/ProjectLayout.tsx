@@ -28,6 +28,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { AccountCard } from "@/components/AccountCard";
 import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { SidebarProvider, SidebarShell, useSidebar } from "@/components/SidebarShell";
+import { MainChromeProvider, MainRegion } from "@/components/MainRegion";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { ShortcutsHelpDialog } from "@/components/ShortcutsHelpDialog";
 import { SkipToContent } from "@/components/SkipToContent";
@@ -136,12 +137,12 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-architecture",
     title: "Architecture map",
-    body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is.",
+    body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is; its Open button lists the files inside.",
   },
   {
     target: "nav-dependencies",
     title: "Dependency graph",
-    body: "Which files depend on which. Select a node to get the standard symbol doc: summary, signature, and a real usage example from a call site.",
+    body: "Which files depend on which. Select a node to get the standard symbol doc: summary, signature, and a real usage example from a call site. Groups open via their Open button.",
   },
   {
     target: "nav-capabilities",
@@ -302,7 +303,7 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
 }
 
 function ProjectLayoutContent() {
-  const { loading, error } = useProject();
+  const { project, loading, error } = useProject();
   const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -372,14 +373,12 @@ function ProjectLayoutContent() {
     <div className="relative flex h-screen overflow-hidden">
       <SkipToContent />
       <ProjectSidebar onStartTour={() => setTourOpen(true)} onShowShortcuts={() => setShortcutsOpen(true)} />
-      {/* `outline-none`: usePageChrome focuses this on every tab change, and a
-          ring around the whole tab would be a new visual on navigation. */}
-      <main
-        id={MAIN_REGION_ID}
-        tabIndex={-1}
-        className="flex-1 overflow-y-auto bg-background p-3 outline-none sm:p-4 lg:p-5"
-      >
-        {loading ? (
+      <MainRegion>
+        {/* Spinner only while there is nothing to show yet. A background
+            refetch() (e.g. project settings Save/Cancel) also sets `loading`,
+            and unmounting the tab for it wipes every page's local state —
+            including the save bar's "Saved!" flash. */}
+        {loading && !project ? (
           <PageSpinner className="py-16" label="Loading this project" />
         ) : (
           // Bug #24: the feature tabs are the pages that render analysis
@@ -395,7 +394,7 @@ function ProjectLayoutContent() {
             <Outlet />
           </RouteErrorBoundary>
         )}
-      </main>
+      </MainRegion>
       {tourOpen && <AppTour steps={PROJECT_TOUR_STEPS} onDone={handleTourDone} />}
       <ShortcutsHelpDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
@@ -410,7 +409,9 @@ export function ProjectLayout() {
     <ProjectProvider projectId={id}>
       <PackagesProvider projectId={id}>
         <SidebarProvider>
-          <ProjectLayoutContent />
+          <MainChromeProvider>
+            <ProjectLayoutContent />
+          </MainChromeProvider>
         </SidebarProvider>
       </PackagesProvider>
     </ProjectProvider>

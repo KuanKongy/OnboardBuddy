@@ -28,7 +28,7 @@ import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { AppTour, type TourStep } from "@/components/AppTour";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { PageHeader } from "@/components/PageHeader";
-import { SidebarToggle } from "@/components/SidebarShell";
+import { useFullBleedMain } from "@/components/MainRegion";
 import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -950,6 +950,10 @@ export function OnboardingPage() {
   } = usePackages();
 
   const view = searchParams.get("view") ?? "cards";
+  // The reader draws its own wall-to-wall dividers (top bar, coverage strip,
+  // section rail), which the shell's <main> padding would inset. The cards
+  // view is an ordinary padded page.
+  useFullBleedMain(view === "reader");
   const selectedRole = searchParams.get("role") ?? project?.developer_role ?? FALLBACK_ROLE;
   // ?package=<id> pins the reader to one exact package (set when opening a
   // card); legacy ?role= links keep the old "latest for role" behavior.
@@ -1585,7 +1589,7 @@ export function OnboardingPage() {
             </div>
           )
         ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" data-tour="onboarding-cards">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-tour="onboarding-cards">
             {filtered.map((card) => (
               <PackageCardView
                 key={card.id}
@@ -1688,164 +1692,167 @@ export function OnboardingPage() {
   // ── reader view ─────────────────────────────────────────────────────────────
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* compact top bar: navigation + role + actions in one row */}
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background px-1 pb-2.5">
-        <SidebarToggle />
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => setParams({ view: null, package: null }, { replace: false })}
-          className="gap-1"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Packages
-        </Button>
-        <div className="min-w-0">
-          <h1 className="truncate text-[0.9375rem] font-semibold text-foreground">
-            {activeSection?.label ?? "Onboarding"}
-          </h1>
-        </div>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
-          {selectedPackageParam ? (
-            // Pinned to one exact package — role is part of its identity.
-            <Badge variant="outline" className="h-7 px-2 text-xs">
-              {roleTitle(pkg?.role ?? selectedRole)}
-            </Badge>
-          ) : (
-            <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
-              <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          )}
-          {!isMissing && (
+      {/* Top bar: the standard PageHeader (toggle placement, .page-title) in a
+          full-width band, so its divider reaches both window walls. */}
+      <div className="border-b bg-background px-3 pb-2.5 pt-3 sm:px-4 sm:pt-4 lg:px-5 lg:pt-5">
+        <PageHeader
+          className="mb-0"
+          title={activeSection?.label ?? "Onboarding"}
+          leading={
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setParams({ view: null, package: null }, { replace: false })}
+              className="gap-1"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" /> Packages
+            </Button>
+          }
+          actions={
             <>
-              {/* Always-visible per-section regeneration (owner/admin — the
-                  endpoint enforces the same tiers). The stale banner keeps
-                  its own contextual copy of this action. */}
-              {canManage && activeSection?.sectionId && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
+              {!isMissing && <StatusBadge status={generating ? "generating" : pkg.status} />}
+              {selectedPackageParam ? (
+                // Pinned to one exact package — role is part of its identity.
+                <Badge variant="outline" className="h-7 px-2 text-xs">
+                  {roleTitle(pkg?.role ?? selectedRole)}
+                </Badge>
+              ) : (
+                <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
+                  <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              {!isMissing && (
+                <>
+                  {/* Always-visible per-section regeneration (owner/admin — the
+                      endpoint enforces the same tiers). The stale banner keeps
+                      its own contextual copy of this action. */}
+                  {canManage && activeSection?.sectionId && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          className="gap-1.5"
+                          onClick={handleRegenerateSection}
+                          disabled={regenerating}
+                        >
+                          {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                          {regenerating ? "Regenerating…" : "Regenerate section"}
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
+                    </Tooltip>
+                  )}
+                  {canManage && activeSection?.sectionId && (
                     <Button
                       size="xs"
-                      variant="outline"
-                      className="gap-1.5"
-                      onClick={handleRegenerateSection}
-                      disabled={regenerating}
+                      variant={markedReviewed ? "secondary" : "outline"}
+                      data-tour="reader-review"
+                      className={cn(
+                        "gap-1.5",
+                        markedReviewed && "border-success/40 bg-success-soft text-success",
+                      )}
+                      onClick={handleToggleReview}
                     >
-                      {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                      {regenerating ? "Regenerating…" : "Regenerate section"}
+                      {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                      {markedReviewed ? "Reviewed" : "Mark reviewed"}
                     </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
-                </Tooltip>
-              )}
-              {canManage && activeSection?.sectionId && (
-                <Button
-                  size="xs"
-                  variant={markedReviewed ? "secondary" : "outline"}
-                  data-tour="reader-review"
-                  className={cn(
-                    "gap-1.5",
-                    markedReviewed && "border-success/40 bg-success-soft text-success",
                   )}
-                  onClick={handleToggleReview}
-                >
-                  {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                  {markedReviewed ? "Reviewed" : "Mark reviewed"}
-                </Button>
-              )}
-              {/* Personal progress for everyone else — the tour's "track what
-                  you've read" was previously only true for owners/admins. */}
-              {!canManage && activeSection && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
+                  {/* Personal progress for everyone else — the tour's "track what
+                      you've read" was previously only true for owners/admins. */}
+                  {!canManage && activeSection && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
+                          <Button
+                            size="xs"
+                            variant={isSectionRead ? "secondary" : "outline"}
+                            data-tour="reader-review"
+                            disabled={readSections === null}
+                            className={cn(
+                              "gap-1.5",
+                              isSectionRead && "border-success/40 bg-success-soft text-success",
+                            )}
+                            onClick={handleToggleRead}
+                          >
+                            {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                            {isSectionRead ? "Read" : "Mark as read"}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {/* Bug #68: the control is disabled because the progress
+                          fetch failed, not because the feature is unavailable —
+                          and it stays disabled on purpose, since writing marks
+                          against a history we could not read would erase it. */}
+                      {progressLoadError && (
+                        <TooltipContent side="bottom" className="max-w-xs text-left">
+                          Your reading progress couldn&apos;t be loaded, so marks are paused for this
+                          visit — saving now would overwrite the sections you have already read.
+                          Reload the page to try again.
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  )}
+                  {/* E8: the emphasis used to be inverted — "Mark as read" (a
+                      progress checkbox) wore the only primary ring in the top bar
+                      while Ask, the reader's highest-value action, was a ghost.
+                      Ask is the emphasized control now; the read/review marks are
+                      quiet outlines. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button size="xs" variant="default" className="gap-1.5" onClick={() => setAskOpen(true)}>
+                        <MessageSquare className="h-3 w-3" />
+                        Ask
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs text-left">
+                      Ask a question about this codebase — answered from the analyzed evidence with receipts
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
                       <Button
                         size="xs"
-                        variant={isSectionRead ? "secondary" : "outline"}
-                        data-tour="reader-review"
-                        disabled={readSections === null}
-                        className={cn(
-                          "gap-1.5",
-                          isSectionRead && "border-success/40 bg-success-soft text-success",
-                        )}
-                        onClick={handleToggleRead}
+                        variant="outline"
+                        className="gap-1"
+                        onClick={() => setProvenanceOpen(true)}
+                        aria-label="How this package was made"
                       >
-                        {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                        {isSectionRead ? "Read" : "Mark as read"}
+                        <FlaskConical className="h-3 w-3" />
                       </Button>
-                    </span>
-                  </TooltipTrigger>
-                  {/* Bug #68: the control is disabled because the progress
-                      fetch failed, not because the feature is unavailable —
-                      and it stays disabled on purpose, since writing marks
-                      against a history we could not read would erase it. */}
-                  {progressLoadError && (
+                    </TooltipTrigger>
                     <TooltipContent side="bottom" className="max-w-xs text-left">
-                      Your reading progress couldn&apos;t be loaded, so marks are paused for this
-                      visit — saving now would overwrite the sections you have already read.
-                      Reload the page to try again.
+                      How this package was made — models, calls, cost, validation
                     </TooltipContent>
-                  )}
-                </Tooltip>
+                  </Tooltip>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        className="gap-1"
+                        data-tour="reader-actions"
+                        aria-label="Export options"
+                        disabled={exporting}
+                      >
+                        {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+                        <ChevronDown className="h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuItem className="text-xs" onSelect={handleExport} disabled={exporting}>
+                        <FileText className="mr-2 h-3 w-3" /> Markdown file
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
               )}
-              {/* E8: the emphasis used to be inverted — "Mark as read" (a
-                  progress checkbox) wore the only primary ring in the top bar
-                  while Ask, the reader's highest-value action, was a ghost.
-                  Ask is the emphasized control now; the read/review marks are
-                  quiet outlines. */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button size="xs" variant="default" className="gap-1.5" onClick={() => setAskOpen(true)}>
-                    <MessageSquare className="h-3 w-3" />
-                    Ask
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs text-left">
-                  Ask a question about this codebase — answered from the analyzed evidence with receipts
-                </TooltipContent>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="gap-1"
-                    onClick={() => setProvenanceOpen(true)}
-                    aria-label="How this package was made"
-                  >
-                    <FlaskConical className="h-3 w-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom" className="max-w-xs text-left">
-                  How this package was made — models, calls, cost, validation
-                </TooltipContent>
-              </Tooltip>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="gap-1"
-                    data-tour="reader-actions"
-                    aria-label="Export options"
-                    disabled={exporting}
-                  >
-                    {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
-                    <ChevronDown className="h-3 w-3" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-40">
-                  <DropdownMenuItem className="text-xs" onSelect={handleExport} disabled={exporting}>
-                    <FileText className="mr-2 h-3 w-3" /> Markdown file
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
             </>
-          )}
-        </div>
+          }
+        />
       </div>
 
       {/* How this package was built. Sits above the coverage strip because it
@@ -1856,7 +1863,7 @@ export function OnboardingPage() {
           no-AI does not do anything" was partly that the change was invisible. */}
       {!isMissing && pkg.generation?.label && pkg.generation.kind !== "ai" && (
         <div
-          className="flex items-start gap-2 border-b bg-muted/30 px-5 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground"
+          className="flex items-start gap-2 border-b bg-muted/30 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5"
           role="status"
         >
           <Sparkles className="mt-0.5 h-3 w-3 shrink-0 opacity-60" aria-hidden />
@@ -1881,7 +1888,7 @@ export function OnboardingPage() {
           actually cites, and the signals behind the ranking — the honest
           denominators the "critical 25%" story needs. All counts, no prose. */}
       {!isMissing && pkg.coverage && (
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-5 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5">
           <CoverageFiles files={pkg.coverage.files} languages={pkg.coverage.languages} />
           <span aria-hidden>·</span>
           <span>
@@ -1943,7 +1950,7 @@ export function OnboardingPage() {
           silent catch destroyed. */}
       {!isMissing && pkg.status === "generating" && livePollStalled && (
         <div
-          className="flex items-center justify-between gap-3 border-b border-warning/40 bg-warning-soft px-5 py-2 text-xs text-warning"
+          className="flex items-center justify-between gap-3 border-b border-warning/40 bg-warning-soft px-3 py-2 text-xs text-warning sm:px-4 lg:px-5"
           role="alert"
         >
           <span>
@@ -1962,13 +1969,13 @@ export function OnboardingPage() {
         </div>
       )}
       {!isMissing && pkg.status === "generating" && !livePollStalled && (
-        <div className="flex items-center gap-2 border-b bg-info-soft px-5 py-2 text-xs text-info">
+        <div className="flex items-center gap-2 border-b bg-info-soft px-3 py-2 text-xs text-info sm:px-4 lg:px-5">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
           Generating — sections appear here as each one finishes ({sections.length}/{SECTION_NAV_ORDER.length} so far).
         </div>
       )}
       {!isMissing && pkg.status === "failed" && (
-        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger">
+        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger sm:px-4 lg:px-5">
           <span>
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
             Generation failed — some sections may be missing or incomplete.
@@ -1987,7 +1994,7 @@ export function OnboardingPage() {
       )}
 
       {actionError && (
-        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-5 py-2 text-xs text-danger">
+        <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger sm:px-4 lg:px-5">
           <span>
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
             {actionError}
@@ -1998,9 +2005,11 @@ export function OnboardingPage() {
         </div>
       )}
 
-      {/* Mobile section picker — the section nav aside is desktop-only. */}
+      {/* Mobile section picker — the section nav aside is desktop-only. Same
+          inset scale as the strips above, minus the lg step: this row is
+          lg:hidden. */}
       {!isMissing && sections.length > 0 && (
-        <div className="border-b px-4 py-2 lg:hidden">
+        <div className="border-b px-3 py-2 sm:px-4 lg:hidden">
           <Select value={activeSectionId ?? undefined} onValueChange={(v) => setActiveSectionId(v as typeof activeSectionId)}>
             <SelectTrigger aria-label="Jump to section" className="h-8 w-full text-[0.8125rem]"><SelectValue placeholder="Jump to section" /></SelectTrigger>
             <SelectContent>
@@ -2017,7 +2026,7 @@ export function OnboardingPage() {
 
       <div className="flex min-h-0 flex-1">
         {/* section nav */}
-        <aside className="hidden w-52 shrink-0 overflow-y-auto border-r py-3 pr-2 lg:block" data-tour="reader-sections">
+        <aside className="hidden w-60 shrink-0 overflow-y-auto border-r py-3 pl-5 pr-2 lg:block" data-tour="reader-sections">
           <p className="section-label mb-2 px-2">Sections</p>
           {readSections !== null && presentSectionIds.length > 0 && (
             <p className="mb-2 px-2 text-[0.625rem] tabular-nums text-muted-foreground">
@@ -2132,9 +2141,9 @@ export function OnboardingPage() {
 
         {/* content */}
         <div ref={readerScrollRef} className="min-w-0 flex-1 overflow-y-auto px-5 py-5 lg:px-8">
-          {/* No `mx-auto`: centring inside an already-narrowed column opens ~300px of
-              dead gutter each side. max-w-3xl still caps the line length. */}
-          <div className="max-w-3xl">
+          {/* Centered measure: the column sits mid-pane like a document page;
+              max-w-3xl still caps the line length. */}
+          <div className="mx-auto max-w-3xl">
             {isMissing ? (
               // Bug #68, the expensive one. Order matters: loading first (so
               // the empty state never flashes before the first response),
