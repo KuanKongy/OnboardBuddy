@@ -291,13 +291,10 @@ export function ArchitecturePage() {
           responsibility: c.narrative?.responsibility ?? c.summary,
           selected: p.id === selectedId,
           dimmed: neighborIds !== null && !neighborIds.has(p.id),
-          // Owner I1: opening is a decision the reader makes with a button,
-          // not a side effect of clicking the card.
-          onOpen: () => openComponent(c.id, c.label),
         } satisfies ClusterNodeData,
       };
     });
-  }, [insideCluster, positioned, visibleClusters, visibleMembers, level, selectedId, neighborIds, openComponent]);
+  }, [insideCluster, positioned, visibleClusters, visibleMembers, level, selectedId, neighborIds]);
 
   const flowEdges: Edge[] = useMemo(
     () =>
@@ -448,7 +445,7 @@ export function ArchitecturePage() {
           subtitle={
             insideCluster
               ? "Inside one component — the files it is made of, most critical first."
-              : "How the codebase is organized into layers — click a component to read what it is for, then Open to list its files."
+              : "How the codebase is organized into layers — click a component to read what it is for, then Open in its details panel to list its files."
           }
           actions={
             <>
@@ -611,13 +608,13 @@ export function ArchitecturePage() {
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
                 // A click selects — a component opens its aside, a member opens
-                // its panel — and opening a component is the labelled button on
-                // the card and in that aside (owner I1). Readers who want the
-                // old one-click drill back turn it on in account settings; a
-                // MEMBER still never drills, because there is no level below a
-                // file here.
+                // its panel — and opening a component is the labelled button in
+                // that aside (owner I1). Readers who want the old one-click
+                // drill back turn it on for this project in Project settings →
+                // Viewing; a MEMBER still never drills, because there is no
+                // level below a file here.
                 onDrillInto={(nodeId) => {
-                  if (insideCluster || !autoDrillEnabled("architecture")) return false;
+                  if (insideCluster || !autoDrillEnabled("architecture", id ?? "")) return false;
                   const cluster = clusterById.get(nodeId);
                   if (!cluster) return false;
                   openComponent(cluster.id, cluster.label, nodeId);

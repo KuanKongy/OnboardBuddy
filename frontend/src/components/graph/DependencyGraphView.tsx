@@ -68,14 +68,6 @@ interface DependencyGraphViewProps {
   refitSignal?: string | number;
   /** Returns true when this node opens a level below — see GraphCanvas. */
   onDrillInto?: (nodeId: string) => boolean;
-  /**
-   * Opens a group box's contents. Wired to the Open button ModuleNode renders
-   * on group cards, which is the default way into a level now that a plain
-   * click selects instead of navigating — so a caller that draws group nodes
-   * and omits this leaves the ladder reachable only through the account
-   * preference.
-   */
-  onOpenGroup?: (nodeId: string) => void;
   drill?: GraphDrill;
   /** `frame` only while resolving a `?focus=` deep link. */
   focusMode?: FocusMode;
@@ -105,7 +97,6 @@ export function DependencyGraphView({
   suppressInitialFit = false,
   refitSignal,
   onDrillInto,
-  onOpenGroup,
   drill,
   focusMode,
   restoreViewport,
@@ -165,15 +156,10 @@ export function DependencyGraphView({
             isEntryPoint: entryPointSet.has(node.id),
             selected: node.id === selectedNodeId,
             dimmed: neighborIds !== null && !neighborIds.has(node.id),
-            // Only a group has a level under it, so only a group gets the
-            // button — `fileCount` is the field that marks one.
-            ...(node.metadata.fileCount !== undefined && onOpenGroup
-              ? { onOpen: () => onOpenGroup(node.id) }
-              : {}),
           },
         };
       }),
-    [nodes, entryPointSet, selectedNodeId, neighborIds, nodeKindById, hiddenKinds, onOpenGroup],
+    [nodes, entryPointSet, selectedNodeId, neighborIds, nodeKindById, hiddenKinds],
   );
 
   const flowEdges: Edge[] = useMemo(

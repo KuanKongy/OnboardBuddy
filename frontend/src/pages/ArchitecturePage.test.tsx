@@ -115,10 +115,11 @@ describe("ArchitecturePage", () => {
     expect(screen.getByText("Responsible for")).toBeInTheDocument();
     expect(screen.getByText("Why it is separate")).toBeInTheDocument();
 
-    // Opening is the labelled control — one on the card, one in the aside.
-    const open = screen.getAllByRole("button", { name: /Open 2 files/ });
-    expect(open.length).toBeGreaterThan(0);
-    fireEvent.click(open[0]!);
+    // Opening is one labelled control, in the aside. The card carried a second
+    // copy of it until the action moved to a single place, which is why this is
+    // `getByRole` — a card button coming back would fail here rather than be
+    // absorbed by a "one or more" assertion.
+    fireEvent.click(screen.getByRole("button", { name: /Open 2 files/ }));
 
     // The level is fetched from the server, not synthesized from the members
     // already in hand — that is what gives it real edges and per-file scores.

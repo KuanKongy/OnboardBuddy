@@ -20,7 +20,6 @@ import { PageHeader } from "@/components/PageHeader";
 import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { applyFontSize, readStoredFontSize, type FontSizeChoice } from "@/lib/fontSize";
 import { hotkeysEnabled, setHotkeysEnabled } from "@/hooks/useHotkeys";
-import { autoDrillEnabled, setAutoDrillEnabled, type GraphSurface } from "@/lib/graphPrefs";
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
@@ -42,19 +41,10 @@ export function AccountSettingsPage() {
   // useHotkeys reads the preference per keypress, so the write below is the whole
   // apply step. Mirrored into state only so the buttons can show which is active.
   const [hotkeys, setHotkeys] = useState(() => hotkeysEnabled());
-  const [autoDrill, setAutoDrill] = useState(() => ({
-    dependencies: autoDrillEnabled("dependencies"),
-    architecture: autoDrillEnabled("architecture"),
-  }));
 
   function chooseHotkeys(enabled: boolean) {
     setHotkeysEnabled(enabled);
     setHotkeys(enabled);
-  }
-
-  function chooseAutoDrill(surface: GraphSurface, enabled: boolean) {
-    setAutoDrillEnabled(surface, enabled);
-    setAutoDrill((prev) => ({ ...prev, [surface]: enabled }));
   }
 
   const [appConnected, setAppConnected] = useState(false);
@@ -634,47 +624,6 @@ export function AccountSettingsPage() {
               <p className="mt-1 text-[0.6875rem] text-muted-foreground">
                 Single-key shortcuts like <kbd className="font-mono">↑</kbd>, <kbd className="font-mono">↓</kbd> and{" "}
                 <kbd className="font-mono">/</kbd>. Turning them off leaves every button and link working.
-              </p>
-
-              {(
-                [
-                  { surface: "dependencies", label: "Dependency graph drill-down on click" },
-                  { surface: "architecture", label: "Architecture map drill-down on click" },
-                ] as const
-              ).map((pref) => (
-                <div key={pref.surface}>
-                  <Label className="mt-3 block text-[0.6875rem] text-muted-foreground">{pref.label}</Label>
-                  <div
-                    className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5"
-                    role="group"
-                    aria-label={pref.label}
-                  >
-                    {(
-                      [
-                        { on: true, label: "On" },
-                        { on: false, label: "Off" },
-                      ] as const
-                    ).map((opt) => (
-                      <button
-                        key={opt.label}
-                        type="button"
-                        onClick={() => chooseAutoDrill(pref.surface, opt.on)}
-                        aria-pressed={autoDrill[pref.surface] === opt.on}
-                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                          autoDrill[pref.surface] === opt.on
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-                On: clicking a group or component opens it immediately. Off: a click selects it and
-                its Open button drills down.
               </p>
             </CardContent>
           </Card>

@@ -1,4 +1,4 @@
-import { ChevronRight, Unlink } from "lucide-react";
+import { Unlink } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import { CLUSTER_KIND_LABELS, CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
 import { cn } from "@/lib/utils";
@@ -22,8 +22,6 @@ export interface ClusterNodeData {
   responsibility: string;
   selected: boolean;
   dimmed: boolean;
-  /** Opens the component. Explicit, never on a plain card click — owner I1. */
-  onOpen: () => void;
 }
 
 /**
@@ -39,8 +37,11 @@ export interface ClusterNodeData {
  * that count, so the label is the fix that finding asked for, not a loss.
  *
  * The card is a door, but it does not open itself: clicking selects, and the
- * "Open" button opens (owner I1: "You may add the button, to allow drilling
- * down, it shouldn't by default").
+ * Open button in the details panel beside the canvas opens (owner I1: "You may
+ * add the button, to allow drilling down, it shouldn't by default"). The button
+ * used to be on the card too, which put the same action in two places and cost
+ * the card a row of its 240px width; the panel is where the reader already is
+ * once they have chosen a component.
  */
 export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
   const palette = CLUSTER_KIND_PALETTE[data.kind] ?? "shared";
@@ -104,23 +105,6 @@ export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
             crit {(data.criticalScore * 100).toFixed(0)}
           </span>
         </span>
-      </div>
-
-      <div className="border-t border-border/60 px-3 py-1.5">
-        <button
-          type="button"
-          className="nodrag inline-flex w-full items-center justify-center gap-1 rounded-md border border-border px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          aria-label={`Open ${data.label} and list its ${data.count} ${data.noun}${data.count === 1 ? "" : "s"}`}
-          onClick={(e) => {
-            // The canvas would otherwise treat this as a plain node click and
-            // select the card instead of opening it.
-            e.stopPropagation();
-            data.onOpen();
-          }}
-        >
-          Open {data.count} {data.noun}{data.count === 1 ? "" : "s"}
-          <ChevronRight className="h-3 w-3" />
-        </button>
       </div>
     </div>
   );
