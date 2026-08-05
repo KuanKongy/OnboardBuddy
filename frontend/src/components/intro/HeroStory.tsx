@@ -17,14 +17,14 @@ import { prefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** Which tab of the fake app window each scene "opens": the dependency graph
- *  belongs to Dependencies and the walkthrough to Tutorials; import, analysis
- *  and architecture all happen on Overview. */
+ *  belongs to Dependencies, the cluster map to Architecture and the walkthrough
+ *  to Tutorials; import and analysis both happen on Overview. */
 const SCENE_TAB: Record<StorySceneId, number> = {
   import: 0,
   analysis: 0,
   graph: 1,
-  architecture: 0,
-  tutorial: 2,
+  architecture: 2,
+  tutorial: 3,
 };
 
 /**
@@ -95,15 +95,17 @@ export function HeroStory() {
           }}
         />
         <div className="overflow-hidden rounded-2xl border border-foreground/10 bg-card/85 shadow-2xl shadow-[#2659f4]/10 backdrop-blur-sm dark:border-white/10 dark:bg-card/70">
-          <div className="flex items-center gap-3 border-b border-foreground/10 px-4 py-2.5 dark:border-white/10">
+          {/* Four pills clip a 375px viewport at the desktop scale, so the row
+              and the pills both shrink below sm. */}
+          <div className="flex items-center gap-2 border-b border-foreground/10 px-4 py-2.5 dark:border-white/10 sm:gap-3">
             <LogoMark className="h-4 w-4" />
             <div aria-hidden="true" className="flex items-center gap-1">
-              {["Overview", "Dependencies", "Tutorials"].map((tab, i) => (
+              {["Overview", "Dependencies", "Architecture", "Tutorials"].map((tab, i) => (
                 <span
                   key={tab}
                   data-active={i === activeTab || undefined}
                   className={cn(
-                    "rounded-md px-2.5 py-1 text-[0.6875rem] font-medium transition-colors duration-300",
+                    "rounded-md px-1.5 py-1 text-[0.625rem] font-medium transition-colors duration-300 sm:px-2.5 sm:text-[0.6875rem]",
                     i === activeTab ? "bg-accent/70 text-foreground" : "text-muted-foreground",
                   )}
                 >
