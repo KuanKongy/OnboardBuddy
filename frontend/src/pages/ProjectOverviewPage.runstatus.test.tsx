@@ -55,9 +55,13 @@ const PACKAGE_RUN: RunHistoryEntry = {
 };
 
 vi.mock("@/lib/api", () => ({
-  apiFetch: vi.fn(async (path: string) =>
-    path.includes("/runs") ? { runs: [PACKAGE_RUN, ANALYZE_RUN] } : {},
-  ),
+  apiFetch: vi.fn(async (path: string) => {
+    if (path.includes("/runs")) return { runs: [PACKAGE_RUN, ANALYZE_RUN] };
+    // The idle status block mounts the pipeline panel open, which fetches the
+    // snapshot's phases; an empty list is the panel's "nothing recorded" path.
+    if (path.includes("/metrics")) return { snapshot: {}, phases: [] };
+    return {};
+  }),
   ApiError: class ApiError extends Error {},
 }));
 
@@ -113,12 +117,17 @@ describe("run history row (#74/V12, V10)", () => {
       </TooltipProvider>,
     );
 
-    const badge = await screen.findByText("complete");
-    expect(badge).toHaveAttribute("data-variant", "success");
-    // Not the primary/blue chip, which is this app's info/selected tone.
-    expect(badge).not.toHaveAttribute("data-variant", "default");
+    // Twice on purpose: the idle "Analysis status" block is the current state,
+    // the run history below is the ledger, and this pair is the newest of both.
+    const badges = await screen.findAllByText("complete");
+    expect(badges).toHaveLength(2);
+    for (const badge of badges) {
+      expect(badge).toHaveAttribute("data-variant", "success");
+      // Not the primary/blue chip, which is this app's info/selected tone.
+      expect(badge).not.toHaveAttribute("data-variant", "default");
+    }
 
     // Both halves summed by sumDuration, in hours rather than "560m 7s".
-    expect(await screen.findByText("9h 20m")).toBeInTheDocument();
+    expect(await screen.findAllByText("9h 20m")).toHaveLength(2);
   });
 });
