@@ -371,8 +371,10 @@ Errors: 400 — developer_role required but missing on invite and body · 403 �
 | GET | `/members/invitations` | member | Pending invites for this project |
 | POST | `/members/invitations` | owner/admin | Invite a user by email |
 | PATCH | `/members/invitations/:invitationId` | owner/admin | Revoke a pending invite |
-| PATCH | `/members/members/:userId` | owner/admin | Update member tier or role |
-| DELETE | `/members/members/:userId` | owner/admin | Remove a member |
+| PATCH | `/members/:userId` | owner/admin | Update member tier or role |
+| POST | `/members/:userId/transfer-ownership` | owner | Hand the project to another member |
+| DELETE | `/members/me` | member | Leave the project yourself |
+| DELETE | `/members/:userId` | owner/admin | Remove a member |
 
 #### GET /members
 
@@ -406,14 +408,33 @@ Revokes a pending invitation (sets status to `revoked`).
 Input: no body → 200 `{ invitation }`  
 Errors: 401 — not authenticated · 403 — not owner/admin · 404 — no pending invitation with that id · 500 — server failure
 
-#### PATCH /members/members/:userId
+#### PATCH /members/:userId
 
 Updates a member's permission tier and/or developer role. Admins may only change developers; owners cannot assign owner to someone else.
 
 Input: `{ permission_tier?, developer_role? }` → 200 `{ member }`  
 Errors: 400 — invalid tier/role or no fields to update · 401 — not authenticated · 403 — caller lacks permission for this change · 404 — member not found · 500 — server failure
 
-#### DELETE /members/members/:userId
+#### POST /members/:userId/transfer-ownership
+
+Hands the project to another member: demotes the caller to `admin`, promotes the
+target to `owner`, and moves `projects.user_id` — all three in one transaction.
+`projects.user_id` has to move with the tier: `services/accountDeletion.ts`
+cascades owned projects through it, so an old owner left there would take the
+project with them.
+
+Input: no body → 200 `{ new_owner, previous_owner }`  
+Errors: 400 — target is the caller · 401 — not authenticated · 403 — not the owner · 404 — member not found · 409 — ownership changed concurrently, or the new owner already has their own project for this repo · 503 — database unavailable · 500 — server failure
+
+#### DELETE /members/me
+
+Removes the caller from the project. Registered above `DELETE /:userId` because
+Express matches in order and that route's UUID guard would 404 the literal `/me`.
+
+Input: no body → 200 `{ success: true }`  
+Errors: 401 — not authenticated · 403 — the owner must transfer ownership first (an ownerless project is not a state the account cascade answers for) · 500 — server failure
+
+#### DELETE /members/:userId
 
 Removes a member from the project. Cannot remove yourself or the project owner.
 

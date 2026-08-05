@@ -145,9 +145,11 @@ Light and dark themes, both OKLCH token systems defined in `src/styles.css` (`:r
 - Architecture map, class/interface graph, role-based filtering, and workflow graph views are not yet implemented (`/projects/:id/architecture` and `/projects/:id/walkthrough` remain `EmptyStubPage`)
 
 ### TeamPage
-- Member grid with avatar, email, role/tier badges
-- Invite modal (owner/admin only) via `POST /projects/:id/members/invitations`
-- Remove member (owner/admin) via `DELETE /projects/:id/members/members/:userId`
+- Member table (`max-w-3xl`) at the sidebar account card's density: identity (avatar + name + tier badge, plus a "You" pill on your own row), role, joined, approvals, read marks, and a trailing actions cell
+- The identity is a button, not the row — it opens a read-only profile dialog (email, GitHub link, joined date, approvals, read marks); no controls reach it, so viewing anyone is ungated
+- Actions on a manageable row: `Manage` opens the tier/role modal (`PATCH /projects/:id/members/:userId`; the tier Select is owner-only), and a three-dots menu holds owner-only "Transfer ownership" (`POST /projects/:id/members/:userId/transfer-ownership`, type-to-confirm) and "Remove member" (`DELETE /projects/:id/members/:userId`)
+- Your own row carries `Leave team` (`DELETE /projects/:id/members/me`) — disabled with a tooltip for the owner, whose way out is a transfer
+- Invite modal (owner/admin only) via `POST /projects/:id/members/invitations`; pending invitations list below the table with revoke
 
 ### ProjectSettingsPage
 - Single-column layout: repo info, developer role, ignored paths, analysis limits, danger zone

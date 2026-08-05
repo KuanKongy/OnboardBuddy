@@ -1,8 +1,9 @@
-import { AlertTriangle, BookOpenCheck, CalendarDays, Crown, FileCheck2, Github, Loader2, LogOut, Mail, RefreshCw, Trash2, UserPlus, X } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, CalendarDays, Crown, FileCheck2, Github, Loader2, LogOut, Mail, MoreVertical, RefreshCw, Trash2, UserPlus, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { PageHeader } from "@/components/PageHeader";
+import { useAuth } from "@/contexts/AuthContext";
 import { useProject } from "@/contexts/ProjectContext";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageSpinner } from "@/components/ui/page-spinner";
@@ -16,6 +17,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,7 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { apiFetch } from "@/lib/api";
 import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 
@@ -97,6 +104,7 @@ const tierBadgeVariant: Record<string, "default" | "secondary" | "outline"> = {
 
 export function TeamPage() {
   const { project, refetch } = useProject();
+  const { user } = useAuth();
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [members, setMembers] = useState<Member[]>([]);
@@ -110,6 +118,7 @@ export function TeamPage() {
   const [inviteRole, setInviteRole] = useState<string>(FALLBACK_ROLE);
   const [inviting, setInviting] = useState(false);
 
+  const [profileMember, setProfileMember] = useState<Member | null>(null);
   const [manageMember, setManageMember] = useState<Member | null>(null);
   const [editTier, setEditTier] = useState("developer");
   const [editRole, setEditRole] = useState<string>(FALLBACK_ROLE);
@@ -125,6 +134,7 @@ export function TeamPage() {
   const canManage =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
   const isOwner = project?.permission_tier === "owner";
+  const currentUserId = user?.id ?? null;
 
   useEffect(() => {
     if (!id) return;
@@ -143,9 +153,15 @@ export function TeamPage() {
   const loadInvitations = useCallback(() => {
     if (!id || !canManage) return;
     apiFetch(`/projects/${id}/members/invitations`)
-      .then((data: { invitations: PendingInvitation[] }) => {
-        setInvitations(data.invitations);
-        setInvitationsError(false);
+      .then((data: { invitations?: PendingInvitation[] }) => {
+        // A malformed success is a failure for Bug #68 purposes: rendering it
+        // as an empty list would again look like "nobody is waiting".
+        if (Array.isArray(data.invitations)) {
+          setInvitations(data.invitations);
+          setInvitationsError(false);
+        } else {
+          setInvitationsError(true);
+        }
       })
       .catch(() => setInvitationsError(true));
   }, [id, canManage]);
@@ -187,6 +203,12 @@ export function TeamPage() {
     } finally {
       setRevokingId(null);
     }
+  }
+
+  /** Read-only: viewing a member is not gated, managing one is. */
+  function openProfile(member: Member) {
+    setError("");
+    setProfileMember(member);
   }
 
   function openManage(member: Member) {
@@ -292,25 +314,15 @@ export function TeamPage() {
         subtitle={`Who has access to ${project.repo_name} and their permissions${
           !loading ? ` · ${members.length} member${members.length !== 1 ? "s" : ""}` : ""
         }`}
+        // Leaving is a per-member action and now lives on the caller's own row,
+        // next to every other thing you can do to a member.
         actions={
-          <>
-            {canManage && (
-              <Button size="sm" onClick={() => { setError(""); setInviteOpen(true); }}>
-                <UserPlus className="h-3.5 w-3.5" />
-                Invite
-              </Button>
-            )}
-            {!isOwner && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { setError(""); setLeaveOpen(true); }}
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                Leave project
-              </Button>
-            )}
-          </>
+          canManage ? (
+            <Button size="sm" onClick={() => { setError(""); setInviteOpen(true); }}>
+              <UserPlus className="h-3.5 w-3.5" />
+              Invite
+            </Button>
+          ) : undefined
         }
       />
 
@@ -400,7 +412,7 @@ export function TeamPage() {
         </Dialog>
       )}
 
-      {error && !inviteOpen && !leaveOpen && manageMember === null && removeConfirm === null && transferTarget === null && (
+      {error && !inviteOpen && !leaveOpen && profileMember === null && manageMember === null && removeConfirm === null && transferTarget === null && (
         <ErrorBanner className="mb-3">{error}</ErrorBanner>
       )}
 
@@ -410,85 +422,172 @@ export function TeamPage() {
           when they joined, and both progress counts — approvals (editorial)
           and read marks (personal), which #74/F16 kept confusing for each
           other — and the empty two thirds of the screen stop being empty. */}
-      <div className="mx-auto max-w-2xl">
+      <div className="mx-auto max-w-3xl">
       {loading ? (
         <PageSpinner className="py-12" iconClassName="h-4 w-4" label="Loading team members" />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
+        // Scrolls rather than clips: the actions column pushes the table to
+        // 418px, and at 390px the old `overflow-hidden` cut the last 54px off
+        // with no way to reach it — Manage and the row menu were unclickable.
+        <div className="overflow-x-auto rounded-lg border border-border">
           <table className="w-full text-left text-xs">
             <thead>
+              {/* Cell padding is what sets the row height: px-2 py-1.5 around a
+                  size-7 avatar reproduces the sidebar account card's scale, which
+                  is the density the rest of the app is read at. */}
               <tr className="border-b border-border bg-muted/40 text-muted-foreground">
-                <th scope="col" className="px-3 py-2 font-medium">Member</th>
-                <th scope="col" className="px-3 py-2 font-medium">Role</th>
-                <th scope="col" className="hidden px-3 py-2 font-medium sm:table-cell">Joined</th>
+                <th scope="col" className="px-2 py-1.5 font-medium">Member</th>
+                <th scope="col" className="px-2 py-1.5 font-medium">Role</th>
+                <th scope="col" className="hidden px-2 py-1.5 font-medium sm:table-cell">Joined</th>
                 {/* Two columns because they are two different facts: an approval is
                     editorial, a read mark is the member's own progress. */}
                 <th
                   scope="col"
-                  className="px-3 py-2 text-right font-medium"
+                  className="px-2 py-1.5 text-right font-medium"
                   title="Sections this member approved (owner/admin review)"
                 >
                   Approvals
                 </th>
                 <th
                   scope="col"
-                  className="px-3 py-2 text-right font-medium"
+                  className="px-2 py-1.5 text-right font-medium"
                   title="Sections this member marked as read in the reader"
                 >
                   Read
                 </th>
+                <th scope="col" className="px-2 py-1.5"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody>
-              {members.map((member) => (
+              {members.map((member) => {
+                const isSelf = member.user_id === currentUserId;
+                return (
                 <tr
                   key={member.user_id}
-                  // Every member opens the detail modal — management controls
-                  // inside are permission-gated, viewing details is not.
-                  tabIndex={0}
-                  role="button"
-                  aria-label={`View ${member.email}`}
-                  onClick={() => openManage(member)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openManage(member); }
-                  }}
-                  className="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/50 focus-visible:bg-accent/50 focus-visible:outline-none"
+                  className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/50"
                 >
-                  <td className="px-3 py-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Avatar className="h-6 w-6 shrink-0">
+                  <td className="px-2 py-1.5">
+                    {/* The identity region is the control, not the row: the actions
+                        cell holds buttons, and a row-wide button cannot contain
+                        them. Viewing a profile is ungated — managing is not. */}
+                    <button
+                      type="button"
+                      aria-label={`View ${member.email}`}
+                      onClick={() => openProfile(member)}
+                      className="flex min-w-0 max-w-full items-center gap-2 rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Avatar className="size-7 shrink-0">
                         <AvatarFallback className={`${getAvatarColor(member.email)} text-[0.625rem] font-medium`}>
                           {getInitials(member.email)}
                         </AvatarFallback>
                       </Avatar>
-                      <div className="min-w-0">
-                        <p className="truncate font-medium text-foreground" title={member.email}>
-                          {member.email.split("@")[0]}
-                        </p>
+                      <span className="min-w-0">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-[0.8125rem] font-medium text-foreground" title={member.email}>
+                            {member.email.split("@")[0]}
+                          </span>
+                          {isSelf && (
+                            <Badge variant="secondary" className="shrink-0 text-[0.625rem]">You</Badge>
+                          )}
+                        </span>
                         <Badge
                           variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
                           className="mt-0.5 text-[0.625rem] capitalize"
                         >
                           {member.permission_tier}
                         </Badge>
-                      </div>
-                    </div>
+                      </span>
+                    </button>
                   </td>
-                  <td className="px-3 py-2 text-muted-foreground">{roleLabel(member.developer_role)}</td>
-                  <td className="hidden px-3 py-2 tabular-nums text-muted-foreground sm:table-cell">
+                  <td className="px-2 py-1.5 text-muted-foreground">{roleLabel(member.developer_role)}</td>
+                  <td className="hidden px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
                     {fmtDate(member.joined_at)}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                  <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                     {member.sections_reviewed}
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                  <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                     {member.sections_read}
                   </td>
+                  <td className="px-2 py-1.5">
+                    <div className="flex items-center justify-end gap-1">
+                      {isSelf ? (
+                        isOwner ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              {/* A disabled button fires no pointer events, so the
+                                  tooltip — the only place the reason lives — needs a
+                                  focusable wrapper to hang off. */}
+                              <span tabIndex={0}>
+                                <Button variant="outline" size="xs" disabled>
+                                  <LogOut className="h-3 w-3" />
+                                  Leave team
+                                </Button>
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              Transfer ownership first — a project cannot be ownerless
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => { setError(""); setLeaveOpen(true); }}
+                          >
+                            <LogOut className="h-3 w-3" />
+                            Leave team
+                          </Button>
+                        )
+                      ) : canManageMember(member) ? (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            aria-label={`Manage ${member.email}`}
+                            onClick={() => openManage(member)}
+                          >
+                            Manage
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-xs"
+                                aria-label={`Member actions for ${member.email}`}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <MoreVertical className="h-3 w-3" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              {/* Ownership moves from here, not through the tier
+                                  dropdown, which refuses to assign it. */}
+                              {isOwner && (
+                                <DropdownMenuItem onClick={() => { setError(""); setTransferTarget(member); }}>
+                                  <Crown className="h-3 w-3" />
+                                  Transfer ownership
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => { setError(""); setRemoveConfirm(member); }}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                                Remove member
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </>
+                      ) : null}
+                    </div>
+                  </td>
                 </tr>
-              ))}
+                );
+              })}
               {members.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                  <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                     No members yet.
                   </td>
                 </tr>
@@ -572,8 +671,78 @@ export function TeamPage() {
       )}
       </div>
 
-      {/* Member detail dialog: profile info for everyone, management
-          controls only when the caller may manage this member. */}
+      {/* Read-only profile: everyone can open everyone. Nothing here is a
+          control, so no tier check has to be made about what to hide. */}
+      <Dialog
+        open={profileMember !== null}
+        onOpenChange={(open) => {
+          if (!open) { setProfileMember(null); setError(""); }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-sm">
+              <Avatar className="h-7 w-7">
+                <AvatarFallback className={`${getAvatarColor(profileMember?.email ?? "")} text-[0.6875rem] font-medium`}>
+                  {getInitials(profileMember?.email ?? "")}
+                </AvatarFallback>
+              </Avatar>
+              {profileMember?.email.split("@")[0]}
+              <Badge
+                variant={tierBadgeVariant[profileMember?.permission_tier ?? ""] ?? "outline"}
+                className="text-[0.6875rem] capitalize"
+              >
+                {profileMember?.permission_tier}
+              </Badge>
+            </DialogTitle>
+          </DialogHeader>
+          {profileMember && (
+            <div className="space-y-1.5 pt-1 text-xs">
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate text-foreground" title={profileMember.email}>{profileMember.email}</span>
+              </div>
+              {profileMember.github_username && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Github className="h-3.5 w-3.5 shrink-0" />
+                  <a
+                    href={`https://github.com/${profileMember.github_username}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-foreground hover:underline"
+                  >
+                    @{profileMember.github_username}
+                  </a>
+                </div>
+              )}
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <CalendarDays className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Joined{" "}
+                  {new Date(profileMember.joined_at).toLocaleDateString(undefined, {
+                    year: "numeric", month: "long", day: "numeric",
+                  })}
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {profileMember.sections_reviewed} section{profileMember.sections_reviewed === 1 ? "" : "s"} approved
+                </span>
+              </div>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <BookOpenCheck className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  {profileMember.sections_read} section{profileMember.sections_read === 1 ? "" : "s"} marked read
+                </span>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Management modal: only ever opened from a row whose Manage button
+          `canManageMember` already gated, so it carries no fallback branch. */}
       <Dialog
         open={manageMember !== null}
         onOpenChange={(open) => {
@@ -582,139 +751,51 @@ export function TeamPage() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-sm">
-              <Avatar className="h-7 w-7">
-                <AvatarFallback className={`${getAvatarColor(manageMember?.email ?? "")} text-[0.6875rem] font-medium`}>
-                  {getInitials(manageMember?.email ?? "")}
-                </AvatarFallback>
-              </Avatar>
-              {manageMember?.email.split("@")[0]}
-              <Badge
-                variant={tierBadgeVariant[manageMember?.permission_tier ?? ""] ?? "outline"}
-                className="text-[0.6875rem] capitalize"
-              >
-                {manageMember?.permission_tier}
-              </Badge>
-            </DialogTitle>
+            <DialogTitle className="text-sm">Manage member</DialogTitle>
           </DialogHeader>
           {manageMember && (
             <div className="space-y-3 pt-1">
-              <div className="space-y-1.5 text-xs">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Mail className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate text-foreground" title={manageMember.email}>{manageMember.email}</span>
+              <p className="truncate text-xs text-muted-foreground" title={manageMember.email}>
+                {manageMember.email}
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <Label htmlFor="member-tier" className="text-xs">Permission tier</Label>
+                  <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
+                    <SelectTrigger id="member-tier" className="h-8 w-full text-[0.8125rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">Admin</SelectItem>
+                      <SelectItem value="developer">Developer</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {!isOwner && (
+                    <p className="text-[0.6875rem] text-muted-foreground">Only the owner can change tiers.</p>
+                  )}
                 </div>
-                {manageMember.github_username && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Github className="h-3.5 w-3.5 shrink-0" />
-                    <a
-                      href={`https://github.com/${manageMember.github_username}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-foreground hover:underline"
-                    >
-                      @{manageMember.github_username}
-                    </a>
-                  </div>
-                )}
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <CalendarDays className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    Joined{" "}
-                    {new Date(manageMember.joined_at).toLocaleDateString(undefined, {
-                      year: "numeric", month: "long", day: "numeric",
-                    })}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {manageMember.sections_reviewed} section{manageMember.sections_reviewed === 1 ? "" : "s"} approved
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <BookOpenCheck className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    {manageMember.sections_read} section{manageMember.sections_read === 1 ? "" : "s"} marked read
-                  </span>
+                <div className="space-y-1">
+                  <Label htmlFor="member-role" className="text-xs">Developer role</Label>
+                  <Select value={editRole} onValueChange={setEditRole}>
+                    <SelectTrigger id="member-role" className="h-8 w-full text-[0.8125rem]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ROLE_OPTIONS.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-
-              {canManageMember(manageMember) ? (
-                <>
-                  <Separator />
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-1">
-                      <Label htmlFor="member-tier" className="text-xs">Permission tier</Label>
-                      <Select value={editTier} onValueChange={setEditTier} disabled={!isOwner}>
-                        <SelectTrigger id="member-tier" className="h-8 w-full text-[0.8125rem]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="admin">Admin</SelectItem>
-                          <SelectItem value="developer">Developer</SelectItem>
-                        </SelectContent>
-                      </Select>
-                      {!isOwner && (
-                        <p className="text-[0.6875rem] text-muted-foreground">Only the owner can change tiers.</p>
-                      )}
-                    </div>
-                    <div className="space-y-1">
-                      <Label htmlFor="member-role" className="text-xs">Developer role</Label>
-                      <Select value={editRole} onValueChange={setEditRole}>
-                        <SelectTrigger id="member-role" className="h-8 w-full text-[0.8125rem]">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {ROLE_OPTIONS.map((r) => (
-                            <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-                  <Separator />
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={() => { setError(""); setRemoveConfirm(manageMember); }}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                        Remove
-                      </Button>
-                      {/* Ownership moves from here, not through the tier dropdown,
-                          which refuses to assign it. */}
-                      {isOwner && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => { setError(""); setTransferTarget(manageMember); }}
-                        >
-                          <Crown className="h-3 w-3" />
-                          Transfer ownership
-                        </Button>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="outline" size="sm" onClick={() => { setManageMember(null); setError(""); }}>Cancel</Button>
-                      <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
-                        {savingMember && <Loader2 className="h-3 w-3 animate-spin" />}
-                        Save
-                      </Button>
-                    </div>
-                  </div>
-                  {error && <ErrorBanner>{error}</ErrorBanner>}
-                </>
-              ) : (
-                <p className="text-[0.6875rem] text-muted-foreground">
-                  {manageMember.permission_tier === "owner"
-                    ? "The project owner can't be modified."
-                    : "You don't have permission to manage this member."}
-                </p>
-              )}
+              {error && <ErrorBanner>{error}</ErrorBanner>}
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => { setManageMember(null); setError(""); }}>Cancel</Button>
+                <Button size="sm" onClick={handleUpdateMember} disabled={savingMember}>
+                  {savingMember && <Loader2 className="h-3 w-3 animate-spin" />}
+                  Save
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
