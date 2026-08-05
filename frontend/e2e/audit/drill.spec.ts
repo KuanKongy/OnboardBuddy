@@ -77,15 +77,19 @@ async function openGraph(page: Page, query = ""): Promise<void> {
 }
 
 /**
- * Opens a group the way a reader does: the Open button on its card.
+ * Opens a group the way a reader does: select the box, then the Open button in
+ * the details panel that selection opens.
  *
- * A plain click on the card SELECTS now (owner I1's model, already used by the
- * Architecture map) — the account preference is what restores click-to-open —
- * so the camera contract below has to be driven through the control that
- * actually navigates by default.
+ * A plain click on the card SELECTS (owner I1's model, already used by the
+ * Architecture map) — the per-project Viewing preference is what restores
+ * click-to-open — so the camera contract below has to be driven through the
+ * control that actually navigates by default. Selecting never moves the camera
+ * (test 1 pins that), so the zoom baseline this file measures is unaffected by
+ * the extra click.
  */
 async function openGroup(page: Page, label: string): Promise<void> {
-  await page.getByLabel(new RegExp(`^Open ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} and list its`)).click();
+  await page.getByText(label).first().click();
+  await page.getByRole("button", { name: /^Open \d+ files$/ }).click();
 }
 
 test.describe("drill-down", () => {
@@ -137,8 +141,15 @@ test.describe("drill-down", () => {
   test("a click during the transition is ignored", async ({ page }) => {
     await openGraph(page);
     await openGroup(page, "src/lib/ (40 files)");
-    // Fire a second navigation immediately, before the first settles.
-    await page.getByLabel(/^Open src\/api\/ \(30 files\) and list its/).click({ force: true, timeout: 2000 }).catch(() => {});
+    // Fire a second navigation immediately, before the first settles: the same
+    // panel button, pressed again. Selecting a sibling group first is not a
+    // gesture the reader can complete mid-transition (the canvas is animating
+    // and the level is about to swap), so pressing the control that is still
+    // under the cursor is the realistic double-fire. `force` skips the
+    // actionability wait and the timeout is swallowed, because the panel may
+    // already have gone with the level — either way the second drill must not
+    // land.
+    await page.getByRole("button", { name: /^Open \d+ files$/ }).click({ force: true, timeout: 2000 }).catch(() => {});
 
     await expect(idle(page)).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: /back/i }).click();

@@ -1,4 +1,4 @@
-import { ChevronRight, Star } from "lucide-react";
+import { Star } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
 import { inferNodeType } from "@/lib/graphNodeType";
 import { cn } from "@/lib/utils";
@@ -28,12 +28,6 @@ export interface ModuleNodeData {
   groupNoun?: string;
   /** Group nodes only — links with both ends inside the box, so undrawn. */
   internalImportCount?: number;
-  /**
-   * Group nodes only — opens the level inside the box. Explicit, because a
-   * plain click selects the group and explains it (owner I1's model, borrowed
-   * from the Architecture card).
-   */
-  onOpen?: () => void;
   isEntryPoint: boolean;
   dimmed: boolean;
   selected: boolean;
@@ -52,8 +46,6 @@ export interface ModuleNodeData {
 export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   const typeInfo = inferNodeType(data.filePath, data.exportedSymbols);
   const isGroup = data.fileCount !== undefined;
-  // Read once: narrowing a property does not survive into the click handler.
-  const onOpen = data.onOpen;
   // A class card's label is a bare name ("SnapshotWriter"), which two files can
   // both declare; the path is the only thing that tells them apart, and it is
   // the file-shape guess below that would otherwise fill the line describing
@@ -147,26 +139,6 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
           </>
         ) : null}
       </div>
-
-      {/* The box is a door, but it does not open itself: a click selects the
-          group and the panel explains it, and THIS opens it — the same split
-          owner I1 asked for on the Architecture card, spelled the same way. */}
-      {isGroup && onOpen && (
-        <button
-          type="button"
-          className="nodrag mt-2 inline-flex w-full items-center justify-center gap-1 rounded-md border border-border px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-          aria-label={`Open ${data.label} and list its ${data.fileCount} ${data.groupNoun ?? "files"}`}
-          onClick={(e) => {
-            // The canvas would otherwise treat this as a plain node click and
-            // select the group instead of opening it.
-            e.stopPropagation();
-            onOpen();
-          }}
-        >
-          Open {data.fileCount} {data.groupNoun ?? "files"}
-          <ChevronRight className="h-3 w-3" />
-        </button>
-      )}
     </div>
   );
 }

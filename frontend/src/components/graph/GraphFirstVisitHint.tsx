@@ -64,8 +64,8 @@ export function GraphFirstVisitHint({
             This is a map of how files in this project depend on each other.
           </p>
           <p className="text-muted-foreground">
-            Click a node to see its details and open it on GitHub. A group's Open button lists the
-            files inside.
+            Click a node to see its details and open it on GitHub. Select a group and its panel's Open
+            button lists the files inside.
             {hasEntryPoints && " Start from an entry point (marked ▶) to follow the app's flow."}
           </p>
         </>

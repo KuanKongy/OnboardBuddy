@@ -217,9 +217,9 @@ export function GraphPage() {
   });
 
   /**
-   * Opens a directory group. One entry point for the card's Open button, the
-   * panel's, and the canvas gesture when the reader has turned that back on,
-   * so the three can never drift apart.
+   * Opens a directory group. One entry point for the panel's Open button and
+   * for the canvas gesture when the reader has turned that back on, so the two
+   * can never drift apart.
    */
   const openGroup = useCallback(
     (nodeId: string) => {
@@ -707,9 +707,9 @@ export function GraphPage() {
               {currentFrame
                 ? `${currentFrame.label} holds ${data.totalNodes} files — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. `
                 : `${data.totalNodes} files, too many to draw at once — showing ${groupCount} directory group${groupCount === 1 ? "" : "s"}. `}
-              Click a group for its numbers, or use its Open button to list its files, each with a line
-              saying what it does. Numbers on a group box count links crossing its boundary, not links
-              inside it.
+              Click a group for its numbers, then use the Open button in its details panel to list its
+              files, each with a line saying what it does. Numbers on a group box count links crossing
+              its boundary, not links inside it.
             </p>
           ) : (
             <p className="mb-2 text-xs text-muted-foreground">
@@ -804,16 +804,15 @@ export function GraphPage() {
                 restoreViewport={stack.savedViewport(stack.depth)}
                 viewportRef={viewportRef}
                 // A click SELECTS, groups included: it highlights the box's
-                // edges and explains it in the panel, and the Open button on
-                // the card or in the panel is what navigates into the files.
-                // Owner I1 asked for that split on the Architecture map and
-                // this canvas is the same gesture, so it reads the same way.
-                // The account preference restores the old click-to-open for
-                // readers who want it; a FILE never opens either way, because
-                // it is the bottom of the ladder (owner E1).
-                onOpenGroup={openGroup}
+                // edges and explains it in the panel, and the Open button in
+                // that panel is what navigates into the files. Owner I1 asked
+                // for that split on the Architecture map and this canvas is the
+                // same gesture, so it reads the same way. The per-project
+                // Viewing preference restores the old click-to-open for readers
+                // who want it; a FILE never opens either way, because it is the
+                // bottom of the ladder (owner E1).
                 onDrillInto={(nodeId) => {
-                  if (!nodeId.startsWith("cluster:") || !autoDrillEnabled("dependencies")) return false;
+                  if (!nodeId.startsWith("cluster:") || !autoDrillEnabled("dependencies", id ?? "")) return false;
                   openGroup(nodeId);
                   return true;
                 }}

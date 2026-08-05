@@ -174,27 +174,31 @@ function renderGraphPage(entry = "/projects/proj-1/dependencies") {
 }
 
 /**
- * Opens a group the way a reader does by default: its card's Open button.
- * Clicking the card itself only selects now (see the selection test below), so
- * the ladder is exercised through the control that navigates.
+ * Opens a group the way a reader does: select the box, then press the Open
+ * button in the details panel that selection opens. The card used to carry its
+ * own copy of that button; the action lives in one place now, and a click on
+ * the box still only selects (see the selection test below).
  *
- * Matched by prefix rather than by full name, because the label is baked into
- * the aria-label ("Open src/lib/ (40 files) and list its 40 files") and the
- * panel's own Open button is plain text ("Open 40 files") — a looser matcher
- * would hit both.
+ * The panel button is named from the group's own numbers ("Open 40 files"), so
+ * they are parsed out of the fixture label rather than passed in separately.
  *
- * Queried by label rather than by role+name: React Flow renders a node with
- * `visibility: hidden` until it has been measured (@reactflow/core NodeWrapper)
- * and jsdom measures nothing, so every control on the canvas computes an EMPTY
- * accessible name here — `getByRole(…, { name })` cannot reach one even with
- * `hidden: true`. In a browser the cards are visible and their buttons are
- * named; this is a jsdom fact, not a claim about the product.
+ * `findAllByText(…)[0]` rather than `getByText`: an open panel prints the
+ * selected node's label too, so drilling again from a level that already has a
+ * selection matches twice. Index 0 is the canvas node — the canvas renders
+ * before the aside.
+ *
+ * The panel button is reachable by role+name while a canvas control is not:
+ * React Flow leaves a node `visibility: hidden` until it has been measured
+ * (@reactflow/core NodeWrapper) and jsdom measures nothing, so anything inside
+ * a node computes an EMPTY accessible name here. That is a jsdom fact, not a
+ * claim about the product — and it is exactly why the ladder must not depend on
+ * a control that only exists on the canvas.
  */
 const drillInto = async (label: string) => {
-  const matches = (name: string) => name.startsWith(`Open ${label} and list its`);
-  const button = () => screen.getByLabelText(matches, { selector: "button" });
-  await waitFor(() => expect(button()).toBeInTheDocument());
-  fireEvent.click(button());
+  const [, count, noun] = /\((\d+) (\w+)\)/.exec(label) ?? [];
+  const box = await screen.findAllByText(label);
+  fireEvent.click(box[0]!);
+  fireEvent.click(await screen.findByRole("button", { name: `Open ${count} ${noun}` }));
 };
 
 describe("GraphPage drill-down", () => {
@@ -270,7 +274,7 @@ describe("GraphPage drill-down", () => {
   /**
    * The group box is a door that does not open itself (owner I1, the model the
    * Architecture card already follows): a click selects it and the panel says
-   * what it stands for, the Open button navigates. Auto-drill on a click made
+   * what it stands for, and that panel's Open button navigates. Auto-drill on a click made
    * the group's own numbers unreadable — the canvas changed before anyone
    * could look at them.
    */
@@ -286,14 +290,15 @@ describe("GraphPage drill-down", () => {
     expect(screen.getByText("src/api/ (40 files)")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Dependencies" })).not.toBeInTheDocument();
     // What the click DID produce: the panel, explaining the box and offering
-    // the way in. Its plain-text name is what tells it apart from the card's
-    // button, whose aria-label carries the group label.
+    // the only way in — the card carries no button of its own.
     expect(screen.getByText("Directory group")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open 40 files" })).toBeInTheDocument();
   });
 
-  it("restores click-to-open when the account preference is on", async () => {
-    localStorage.setItem("onboardbuddy:graph-auto-drill:dependencies", "on");
+  it("restores click-to-open when this project's preference is on", async () => {
+    // Keyed by project as well as surface: the toggle lives in this project's
+    // settings, so another project's canvas must keep the default gesture.
+    localStorage.setItem("onboardbuddy:graph-auto-drill:dependencies:proj-1", "on");
     renderGraphPage();
     await waitFor(() => expect(screen.getByText("src/lib/ (40 files)")).toBeInTheDocument());
 

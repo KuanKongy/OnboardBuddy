@@ -137,12 +137,12 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-architecture",
     title: "Architecture map",
-    body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is; its Open button lists the files inside.",
+    body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is; the Open button in its details panel lists the files inside.",
   },
   {
     target: "nav-dependencies",
     title: "Dependency graph",
-    body: "Which files depend on which. Select a node to get the standard symbol doc: summary, signature, and a real usage example from a call site. Groups open via their Open button.",
+    body: "Which files depend on which. Select a node to get the standard symbol doc: summary, signature, and a real usage example from a call site. Groups open via the Open button in their details panel.",
   },
   {
     target: "nav-capabilities",

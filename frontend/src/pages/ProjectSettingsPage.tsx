@@ -24,6 +24,7 @@ import { useFullBleedMain } from "@/components/MainRegion";
 import { PageHeader } from "@/components/PageHeader";
 import { SettingsShell, type SettingsSection } from "@/components/SettingsShell";
 import { apiFetch } from "@/lib/api";
+import { autoDrillEnabled, setAutoDrillEnabled, type GraphSurface } from "@/lib/graphPrefs";
 import { scrollBehavior } from "@/lib/motion";
 import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
@@ -207,6 +208,30 @@ export function ProjectSettingsPage() {
 
   const canEdit =
     project?.permission_tier === "owner" || project?.permission_tier === "admin";
+
+  // Graph click model. Browser-local and per project, so it is not part of the
+  // saved settings above and every tier gets to set it: it changes what YOUR
+  // click does, not what the project is. The graph pages read the stored value
+  // per click, so this mirror exists only to show which option is active.
+  const projectId = project?.id;
+  const [autoDrill, setAutoDrill] = useState(() => ({
+    dependencies: autoDrillEnabled("dependencies", projectId ?? ""),
+    architecture: autoDrillEnabled("architecture", projectId ?? ""),
+  }));
+  // Seeded from the first render's project, which is null on a cold load — and
+  // this page stays mounted across a project switch, so the toggles would
+  // otherwise show the previous project's answer.
+  useEffect(() => {
+    setAutoDrill({
+      dependencies: autoDrillEnabled("dependencies", projectId ?? ""),
+      architecture: autoDrillEnabled("architecture", projectId ?? ""),
+    });
+  }, [projectId]);
+
+  function chooseAutoDrill(surface: GraphSurface, enabled: boolean) {
+    setAutoDrillEnabled(surface, projectId ?? "", enabled);
+    setAutoDrill((prev) => ({ ...prev, [surface]: enabled }));
+  }
 
   useEffect(() => {
     if (project?.settings) {
@@ -898,6 +923,65 @@ export function ProjectSettingsPage() {
         </>
       ),
     },
+    // NOT gated on canEdit: this is a personal browser preference for this
+    // project, so a developer who only reads the graphs still gets to choose
+    // what their own click does.
+    {
+      id: "settings-viewing",
+      label: "Viewing",
+      children: (
+        <Card>
+          <CardContent className="p-3">
+            <h3 className="mb-2 text-xs font-medium text-foreground">Graph clicks</h3>
+            {(
+              [
+                { surface: "dependencies", label: "Dependency graph drill-down on click" },
+                { surface: "architecture", label: "Architecture map drill-down on click" },
+              ] as const
+            ).map((pref) => (
+              <div key={pref.surface}>
+                <Label className="mt-3 block text-[0.6875rem] text-muted-foreground first:mt-0">
+                  {pref.label}
+                </Label>
+                <div
+                  className="mt-1 flex items-center rounded-lg border border-border bg-card p-0.5"
+                  role="group"
+                  aria-label={pref.label}
+                >
+                  {(
+                    [
+                      { on: true, label: "On" },
+                      { on: false, label: "Off" },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.label}
+                      type="button"
+                      onClick={() => chooseAutoDrill(pref.surface, opt.on)}
+                      aria-pressed={autoDrill[pref.surface] === opt.on}
+                      className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                        autoDrill[pref.surface] === opt.on
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+              On: clicking a group or component opens it immediately. Off: a click selects it and the
+              Open button in its details panel drills down.
+            </p>
+            <p className="mt-1 text-[0.6875rem] text-muted-foreground">
+              Saved in this browser for you; not shared with the team.
+            </p>
+          </CardContent>
+        </Card>
+      ),
+    },
     // Owner-only card, so the rail loses the whole section rather than pointing at
     // an empty one.
     ...(project.permission_tier === "owner"
@@ -960,18 +1044,23 @@ export function ProjectSettingsPage() {
       <SettingsShell
         sections={sections}
         footer={
-          // The bar rides the column now, so it only renders when there is
-          // something to save. `saving || saved` keeps it mounted between the
-          // PUT and the fresh baseline, so the "Saved!" flash survives the
-          // refetch's clean state (ProjectLayout keeps the tab mounted during
-          // a background refetch; only a first load shows the spinner).
-          canEdit && (dirty || saving || saved) ? (
+          // Always mounted for someone who can edit, disabled until there is
+          // something to save: a bar that appears only once the form is dirty
+          // leaves a reader who has not touched anything unable to see that
+          // saving is how a change is committed here at all. Below admin there
+          // is nothing to save, so the bar is absent rather than permanently
+          // greyed. `saved` is not part of the enable condition but keeps the
+          // "Saved!" flash on the button through the refetch that clears
+          // `dirty` (ProjectLayout keeps the tab mounted during a background
+          // refetch; only a first load shows the spinner).
+          canEdit ? (
             <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               {/* Cancel used to refetch settings only, so moved ranking sliders —
                   which live in `weightRoles`, not in settings — stayed moved. */}
               <Button
                 variant="outline"
                 size="sm"
+                disabled={saving || !dirty}
                 onClick={() => {
                   refetch();
                   loadWeights();
@@ -982,7 +1071,7 @@ export function ProjectSettingsPage() {
               >
                 Cancel
               </Button>
-              <Button size="sm" onClick={handleSave} disabled={saving}>
+              <Button size="sm" onClick={handleSave} disabled={saving || !dirty}>
                 {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                 {saved ? "Saved!" : "Save changes"}
               </Button>

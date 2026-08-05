@@ -67,3 +67,44 @@ describe("ProjectSettingsPage delete failure (#74/H1)", () => {
     expect(within(dialog).getByRole("button", { name: /Delete permanently/ })).toBeEnabled();
   });
 });
+
+/**
+ * The save bar used to render only once the form was dirty, so someone reading
+ * the page had no way to tell that edits here are staged rather than applied on
+ * change — and the buttons appearing under the cursor mid-edit moved the page.
+ * It is mounted for anyone who can edit and disabled until there is something
+ * to save. The project mock carries `settings: null`, which is exactly the
+ * baseline the form seeds itself from, so a freshly loaded page is clean.
+ */
+describe("ProjectSettingsPage save bar", () => {
+  beforeEach(() => {
+    mockApi.mockReset();
+    mockApi.mockResolvedValue({ key: { exists: false }, usage_by_key_source: [], roles: [] });
+    localStorage.clear();
+  });
+
+  it("shows Save and Cancel disabled until an edit, beside the Viewing section", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/projects/p1/settings"]}>
+        <Routes>
+          <Route path="/projects/:id/settings" element={<ProjectSettingsPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const save = await screen.findByRole("button", { name: /Save changes/ });
+    const cancel = screen.getByRole("button", { name: /^Cancel$/ });
+    expect(save).toBeDisabled();
+    expect(cancel).toBeDisabled();
+
+    // The personal, per-project click model lives here now rather than in
+    // account settings.
+    expect(screen.getByRole("heading", { name: "Viewing" })).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText(/node_modules/), "dist/");
+
+    expect(save).toBeEnabled();
+    expect(cancel).toBeEnabled();
+  });
+});
