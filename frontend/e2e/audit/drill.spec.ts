@@ -76,6 +76,18 @@ async function openGraph(page: Page, query = ""): Promise<void> {
   await expect(idle(page)).toBeVisible();
 }
 
+/**
+ * Opens a group the way a reader does: the Open button on its card.
+ *
+ * A plain click on the card SELECTS now (owner I1's model, already used by the
+ * Architecture map) — the account preference is what restores click-to-open —
+ * so the camera contract below has to be driven through the control that
+ * actually navigates by default.
+ */
+async function openGroup(page: Page, label: string): Promise<void> {
+  await page.getByLabel(new RegExp(`^Open ${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} and list its`)).click();
+}
+
 test.describe("drill-down", () => {
   test("selecting a node does not change the zoom level", async ({ page }) => {
     await openGraph(page, "?drill=cluster,src%2Flib,lib");
@@ -96,7 +108,7 @@ test.describe("drill-down", () => {
     await openGraph(page);
     await expect(page.getByText("src/lib/ (40 files)")).toBeVisible();
 
-    await page.getByText("src/lib/ (40 files)").click();
+    await openGroup(page, "src/lib/ (40 files)");
 
     // The camera moves (that is the navigation signal), the level swaps, and
     // the transition finishes.
@@ -109,7 +121,7 @@ test.describe("drill-down", () => {
 
   test("Back returns to the level you came from", async ({ page }) => {
     await openGraph(page);
-    await page.getByText("src/lib/ (40 files)").click();
+    await openGroup(page, "src/lib/ (40 files)");
     await expect(idle(page)).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("alpha", { exact: true })).toBeVisible();
 
@@ -124,9 +136,9 @@ test.describe("drill-down", () => {
 
   test("a click during the transition is ignored", async ({ page }) => {
     await openGraph(page);
-    await page.getByText("src/lib/ (40 files)").click();
+    await openGroup(page, "src/lib/ (40 files)");
     // Fire a second navigation immediately, before the first settles.
-    await page.getByText("src/api/ (30 files)").click({ force: true, timeout: 2000 }).catch(() => {});
+    await page.getByLabel(/^Open src\/api\/ \(30 files\) and list its/).click({ force: true, timeout: 2000 }).catch(() => {});
 
     await expect(idle(page)).toBeVisible({ timeout: 10_000 });
     await page.getByRole("button", { name: /back/i }).click();
@@ -140,7 +152,7 @@ test.describe("drill-down", () => {
 
   test("a drill level survives reload", async ({ page }) => {
     await openGraph(page);
-    await page.getByText("src/lib/ (40 files)").click();
+    await openGroup(page, "src/lib/ (40 files)");
     await expect(idle(page)).toBeVisible({ timeout: 10_000 });
 
     await page.reload();
