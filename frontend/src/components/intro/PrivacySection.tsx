@@ -1,5 +1,5 @@
 import { ArrowRight, EyeOff, KeyRound, Lock, ShieldCheck, Sparkles } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { IconRow } from "@/components/intro/IconRow";
 import { Reveal } from "@/components/intro/Reveal";
 import { SectionShell } from "@/components/intro/SectionShell";
@@ -44,15 +44,24 @@ export function PrivacySection() {
             quote, and inside an anchor a drag doesn't select text, it starts a
             native link drag. A div keeps the text selectable, so the onClick
             has to bail when the mouseup merely finished a selection. Keyboard
-            activation is hand-rolled for the same reason. The row below stays a
-            span (it was already one, since an anchor cannot nest), and the
-            aria-label keeps the accessible name short instead of reading out
-            all three guarantees. */}
+            activation is hand-rolled for the same reason.
+
+            The row at the bottom is a real anchor, which is the other half of
+            why the card cannot be one (anchors don't nest). It carries its own
+            hover:underline rather than group-hover, so hovering anywhere on the
+            card no longer underlines a row the pointer is nowhere near, and it
+            hands back what a div never had: drag the link out, middle-click it,
+            open the browser's own context menu on it. Its click bubbles up
+            here, so the outer handler drops anything that started inside an
+            anchor before it can navigate a second time. Card and row share one
+            accessible name, which keeps the card from reading out all three
+            guarantees at the cost of announcing that one name twice. */}
         <div
           role="link"
           tabIndex={0}
           aria-label="Full privacy breakdown, mode by mode"
-          onClick={() => {
+          onClick={(e) => {
+            if ((e.target as Element).closest("a")) return;
             if (window.getSelection()?.toString()) return;
             navigate("/privacy");
           }}
@@ -62,7 +71,7 @@ export function PrivacySection() {
               navigate("/privacy");
             }
           }}
-          className="group block cursor-pointer select-text rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
+          className="block cursor-pointer select-text rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
         >
           <ul className="space-y-3">
             <IconRow icon={<Lock className="h-4 w-4" aria-hidden="true" />}>
@@ -81,10 +90,14 @@ export function PrivacySection() {
               shared one.
             </IconRow>
           </ul>
-          <span className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary group-hover:underline">
+          <Link
+            to="/privacy"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline"
+          >
             Full privacy breakdown, mode by mode
             <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-          </span>
+          </Link>
         </div>
       </Reveal>
     </SectionShell>

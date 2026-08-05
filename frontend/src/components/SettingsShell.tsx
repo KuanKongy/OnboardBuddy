@@ -103,9 +103,9 @@ export function SettingsShell({
                   }
                 }}
                 className={cn(
-                  "truncate rounded px-2 py-1 text-left text-[0.6875rem] transition-colors lg:block lg:w-full",
+                  "truncate rounded-md px-2.5 py-1.5 text-left text-[0.8125rem] font-medium transition-colors lg:block lg:w-full",
                   active === section.id
-                    ? "bg-accent font-medium text-accent-foreground"
+                    ? "bg-accent text-accent-foreground"
                     : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
                 )}
               >
