@@ -1,5 +1,5 @@
 import { ArrowRight, EyeOff, KeyRound, Lock, ShieldCheck, Sparkles } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { IconRow } from "@/components/intro/IconRow";
 import { Reveal } from "@/components/intro/Reveal";
 import { SectionShell } from "@/components/intro/SectionShell";
@@ -13,6 +13,8 @@ const MODE_DECOR = [
 ];
 
 export function PrivacySection() {
+  const navigate = useNavigate();
+
   return (
     <SectionShell
       id="privacy"
@@ -37,14 +39,30 @@ export function PrivacySection() {
       </div>
 
       <Reveal index={1} className="mt-4">
-        {/* The whole card is the link to /privacy; the row below is a span,
-            because an anchor inside an anchor is invalid HTML. The aria-label
-            keeps the accessible name short instead of reading out the three
-            guarantees. */}
-        <Link
-          to="/privacy"
+        {/* The whole card opens /privacy, but as role="link" rather than a real
+            anchor: these three guarantees are the sentences a reader wants to
+            quote, and inside an anchor a drag doesn't select text, it starts a
+            native link drag. A div keeps the text selectable, so the onClick
+            has to bail when the mouseup merely finished a selection. Keyboard
+            activation is hand-rolled for the same reason. The row below stays a
+            span (it was already one, since an anchor cannot nest), and the
+            aria-label keeps the accessible name short instead of reading out
+            all three guarantees. */}
+        <div
+          role="link"
+          tabIndex={0}
           aria-label="Full privacy breakdown, mode by mode"
-          className="group block rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
+          onClick={() => {
+            if (window.getSelection()?.toString()) return;
+            navigate("/privacy");
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              navigate("/privacy");
+            }
+          }}
+          className="group block cursor-pointer select-text rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
         >
           <ul className="space-y-3">
             <IconRow icon={<Lock className="h-4 w-4" aria-hidden="true" />}>
@@ -67,7 +85,7 @@ export function PrivacySection() {
             Full privacy breakdown, mode by mode
             <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
           </span>
-        </Link>
+        </div>
       </Reveal>
     </SectionShell>
   );

@@ -184,6 +184,24 @@ describe("TeamPage", () => {
     });
   });
 
+  // The whole row is the click target, not just the name. A guard that catches
+  // too much (or a cell that stops propagation) breaks this invisibly: the row
+  // still hovers and still looks clickable.
+  it("opens the profile from a plain cell in the row body", async () => {
+    const user = userEvent.setup();
+    renderTeam("developer");
+
+    await screen.findByText("dev");
+    const row = screen.getByRole("button", { name: "View dev@acme.test" }).closest("tr")!;
+    // Short tier label, decided with the product owner — "developer" never appears.
+    expect(within(row).getByText("Dev")).toBeInTheDocument();
+
+    await user.click(within(row).getByText("7"));
+
+    const profile = await screen.findByRole("dialog");
+    expect(within(profile).getByText("dev@acme.test")).toBeInTheDocument();
+  });
+
   it("marks only the caller's own row with You", async () => {
     renderTeam("developer");
 

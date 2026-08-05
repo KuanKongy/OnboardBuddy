@@ -7,7 +7,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -199,21 +199,35 @@ export function ProjectCard({
 
   return (
     <>
-    {/* The whole card opens the project (like a GitHub repo card); inner
-        controls (menu, delete) stop propagation so managing still works. */}
+    {/* The whole card opens the project (like a GitHub repo card), but as a
+        stretched link rather than a clickable div: a transparent <Link> covers
+        the card and carries the one accessible name plus a real href, so
+        middle-click, cmd-click and the browser's own context menu offer "open
+        in new tab" — a role="link" div offered none of them.
+
+        Interactive children (the menu trigger, the tooltip badge) are lifted
+        above the overlay with `relative z-10`; everything else sits under it.
+        Accepted cost: covered text can't be drag-selected, and `title`
+        tooltips on covered text never fire because the pointer is over the
+        overlay, not the text.
+
+        The onClick stays because jsdom has no hit-testing — a click on the h3
+        in a test lands on the h3, never on the overlay. In a real browser the
+        overlay's own click bubbles up here too, so the guard drops anything
+        that started on a link or a button to keep one click from navigating
+        twice. */}
     <Card
-      role="link"
-      tabIndex={0}
-      aria-label={`Open ${project.repo_owner}/${project.repo_name}`}
-      onClick={openProject}
-      onKeyDown={(e) => {
-        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-          e.preventDefault();
-          openProject();
-        }
+      onClick={(e) => {
+        if ((e.target as Element).closest("a,button")) return;
+        openProject();
       }}
-      className="group cursor-pointer transition-colors hover:border-primary/40 focus-visible:border-primary/40 focus-visible:outline-none"
+      className="group relative transition-colors focus-within:border-primary/40 hover:border-primary/40"
     >
+      <Link
+        to={`/projects/${project.id}`}
+        aria-label={`Open ${project.repo_owner}/${project.repo_name}`}
+        className="absolute inset-0 rounded-xl focus-visible:outline-none"
+      />
       <CardContent className="p-3">
         <div className="mb-1.5 flex items-start justify-between gap-2">
           <div className="min-w-0">
@@ -233,7 +247,8 @@ export function ProjectCard({
             {canDelete && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-xs" aria-label="Project actions" onClick={(e) => e.stopPropagation()}>
+                  {/* Above the stretched link, or the overlay swallows it. */}
+                  <Button variant="ghost" size="icon-xs" aria-label="Project actions" className="relative z-10" onClick={(e) => e.stopPropagation()}>
                     <MoreVertical className="h-3 w-3" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -257,12 +272,13 @@ export function ProjectCard({
           <Tooltip>
             {/* A Badge, not an underlined span — a dotted underline reads as a link
                 and "Complete" navigates nowhere. Still focusable, since the tooltip
-                is the only place the hint lives. */}
+                is the only place the hint lives, and lifted above the stretched
+                link so hovering it opens the tooltip instead of the card. */}
             <TooltipTrigger asChild>
               <Badge
                 variant="outline"
                 tabIndex={0}
-                className={`min-w-0 shrink-0 cursor-help truncate text-[0.6875rem] ${status.tone}`}
+                className={`relative z-10 min-w-0 shrink-0 cursor-help truncate text-[0.6875rem] ${status.tone}`}
               >
                 {statusLabel}
               </Badge>

@@ -102,6 +102,18 @@ const tierBadgeVariant: Record<string, "default" | "secondary" | "outline"> = {
   developer: "outline",
 };
 
+/**
+ * Short labels, decided with the product owner: on the identity line the badge
+ * competes with a truncating name, and "Developer" is the longest word there
+ * for the least information. The stored tier stays lowercase everywhere else
+ * (the profile dialog still spells it out, where there is room).
+ */
+const TIER_LABELS: Record<string, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  developer: "Dev",
+};
+
 export function TeamPage() {
   const { project, refetch } = useProject();
   const { user } = useAuth();
@@ -464,12 +476,22 @@ export function TeamPage() {
                 return (
                 <tr
                   key={member.user_id}
-                  className="border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/50"
+                  // The row already highlights on hover, so it looked clickable
+                  // while only the name was. Two guards: anything that starts on
+                  // a control is that control's click, and a mouseup that ended a
+                  // drag-selection is a copy, not a navigation.
+                  onClick={(e) => {
+                    if ((e.target as Element).closest("button,a,[role='menuitem'],[role='menu']")) return;
+                    if (window.getSelection()?.toString()) return;
+                    openProfile(member);
+                  }}
+                  className="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-accent/50"
                 >
                   <td className="px-2 py-1.5">
-                    {/* The identity region is the control, not the row: the actions
-                        cell holds buttons, and a row-wide button cannot contain
-                        them. Viewing a profile is ungated — managing is not. */}
+                    {/* The row's onClick is for the mouse; this button is the
+                        accessible control, because a row-wide button cannot
+                        contain the buttons in the actions cell. Viewing a
+                        profile is ungated — managing is not. */}
                     <button
                       type="button"
                       aria-label={`View ${member.email}`}
@@ -481,32 +503,35 @@ export function TeamPage() {
                           {getInitials(member.email)}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="min-w-0">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          <span className="truncate text-[0.8125rem] font-medium text-foreground" title={member.email}>
-                            {member.email.split("@")[0]}
-                          </span>
-                          {isSelf && (
-                            <Badge variant="secondary" className="shrink-0 text-[0.625rem]">You</Badge>
-                          )}
+                      {/* One line, not two: the tier badge sat under the name on
+                          a row whose height is set by the avatar, so it bought
+                          a taller row for a word that fits beside the name. */}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="select-text truncate text-[0.8125rem] font-medium text-foreground" title={member.email}>
+                          {member.email.split("@")[0]}
                         </span>
                         <Badge
                           variant={tierBadgeVariant[member.permission_tier] ?? "outline"}
-                          className="mt-0.5 text-[0.625rem] capitalize"
+                          className="shrink-0 text-[0.625rem]"
                         >
-                          {member.permission_tier}
+                          {TIER_LABELS[member.permission_tier] ?? member.permission_tier}
                         </Badge>
+                        {isSelf && (
+                          <Badge variant="secondary" className="shrink-0 text-[0.625rem]">You</Badge>
+                        )}
                       </span>
                     </button>
                   </td>
-                  <td className="px-2 py-1.5 text-muted-foreground">{roleLabel(member.developer_role)}</td>
-                  <td className="hidden px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
+                  {/* `select-text` on the data cells: the row is clickable now,
+                      and these are the values someone copies out of it. */}
+                  <td className="select-text px-2 py-1.5 text-muted-foreground">{roleLabel(member.developer_role)}</td>
+                  <td className="hidden select-text px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
                     {fmtDate(member.joined_at)}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                  <td className="select-text px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                     {member.sections_reviewed}
                   </td>
-                  <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                  <td className="select-text px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                     {member.sections_read}
                   </td>
                   <td className="px-2 py-1.5">
@@ -533,7 +558,7 @@ export function TeamPage() {
                           <Button
                             variant="outline"
                             size="xs"
-                            onClick={() => { setError(""); setLeaveOpen(true); }}
+                            onClick={(e) => { e.stopPropagation(); setError(""); setLeaveOpen(true); }}
                           >
                             <LogOut className="h-3 w-3" />
                             Leave team
@@ -545,7 +570,7 @@ export function TeamPage() {
                             variant="outline"
                             size="xs"
                             aria-label={`Manage ${member.email}`}
-                            onClick={() => openManage(member)}
+                            onClick={(e) => { e.stopPropagation(); openManage(member); }}
                           >
                             Manage
                           </Button>
