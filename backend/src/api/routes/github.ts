@@ -14,7 +14,7 @@ import {
 import { GitHubLinkError } from "../../lib/githubErrors.js";
 import {
   assertGithubAccountCanBeLinked,
-  getInstallationTokenForUser,
+  getInstallationTokenForUserRepo,
   getUserGithubConnection,
   linkInstallationToUser,
   listInstallationsForUser,
@@ -240,7 +240,12 @@ githubRouter.get("/repos", async (req, res) => {
     const installationId = resolveInstallationId(res, req.query.installation_id);
     if (installationId === null) return;
 
-    const installationToken = await getInstallationTokenForUser(userId, installationId);
+    // The picker takes its ids straight from GET /installations, so they are
+    // live and `owner` is normally absent; it is honoured when sent so that a
+    // caller holding a persisted id gets the same stale-id recovery as the
+    // branch and commit routes.
+    const owner = typeof req.query.owner === "string" ? req.query.owner : "";
+    const installationToken = await getInstallationTokenForUserRepo(userId, installationId, owner);
     const repos = await listInstallationRepos(installationToken);
 
     res.json({
@@ -268,7 +273,7 @@ githubRouter.get("/repos/:owner/:repo/branches", async (req, res) => {
     const installationId = resolveInstallationId(res, req.query.installation_id);
     if (installationId === null) return;
 
-    const installationToken = await getInstallationTokenForUser(userId, installationId);
+    const installationToken = await getInstallationTokenForUserRepo(userId, installationId, owner);
     const branches = await listBranches(installationToken, owner, repo);
     res.json({ branches });
   } catch (err) {
@@ -291,7 +296,7 @@ githubRouter.get("/repos/:owner/:repo/commits", async (req, res) => {
       return;
     }
 
-    const installationToken = await getInstallationTokenForUser(userId, installationId);
+    const installationToken = await getInstallationTokenForUserRepo(userId, installationId, owner);
     const commits = await listCommits(installationToken, owner, repo, branch);
     res.json({ commits });
   } catch (err) {
