@@ -24,7 +24,7 @@ export function FaqPage() {
       <p className="mt-4 text-[0.8125rem] leading-relaxed text-muted-foreground">
         The full policy lives on the{" "}
         <Link to="/privacy" className="text-primary hover:underline">
-          Privacy &amp; AI transparency
+          Privacy Policy
         </Link>{" "}
         page. Guided tours and help scoped to your own projects live inside the app, under Help
         &amp; FAQ.

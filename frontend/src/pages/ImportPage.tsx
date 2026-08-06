@@ -138,6 +138,9 @@ export function ImportPage() {
    * reference; this now matches it.
    */
   const [confirmed, setConfirmed] = useState(false);
+  /** A repository with no commits at all: analyzing it can only fail, and a
+   *  brand-new repo is exactly what a first-time user reaches for here. */
+  const [repoEmpty, setRepoEmpty] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
 
   const [installUrl, setInstallUrl] = useState("");
@@ -276,10 +279,10 @@ export function ImportPage() {
       .finally(() => setInstallationsLoading(false));
   }, [refreshKey]);
 
-  // refreshKey is a dependency ON PURPOSE: Refresh (and the focus refetch)
-  // must re-list repos too, not only installations — the old page refetched
-  // nothing visible, which made the button look broken right next to the
-  // "Configure repositories" link whose changes it exists to pick up.
+  // refreshKey is a dependency ON PURPOSE: the focus refetch (and the
+  // empty-state Refresh) must re-list repos too, not only installations — the
+  // old page refetched nothing visible, so changes made through "Configure
+  // repositories" never appeared without a full page reload.
   const prevInstallationRef = useRef("");
   useEffect(() => {
     if (!selectedInstallation) return;
@@ -476,7 +479,7 @@ export function ImportPage() {
    * computes the thresholds, so there is nothing to acknowledge before one.
    */
   const needsAcknowledgment = preview !== null && preview.confirmationsRequired.length > 0;
-  const startBlocked = startingAnalysis || (needsAcknowledgment && !confirmed);
+  const startBlocked = startingAnalysis || repoEmpty || (needsAcknowledgment && !confirmed);
 
   async function handleStartAnalysis() {
     if (!createdProjectId) return;
@@ -538,6 +541,7 @@ export function ImportPage() {
                   projectDepth={configure.depth}
                   projectRole={configure.role}
                   config={analyzeConfig}
+                  onRepoEmpty={setRepoEmpty}
                   onChange={(c) => {
                     setAnalyzeConfig(c);
                     // The preview describes ONE exact configuration, so the
@@ -710,6 +714,10 @@ export function ImportPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  {/* No Refresh button beside the link: returning from the
+                      GitHub tab refetches on focus, so a button that only
+                      repeated what already happened read as the fix for a
+                      staleness the page no longer has. */}
                   <div className="flex items-center justify-between">
                     {installUrl && (
                       <a
@@ -721,14 +729,6 @@ export function ImportPage() {
                         Configure repositories <ExternalLink className="h-2.5 w-2.5" />
                       </a>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => setRefreshKey((k) => k + 1)}
-                      className="text-muted-foreground hover:text-foreground"
-                    >
-                      Refresh
-                    </Button>
                   </div>
                 </>
               )}

@@ -141,6 +141,20 @@ describe("HeroStory playback", () => {
     expect(currentScene()).toBe(STORY_SCENES[4]!.id);
   });
 
+  it("jumps to a tab's first scene when the window tab is clicked", () => {
+    render(<HeroStory />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Tutorials" }));
+    expect(currentScene()).toBe("tutorial");
+    expect(screen.getByText("Tutorials")).toHaveAttribute("data-active");
+    expect(screen.getByText("Overview")).not.toHaveAttribute("data-active");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dependencies" }));
+    expect(currentScene()).toBe("graph");
+    expect(screen.getByText("Dependencies")).toHaveAttribute("data-active");
+    expect(screen.getByText("Tutorials")).not.toHaveAttribute("data-active");
+  });
+
   it("pauses while the tab is hidden", () => {
     render(<HeroStory />);
     const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, "visibilityState");

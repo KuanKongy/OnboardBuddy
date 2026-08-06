@@ -27,6 +27,11 @@ const SCENE_TAB: Record<StorySceneId, number> = {
   tutorial: 3,
 };
 
+/** First scene of each tab's showcase, in SCENE_TAB's tab order: clicking a tab
+ *  jumps there. Analysis has no own tab (it plays under Overview), so it is
+ *  reachable from the dots and the loop only. */
+const TAB_FIRST_SCENE = [0, 2, 3, 4] as const;
+
 /**
  * The hero centerpiece: a five-scene product story on a ~15s loop, inside an
  * app-window frame. Progression is wall-clock timers ONLY (never transition
@@ -34,10 +39,11 @@ const SCENE_TAB: Record<StorySceneId, number> = {
  * [playing, scene] so StrictMode's double mount cannot leak a second clock.
  *
  * The stage is aria-hidden decoration with an sr-only description beside it;
- * the ONLY interactive controls are the five scene dots and the pause button
- * below the window. Census contract (e2e audit): nothing inside the stage may
- * be a button, link, [title] or [tabindex] element, every layer stays
- * mounted, and the stage's rendered text never changes while scenes play.
+ * the interactive controls are the four window tabs, the five scene dots and
+ * the pause button, all of them outside the stage. Census contract (e2e audit)
+ * binds the STAGE only: nothing inside it may be a button, link, [title] or
+ * [tabindex] element, every layer stays mounted, and the stage's rendered text
+ * never changes while scenes play.
  */
 export function HeroStory() {
   const [scene, setScene] = useState(0);
@@ -99,18 +105,22 @@ export function HeroStory() {
               and the pills both shrink below sm. */}
           <div className="flex items-center gap-2 border-b border-foreground/10 px-4 py-2.5 dark:border-white/10 sm:gap-3">
             <LogoMark className="h-4 w-4" />
-            <div aria-hidden="true" className="flex items-center gap-1">
+            <div className="flex items-center gap-1">
               {["Overview", "Dependencies", "Architecture", "Tutorials"].map((tab, i) => (
-                <span
+                <button
                   key={tab}
+                  type="button"
                   data-active={i === activeTab || undefined}
+                  onClick={() => setScene(TAB_FIRST_SCENE[i]!)}
                   className={cn(
-                    "rounded-md px-1.5 py-1 text-[0.625rem] font-medium transition-colors duration-300 sm:px-2.5 sm:text-[0.6875rem]",
-                    i === activeTab ? "bg-accent/70 text-foreground" : "text-muted-foreground",
+                    "rounded-md px-1.5 py-1 text-[0.625rem] font-medium transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-2.5 sm:text-[0.6875rem]",
+                    i === activeTab
+                      ? "bg-accent/70 text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {tab}
-                </span>
+                </button>
               ))}
             </div>
             <span className="ml-auto hidden font-mono text-[0.6875rem] text-muted-foreground sm:block">

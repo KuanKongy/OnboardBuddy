@@ -23,7 +23,7 @@ export function IntroFooter() {
             FAQ
           </Link>
           <Link to="/privacy" className="text-muted-foreground transition-colors hover:text-foreground">
-            Privacy
+            Privacy Policy
           </Link>
           <Link to="/terms" className="text-muted-foreground transition-colors hover:text-foreground">
             Terms

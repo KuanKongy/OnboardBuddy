@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -404,7 +404,10 @@ describe("ImportPage — streamlined step 1", () => {
     // option; the links row keeps the escape hatches.
     expect(screen.getByRole("combobox", { name: "GitHub account" })).toHaveTextContent("acme");
     expect(screen.getByRole("link", { name: /configure repositories/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+    // No Refresh here: the lists refetch when the tab regains focus, so the
+    // button was a control for a staleness the connected state does not have.
+    // (The empty state keeps its Refresh; there it is the retry.)
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
   });
 
   it("does not auto-select when several installations exist", async () => {
@@ -433,7 +436,7 @@ describe("ImportPage — streamlined step 1", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("refetches repositories on Refresh and keeps a still-valid selection", async () => {
+  it("refetches repositories when the tab regains focus and keeps a still-valid selection", async () => {
     const user = userEvent.setup();
     await awaitAccountReady();
     await user.click(screen.getByRole("combobox", { name: "Repository" }));
@@ -444,7 +447,10 @@ describe("ImportPage — streamlined step 1", () => {
       .mocked(apiFetch)
       .mock.calls.filter(([path]) => String(path).startsWith("/github/repos?")).length;
 
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    // Coming back from the GitHub tab after using "Configure repositories".
+    // jsdom reports visibilityState "visible", and the 500ms debounce has not
+    // been armed yet in this render, so the first focus goes straight through.
+    fireEvent(window, new Event("focus"));
 
     await waitFor(() => {
       const repoCallsAfter = vi

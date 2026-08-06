@@ -39,6 +39,9 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
   const [conflict, setConflict] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
+  /** A repository with no commits: the run would fail in ingestion, so the
+   *  form's own notice is paired with a disabled Start. */
+  const [repoEmpty, setRepoEmpty] = useState(false);
   const { preview, previewing, error: previewError, run: runPreflight, reset: resetPreflight } = usePreflight(projectId);
 
   useEffect(() => {
@@ -101,6 +104,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           projectRole={project.settings?.default_developer_role}
           config={config}
           onChange={updateConfig}
+          onRepoEmpty={setRepoEmpty}
         />
 
         <div className="rounded-md border border-border">
@@ -181,7 +185,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           <Button
             size="sm"
             onClick={startAnalysis}
-            disabled={starting || conflict || (preview !== null && preview.confirmationsRequired.length > 0 && !confirmed)}
+            disabled={starting || conflict || repoEmpty || (preview !== null && preview.confirmationsRequired.length > 0 && !confirmed)}
           >
             {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
             Start analysis
