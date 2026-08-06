@@ -94,6 +94,13 @@ export interface RunHistoryEntry {
    * merge by timestamp adjacency instead).
    */
   chained_from?: string | null;
+  /**
+   * `generate_package` runs that rebuilt only the stale sections and tutorials
+   * of an existing package (from the job's `checkpoint`). The package identity
+   * is untouched, so the row is a repair rather than a generation, and it is
+   * accountable for its own steps rather than the snapshot's phases.
+   */
+  only_stale?: boolean;
   config: {
     branch: string | null;
     commit: string | null;

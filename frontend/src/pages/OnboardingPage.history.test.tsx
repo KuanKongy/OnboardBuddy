@@ -23,7 +23,7 @@ const CARD: PackageCard = {
   stale_sections: 0,
   approved_sections: 0,
   low_confidence_sections: 0,
-  tutorial_count: 0,
+  tutorial_count: 0, stale_tutorials: 0,
   is_latest_commit: true,
 };
 

@@ -70,6 +70,12 @@ function runActionLabel(run: RunHistoryEntry): string {
     case "generate_package": {
       const role = run.package?.role ?? run.config.role;
       const branch = run.package?.branch ?? run.config.branch;
+      // A stale-only run rebuilt part of a package that already existed —
+      // labelling it "Generated … package" reads as a second package being
+      // paid for, when the run replaced a few sections in place.
+      if (run.only_stale) {
+        return `Regenerated stale content of ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
+      }
       return `Generated ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
     }
     case "regenerate_section":
@@ -244,10 +250,16 @@ function RunCard({
 
 // ── Run history ───────────────────────────────────────────────────────────────
 
-/** Section and tutorial regenerations ride one job type (the enum is
- *  CHECK-constrained); both touch a single item rather than the pipeline. */
+/**
+ * Runs that rebuilt part of a package rather than running the pipeline.
+ *
+ * Section and tutorial regenerations ride one job type (the enum is
+ * CHECK-constrained); both touch a single item. A stale-only run rides
+ * `generate_package` but never re-runs the analysis either, so showing it the
+ * snapshot's 16 phases would credit it with work it did not do.
+ */
 function isPartialRun(run: RunHistoryEntry): boolean {
-  return run.job_type === "regenerate_section";
+  return run.job_type === "regenerate_section" || run.only_stale === true;
 }
 
 const PHASE_BY_KEY = new Map(PHASE_ORDER.map((p) => [p.key, p]));
@@ -330,7 +342,7 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
   return (
     <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
       <p className="mb-1.5 text-[0.65625rem] text-muted-foreground">
-        Steps this run performed — a regeneration replaces one item, so the rest of the pipeline never re-runs.
+        Steps this run performed — a regeneration replaces only what it targets, so the rest of the pipeline never re-runs.
       </p>
       <ol className="space-y-0.5">
         {steps.map((step, i) => {
@@ -356,6 +368,32 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
           );
         })}
       </ol>
+    </div>
+  );
+}
+
+/**
+ * What one run was configured to do: branch, commit, scope, depth, role, who
+ * asked for it, and any retry.
+ *
+ * Shared by the history row and the idle status card. The status card is the
+ * page's answer to "what state is the analysis in", and it named the action
+ * without ever naming the branch or commit it ran against — on a project with
+ * several branches that is the one fact the reader needs.
+ */
+function RunConfigChips({ run, partner }: { run: RunHistoryEntry; partner: RunHistoryEntry | null }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.6875rem] text-muted-foreground">
+      {run.config.branch && <Badge variant="outline" className="font-mono text-[0.6875rem]">branch {run.config.branch}</Badge>}
+      {run.config.commit && <Badge variant="outline" className="font-mono text-[0.6875rem]">commit {run.config.commit.slice(0, 7)}</Badge>}
+      {run.config.scope_path && <Badge variant="outline" className="font-mono text-[0.6875rem]">scope {run.config.scope_path}/</Badge>}
+      {run.config.depth && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.depth} depth</Badge>}
+      {run.config.role && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.role} role</Badge>}
+      {run.requested_by_email && <span>by {run.requested_by_email}</span>}
+      {run.attempt > 1 && <span>attempt #{run.attempt}</span>}
+      {/* The package half retrying is its own fact — inside a merged row it
+          would otherwise vanish behind the analysis's attempt count. */}
+      {partner && partner.attempt > 1 && <span>package attempt #{partner.attempt}</span>}
     </div>
   );
 }
@@ -533,18 +571,7 @@ function RunHistoryRow({ run, partner, projectId }: { run: RunHistoryEntry; part
       </summary>
 
       <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.6875rem] text-muted-foreground">
-          {run.config.branch && <Badge variant="outline" className="font-mono text-[0.6875rem]">branch {run.config.branch}</Badge>}
-          {run.config.commit && <Badge variant="outline" className="font-mono text-[0.6875rem]">commit {run.config.commit.slice(0, 7)}</Badge>}
-          {run.config.scope_path && <Badge variant="outline" className="font-mono text-[0.6875rem]">scope {run.config.scope_path}/</Badge>}
-          {run.config.depth && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.depth} depth</Badge>}
-          {run.config.role && <Badge variant="outline" className="font-mono text-[0.6875rem]">{run.config.role} role</Badge>}
-          {run.requested_by_email && <span>by {run.requested_by_email}</span>}
-          {run.attempt > 1 && <span>attempt #{run.attempt}</span>}
-          {/* The package half retrying is its own fact — inside a merged row it
-              would otherwise vanish behind the analysis's attempt count. */}
-          {partner && partner.attempt > 1 && <span>package attempt #{partner.attempt}</span>}
-        </div>
+        <RunConfigChips run={run} partner={partner} />
 
         {errors.map((message, i) => (
           <p key={i} className="rounded-md border border-destructive/30 bg-destructive/5 px-2.5 py-1.5 text-[0.6875rem] text-destructive">
@@ -664,7 +691,8 @@ function IdleRunStatus({ run, partner, projectId }: { run: RunHistoryEntry; part
   // Same accounting as the history row: a regeneration gets its own two steps,
   // everything else the snapshot's phases cut down to the ones this run is
   // accountable for. A run with no snapshot at all (it failed before writing
-  // one) has nothing to show, and an empty bordered strip is not nothing.
+  // one) has no phases to show; the config chips below still say what it was,
+  // so the open strip is never empty.
   const detail = isPartialRun(run) ? (
     <PartialRunSteps run={run} />
   ) : snapshotId ? (
@@ -697,7 +725,14 @@ function IdleRunStatus({ run, partner, projectId }: { run: RunHistoryEntry; part
                 <span>{new Date(run.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
               </span>
             </summary>
-            {open && detail && <div className="mt-2 border-t border-border/60 pt-2">{detail}</div>}
+            {open && (
+              <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
+                {/* Config first: the summary line above says what was done, and
+                    this is the only place on an idle page that says to what. */}
+                <RunConfigChips run={run} partner={partner} />
+                {detail}
+              </div>
+            )}
           </details>
         </CardContent>
       </Card>
@@ -952,6 +987,7 @@ export function ProjectOverviewPage() {
       <PageHeader
         title="Overview"
         subtitle={
+          <>
           <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
             {/* M1: the analysed repository, as a real link, pinned to the
                 commit this page is describing rather than to a moving branch. */}
@@ -973,6 +1009,13 @@ export function ProjectOverviewPage() {
               </span>
             )}
           </span>
+          {/* GitHub's own blurb, on its own line: the ref/counts row above is
+              already at its wrapping limit, and what the repo IS is the first
+              thing someone opening a project they did not import needs. */}
+          {project.repo_description && (
+            <span className="mt-0.5 block text-xs text-muted-foreground">{project.repo_description}</span>
+          )}
+          </>
         }
         actions={
           canManage && (

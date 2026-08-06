@@ -80,7 +80,12 @@ function durationOf(p: PhaseRow): string {
   return formatDuration(new Date(p.finished_at).getTime() - new Date(p.started_at).getTime());
 }
 
-/** Pick the metrics worth a glance per phase; the full JSON stays a tooltip. */
+/**
+ * Pick the metrics worth a glance per phase. This list is the whole contract:
+ * anything not named here stays in the DB only — a raw-JSON tooltip is not a
+ * UI, and hovering a phase row used to dump the entire metrics object
+ * (internal ids, nested objects, `[object Object]`) at the reader.
+ */
 function keyMetrics(m: Record<string, unknown>): string {
   const parts: string[] = [];
   const take = (key: string, label: string) => {
@@ -93,6 +98,8 @@ function keyMetrics(m: Record<string, unknown>): string {
   take("filesChanged", "files changed");
   take("symbolsChanged", "symbols changed");
   take("staleSections", "sections stale");
+  take("staleTutorials", "tutorials stale");
+  take("stalePackages", "packages stale");
   take("nodes", "nodes");
   take("edges", "edges");
   take("workflows", "workflows");
@@ -108,7 +115,10 @@ function keyMetrics(m: Record<string, unknown>): string {
     parts.push(`$${(m.estimatedCostUsd as number).toFixed(4)}`);
   }
   if (typeof m.reason === "string") parts.push(String(m.reason).replace(/_/g, " "));
-  return parts.slice(0, 3).join(" · ");
+  // Five, not three: the incremental diff row alone can carry files changed,
+  // symbols changed and three staleness counts, and a cap of three dropped the
+  // staleness numbers — the one thing that row exists to report.
+  return parts.slice(0, 5).join(" · ");
 }
 
 export function AnalysisRunPanel({
@@ -188,7 +198,7 @@ export function AnalysisRunPanel({
                   ? errorText
                   : p ? keyMetrics(p.metrics) : "";
               return (
-                <li key={key} className="flex items-center gap-2.5 py-0.5" title={!errorText && p ? JSON.stringify(p.metrics) : undefined}>
+                <li key={key} className="flex items-center gap-2.5 py-0.5">
                   <StatusIcon status={status} />
                   <Tooltip>
                     <TooltipTrigger asChild>

@@ -302,5 +302,6 @@ export interface PackageCard {
   approved_sections: number;
   low_confidence_sections: number;
   tutorial_count: number;
+  stale_tutorials: number;
   is_latest_commit: boolean;
 }

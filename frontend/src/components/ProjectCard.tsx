@@ -201,12 +201,11 @@ export function ProjectCard({
     <>
     {/* The whole card opens the project (like a GitHub repo card), and the
         card body is a clickable div rather than a stretched link. A stretched
-        link is a transparent anchor covering the card, and covered text pays
-        for it twice: it can't be drag-selected, and its `title` tooltip never
-        fires because the pointer is over the overlay, not the text. The
-        description is the one line on this card people want to copy, so
-        nothing covers it now — `select-text` holds, and the onClick bails when
-        the mouseup merely finished a selection.
+        link is a transparent anchor covering the card, and covered text can't
+        be drag-selected: every pointer event belongs to the overlay, not the
+        text under it. The description is the one line on this card people want
+        to copy, so nothing covers it now — `select-text` holds, and the
+        onClick bails when the mouseup merely finished a selection.
 
         The repo name is the one real link: it carries the href, the
         accessible name and the `title`, so middle-click, cmd-click and the
@@ -228,9 +227,13 @@ export function ProjectCard({
         if (window.getSelection()?.toString()) return;
         openProject();
       }}
-      className="group cursor-pointer select-text transition-colors focus-within:border-primary/40 hover:border-primary/40"
+      // h-full + column flex, with the meta half pinned via mt-auto below: in a
+      // grid the tallest description used to set the row height and every other
+      // card floated its progress bar and metadata at a different y. The slack
+      // now opens above the meta block instead of between the cards.
+      className="group flex h-full cursor-pointer select-text flex-col transition-colors focus-within:border-primary/40 hover:border-primary/40"
     >
-      <CardContent className="p-3">
+      <CardContent className="flex flex-1 flex-col p-3">
         <div className="mb-1.5 flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
@@ -272,11 +275,14 @@ export function ProjectCard({
           </div>
         </div>
 
-        <p className="mb-2 line-clamp-2 min-h-4 text-xs leading-snug text-muted-foreground" title={project.repo_description ?? undefined}>
+        {/* Unclamped: the cards are equal height regardless now, so truncating
+            the one line people read here bought nothing. The `title` went with
+            the clamp — a tooltip repeating text already fully visible. */}
+        <p className="mb-2 text-xs leading-snug text-muted-foreground">
           {project.repo_description ?? ""}
         </p>
 
-        <div className="mb-1.5 flex items-center justify-between gap-2 text-xs">
+        <div className="mt-auto mb-1.5 flex items-center justify-between gap-2 text-xs">
           <span className="min-w-0 shrink truncate tabular-nums text-muted-foreground">{progressText}</span>
           <Tooltip>
             {/* A Badge, not an underlined span — a dotted underline reads as a link
