@@ -13,6 +13,9 @@ export interface ProjectData {
   id: string;
   repo_owner: string;
   repo_name: string;
+  /** GitHub's own repo blurb, refreshed on every analysis run. Already on the
+   *  wire (`GET /projects/:id` selects `p.*`); null on repos without one. */
+  repo_description: string | null;
   /** Default branch for new analysis runs; each run can override it. */
   branch: string;
   default_branch: string | null;
