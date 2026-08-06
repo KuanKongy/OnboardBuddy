@@ -31,7 +31,7 @@ export function Sidebar({
           to="/dashboard"
           onClick={() => setOpen(false)}
           className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
-          title="Back to main dashboard"
+          title="Dashboard"
         >
           <LogoMark className="h-7 w-7" />
           <LogoWordmark />
@@ -77,7 +77,7 @@ export function Sidebar({
         </button>
         <button
           onClick={onShowShortcuts}
-          title="Also opens with /"
+          title="Also opens with ?"
           className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[0.8125rem] font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
         >
           <Keyboard className="h-3.5 w-3.5" />

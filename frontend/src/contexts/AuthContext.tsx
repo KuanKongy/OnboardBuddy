@@ -26,6 +26,61 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * One avatar sync per page load.
+ *
+ * Module-level rather than state or a ref: `TOKEN_REFRESHED` fires on GoTrue's
+ * refresh timer for as long as the tab stays open, and the provider remounts on
+ * every hot reload — either would turn "sync on that event" into a repeating
+ * write to GoTrue that carries no new information.
+ */
+let avatarSyncAttempted = false;
+
+/** GitHub serves avatars from *.githubusercontent.com and nothing else does. */
+function isGithubAvatarUrl(url: string): boolean {
+  try {
+    return /(?:^|\.)githubusercontent\.com$/i.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Re-copy the GitHub avatar into `user_metadata.avatar_url`.
+ *
+ * GoTrue writes the identity's avatar into user metadata when the GitHub
+ * identity is FIRST created and never again. Two real accounts end up with no
+ * picture because of that: one that signed up with email and linked GitHub
+ * afterwards (the link leaves existing metadata alone), and one whose GitHub
+ * picture changed since sign-up. Both showed initials in the sidebar while
+ * Account Settings displayed the GitHub avatar it reads off the identity row
+ * directly, which is what made the gap visible.
+ *
+ * A metadata avatar that is NOT a githubusercontent URL was typed into the
+ * Avatar URL field by hand, so it wins: this only fills an empty slot or
+ * refreshes a URL GitHub itself put there.
+ */
+function syncGithubAvatar(session: Session | null): void {
+  if (avatarSyncAttempted) return;
+  const user = session?.user;
+  if (!user) return;
+
+  const identityData = user.identities?.find((identity) => identity.provider === "github")
+    ?.identity_data as Record<string, unknown> | undefined;
+  const githubAvatar = typeof identityData?.avatar_url === "string" ? identityData.avatar_url.trim() : "";
+  if (githubAvatar === "") return;
+
+  const stored = (user.user_metadata as Record<string, unknown> | undefined)?.avatar_url;
+  const currentAvatar = typeof stored === "string" ? stored.trim() : "";
+  if (currentAvatar === githubAvatar) return;
+  if (currentAvatar !== "" && !isGithubAvatarUrl(currentAvatar)) return;
+
+  avatarSyncAttempted = true;
+  // Fire-and-forget: a missing picture is not worth holding up a sign-in or
+  // surfacing an error over, and the next page load retries.
+  void supabase.auth.updateUser({ data: { avatar_url: githubAvatar } }).catch(() => {});
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -40,10 +95,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
+    } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
       setUser(s?.user ?? null);
       setLoading(false);
+      // Both events carry a freshly fetched user, so the identity row read
+      // below is current; the latch keeps the refresh event from re-writing.
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") syncGithubAvatar(s);
     });
 
     return () => subscription.unsubscribe();

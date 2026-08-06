@@ -310,8 +310,10 @@ export function AccountSettingsPage() {
         <>
           <Card>
             <CardContent className="p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-xs font-medium text-foreground">Profile</h3>
+              {/* No card heading: SettingsShell already renders the section's
+                  `h2` "Profile" directly above this card, and the two stacked
+                  read as two separate Profile blocks. */}
+              <div className="mb-2 flex items-center justify-end">
                 {!editingProfile && (
                   <Button variant="outline" size="xs" onClick={startEditProfile}>
                     <Pencil className="h-3 w-3" />

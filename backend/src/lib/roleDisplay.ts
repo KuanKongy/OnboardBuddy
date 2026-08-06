@@ -8,7 +8,7 @@ const ROLE_TITLES: Record<string, string> = {
   frontend: 'Frontend Developer',
   devops: 'DevOps Engineer',
   qa: 'QA Engineer',
-  general: 'Full-stack Developer',
+  general: 'Full-Stack',
 };
 
 /** "a {descriptor} developer" reads correctly for every role. */
