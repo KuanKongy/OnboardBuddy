@@ -118,4 +118,14 @@ export interface SummaryJobData {
    * spawning a new package for the new commit.
    */
   packageId?: string;
+  /**
+   * Rebuild ONLY the stale sections and tutorials of `packageId` (which is
+   * then required), leaving everything else in the package untouched and
+   * unpaid for. Rides the `generate_package` job type for the same reason the
+   * tutorial regeneration rides `regenerate_section`: `analysis_jobs.job_type`
+   * is a CHECK-constrained enum and M5 freezes the schema (doc/DEVOPS.md), so
+   * the distinction lives here and — authoritatively, because Resume rebuilds
+   * this payload from the row — in the job's `checkpoint` jsonb.
+   */
+  onlyStale?: boolean;
 }

@@ -195,11 +195,35 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     // from whichever run analyzed this (scope, commit) first.
     const branch = job.data.branch ?? snap.branch;
 
+    // The job row's checkpoint, read once up here because it carries two
+    // different things: the resume cursor used far below, and this job's
+    // FLAGS. Job recovery (jobRecovery.ts) rebuilds SummaryJobData from the
+    // row, so on a resumed run the checkpoint is the only surviving copy of
+    // "this was an only-stale rebuild of package X" — reading the flags from
+    // job.data alone would silently turn a resume into a full generation.
+    const checkpointRes = await query(`SELECT checkpoint FROM analysis_jobs WHERE id = $1`, [jobId]);
+    const checkpoint = (checkpointRes.rows[0] as {
+      checkpoint?: {
+        completedSections?: string[]; tutorialsDone?: boolean;
+        onlyStale?: boolean; packageId?: string;
+      };
+    } | undefined)?.checkpoint;
+    const onlyStale = job.data.onlyStale === true || checkpoint?.onlyStale === true;
+    const targetPackageId = job.data.packageId ?? checkpoint?.packageId ?? null;
+
     // Package row per (scope, role, commit, branch). Regenerate jobs target
     // the section's existing package (possibly built from an older commit) so
     // a stale section rebuilt against a newer snapshot lands in place instead
     // of spawning a fresh one-section package for the new commit.
-    const packageId = job.data.packageId ?? ((await query(
+    //
+    // CRITICAL: every regeneration — one section, one tutorial, or the
+    // only-stale rebuild below — MUST resolve to an existing package and never
+    // reach this upsert. It keys on (project, scope, role, analyzed_commit,
+    // branch), and a stale rebuild runs against a NEWER commit by definition,
+    // so the upsert would mint a fresh package identity: the repair would land
+    // in a new near-empty package while the one the user is looking at stayed
+    // stale forever.
+    const packageId = targetPackageId ?? ((await query(
       `INSERT INTO onboarding_packages
          (snapshot_id, project_id, scope_id, role, status, generated_by, analyzed_commit, branch)
        VALUES ($1, $2, $3, $4, 'generating', $5, $6, $7)
@@ -211,6 +235,120 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     failedPackageId = packageId;
 
     const deps = await buildSectionDeps(snapshotId, projectId, role);
+
+    if (onlyStale) {
+      // ── only-stale rebuild: exactly the sections and tutorials this package
+      //    has flagged stale, against the snapshot this job targets (the API
+      //    and the auto-regen enqueue both point it at the newest complete
+      //    analysis of the package's scope+branch). Everything still current
+      //    is left alone and unpaid for — the whole reason this path exists
+      //    beside the full package regeneration.
+      //    Sits ABOVE the ai_disabled branch because it serves both modes:
+      //    with AI off the same stale sections rebuild deterministically.
+      const allStaleTypes = ((await query(
+        `SELECT type FROM package_sections
+         WHERE package_id = $1 AND review_status = 'stale'
+         ORDER BY type`,
+        [packageId],
+      )).rows as Array<{ type: string }>).map((r) => r.type);
+      // Pre-Diátaxis section types have no spec to regenerate from (same rule
+      // the per-section route enforces with a hard failure). Here they are
+      // skipped rather than fatal — one legacy row must not block the repair
+      // of eleven current ones — and counted, so the package staying stale
+      // afterwards has a stated reason in the step message.
+      const staleSectionTypes = allStaleTypes.filter((t): t is SectionType => t in SECTION_SPECS);
+      const legacySkipped = allStaleTypes.length - staleSectionTypes.length;
+      const staleTutorialKeys = ((await query(
+        `SELECT stable_key FROM tutorials
+         WHERE package_id = $1 AND status = 'stale'
+         ORDER BY stable_key`,
+        [packageId],
+      )).rows as Array<{ stable_key: string }>).map((r) => r.stable_key);
+
+      // Budget + client built here rather than by restructuring the mainline:
+      // the full path constructs these AFTER the ai_disabled early return, and
+      // moving that construction up would change budget and model resolution
+      // for every job in order to serve this one branch.
+      let staleAi: AiClient | null = null;
+      if (snap.effective_privacy_mode !== 'ai_disabled') {
+        const budget = await new BudgetEnforcer({
+          snapshotId, jobId,
+          depth: snap.semantic_depth,
+          budgetOverrides: snap.budget_overrides,
+          stopBehavior: snap.budget_stop_behavior,
+        }).load();
+        budgetRef = budget;
+        let staleOverrides: unknown = snap.model_tier_overrides;
+        if (isAutoSelection(staleOverrides)) {
+          const selection = await selectModel({ projectId });
+          if (selection.rankings.length > 0) staleOverrides = overridesForSelection(selection);
+        }
+        staleAi = new AiClient({
+          projectId, snapshotId, jobId,
+          privacyMode: snap.effective_privacy_mode as 'full_ai' | 'facts_only_ai',
+          budget,
+          tierConfig: resolveTierConfig({
+            modelTierOverrides: staleOverrides,
+            modelFailureBehavior: snap.model_failure_behavior,
+          }),
+        });
+      }
+
+      const total = staleSectionTypes.length + staleTutorialKeys.length;
+      let rebuilt = 0;
+      const advance = async (label: string) => {
+        rebuilt += 1;
+        await updateJob('running', `${label} (${rebuilt}/${total})`, 10 + Math.floor((rebuilt / total) * 85));
+      };
+      await updateJob('running', `Regenerating ${total} stale item(s)`, 10);
+      // No per-section rescue here (unlike the full generation, which records
+      // a gap and ships the rest): a section that fails to rebuild stays
+      // 'stale', which is both the truth and the exact state a retry needs.
+      // Errors — run-control or otherwise — go to the catch below.
+      await mapLimit(staleSectionTypes, envInt('SECTION_CONCURRENCY', 12), async (sectionType) => {
+        if (staleAi) {
+          await generateSection({
+            ai: staleAi, snapshotId, projectId, packageId, role, sectionType,
+            privacyMode: snap.effective_privacy_mode as 'full_ai' | 'facts_only_ai',
+            commitHash: snap.commit_hash, deps,
+          });
+        } else {
+          await generateDeterministicSection({
+            snapshotId, packageId, role, sectionType, commitHash: snap.commit_hash, deps,
+          });
+        }
+        await advance(`Regenerated section: ${sectionType}`);
+      });
+
+      let tutorialsRebuilt = 0;
+      const tutorialMisses: string[] = [];
+      for (const stableKey of staleTutorialKeys) {
+        const outcome = await regenerateOneTutorial({
+          ai: staleAi, snapshotId, projectId, packageId, role,
+          commitHash: snap.commit_hash, projections: deps.projections,
+          privacyMode: snap.effective_privacy_mode,
+        }, stableKey);
+        // A miss is an ANSWER about the repository (the flow is gone, or it no
+        // longer yields a procedure), not a failure of this run. The
+        // single-tutorial route can fail its job over one miss because that
+        // miss IS the whole job; failing here would throw away every section
+        // and tutorial this run just rebuilt. The tutorial stays stale and the
+        // count says so.
+        if (outcome.ok) tutorialsRebuilt += 1;
+        else tutorialMisses.push(stableKey);
+        await advance(outcome.ok ? 'Regenerated tutorial' : 'Tutorial no longer applies');
+      }
+
+      await settlePackageStaleness(packageId);
+      const summary = [`Regenerated ${staleSectionTypes.length} stale section(s)`];
+      if (tutorialsRebuilt > 0) summary.push(`${tutorialsRebuilt} tutorial(s)`);
+      if (tutorialMisses.length > 0) summary.push(`${tutorialMisses.length} tutorial(s) no longer applicable`);
+      if (legacySkipped > 0) summary.push(`${legacySkipped} section(s) from a previous layout need a full regeneration`);
+      await updateJob('complete', summary.join(' · '), 100);
+      await recomputeProjectStatus(projectId);
+      console.log(`[summary-worker] only-stale rebuild of package ${packageId}: sections=${staleSectionTypes.length} tutorials=${tutorialsRebuilt} misses=${tutorialMisses.length} legacySkipped=${legacySkipped}`);
+      return;
+    }
 
     if (snap.effective_privacy_mode === 'ai_disabled') {
       // Spec: ai_disabled = deterministic-only outputs — the package still
@@ -368,9 +506,8 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
     );
     await query(`DELETE FROM tutorials WHERE package_id = $1 AND workflow_id IS NULL`, [packageId]);
 
-    // Resume support: a retry of this job row skips work it already persisted.
-    const checkpointRes = await query(`SELECT checkpoint FROM analysis_jobs WHERE id = $1`, [jobId]);
-    const checkpoint = (checkpointRes.rows[0] as { checkpoint?: { completedSections?: string[]; tutorialsDone?: boolean } } | undefined)?.checkpoint;
+    // Resume support: a retry of this job row skips work it already persisted
+    // (the checkpoint itself was read at the top of the run).
     const completedSections = new Set<string>(checkpoint?.completedSections ?? []);
     let tutorialsDone = checkpoint?.tutorialsDone === true;
 

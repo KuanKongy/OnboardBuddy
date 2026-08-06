@@ -31,13 +31,30 @@ describe("auto-chained package generation", () => {
     expect(inserts[0]).to.include("checkpoint");
 
     const workerSrc = readFileSync(join(SRC, "worker/index.ts"), "utf8");
-    expect(workerSrc).to.include("JSON.stringify({ chainedFrom: opts.chainedFrom })");
+    // The checkpoint is assembled now (it also carries the only-stale flags),
+    // so the guard is on the key going in AND on the blob staying NULL when
+    // there is nothing to say — an always-`{}` checkpoint would make every
+    // unchained generation look like it had a link the reader could follow.
+    expect(workerSrc).to.include("checkpoint.chainedFrom = opts.chainedFrom");
+    expect(workerSrc).to.include("Object.keys(checkpoint).length > 0 ? JSON.stringify(checkpoint) : null");
 
-    // Every call site must thread it — an untouched third one would look fine
-    // and produce rows the history cannot pair.
+    // Every call site must say which kind of generation it is: chained to an
+    // analysis (history merges the pair into that analysis's row) or an
+    // only-stale rebuild (its own row, its own cost). Neither = a row the
+    // history cannot place; both = one run claiming to be two.
     const callSites = workerSrc.match(/enqueueSummaryGeneration\(\{[\s\S]*?\}\)/g) ?? [];
     expect(callSites, "enqueue call sites found").to.have.length.greaterThan(0);
-    for (const site of callSites) expect(site).to.include("chainedFrom: jobId");
+    for (const site of callSites) {
+      const chained = site.includes("chainedFrom:");
+      const onlyStale = site.includes("onlyStale:");
+      expect(chained !== onlyStale, `exactly one of chainedFrom/onlyStale:\n${site}`).to.equal(true);
+    }
+    // The analysis-chained sites (reuse short-circuit + end of a full run)
+    // still stamp the analyze job's own id.
+    expect(
+      callSites.filter((s) => s.includes("chainedFrom: jobId")),
+      "analysis-chained call sites",
+    ).to.have.length(2);
   });
 
   it("leaves the manual /summarize row unchained (absence of the key is what makes it its own row)", () => {

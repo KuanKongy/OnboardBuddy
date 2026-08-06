@@ -22,26 +22,38 @@ import type { RecordLevel } from './semantic/recordTypes.js';
 // ── Previous snapshot resolution ─────────────────────────────────────────────
 
 /**
- * Latest complete snapshot of the same scope PUSHED before this one.
+ * Latest complete snapshot of the same scope AND BRANCH pushed before this one.
  * Re-scans of an old commit find nothing newer and skip the diff.
  *
  * The "before this one" cursor is push recency, matching how every reader
  * resolves "latest" (lib/snapshotOrdering.ts) — ordering the diff baseline by
  * row-insertion time while readers order by push time would let the two
  * disagree about which snapshot precedes which.
+ *
+ * The branch filter is HARD (`AND s.branch = $3`), unlike every read path,
+ * which only PREFERS a branch so a project with nothing on the asked-for
+ * branch still shows something (lib/snapshotOrdering.ts). A diff baseline has
+ * the opposite requirement: the wrong baseline does not degrade the answer, it
+ * invents one. Diffing a feature branch against main reports every commit main
+ * does not have as "changed" and stales main's packages for work that never
+ * touched them. Empty here means this is the first analysis of this branch, so
+ * the caller goes non-incremental and generates a package for it — which is
+ * the correct, if more expensive, thing to do once per branch.
  */
 export async function findPreviousSnapshot(
   scopeId: string,
   newSnapshotId: string,
+  branch: string,
 ): Promise<{ snapshotId: string; commitHash: string } | null> {
   const row = (await query(
     `SELECT id, commit_hash FROM analysis_snapshots s
      WHERE scope_id = $1 AND id <> $2 AND status = 'complete'
+       AND s.branch = $3
        AND ${pushedAtSql('s')} < (
          SELECT ${pushedAtSql('cur')} FROM analysis_snapshots cur WHERE cur.id = $2)
      ORDER BY ${latestSnapshotOrderSql('s')}
      LIMIT 1`,
-    [scopeId, newSnapshotId],
+    [scopeId, newSnapshotId, branch],
   )).rows[0] as { id: string; commit_hash: string } | undefined;
   return row ? { snapshotId: row.id, commitHash: row.commit_hash } : null;
 }
@@ -289,26 +301,36 @@ async function insertRecordFlags(
   }
 }
 
-interface ArtifactStaleness {
+export interface ArtifactStaleness {
   staleSections: number;
   staleTutorials: number;
   stalePackages: number;
+  /** The packages just marked stale — what auto-regeneration regenerates. */
+  stalePackageIds: string[];
 }
 
 /**
  * Sections/tutorials citing changed evidence go stale (and their packages
  * with them); regeneration is on request, against the newer snapshot.
+ *
+ * Scoped to `branch` on BOTH queries: branch is part of package identity (the
+ * onboarding_packages schema comment, and the unique key
+ * (project, scope, role, analyzed_commit, branch)). A diff computed on branch B
+ * describes what changed on branch B, so it may only implicate branch-B
+ * packages — without the filter, analyzing a feature branch marked main's
+ * package stale for files main never saw change.
  */
-async function flagStaleArtifacts(params: {
+export async function flagStaleArtifacts(params: {
   projectId: string;
   scopeId: string;
+  branch: string;
   newSnapshotId: string;
   newCommit: string;
   changedFilePaths: string[];
   changedSymbolKeys: string[];
   invalidatedRecordIds: string[];
 }): Promise<ArtifactStaleness> {
-  const { projectId, scopeId, newSnapshotId, newCommit } = params;
+  const { projectId, scopeId, branch, newSnapshotId, newCommit } = params;
 
   // Documentation changes stale doc-derived content even without code
   // changes: doc receipts key as `doc:<path>#<slug>` (prefix-match them), and
@@ -334,6 +356,7 @@ async function flagStaleArtifacts(params: {
      FROM package_sections ps
      JOIN onboarding_packages op ON op.id = ps.package_id
      WHERE op.project_id = $1 AND op.scope_id = $2 AND op.analyzed_commit <> $3
+       AND op.branch = $9
        AND ps.review_status <> 'stale'
        AND (
          ps.type = ANY($7)
@@ -346,7 +369,7 @@ async function flagStaleArtifacts(params: {
          )
        )`,
     [projectId, scopeId, newCommit, params.changedFilePaths, params.changedSymbolKeys,
-     params.invalidatedRecordIds, docStaleTypes, docNodePatterns],
+     params.invalidatedRecordIds, docStaleTypes, docNodePatterns, branch],
   )).rows as Array<{ id: string; type: string; role: string | null; package_id: string }>;
   for (const s of sections) {
     await query(
@@ -364,12 +387,13 @@ async function flagStaleArtifacts(params: {
      FROM tutorials t
      JOIN onboarding_packages op ON op.id = t.package_id
      WHERE op.project_id = $1 AND op.scope_id = $2 AND op.analyzed_commit <> $3
+       AND op.branch = $5
        AND t.status <> 'stale'
        AND EXISTS (
          SELECT 1 FROM tutorial_steps ts
          WHERE ts.tutorial_id = t.id AND ts.file_path = ANY($4)
        )`,
-    [projectId, scopeId, newCommit, params.changedFilePaths],
+    [projectId, scopeId, newCommit, params.changedFilePaths, branch],
   )).rows as Array<{ id: string; stable_key: string; package_id: string | null }>;
   for (const t of tutorials) {
     await query(
@@ -395,7 +419,12 @@ async function flagStaleArtifacts(params: {
     await query(`UPDATE onboarding_packages SET status = 'stale', updated_at = NOW() WHERE id = $1`, [pkgId]);
   }
 
-  return { staleSections: sections.length, staleTutorials: tutorials.length, stalePackages: packageIds.length };
+  return {
+    staleSections: sections.length,
+    staleTutorials: tutorials.length,
+    stalePackages: packageIds.length,
+    stalePackageIds: packageIds,
+  };
 }
 
 /**
@@ -444,6 +473,8 @@ export interface IncrementalDiffInput {
   scopeId: string;
   snapshotId: string;
   commitHash: string;
+  /** The branch this run analyzed — the scope of everything it may stale. */
+  branch: string;
   prevSnapshotId: string;
   prevCommitHash: string;
   graph: EvidenceGraph;
@@ -551,6 +582,7 @@ export async function runIncrementalDiff(input: IncrementalDiffInput): Promise<I
   const artifacts = await flagStaleArtifacts({
     projectId: input.projectId,
     scopeId: input.scopeId,
+    branch: input.branch,
     newSnapshotId: input.snapshotId,
     newCommit: input.commitHash,
     changedFilePaths,
@@ -560,6 +592,10 @@ export async function runIncrementalDiff(input: IncrementalDiffInput): Promise<I
 
   const byLevel: Record<string, number> = {};
   for (const r of invalidated) byLevel[r.level] = (byLevel[r.level] ?? 0) + 1;
+  // Counts only in the phase metrics: the jsonb is rendered as a key/value
+  // list in the run panel, and a raw uuid array there is noise the reader
+  // cannot act on. The ids go to the caller instead.
+  const { stalePackageIds: _stalePackageIds, ...artifactCounts } = artifacts;
   return {
     files, symbols, invalidated, artifacts,
     metrics: {
@@ -575,7 +611,7 @@ export async function runIncrementalDiff(input: IncrementalDiffInput): Promise<I
       symbolsUnchanged: symbols.unchanged,
       invalidatedRecords: invalidated.length,
       invalidatedByLevel: byLevel,
-      ...artifacts,
+      ...artifactCounts,
     },
   };
 }

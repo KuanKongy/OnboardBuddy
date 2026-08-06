@@ -88,6 +88,8 @@ interface ProjectRow {
   budget_stop_behavior: 'fail' | 'pause' | 'degrade';
   model_failure_behavior: unknown;
   model_tier_overrides: unknown;
+  /** Opt-in (migration 003): rebuild stale content as soon as a diff flags it. */
+  auto_regenerate_stale: boolean;
 }
 
 async function loadProject(projectId: string): Promise<ProjectRow> {
@@ -99,7 +101,8 @@ async function loadProject(projectId: string): Promise<ProjectRow> {
             COALESCE(ps.budget_overrides, '{}'::jsonb) AS budget_overrides,
             COALESCE(ps.budget_stop_behavior, 'pause') AS budget_stop_behavior,
             COALESCE(ps.model_failure_behavior, '{}'::jsonb) AS model_failure_behavior,
-            COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides
+            COALESCE(ps.model_tier_overrides, '{}'::jsonb) AS model_tier_overrides,
+            COALESCE(ps.auto_regenerate_stale, false) AS auto_regenerate_stale
      FROM projects p
      LEFT JOIN project_settings ps ON ps.project_id = p.id
      WHERE p.id = $1`,
@@ -249,7 +252,28 @@ async function enqueueSummaryGeneration(opts: {
    * Absent = nobody chained it, i.e. POST /summarize — its own row.
    */
   chainedFrom?: string | null;
+  /**
+   * Regenerate INTO this existing package instead of upserting one for
+   * (scope, role, commit, branch). Required with `onlyStale`: the whole point
+   * is to rebuild the stale parts of a package built at an older commit.
+   */
+  packageId?: string | null;
+  /**
+   * Auto-regeneration (project_settings.auto_regenerate_stale): rebuild only
+   * the sections/tutorials this run just flagged stale, not the whole package.
+   */
+  onlyStale?: boolean;
 }): Promise<string> {
+  // Assembled, not a ternary: the checkpoint jsonb is the only M5-safe carrier
+  // for job flags (job_type is a CHECK-constrained enum), and it now carries
+  // two independent ones. Stays NULL when there is nothing to say — the run
+  // history reads absence of `chainedFrom` as "nobody chained this".
+  const checkpoint: Record<string, unknown> = {};
+  if (opts.chainedFrom) checkpoint.chainedFrom = opts.chainedFrom;
+  if (opts.onlyStale) {
+    checkpoint.onlyStale = true;
+    if (opts.packageId) checkpoint.packageId = opts.packageId;
+  }
   const result = await query(
     `INSERT INTO analysis_jobs
        (project_id, snapshot_id, requested_by, job_type, status, current_step, role, branch, commit_hash, scope_id, checkpoint)
@@ -257,10 +281,14 @@ async function enqueueSummaryGeneration(opts: {
      RETURNING id`,
     [opts.projectId, opts.snapshotId, opts.requestedBy, opts.role ?? null,
      opts.branch ?? null, opts.commitHash ?? null, opts.scopeId ?? null,
-     opts.chainedFrom ? JSON.stringify({ chainedFrom: opts.chainedFrom }) : null],
+     Object.keys(checkpoint).length > 0 ? JSON.stringify(checkpoint) : null],
   );
   const summaryJobId = (result.rows[0] as { id: string }).id;
   try {
+    // The flags ride the payload AND the checkpoint above: Resume rebuilds
+    // SummaryJobData from the job ROW, so the checkpoint is the authoritative
+    // copy — a resumed only-stale run that lost these fields would upsert a
+    // brand new package at the new commit instead of repairing the old one.
     await getSummaryQueue().add('generate_summary', {
       jobId: summaryJobId,
       snapshotId: opts.snapshotId,
@@ -268,6 +296,8 @@ async function enqueueSummaryGeneration(opts: {
       triggeredBy: opts.requestedBy,
       role: opts.role ?? undefined,
       branch: opts.branch ?? undefined,
+      packageId: opts.packageId ?? undefined,
+      onlyStale: opts.onlyStale ?? undefined,
     } satisfies SummaryJobData, {
       attempts: 2,
       backoff: { type: 'fixed', delay: 3000 },
@@ -773,11 +803,15 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
       clusterEdges: architecture.edges.length,
     });
 
-    // 11.5 Incremental diff (spec "Incremental Updates"): when this scope was
-    //      analyzed before at a different commit, diff files/symbols, insert
-    //      stale flags, and mark affected sections/tutorials/packages stale.
-    //      Downstream, content addressing makes unchanged symbols cache hits.
-    const previous = await findPreviousSnapshot(scope.scopeId, snapshotId);
+    // 11.5 Incremental diff (spec "Incremental Updates"): when this scope AND
+    //      BRANCH were analyzed before at a different commit, diff
+    //      files/symbols, insert stale flags, and mark this branch's affected
+    //      sections/tutorials/packages stale. Downstream, content addressing
+    //      makes unchanged symbols cache hits. The baseline and the staleness
+    //      it produces are both branch-scoped — a diff on one branch may not
+    //      speak for another's packages (incrementalAnalyzer.ts).
+    let staleRegenIds: string[] = [];
+    const previous = await findPreviousSnapshot(scope.scopeId, snapshotId, branch);
     const isIncremental = previous !== null && previous.commitHash !== commitHash;
     if (isIncremental) {
       await updateStep('Diffing against previous snapshot', 65);
@@ -787,6 +821,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         scopeId: scope.scopeId,
         snapshotId,
         commitHash,
+        branch,
         prevSnapshotId: previous.snapshotId,
         prevCommitHash: previous.commitHash,
         graph: evidence,
@@ -794,10 +829,13 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         architecture,
         inventory: snapshot.inventory,
       });
+      staleRegenIds = diff.artifacts.stalePackageIds;
       await markPhase(snapshotId, 'incremental_diff', 'complete', diff.metrics);
     } else {
       await markPhase(snapshotId, 'incremental_diff', 'skipped', {
-        reason: previous ? 'same_commit_rescan' : 'no_previous_snapshot',
+        // Branch-scoped: "none on this branch" is the first analysis of a
+        // branch, which is a full generation, not a diff.
+        reason: previous ? 'same_commit_rescan' : 'no_previous_snapshot_on_branch',
       });
     }
 
@@ -959,6 +997,31 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         `[worker] could not queue package generation for ${projectId}:`,
         err instanceof Error ? err.message : err,
       ));
+    } else if (project.auto_regenerate_stale && staleRegenIds.length > 0) {
+      // Opt-in only (migration 003): rebuild what this diff just flagged,
+      // one only-stale job per affected package, against THIS snapshot.
+      // Deliberately NOT chainedFrom-linked: run history merges a chained
+      // generation into its analysis row, and N regenerations collapsing into
+      // one analysis row would misrepresent both — the analysis would claim
+      // work it did not do, and each rebuild would lose its own cost and
+      // outcome. They are separate events and they show as separate rows.
+      const stalePackages = (await query(
+        `SELECT id, role, branch FROM onboarding_packages WHERE id = ANY($1)`,
+        [staleRegenIds],
+      )).rows as Array<{ id: string; role: string | null; branch: string | null }>;
+      for (const pkg of stalePackages) {
+        // Per enqueue, not per batch: one package failing to queue must not
+        // cost the others their rebuild.
+        await enqueueSummaryGeneration({
+          projectId, snapshotId, requestedBy: requester,
+          role: pkg.role, branch: pkg.branch ?? branch, commitHash, scopeId: scope.scopeId,
+          packageId: pkg.id, onlyStale: true,
+        }).catch((err) => console.error(
+          `[worker] could not queue stale regeneration for package ${pkg.id}:`,
+          err instanceof Error ? err.message : err,
+        ));
+      }
+      console.log(`[worker] auto-regenerating stale content in ${stalePackages.length} package(s) for ${projectId}`);
     }
     // After the enqueue: a queued generation keeps the project 'analyzing'.
     await recomputeProjectStatus(projectId);
