@@ -109,7 +109,7 @@ function totalKeyUsage(rows: KeyUsageRow[]) {
 }
 
 /**
- * The eleven editable settings fields, in exactly the shape the form state
+ * The twelve editable settings fields, in exactly the shape the form state
  * holds them (every numeric input is a string, because that is what an
  * `<Input>` gives back). Used twice: to hydrate the form from the server, and
  * as the baseline the current form is diffed against to decide whether the
@@ -134,6 +134,7 @@ function settingsFromProject(project: ProjectData) {
       budgetTokens: "",
       stopBehavior: "pause",
       autoReanalyze: false,
+      autoRegenStale: false,
     };
   }
   const tierOverrides = (settings as { model_tier_overrides?: Record<string, string[]> }).model_tier_overrides ?? {};
@@ -150,6 +151,7 @@ function settingsFromProject(project: ProjectData) {
     budgetTokens: budgets.max_input_tokens ? String(budgets.max_input_tokens) : "",
     stopBehavior: (settings as { budget_stop_behavior?: string }).budget_stop_behavior ?? "pause",
     autoReanalyze: (settings as { auto_reanalyze_on_push?: boolean }).auto_reanalyze_on_push ?? false,
+    autoRegenStale: (settings as { auto_regenerate_stale?: boolean }).auto_regenerate_stale ?? false,
   };
 }
 
@@ -173,6 +175,7 @@ export function ProjectSettingsPage() {
   const [budgetTokens, setBudgetTokens] = useState<string>("");
   const [stopBehavior, setStopBehavior] = useState("pause");
   const [autoReanalyze, setAutoReanalyze] = useState(false);
+  const [autoRegenStale, setAutoRegenStale] = useState(false);
   const [saving, setSaving] = useState(false);
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
   const analyzing = project?.status === "analyzing";
@@ -247,6 +250,7 @@ export function ProjectSettingsPage() {
       setBudgetTokens(stored.budgetTokens);
       setStopBehavior(stored.stopBehavior);
       setAutoReanalyze(stored.autoReanalyze);
+      setAutoRegenStale(stored.autoRegenStale);
     }
   }, [project]);
 
@@ -309,6 +313,7 @@ export function ProjectSettingsPage() {
         budget_overrides,
         budget_stop_behavior: stopBehavior,
         auto_reanalyze_on_push: autoReanalyze,
+        auto_regenerate_stale: autoRegenStale,
       };
       // file_limit/loc_limit are `not null check (> 0)` in the DB — never send
       // null/0. Omit the key entirely when the field is empty/invalid so the
@@ -442,7 +447,8 @@ export function ProjectSettingsPage() {
     budgetCalls !== baseline.budgetCalls ||
     budgetTokens !== baseline.budgetTokens ||
     stopBehavior !== baseline.stopBehavior ||
-    autoReanalyze !== baseline.autoReanalyze;
+    autoReanalyze !== baseline.autoReanalyze ||
+    autoRegenStale !== baseline.autoRegenStale;
 
   const spend = totalKeyUsage(keyUsage);
 
@@ -604,9 +610,9 @@ export function ProjectSettingsPage() {
                   <p className="text-[0.8125rem] font-medium text-foreground">Re-analyze on push</p>
                   <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                     When GitHub pushes to a branch that has onboarding packages, run an incremental
-                    re-analysis per affected scope. Changed sections get stale badges — packages are
-                    never rebuilt automatically, so there's no surprise AI spend. Requires the GitHub
-                    App webhook to be configured (see the DevOps guide).
+                    re-analysis per affected scope. Changed sections get stale badges — rebuilding
+                    them is left to the switch below, so on its own this costs no generation spend.
+                    Requires the GitHub App webhook to be configured (see the DevOps guide).
                   </p>
                 </div>
                 <button
@@ -623,6 +629,38 @@ export function ProjectSettingsPage() {
                   <span
                     className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-all ${
                       autoReanalyze ? "left-[18px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Deliberately its own switch rather than a mode of the one above:
+                  stale flags also arrive from a manual re-analysis, and this is
+                  the only setting on the page that spends AI budget with nobody
+                  watching. Default off. */}
+              <div className="mt-3 flex items-start justify-between gap-3 border-t border-border pt-2">
+                <div>
+                  <p className="text-[0.8125rem] font-medium text-foreground">Auto-regenerate stale sections</p>
+                  <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
+                    After a re-analysis marks sections stale, regenerate them immediately against the
+                    new analysis — this spends AI budget without a click. Off: stale badges only;
+                    regenerate from the reader or the package card when you're ready.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={autoRegenStale}
+                  aria-label="Auto-regenerate stale sections"
+                  disabled={!canEdit}
+                  onClick={() => setAutoRegenStale((v) => !v)}
+                  className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                    autoRegenStale ? "bg-primary" : "bg-muted-foreground/30"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-background shadow transition-all ${
+                      autoRegenStale ? "left-[18px]" : "left-0.5"
                     }`}
                   />
                 </button>
