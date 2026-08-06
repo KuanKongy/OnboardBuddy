@@ -3,7 +3,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 
 type ShortcutGroups = Array<{ group: string; rows: Array<{ keys: string[]; action: string }> }>;
 
-/** The project keymap — rendered by the "/" overlay and the sidebar entry. */
+/** The project keymap — rendered by the "?" overlay and the sidebar entry. */
 const PROJECT_SHORTCUT_GROUPS: ShortcutGroups = [
   {
     group: "Anywhere in a project",
@@ -11,7 +11,7 @@ const PROJECT_SHORTCUT_GROUPS: ShortcutGroups = [
       { keys: ["↑"], action: "Previous tab" },
       { keys: ["↓"], action: "Next tab" },
       { keys: ["1", "…", "9"], action: "Jump to tab (Overview = 1 … Settings = 9)" },
-      { keys: ["/"], action: "Show this overlay" },
+      { keys: ["?"], action: "Show this overlay" },
     ],
   },
   {
@@ -43,13 +43,13 @@ const DASHBOARD_SHORTCUT_GROUPS: ShortcutGroups = [
       { keys: ["↑"], action: "Previous page" },
       { keys: ["↓"], action: "Next page" },
       { keys: ["1", "…", "5"], action: "Jump to page (Dashboard = 1 … Help & FAQ = 5)" },
-      { keys: ["/"], action: "Show this overlay" },
+      { keys: ["?"], action: "Show this overlay" },
     ],
   },
   {
     group: "Inside a project",
     rows: [
-      { keys: ["↑", "↓"], action: "Cycle tabs, plus arrows, Esc and more (see / there)" },
+      { keys: ["↑", "↓"], action: "Cycle tabs, plus arrows, Esc and more (see ? there)" },
     ],
   },
 ];

@@ -22,9 +22,11 @@
  *
  * Both registers are display text and can be reworded. The VALUES cannot: they
  * are stored in Postgres, validated by the API and keyed on by the weight
- * table, so `general` stays `general` on the wire while it reads "Full-stack"
- * on screen. Rendering a stored value raw (or through CSS `capitalize`, which
- * would write "Full-Stack") is what these helpers exist to prevent.
+ * table, so `general` stays `general` on the wire while it reads "Full-Stack"
+ * on screen. Rendering the stored value raw would put the word "general" in
+ * front of a reader, which names no role anyone would recognize — that is what
+ * these helpers exist to prevent. `general` is the one role whose two
+ * registers coincide: the short word and the person are both "Full-Stack".
  */
 
 export const DEVELOPER_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -46,7 +48,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
   { value: "frontend", label: "Frontend", title: "Frontend Developer", description: "UI & client-side code" },
   { value: "devops", label: "DevOps", title: "DevOps Engineer", description: "Infrastructure & deployments" },
   { value: "qa", label: "QA", title: "QA Engineer", description: "Testing & quality assurance" },
-  { value: "general", label: "Full-stack", title: "Full-stack Developer", description: "The whole stack, end to end" },
+  { value: "general", label: "Full-Stack", title: "Full-Stack", description: "The whole stack, end to end" },
 ];
 
 /**
@@ -55,7 +57,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * it as the role to rank, score or generate for (doc/REWORK_PLAN.md Phase 10 —
  * "nothing in Phases 1–7 may hardcode `general`").
  *
- * It reads as "Full-stack" everywhere a person sees it; the stored value is
+ * It reads as "Full-Stack" everywhere a person sees it; the stored value is
  * frozen, so use this constant rather than typing the value into a surface.
  */
 export const FALLBACK_ROLE: DeveloperRole = "general";

@@ -118,10 +118,21 @@ export const FAQ_ITEMS: FaqItem[] = [
     question: 'Why do sections go "stale" and what does Regenerate do?',
     answer: (
       <>
-        When a new commit is analyzed, sections whose underlying code evidence actually changed
-        get flagged stale (whitespace-only edits flag nothing). Regenerate rebuilds a section or
-        whole package in place at the same commit; it does not create a new package, and review
-        history is kept.
+        <p className="mb-1.5">
+          When a new commit is analyzed, sections whose underlying code evidence actually changed
+          get flagged stale (whitespace-only edits flag nothing). Regenerate rebuilds a section or
+          whole package in place at the same commit; it does not create a new package, and review
+          history is kept.
+        </p>
+        <p className="mb-1.5">
+          Staleness is scoped to a branch. Re-analyzing a branch only re-checks packages built
+          from that branch, so work on one branch never flags another branch's packages.
+        </p>
+        <p>
+          Rebuilding stale content can happen two ways: turn on "Auto-regenerate stale sections"
+          in Project Settings and each new analysis rebuilds what it flagged, or leave it off and
+          use "Regenerate only the stale sections" on the package card when you want it.
+        </p>
       </>
     ),
   },
@@ -161,7 +172,7 @@ export const FAQ_ITEMS: FaqItem[] = [
     question: "Where are keyboard shortcuts?",
     answer: (
       <>
-        Press <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[0.6875rem]">/</kbd> anywhere
+        Press <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[0.6875rem]">?</kbd> anywhere
         in the app, or open them from the "Keyboard shortcuts" button in the sidebar.
       </>
     ),

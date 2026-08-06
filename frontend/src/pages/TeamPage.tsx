@@ -653,10 +653,10 @@ export function TeamPage() {
                     <div className="min-w-0">
                       <p className="truncate text-xs text-foreground" title={inv.email}>{inv.email}</p>
                       {/* `capitalize` used to sit on the whole line, so it also
-                          title-cased the inviter's address and would render the
-                          role label as "Full-Stack". Only the tier, which is a
-                          stored lowercase value with no label table, is cased
-                          by CSS now. */}
+                          title-cased the inviter's email address and re-cased
+                          role labels that the label table had already spelled.
+                          Only the tier, which is a stored lowercase value with
+                          no label table, is cased by CSS now. */}
                       <p
                         className="truncate text-xs text-muted-foreground"
                         title={`${inv.permission_tier}${

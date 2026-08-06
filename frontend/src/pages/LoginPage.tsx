@@ -1,4 +1,4 @@
-import { ArrowLeft, Eye, EyeOff, Github, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Github, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, type Location } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
@@ -69,7 +69,9 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <LogoMark className="mx-auto mb-3 h-10 w-10" />
+          <Link to="/" title="Homepage" className="mx-auto mb-3 inline-block">
+            <LogoMark className="h-10 w-10" />
+          </Link>
           <h1 className="text-lg font-semibold text-foreground">Welcome back</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">Sign in to OnboardBuddy</p>
         </div>
@@ -148,11 +150,6 @@ export function LoginPage() {
           Don&apos;t have an account?{" "}
           <Link to="/signup" className="font-medium text-primary hover:underline">
             Sign up
-          </Link>
-        </p>
-        <p className="mt-2 text-center">
-          <Link to="/" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="h-3 w-3" /> Back to home
           </Link>
         </p>
       </div>

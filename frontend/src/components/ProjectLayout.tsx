@@ -132,7 +132,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-onboarding",
     title: "When packages change",
-    body: "Regenerating replaces a package's content in place; analyzing a new commit adds a new package and keeps the old one — nothing is silently discarded. Stale badges appear only on sections whose code actually changed. The 'How packages work' tour inside Your Onboarding has the full rules.",
+    body: "Regenerating replaces a package's content in place; analyzing a new commit adds a new package and keeps the old one — nothing is silently discarded. Stale badges appear only on sections whose code actually changed, and staleness is branch-scoped: re-analyzing a branch only re-checks packages built from it. The 'How packages work' tour inside Your Onboarding has the full rules.",
   },
   {
     target: "nav-architecture",
@@ -182,14 +182,19 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
     <SidebarShell>
       <div className="px-3 py-3">
         <div className="flex items-center justify-between">
-          <Link
-            to="/dashboard"
-            onClick={() => setOpen(false)}
-            className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
-          >
-            <LogoMark className="h-7 w-7" />
-            <LogoWordmark />
-          </Link>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link
+                to="/dashboard"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 rounded-md transition-opacity hover:opacity-80"
+              >
+                <LogoMark className="h-7 w-7" />
+                <LogoWordmark />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent side="right">Dashboard</TooltipContent>
+          </Tooltip>
           <ThemeToggle />
         </div>
         {loading ? (
@@ -292,7 +297,7 @@ function ProjectSidebar({ onStartTour, onShowShortcuts }: { onStartTour: () => v
               Keyboard shortcuts
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right">Also opens with /</TooltipContent>
+          <TooltipContent side="right">Also opens with ?</TooltipContent>
         </Tooltip>
       </div>
       <div className="px-2 py-2">
@@ -311,8 +316,10 @@ function ProjectLayoutContent() {
   const [tourOpen, setTourOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Project-wide hotkeys: ↑ / ↓ cycle tabs, 1..9 jump, / opens the keymap.
+  // Project-wide hotkeys: ↑ / ↓ cycle tabs, 1..9 jump, ? opens the keymap.
   // Per-page arrows/Esc live in the pages themselves (hooks/useHotkeys.ts).
+  // `/` stays bound alongside `?` — it is what the dialog advertised until now
+  // and what anyone who learned the app before this change still presses.
   const tabPaths = projectNavItems.map((item) => item.to);
   const currentSegment = pathname.replace(/\/+$/, "").split(`/projects/${id}`)[1]?.replace(/^\//, "").split("/")[0] ?? "";
   const currentTab = Math.max(0, tabPaths.indexOf(currentSegment));
@@ -325,6 +332,7 @@ function ProjectLayoutContent() {
     ArrowUp: () => goToTab(currentTab - 1),
     ArrowDown: () => goToTab(currentTab + 1),
     "/": () => setShortcutsOpen(true),
+    "?": () => setShortcutsOpen(true),
     ...Object.fromEntries(tabPaths.slice(0, 9).map((_, i) => [String(i + 1), () => goToTab(i)])),
   });
 

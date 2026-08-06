@@ -127,8 +127,10 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // Shell-wide hotkeys, mirroring the project layout: ↑ / ↓ cycle the sidebar
-  // pages, 1..5 jump, / opens the keymap. Pages outside the nav (e.g. /import)
-  // count as page 1 so ↑ / ↓ still land somewhere sensible.
+  // pages, 1..5 jump, ? opens the keymap. Pages outside the nav (e.g. /import)
+  // count as page 1 so ↑ / ↓ still land somewhere sensible. `/` stays bound
+  // beside `?`: it is the key the app advertised until now, and dropping it
+  // would break the habit of anyone who already learned it.
   const pagePaths = dashboardNavItems.map((item) => item.to);
   const currentPage = Math.max(0, pagePaths.indexOf(pathname));
   const goToPage = (index: number) => {
@@ -141,6 +143,7 @@ function AuthenticatedLayout({ children }: { children?: ReactNode }) {
     ArrowUp: () => goToPage(currentPage - 1),
     ArrowDown: () => goToPage(currentPage + 1),
     "/": () => setShortcutsOpen(true),
+    "?": () => setShortcutsOpen(true),
     ...Object.fromEntries(pagePaths.map((_, i) => [String(i + 1), () => goToPage(i)])),
   });
 
