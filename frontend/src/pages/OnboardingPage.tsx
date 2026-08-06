@@ -373,7 +373,7 @@ const LIFECYCLE_TOUR_STEPS: TourStep[] = [
   {
     target: "onboarding-cards",
     title: "Stale badges are your diff signal",
-    body: "Push commits, then re-analyze: only sections whose underlying code evidence actually changed get a stale badge (whitespace-only edits flag nothing). A stale section shows a banner in the reader — Regenerate rebuilds it against the newest analysis while review history is kept.",
+    body: "Push commits, then re-analyze: only sections whose underlying code evidence actually changed get a stale badge (whitespace-only edits flag nothing). A stale section shows a banner in the reader — Regenerate rebuilds it against the newest analysis while review history is kept. Staleness is branch-scoped: re-analyzing a branch only re-checks packages built from that branch, so a feature branch never stale-flags your main package. Rebuilding stays your call — a card with stale sections offers 'Regenerate only the stale sections', which touches nothing else — or turn on 'Auto-regenerate stale sections' in project settings to have every re-analysis rebuild them immediately.",
   },
   {
     target: "onboarding-filters",
@@ -1310,6 +1310,29 @@ export function OnboardingPage() {
     }
   }
 
+  // The cheap half of the same dialog: rebuild ONLY the sections and tutorials
+  // the last re-analysis flagged stale, against the newest analysis. Everything
+  // else keeps its current text and costs nothing, so this is the option to
+  // reach for when a push touched two sections out of twelve.
+  async function handleRegenerateStale() {
+    if (!id || !regenCard) return;
+    setRegenBusy(true);
+    setRegenError("");
+    try {
+      const data = (await apiFetch(`/projects/${id}/onboarding/generate`, {
+        method: "POST",
+        body: JSON.stringify({ role: regenCard.role, package_id: regenCard.id, only_stale: true }),
+      })) as { job?: { id: string } };
+      if (data.job?.id) registerSessionJob(data.job.id, { navigateOnDone: false });
+      setRegenCard(null);
+      loadCards();
+    } catch (err: unknown) {
+      setRegenError(err instanceof Error ? err.message : "Failed to start regeneration");
+    } finally {
+      setRegenBusy(false);
+    }
+  }
+
   // On-demand per-role generation against the selected package's snapshot
   // (falls back to the latest analysis), so only this role's package is paid
   // for — no repo re-analysis, no fan-out.
@@ -1635,8 +1658,9 @@ export function OnboardingPage() {
           </div>
         )}
 
-        {/* Per-package regeneration: whole package now, or a fresh analysis
-            at a new commit first. Single sections regenerate in the reader. */}
+        {/* Per-package regeneration: the whole package now, only the sections a
+            re-analysis flagged stale, or a fresh analysis at a new commit
+            first. Single sections regenerate in the reader. */}
         <Dialog open={regenCard !== null} onOpenChange={(open) => !open && setRegenCard(null)}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
@@ -1667,6 +1691,35 @@ export function OnboardingPage() {
                     " This package is behind the latest analysis, so this also brings it up to date."}
                 </p>
               </button>
+
+              {/* Tutorials can be the only stale content, so the gate counts
+                  both — the API's 409 guard does the same arithmetic. */}
+              {regenCard && (regenCard.stale_sections > 0 || regenCard.stale_tutorials > 0) && (
+                <button
+                  type="button"
+                  onClick={handleRegenerateStale}
+                  disabled={regenBusy}
+                  className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60"
+                >
+                  <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
+                    {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                    Regenerate only the stale sections
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Rebuilds just the stale content (
+                    {[
+                      regenCard.stale_sections > 0 &&
+                        `${regenCard.stale_sections} section${regenCard.stale_sections === 1 ? "" : "s"}`,
+                      regenCard.stale_tutorials > 0 &&
+                        `${regenCard.stale_tutorials} tutorial${regenCard.stale_tutorials === 1 ? "" : "s"}`,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                    ) against the newest analysis — everything else keeps its current text and
+                    costs nothing.
+                  </p>
+                </button>
+              )}
 
               {canManage && (
                 <button
