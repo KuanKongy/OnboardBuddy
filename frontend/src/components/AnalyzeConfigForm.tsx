@@ -67,10 +67,12 @@ interface Commit {
 
 /**
  * Why a GitHub-backed list is missing. "reconnect" is the one failure the user
- * can fix themselves, so it gets its own copy and a route to the fix; "error"
+ * can fix themselves, so it gets its own copy and a route to the fix; "empty"
+ * is not a failure at all (a repository with no commits, which GitHub reports
+ * as a 409 on the commits endpoint) and must not be dressed as one; "error"
  * is everything else (network, 404, rate limit) and stays a plain warning.
  */
-type ListFailure = false | "error" | "reconnect";
+type ListFailure = false | "error" | "reconnect" | "empty";
 
 /**
  * A dead stored GitHub connection, as the API reports it. Deliberate duplicate
@@ -81,6 +83,12 @@ type ListFailure = false | "error" | "reconnect";
  */
 function reconnectRequired(err: unknown): boolean {
   return err instanceof ApiError && (err.body?.code === "github_reconnect_required" || err.status === 403);
+}
+
+/** A repository with no commits, as the commits route reports it (GitHub's own
+ *  409 for an empty repo; api/routes/github.ts maps it to this code). */
+function repoIsEmpty(err: unknown): boolean {
+  return err instanceof ApiError && err.body?.code === "repo_empty";
 }
 
 /** Inherits the warning colour of the line it sits in, so the sentence and its
@@ -114,6 +122,12 @@ interface AnalyzeConfigFormProps {
   projectRole?: string;
   config: AnalyzeConfig;
   onChange: (config: AnalyzeConfig) => void;
+  /**
+   * Fired when the commits list identifies the repository as having no commits
+   * at all (and cleared when it does). Callers own the Start button, and an
+   * analysis of an empty repository can only fail, so they gate on this.
+   */
+  onRepoEmpty?: (empty: boolean) => void;
 }
 
 /**
@@ -133,6 +147,7 @@ export function AnalyzeConfigForm({
   projectRole,
   config,
   onChange,
+  onRepoEmpty,
 }: AnalyzeConfigFormProps) {
   const [branches, setBranches] = useState<string[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
@@ -194,10 +209,18 @@ export function AnalyzeConfigForm({
       .then((data: { commits: Commit[] }) => {
         setCommits(data.commits ?? []);
         setListErrors((e) => ({ ...e, commits: false }));
+        onRepoEmpty?.(false);
       })
       .catch((err: unknown) => {
         setCommits([]);
-        setListErrors((e) => ({ ...e, commits: reconnectRequired(err) ? "reconnect" : "error" }));
+        const empty = repoIsEmpty(err);
+        setListErrors((e) => ({
+          ...e,
+          commits: empty ? "empty" : reconnectRequired(err) ? "reconnect" : "error",
+        }));
+        // Only an identified empty repository blocks the run; a failed request
+        // must not, or a rate limit would lock the button on a fine repo.
+        onRepoEmpty?.(empty);
       })
       .finally(() => setLoadingCommits(false));
   }, [repoOwner, repoName, installationId, branch]);
@@ -251,7 +274,11 @@ export function AnalyzeConfigForm({
             ))}
           </SelectContent>
         </Select>
-        {listErrors.commits === "reconnect" ? (
+        {listErrors.commits === "empty" ? (
+          <p className="text-[0.6875rem] text-warning">
+            This repository has no commits yet — push code before analyzing.
+          </p>
+        ) : listErrors.commits === "reconnect" ? (
           <p className="text-[0.6875rem] text-warning">
             Your GitHub connection needs to be re-authorized, so recent commits can&apos;t be
             listed — this will analyze the branch head.{" "}
@@ -296,7 +323,7 @@ export function AnalyzeConfigForm({
               id="analyze-scope-path"
               value={config.scopePath}
               onChange={(e) => onChange({ ...config, scopePath: e.target.value })}
-              placeholder="e.g. backend/ or packages/server"
+              placeholder="e.g. backend/ or src/"
               className="h-8 font-mono text-[0.75rem]"
             />
           </>

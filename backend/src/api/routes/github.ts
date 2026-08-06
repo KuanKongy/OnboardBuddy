@@ -11,7 +11,7 @@ import {
   listBranches,
   listCommits,
 } from "../../lib/github.js";
-import { GitHubLinkError } from "../../lib/githubErrors.js";
+import { GitHubApiError, GitHubLinkError } from "../../lib/githubErrors.js";
 import {
   assertGithubAccountCanBeLinked,
   getInstallationTokenForUserRepo,
@@ -302,6 +302,14 @@ githubRouter.get("/repos/:owner/:repo/commits", async (req, res) => {
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
       console.error("List commits error:", err);
+    }
+    // GitHub answers 409 for the commits of an empty repository; branches
+    // answer 200 [], so this route is the only place the emptiness surfaces.
+    // Without this the caller sees a bare 500 and reads "our request failed"
+    // instead of "there is nothing here to analyze yet".
+    if (err instanceof GitHubApiError && err.status === 409) {
+      res.status(409).json({ error: "This repository has no commits yet.", code: "repo_empty" });
+      return;
     }
     handleGitHubRouteError(res, err);
   }
