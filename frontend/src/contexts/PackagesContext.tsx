@@ -20,9 +20,22 @@ import type { PackageCard } from "@/types/onboarding";
  * sidebar selection; the completion watcher auto-selects a package you
  * generated and brings you back to the overview when it lands.
  *
- * Selection precedence: what you picked this session (localStorage) → your
- * member default (server, set automatically when a generation you asked for
- * finishes) → null = "latest analysis" (server resolves).
+ * Selection is per BROWSER TAB and the pin is per browser, so two tabs open on
+ * the same project can sit on different packages — comparing a branch against
+ * main side by side used to be impossible, because one shared localStorage key
+ * meant the last tab you touched moved the other one.
+ *
+ * Init precedence, highest first:
+ *   1. sessionStorage `obb.tabPackage.<projectId>` — what THIS tab picked
+ *      (written only by selectPackage; sessionStorage is per-tab by spec).
+ *   2. localStorage `obb.pinnedPackage.<projectId>` — the pin (written only by
+ *      pinPackage; absent = follow the newest). What a NEW tab opens on.
+ *   3. `project.default_package_id` — the member default the server sets when
+ *      a generation you asked for finishes.
+ *   4. null = "latest analysis", resolved server-side per request.
+ *
+ * The pin is also a freeze: with one set, a generation completing does not
+ * move the selection onto its package (see the adopt effect).
  */
 
 interface PackagesContextValue {
@@ -31,6 +44,10 @@ interface PackagesContextValue {
   selectedPackageId: string | null;
   selectedPackage: PackageCard | null;
   selectPackage: (id: string | null) => void;
+  /** The package new tabs of this project open on; null = follow the newest. */
+  pinnedPackageId: string | null;
+  /** Set or clear the pin. Never touches this tab's selection. */
+  pinPackage: (id: string | null) => void;
   defaultPackageId: string | null;
   status: AnalysisStatus | null;
   refreshStatus: () => Promise<void>;
@@ -48,7 +65,12 @@ interface PackagesContextValue {
 const PackagesContext = createContext<PackagesContextValue | undefined>(undefined);
 
 const LATEST_SENTINEL = "latest";
-const storageKey = (projectId: string) => `obb.selectedPackage.${projectId}`;
+/** This tab's selection (sessionStorage — a new tab starts without it). */
+const tabKey = (projectId: string) => `obb.tabPackage.${projectId}`;
+/** The pin (localStorage — shared by every tab; absent means follow newest). */
+const pinKey = (projectId: string) => `obb.pinnedPackage.${projectId}`;
+/** Pre-pinning key, removed at init. See the comment at its removal. */
+const legacyKey = (projectId: string) => `obb.selectedPackage.${projectId}`;
 
 function isActiveStatus(s: string | undefined): boolean {
   return s === "queued" || s === "running";
@@ -64,11 +86,20 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   const [packages, setPackages] = useState<PackageCard[] | null>(null);
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  const [pinnedPackageId, setPinnedPackageId] = useState<string | null>(() =>
+    localStorage.getItem(pinKey(projectId)),
+  );
   const [packagesError, setPackagesError] = useState(false);
   const [statusError, setStatusError] = useState(false);
-  // Whether selection still needs initializing from localStorage/default once
-  // the package list is known.
+  // Whether selection still needs initializing from storage/default once the
+  // package list is known.
   const selectionInitialized = useRef(false);
+
+  // The provider is not remounted when the layout moves between projects, so
+  // the pin is re-read rather than only initialized.
+  useEffect(() => {
+    setPinnedPackageId(localStorage.getItem(pinKey(projectId)));
+  }, [projectId]);
 
   // Session-started jobs we watch for completion. Analyze jobs "adopt" the
   // worker-chained generate job via the shared snapshot_id.
@@ -174,17 +205,39 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     return () => window.clearInterval(t);
   }, [anyGenerating, refreshPackages]);
 
+  const selectPackage = useCallback((id: string | null) => {
+    selectionInitialized.current = true;
+    setSelectedPackageId(id);
+    // Selection is this tab's business only — the pin is the cross-tab knob.
+    sessionStorage.setItem(tabKey(projectId), id ?? LATEST_SENTINEL);
+  }, [projectId]);
+
+  const pinPackage = useCallback((id: string | null) => {
+    setPinnedPackageId(id);
+    // Absent, not "latest": no key at all is what "follow the newest" means,
+    // so an unpin leaves nothing behind for the next tab to read.
+    if (id === null) localStorage.removeItem(pinKey(projectId));
+    else localStorage.setItem(pinKey(projectId), id);
+  }, [projectId]);
+
   // ── Selection init + validation once packages and project are known. ──────
   useEffect(() => {
     if (packages === null || !project) return;
     const ids = new Set(packages.map((p) => p.id));
     if (!selectionInitialized.current) {
       selectionInitialized.current = true;
-      const stored = localStorage.getItem(storageKey(projectId));
-      if (stored === LATEST_SENTINEL) {
+      // Dropped rather than migrated: the legacy key meant "the last selection
+      // made anywhere in this browser", which is exactly the cross-tab
+      // clobbering the tab/pin split removes. Migrating it into the pin would
+      // resurrect that behaviour as a permanent default nobody asked for.
+      localStorage.removeItem(legacyKey(projectId));
+      const tabValue = sessionStorage.getItem(tabKey(projectId));
+      if (tabValue === LATEST_SENTINEL) {
         setSelectedPackageId(null);
-      } else if (stored && ids.has(stored)) {
-        setSelectedPackageId(stored);
+      } else if (tabValue && ids.has(tabValue)) {
+        setSelectedPackageId(tabValue);
+      } else if (pinnedPackageId && ids.has(pinnedPackageId)) {
+        setSelectedPackageId(pinnedPackageId);
       } else if (defaultPackageId && ids.has(defaultPackageId)) {
         setSelectedPackageId(defaultPackageId);
       } else {
@@ -192,30 +245,32 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
       }
       return;
     }
+    // A pin whose package is gone (deleted project scope, or a regeneration
+    // that minted a new id) would otherwise silently open every new tab on
+    // nothing at all.
+    if (pinnedPackageId && !ids.has(pinnedPackageId)) pinPackage(null);
     // A selected package that no longer exists falls back to "latest".
     if (selectedPackageId && !ids.has(selectedPackageId)) {
       setSelectedPackageId(null);
     }
-  }, [packages, project, projectId, defaultPackageId, selectedPackageId]);
-
-  const selectPackage = useCallback((id: string | null) => {
-    selectionInitialized.current = true;
-    setSelectedPackageId(id);
-    localStorage.setItem(storageKey(projectId), id ?? LATEST_SENTINEL);
-  }, [projectId]);
+  }, [packages, project, projectId, defaultPackageId, selectedPackageId, pinnedPackageId, pinPackage]);
 
   // Adopt the freshly generated package once the refetched project carries
   // the server-set member default.
   useEffect(() => {
     if (!adoptDefaultOnNextProject.current || !project?.default_package_id) return;
     adoptDefaultOnNextProject.current = false;
-    selectPackage(project.default_package_id);
+    // A pin is a standing "keep showing me this one", so a generation landing
+    // must not move the selection out from under it. The navigation is the
+    // other half of the courtesy and is independent: this tab asked for the
+    // run, so it still gets taken to the overview to watch it land.
+    if (!pinnedPackageId) selectPackage(project.default_package_id);
     if (navigateOnAdopt.current) {
       navigateOnAdopt.current = false;
       const overviewPath = `/projects/${projectId}`;
       if (pathnameRef.current.replace(/\/$/, "") !== overviewPath) navigate(overviewPath);
     }
-  }, [project?.default_package_id, project, projectId, navigate, selectPackage]);
+  }, [project?.default_package_id, project, projectId, navigate, selectPackage, pinnedPackageId]);
 
   const registerSessionJob = useCallback((jobId: string, opts?: { navigateOnDone?: boolean }) => {
     watchedJobs.current.set(jobId, { navigateOnDone: opts?.navigateOnDone === true });
@@ -235,6 +290,8 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     selectedPackageId,
     selectedPackage,
     selectPackage,
+    pinnedPackageId,
+    pinPackage,
     defaultPackageId,
     status,
     refreshStatus,
@@ -244,7 +301,7 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     packagesError,
     statusError,
   }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage,
-       defaultPackageId, status, refreshStatus, activeJobs,
+       pinnedPackageId, pinPackage, defaultPackageId, status, refreshStatus, activeJobs,
        registerSessionJob, packageQuery, packagesError, statusError]);
 
   return <PackagesContext.Provider value={value}>{children}</PackagesContext.Provider>;

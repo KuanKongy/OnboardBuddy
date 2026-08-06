@@ -1,5 +1,6 @@
-import { Check, ChevronsUpDown, GitBranch, Package as PackageIcon } from "lucide-react";
+import { Check, ChevronsUpDown, Star } from "lucide-react";
 import { usePackages } from "@/contexts/PackagesContext";
+import { useProject } from "@/contexts/ProjectContext";
 import { roleTitle } from "@/lib/roles";
 import {
   DropdownMenu,
@@ -15,10 +16,14 @@ import type { PackageCard } from "@/types/onboarding";
 
 /**
  * Sidebar package selector: which (branch @ commit · scope · role) package
- * every tab shows. "Latest analysis" follows the newest complete run; a
- * pinned package stays put even when newer ones are generated. Where the
- * selection starts next session is the server-set member default — the
- * package your last generation produced (see PackagesContext).
+ * every tab of this project shows. "Latest analysis" follows the newest
+ * complete run.
+ *
+ * Two different things live in this menu and they are deliberately separate:
+ * clicking a row selects it FOR THIS BROWSER TAB (another tab on the same
+ * project keeps its own), while the star PINS it as what a new tab opens on
+ * and freezes it against generations landing. See PackagesContext for the
+ * storage and the precedence.
  */
 
 const STATUS_DOT: Record<string, string> = {
@@ -29,36 +34,93 @@ const STATUS_DOT: Record<string, string> = {
   failed: "bg-danger",
 };
 
-function packageLine(pkg: PackageCard): string {
-  const scope = pkg.path_prefix ? `${pkg.path_prefix}/` : pkg.scope_name || "whole repo";
-  return `${pkg.branch}@${pkg.analyzed_commit.slice(0, 7)} · ${scope} · ${roleTitle(pkg.role)}`;
+function packageScope(pkg: PackageCard): string {
+  return pkg.path_prefix ? `${pkg.path_prefix}/` : pkg.scope_name || "whole repo";
+}
+
+/**
+ * Pin toggle living inside a Radix DropdownMenuItem, which otherwise treats a
+ * press anywhere in the row as "select this row and close the menu". Stopping
+ * the CLICK is the whole guard, and stopping only the click is deliberate —
+ * the obvious extra `onPointerDown` stopPropagation makes things worse, twice
+ * over (both verified against a real browser, not just jsdom):
+ *   - MenuItem sets an isPointerDown flag from its own pointerdown handler and,
+ *     if pointerup arrives without it, fires `event.currentTarget.click()` on
+ *     the ROW. A click the row dispatches on itself never passes through this
+ *     button, so it selects anyway — the guard defeats itself.
+ *   - DismissableLayer marks "the pointer went down inside me" in a capture
+ *     handler and clears it in a document-level bubble handler. Swallow the
+ *     pointerdown and the flag stays stuck on, and the next click OUTSIDE the
+ *     menu is eaten instead of closing it.
+ *
+ * Accepted limitation: the star is mouse-first. Radix's menu owns keyboard
+ * focus with a roving tabindex over the items, so Tab never lands on a nested
+ * button and there is no keyboard route to pinning from this menu. Selection —
+ * the thing that changes what you read — stays fully keyboard-operable.
+ */
+function PinStar({ pinned, label, onToggle }: { pinned: boolean; label: string; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggle();
+      }}
+      className="-my-0.5 -mr-1 shrink-0 rounded p-0.5 transition-colors hover:bg-accent"
+    >
+      <Star
+        className={cn(
+          "h-3.5 w-3.5",
+          pinned ? "fill-warning text-warning" : "text-muted-foreground/50 hover:text-muted-foreground",
+        )}
+      />
+    </button>
+  );
 }
 
 export function PackageSelector() {
-  const { packages, selectedPackage, selectedPackageId, selectPackage } = usePackages();
+  const { packages, selectedPackage, selectedPackageId, selectPackage, pinnedPackageId, pinPackage } = usePackages();
+  const { project } = useProject();
+  const repoName = project?.repo_name ?? "";
 
   if (!packages || packages.length === 0) return null;
 
   return (
-    <div data-tour="package-selector" className="mt-2">
+    // -mx-1 buys the card 8px of width back out of the sidebar header's px-3
+    // without editing ProjectLayout, whose padding is shared with the logo row.
+    <div data-tour="package-selector" className="-mx-1 mt-2">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             className="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-left transition-colors hover:border-primary/40"
             title="Which package every tab shows — branch, commit, scope, and role"
           >
-            <PackageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            {/* Explicit line heights on both lines (14px / 12px, where the
-                inherited normal leading landed at ~13.3 / ~12.1): the sidebar's
-                separator below this button is the line the reader's coverage
-                strip is cut to sit level with, so this button's height has to
-                be arithmetic rather than font-metric. */}
+            {/* ⚠ HEIGHT IS LOAD-BEARING. py-1.5 plus the explicit line heights
+                on both lines (14px / 12px, where the inherited normal leading
+                landed at ~13.3 / ~12.1) are the arithmetic behind the sidebar's
+                100px header block, and the reader's chrome is cut to sit level
+                with the Separator below it (see OnboardingPage's band comment).
+                Change the CONTENT of these two lines freely; leave
+                leading-[0.875rem], leading-3 and py-1.5 exactly as they are, or
+                the reader's coverage strip goes a pixel out of true. */}
             <span className="min-w-0 flex-1">
               {selectedPackage ? (
                 <>
-                  <span className="flex items-center gap-1 truncate font-mono text-[0.6875rem] leading-[0.875rem] text-foreground">
-                    <GitBranch className="h-2.5 w-2.5 shrink-0" />
-                    {selectedPackage.branch}@{selectedPackage.analyzed_commit.slice(0, 7)}
+                  <span className="flex items-center gap-1 font-mono text-[0.6875rem] leading-[0.875rem] text-foreground">
+                    {repoName && (
+                      // shrink-[4]: when the pair does not fit, the repo name
+                      // gives up width four times faster than the branch — the
+                      // repo is context you already know, the branch is the
+                      // thing being chosen. The separator rides INSIDE this
+                      // span so it leaves with it; as its own element it
+                      // survived the repo being squeezed to nothing and the
+                      // sidebar read "/ feature/very-long-br…".
+                      <span className="shrink-[4] truncate text-muted-foreground">{repoName} /</span>
+                    )}
+                    <span className="truncate">{selectedPackage.branch}</span>
                     {!selectedPackage.is_latest_commit && (
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -83,31 +145,64 @@ export function PackageSelector() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72">
-          <DropdownMenuLabel className="text-[0.6875rem] font-normal text-muted-foreground">
-            Every tab follows this selection
+          <DropdownMenuLabel className="font-normal">
+            <span className="block truncate font-mono text-[0.6875rem] text-foreground">{repoName}</span>
+            <span className="block text-[0.625rem] leading-4 text-muted-foreground">
+              Every project tab follows this selection — per browser tab
+            </span>
           </DropdownMenuLabel>
           <DropdownMenuItem onSelect={() => selectPackage(null)} className="gap-2">
             <Check className={cn("h-3.5 w-3.5 shrink-0", selectedPackageId === null ? "opacity-100" : "opacity-0")} />
             <span className="flex-1 text-[0.75rem]">Latest analysis (auto)</span>
+            <PinStar
+              pinned={pinnedPackageId === null}
+              label="Follow the newest analysis by default in new tabs"
+              onToggle={() => pinPackage(null)}
+            />
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {packages.map((pkg) => (
-            <DropdownMenuItem key={pkg.id} onSelect={() => selectPackage(pkg.id)} className="gap-2">
-              <Check className={cn("h-3.5 w-3.5 shrink-0", selectedPackageId === pkg.id ? "opacity-100" : "opacity-0")} />
+            <DropdownMenuItem key={pkg.id} onSelect={() => selectPackage(pkg.id)} className="items-start gap-2">
+              <Check className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", selectedPackageId === pkg.id ? "opacity-100" : "opacity-0")} />
               {/* A `title` on a bare span is not an accessible name, so the tooltip
-                  is for the mouse and the word rides along sr-only. */}
+                  is for the mouse and the word rides along sr-only. mt-[0.3125rem]
+                  centres the 6px dot on the 16px first line. */}
               <span
-                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[pkg.status] ?? "bg-muted-foreground/40")}
+                className={cn("mt-[0.3125rem] h-1.5 w-1.5 shrink-0 rounded-full", STATUS_DOT[pkg.status] ?? "bg-muted-foreground/40")}
                 title={pkg.status}
                 aria-hidden="true"
               />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-mono text-[0.6875rem]">{packageLine(pkg)}</span>
-                <span className="sr-only">status: {pkg.status}</span>
-                {!pkg.is_latest_commit && (
-                  <span className="block text-[0.625rem] text-warning">behind latest on {pkg.branch}</span>
-                )}
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="min-w-0 flex-1">
+                    {/* Wraps to a second line rather than truncating: a long
+                        branch name truncated at the same place as its
+                        neighbours is unreadable, and the hash is what
+                        distinguishes two runs of the same branch. */}
+                    <span className="line-clamp-2 break-all font-mono text-[0.6875rem] leading-4">
+                      {pkg.branch}@{pkg.analyzed_commit.slice(0, 7)}
+                    </span>
+                    <span className="sr-only">status: {pkg.status}</span>
+                    <span className="block truncate text-[0.625rem] text-muted-foreground">
+                      {packageScope(pkg)} · {roleTitle(pkg.role)}
+                    </span>
+                    {!pkg.is_latest_commit && (
+                      <span className="block text-[0.625rem] text-warning">behind latest on {pkg.branch}</span>
+                    )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-64">
+                  <span className="block font-mono text-[0.6875rem]">{pkg.analyzed_commit}</span>
+                  <span className="block">
+                    analyzed {new Date(pkg.created_at).toLocaleDateString()} · {pkg.semantic_depth} depth
+                  </span>
+                </TooltipContent>
+              </Tooltip>
+              <PinStar
+                pinned={pinnedPackageId === pkg.id}
+                label={`Pin ${pkg.branch} as this project's default`}
+                onToggle={() => pinPackage(pinnedPackageId === pkg.id ? null : pkg.id)}
+              />
             </DropdownMenuItem>
           ))}
         </DropdownMenuContent>

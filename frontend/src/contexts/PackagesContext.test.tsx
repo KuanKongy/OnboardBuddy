@@ -4,8 +4,13 @@ import { PackagesProvider, usePackages } from "./PackagesContext";
 import { apiFetch } from "@/lib/api";
 
 /**
- * Completion watcher: a generation the session started becomes the selection
- * and navigates back to the overview; section regenerations don't navigate.
+ * Two behaviours live here:
+ *   - the completion watcher (a generation this tab started becomes the
+ *     selection and navigates back to the overview; section regenerations
+ *     don't navigate), and
+ *   - the storage split: sessionStorage holds THIS tab's selection,
+ *     localStorage holds the pin, and the pin outranks the member default
+ *     while a tab value outranks both.
  */
 
 vi.mock("@/lib/api", () => ({ apiFetch: vi.fn() }));
@@ -55,9 +60,16 @@ const NEW_PKG = {
   stale_sections: 0,
   approved_sections: 0,
   low_confidence_sections: 0,
-  tutorial_count: 3,
+  tutorial_count: 3, stale_tutorials: 0,
   is_latest_commit: true,
 };
+// A second package so precedence can be told apart by id rather than by the
+// "latest" sentinel alone.
+const OTHER_PKG = { ...NEW_PKG, id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", branch: "main", role: "frontend" };
+
+const TAB_KEY = "obb.tabPackage.p1";
+const PIN_KEY = "obb.pinnedPackage.p1";
+const LEGACY_KEY = "obb.selectedPackage.p1";
 
 function makeStatusScript(jobType: string) {
   // Call #1 (mount): running. Later calls: complete.
@@ -97,19 +109,21 @@ function makeStatusScript(jobType: string) {
       });
     }
     if (path.includes("/onboarding/packages")) {
-      return Promise.resolve({ packages: [NEW_PKG] });
+      return Promise.resolve({ packages: [NEW_PKG, OTHER_PKG] });
     }
     return Promise.resolve({});
   };
 }
 
 function Probe() {
-  const { registerSessionJob, selectedPackageId } = usePackages();
+  const { registerSessionJob, selectedPackageId, selectPackage, pinnedPackageId } = usePackages();
   return (
     <div>
       <button onClick={() => registerSessionJob("job-1", { navigateOnDone: true })}>watch</button>
       <button onClick={() => registerSessionJob("job-1", { navigateOnDone: true })}>poke</button>
+      <button onClick={() => selectPackage(OTHER_PKG.id)}>pick other</button>
       <span data-testid="selected">{selectedPackageId ?? "latest"}</span>
+      <span data-testid="pinned">{pinnedPackageId ?? "none"}</span>
     </div>
   );
 }
@@ -142,6 +156,7 @@ function renderProvider(startPath = "/projects/p1/walkthrough") {
 describe("PackagesContext completion watcher", () => {
   beforeEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     vi.mocked(apiFetch).mockReset();
   });
 
@@ -160,7 +175,10 @@ describe("PackagesContext completion watcher", () => {
     await waitFor(() => {
       expect(screen.getByTestId("selected")).toHaveTextContent(NEW_PKG.id);
     });
-    expect(localStorage.getItem("obb.selectedPackage.p1")).toBe(NEW_PKG.id);
+    // Adopting is a selection, not a pin: this tab moves, other tabs and the
+    // next new tab are untouched.
+    expect(sessionStorage.getItem(TAB_KEY)).toBe(NEW_PKG.id);
+    expect(localStorage.getItem(PIN_KEY)).toBeNull();
   });
 
   it("does not navigate for a section regeneration", async () => {
@@ -180,5 +198,66 @@ describe("PackagesContext completion watcher", () => {
     });
     expect(screen.getByTestId("path")).toHaveTextContent("/projects/p1/walkthrough");
     expect(screen.getByTestId("selected")).toHaveTextContent("latest");
+  });
+
+  it("opens a fresh tab on the pinned package", async () => {
+    localStorage.setItem(PIN_KEY, OTHER_PKG.id);
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent(OTHER_PKG.id));
+    expect(screen.getByTestId("pinned")).toHaveTextContent(OTHER_PKG.id);
+  });
+
+  it("lets this tab's own selection outrank the pin", async () => {
+    localStorage.setItem(PIN_KEY, OTHER_PKG.id);
+    sessionStorage.setItem(TAB_KEY, NEW_PKG.id);
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent(NEW_PKG.id));
+    // The pin is untouched — it is what the NEXT tab opens on, not a lock.
+    expect(localStorage.getItem(PIN_KEY)).toBe(OTHER_PKG.id);
+  });
+
+  it("drops the pre-pinning key instead of honouring it", async () => {
+    localStorage.setItem(LEGACY_KEY, NEW_PKG.id);
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    // Waiting on the removal, not on the selection: "latest" is also the
+    // pre-init state, so asserting it first would pass before init even ran.
+    await waitFor(() => expect(localStorage.getItem(LEGACY_KEY)).toBeNull());
+    expect(screen.getByTestId("selected")).toHaveTextContent("latest");
+  });
+
+  it("writes a selection to this tab only, never to the pin", async () => {
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent("latest"));
+    fireEvent.click(screen.getByText("pick other"));
+
+    await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent(OTHER_PKG.id));
+    expect(sessionStorage.getItem(TAB_KEY)).toBe(OTHER_PKG.id);
+    expect(localStorage.getItem(PIN_KEY)).toBeNull();
+  });
+
+  it("keeps a pinned selection when a generation lands, but still navigates", async () => {
+    localStorage.setItem(PIN_KEY, OTHER_PKG.id);
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    await waitFor(() => expect(screen.getByTestId("selected")).toHaveTextContent(OTHER_PKG.id));
+
+    fireEvent.click(screen.getByText("watch"));
+    fireEvent.click(screen.getByText("poke")); // completes → server default is NEW_PKG
+
+    // The navigation courtesy is independent of the pin: this tab asked for
+    // the run, so it is taken to the overview to see it land.
+    await waitFor(() => expect(screen.getByTestId("path")).toHaveTextContent("/projects/p1"));
+    expect(screen.getByTestId("selected")).toHaveTextContent(OTHER_PKG.id);
+    expect(localStorage.getItem(PIN_KEY)).toBe(OTHER_PKG.id);
+    expect(sessionStorage.getItem(TAB_KEY)).toBeNull();
   });
 });
