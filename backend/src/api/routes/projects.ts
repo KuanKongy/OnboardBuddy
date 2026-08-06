@@ -104,6 +104,9 @@ const WRITABLE_SETTINGS: Record<string, SettingSpec> = {
   auto_reanalyze_on_push: {
     validate: (v) => (typeof v === 'boolean' ? null : "auto_reanalyze_on_push must be a boolean"),
   },
+  auto_regenerate_stale: {
+    validate: (v) => (typeof v === 'boolean' ? null : "auto_regenerate_stale must be a boolean"),
+  },
 };
 
 export const projectsRouter = Router();
@@ -697,6 +700,11 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
               -- into one row; NULL means nobody chained it — a package someone
               -- asked for directly — or the row predates the key.
               aj.checkpoint->>'chainedFrom' AS chained_from,
+              -- Same trick for the third generate_package flavour: a run that
+              -- rebuilt only the stale parts of an existing package. Without
+              -- it the history calls a two-section repair a full package
+              -- generation, and its cost reads as inexplicably small.
+              aj.checkpoint->>'onlyStale' AS only_stale,
               CASE WHEN aj.finished_at IS NOT NULL AND aj.started_at IS NOT NULL
                    THEN (EXTRACT(EPOCH FROM (aj.finished_at - aj.started_at)) * 1000)::bigint
                    ELSE NULL END AS duration_ms,
@@ -756,6 +764,8 @@ projectsRouter.get("/:id/runs", requireProjectAccess(), async (req, res) => {
       section_type: r.section_type ?? null,
       tutorial_title: r.tutorial_title ?? null,
       chained_from: r.chained_from ?? null,
+      // ->> yields text, so the jsonb boolean arrives as 'true'/null.
+      only_stale: r.only_stale === 'true',
       config: {
         branch: (r.snapshot_branch as string | null) ?? (r.requested_branch as string | null),
         commit: (r.snapshot_commit as string | null) ?? (r.requested_commit as string | null),

@@ -104,25 +104,34 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
  * against the latest analyzed snapshot, without re-analyzing the repo.
  * Any member can generate their own role's package — that's the product's
  * core loop for a newly joined developer; budgets cap the spend.
+ *
+ * `only_stale` narrows the same job to the stale sections and tutorials of an
+ * existing package: the cheap answer to "N sections are stale" when a full
+ * rebuild would pay to regenerate the eleven that are still current.
  */
 onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = String(req.params.id);
     const userId = req.user!.id;
-    const body = (req.body ?? {}) as { role?: string; package_id?: string; snapshot_id?: string; branch?: string };
+    const body = (req.body ?? {}) as {
+      role?: string; package_id?: string; snapshot_id?: string; branch?: string; only_stale?: boolean;
+    };
     const role = body.role;
     if (!role || !["backend", "frontend", "devops", "qa", "general"].includes(role)) {
       res.status(400).json({ error: "role must be one of backend/frontend/devops/qa/general" });
       return;
     }
+    const onlyStale = body.only_stale === true;
 
     // Target context: an explicit package (generate another role for the
     // same scope/commit/branch) > an explicit snapshot > the latest complete
     // snapshot. Branch defaults to the context's branch.
     let snapshot: { id: string; scope_id: string | null; commit_hash: string | null; branch: string | null } | undefined;
     let branch = typeof body.branch === "string" && body.branch !== "" ? body.branch : null;
+    let targetPackageId: string | null = null;
     try {
       const packageId = readPackageParam(body.package_id);
+      targetPackageId = packageId ?? null;
       if (packageId) {
         const pkg = (await query(
           `SELECT op.snapshot_id, op.branch, s.scope_id, s.commit_hash, s.branch AS snapshot_branch
@@ -155,6 +164,14 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
       throw err;
     }
 
+    // "Only the stale parts" is meaningless without a package to read the
+    // stale parts from — the worker would have nothing to scope the rebuild to
+    // and would fall back to minting a fresh package at the new commit.
+    if (onlyStale && !targetPackageId) {
+      res.status(400).json({ error: "only_stale requires package_id" });
+      return;
+    }
+
     if (!snapshot) {
       // Newest by PUSH recency on the requested (or default) branch — NOT by
       // analysis_snapshots.created_at, which is stamped when the run reached
@@ -175,6 +192,35 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
     // The worker reads the project's CURRENT privacy mode: ai_disabled
     // yields a deterministic package, the other modes an AI-narrated one.
 
+    if (onlyStale && targetPackageId) {
+      // Stale content regenerates against the newest analyzed code, not the
+      // snapshot the package was built from — same rule (and same query) as
+      // the per-section route above; a rebuild against the old snapshot would
+      // reproduce the content that went stale.
+      const latest = await query(
+        `SELECT id, scope_id, commit_hash, branch FROM analysis_snapshots s
+         WHERE scope_id = $1 AND status = 'complete'
+         ORDER BY ${latestSnapshotOrderSql('s', '$2::varchar')} LIMIT 1`,
+        [snapshot.scope_id, branch],
+      );
+      snapshot = (latest.rows[0] as typeof snapshot) ?? snapshot;
+
+      // Nothing stale = nothing to do, and a job that generates nothing is
+      // worse than a refusal: it bills a run and reports "complete" over an
+      // unchanged package. The UI hides the option at zero; this is the race.
+      const counts = (await query(
+        `SELECT (SELECT count(*) FROM package_sections ps
+                  WHERE ps.package_id = $1 AND ps.review_status = 'stale')::int AS stale_sections,
+                (SELECT count(*) FROM tutorials t
+                  WHERE t.package_id = $1 AND t.status = 'stale')::int AS stale_tutorials`,
+        [targetPackageId],
+      )).rows[0] as { stale_sections: number; stale_tutorials: number };
+      if (counts.stale_sections === 0 && counts.stale_tutorials === 0) {
+        res.status(409).json({ error: "Nothing in this package is stale" });
+        return;
+      }
+    }
+
     // Concurrency is per package identity: only the same (snapshot, role,
     // branch) generation conflicts; other roles/branches/snapshots run in
     // parallel.
@@ -194,11 +240,15 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
       return;
     }
 
+    // checkpoint.onlyStale is what the run history labels this row by, and —
+    // because Resume rebuilds the job payload from the row — what keeps a
+    // retried run scoped to the stale parts of the existing package.
     const jobId = ((await query(
-      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step, branch, commit_hash, scope_id)
-       VALUES ($1, $2, $3, 'generate_package', $4, 'queued', 'Waiting for worker', $5, $6, $7)
+      `INSERT INTO analysis_jobs (project_id, snapshot_id, requested_by, job_type, role, status, current_step, branch, commit_hash, scope_id, checkpoint)
+       VALUES ($1, $2, $3, 'generate_package', $4, 'queued', 'Waiting for worker', $5, $6, $7, $8::jsonb)
        RETURNING id`,
-      [projectId, snapshot.id, userId, role, branch, snapshot.commit_hash, snapshot.scope_id],
+      [projectId, snapshot.id, userId, role, branch, snapshot.commit_hash, snapshot.scope_id,
+       onlyStale ? JSON.stringify({ onlyStale: true, packageId: targetPackageId }) : null],
     )).rows[0] as { id: string }).id;
 
     await enqueueSummaryRun(jobId, projectId, `generate_summary_${role}`, {
@@ -208,9 +258,11 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
       triggeredBy: userId,
       role,
       branch: branch ?? undefined,
+      packageId: onlyStale ? targetPackageId ?? undefined : undefined,
+      onlyStale: onlyStale || undefined,
     });
 
-    res.status(202).json({ job: { id: jobId, status: "queued", role } });
+    res.status(202).json({ job: { id: jobId, status: "queued", role, only_stale: onlyStale } });
   } catch (err) {
     console.error("On-demand generate error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -240,7 +292,7 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
               s.semantic_depth, s.privacy_mode,
               sec.section_count, sec.stale_sections, sec.approved_sections,
               sec.low_confidence_sections,
-              tut.tutorial_count,
+              tut.tutorial_count, tut.stale_tutorials,
               (op.analyzed_commit = COALESCE(
                 (SELECT aj.commit_hash FROM analysis_jobs aj
                  WHERE aj.project_id = op.project_id AND aj.scope_id = op.scope_id
@@ -264,7 +316,8 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
          WHERE ps.package_id = op.id
        ) sec ON true
        LEFT JOIN LATERAL (
-         SELECT count(*)::int AS tutorial_count
+         SELECT count(*)::int AS tutorial_count,
+                count(*) FILTER (WHERE t.status = 'stale')::int AS stale_tutorials
          FROM tutorials t
          WHERE t.package_id = op.id
        ) tut ON true
