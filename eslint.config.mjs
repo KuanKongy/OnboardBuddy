@@ -8,7 +8,10 @@ export default [
       "dist/**",
       "coverage/**",
       "frontend/dist/**",
-      "backend/dist/**"
+      "backend/dist/**",
+      // Vendored third-party repos used as analysis truth fixtures; their
+      // code is test DATA, not ours, and must never gate our lint.
+      "backend/.truth-repos/**"
     ]
   },
   {
