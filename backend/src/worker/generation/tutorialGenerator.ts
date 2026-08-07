@@ -56,6 +56,7 @@ import {
   handoffNamesNext,
   lintProcedure,
   lintWalkthrough,
+  narrationIsFiller,
   type ProcedureDraft,
   type ProcedureSkipReason,
   type ProcedureStep,
@@ -64,6 +65,7 @@ import {
   type TraceStep,
   type WalkthroughDraft,
   type WalkthroughEmitSite,
+  type WalkthroughFinding,
   type WalkthroughJourney,
   type WalkthroughStep,
 } from './tutorialProcedure.js';
@@ -72,8 +74,13 @@ import {
  * v4 is the annotated-walkthrough rewrite (doc/TUTORIAL_REDESIGN.md): a bump
  * here invalidates every v3 procedure, which is intended — the step SHAPE
  * changed, so a cached v3 card would render as an empty walkthrough.
+ *
+ * v5 bans the filler openers ("This step involves …", "as part of the overall
+ * …") in the prompt AND rejects them on the way in. The bump is what stops the
+ * v4 cards — whose narration is the filler this gate now refuses — from being
+ * cloned forward untouched for as long as the flow itself does not change.
  */
-export const TUTORIAL_PROMPT_VERSION = 'tutorial-v4-walkthrough';
+export const TUTORIAL_PROMPT_VERSION = 'tutorial-v5-walkthrough';
 /** A ceiling on the reader's attention, not a quota to fill. */
 // 6, up from 4: with run-it and run-tests occupying two slots, 4 left only
 // two traced flows — a senior reviewer opening a repo with five real user
@@ -83,6 +90,14 @@ export const TUTORIAL_PROMPT_VERSION = 'tutorial-v4-walkthrough';
 const DEFAULT_MAX_TUTORIALS = 6;
 // 1M-context sizing (Track B): fuller step snippets, cheap at flash prices.
 const SNIPPET_CAP = 2_400;
+
+/**
+ * A tutorial title is a heading, and headings in this product do not end in a
+ * full stop — but the model ends roughly one in six with one, so a tab of six
+ * cards showed five bare titles and "Onboarding page loads and sets up auth
+ * and tour state." Trailing dots only; nothing inside the title is touched.
+ */
+const asTitle = (text: string): string => text.replace(/[.\s]+$/, '');
 
 export interface GenerateTutorialsParams {
   /**
@@ -740,6 +755,10 @@ function readJourney(raw: unknown): WalkthroughJourney | null {
       // The composer's normalized hand-off token, when it emitted one: an
       // exact literal to scan for beats parsing one back out of prose.
       token: b.token == null ? undefined : String(b.token),
+      // …except that the normalized one is lowercased and de-pluralized, so
+      // it matches nothing in a snippet spelling it `getAnalysisQueue`. Absent
+      // on snapshots analysed before the composer recorded it.
+      tokenRaw: b.tokenRaw == null ? undefined : String(b.tokenRaw),
     }));
   return { members, memberTitles: titles, boundaries };
 }
@@ -912,14 +931,19 @@ async function generateOneTutorial(
   // The model wrote narration and hand-offs over a skeleton it cannot alter;
   // applying them is where a hand-off that names nothing gets replaced by the
   // deterministic template rather than shipped broken.
-  if (candidate.mode === 'walkthrough') applyWalkthroughAnnotation(candidate.draft, output);
+  const narrationRejects = candidate.mode === 'walkthrough'
+    ? applyWalkthroughAnnotation(candidate.draft, output)
+    : [];
   // Nothing to lint when nothing was written: `explanationLint` asks whether
   // prose explains, and the deterministic templates are not prose.
   const lint = params.ai === null
     ? { issues: [] as string[], hits: [] as string[] }
     : lintAnnotation(candidate, output, workflow.title);
+  // A rejected narration is a finding the lint cannot make: by the time it
+  // runs, the filler has already been swapped back out for the template.
   const structural = candidate.mode === 'walkthrough'
-    ? lintWalkthrough(candidate.draft, workflow.journey).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }))
+    ? [...narrationRejects, ...lintWalkthrough(candidate.draft, workflow.journey)]
+      .map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }))
     : lintProcedure(candidate.draft).map((f) => ({ order: f.stepOrder, code: f.code as string, detail: f.detail }));
 
   const unknowns: Array<{ kind: string; detail: string }> = [
@@ -1284,13 +1308,15 @@ async function annotateWalkthrough(
       '- goal: ONE sentence "After this, you can …" naming what they will be able to find or change unaided.',
       '- summary: 1-2 plain sentences on what this path does end to end, and one clause on what it does not cover.',
       '- steps: for each step_order —',
-      '    · narration: 2-3 sentences, at most 55 words, on what this code does IN THIS FLOW. Ground every claim in the snippet and the highlight labels.',
+      '    · narration: 2-3 sentences, at most 55 words, on what this code does IN THIS FLOW. Open on the action — the first word should be doing something to something. Ground every claim in the snippet and the highlight labels.',
       '    · handoff: EXACTLY ONE sentence saying how control or data reaches the next step. It MUST name the next step\'s symbol or its file name. On the last step, return "" — the landing statement is already written.',
       '- confidence: how well the evidence supports this reading end to end.',
     ].join('\n'),
     [
       'Hard rules:',
       '- narration must not restate the hand-off, and the hand-off must not restate the narration.',
+      '- NEVER open a narration with "This step involves", "This step is", "This interaction", "This code" or "This function/method is responsible for". The reader can see which step they are on; describe the code, not the step.',
+      '- NEVER write "as part of the overall …" (or "the larger/broader …"). It is true of every step in every flow, so it states nothing. Say what this code leaves behind that the next step needs.',
       '- Never invent a file, symbol, table, queue or flag that is not written above. If you want to name one and cannot find it, say nothing.',
       '- Never refer to "the highlighted line" on a step whose highlights are listed as none.',
       '- No filler ("this is important", "as we can see", "simply", "essentially"), no tour-guide framing ("let\'s take a look", "we will now"), and no sentence about "this tutorial" or "this step".',
@@ -1336,7 +1362,7 @@ async function annotateWalkthrough(
   }
 
   return {
-    title: clean(value.title ?? ''),
+    title: asTitle(clean(value.title ?? '')),
     goal: clean(value.goal ?? ''),
     summary: clean(value.summary ?? ''),
     confidence: value.confidence ?? 'medium',
@@ -1352,19 +1378,32 @@ async function annotateWalkthrough(
  * saying `deterministic`, which the UI labels exactly as cluster summaries
  * already label their source.
  */
-function applyWalkthroughAnnotation(draft: WalkthroughDraft, output: Annotation): void {
+function applyWalkthroughAnnotation(draft: WalkthroughDraft, output: Annotation): WalkthroughFinding[] {
+  const rejected: WalkthroughFinding[] = [];
   for (const step of draft.steps) {
     if (step.appendix) continue;
     const narration = output.whyByOrder.get(step.order);
     if (narration && narration.length >= 20) {
-      step.narration = narration;
-      step.narrationSource = 'ai';
+      if (narrationIsFiller(narration)) {
+        // Same gate as a hand-off that names nothing: the deterministic
+        // sentence is plainer, but it is about this step's code rather than
+        // about the fact that this step is a step.
+        rejected.push({
+          stepOrder: step.order,
+          code: 'narration_filler',
+          detail: 'the narration described the step instead of the code, so the deterministic sentence was kept',
+        });
+      } else {
+        step.narration = narration;
+        step.narrationSource = 'ai';
+      }
     }
     const handoff = output.handoffByOrder.get(step.order);
     if (step.handoff && handoff && handoffNamesNext(handoff, step.handoff)) {
       step.handoff = { ...step.handoff, text: handoff, source: 'ai' };
     }
   }
+  return rejected;
 }
 
 /**
@@ -1451,7 +1490,7 @@ async function annotateProcedure(
   }
 
   return {
-    title: clean(value.title ?? ''),
+    title: asTitle(clean(value.title ?? '')),
     goal: clean(value.goal ?? ''),
     summary: clean(value.summary ?? ''),
     confidence: value.confidence ?? 'medium',

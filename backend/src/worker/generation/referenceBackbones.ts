@@ -54,8 +54,32 @@ export async function loadConfigFacts(snapshotId: string): Promise<ConfigFacts> 
   return facts;
 }
 
-const cell = (v: unknown): string =>
-  String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ').slice(0, 120);
+/**
+ * One markdown table cell: pipes escaped, newlines flattened, length capped.
+ *
+ * The cap used to be a bare `slice(0, 120)` — a silent cut in the middle of
+ * whatever token it landed on. The guardrails env table shipped
+ * "… the project root, e.g. https://<ref>.su" for SUPABASE_URL, and nothing in
+ * the cell told the reader the URL was truncated rather than simply wrong.
+ * Cut at the last word boundary inside the cap and mark it.
+ *
+ * 160 because that comment is 144 characters whole: the longest documented
+ * purpose in this repo's own `.env.example` now fits, and the ones that still
+ * do not (`configFlowExtractor` caps a gathered comment at 200) end at a word
+ * with an ellipsis instead of mid-URL.
+ */
+const CELL_MAX = 160;
+
+const cell = (v: unknown): string => {
+  const text = String(v ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+  if (text.length <= CELL_MAX) return text;
+  const clipped = text.slice(0, CELL_MAX);
+  const lastSpace = clipped.lastIndexOf(' ');
+  // A file path or an identifier has no space to cut at. A hard cut plus the
+  // ellipsis is still honest there, and beats throwing away most of the cell
+  // hunting for a boundary that does not exist.
+  return `${(lastSpace > CELL_MAX * 0.6 ? clipped.slice(0, lastSpace) : clipped).trimEnd()}…`;
+};
 
 // ── routes_jobs ──────────────────────────────────────────────────────────────
 
@@ -74,6 +98,34 @@ function routeGroup(path: string): string {
   return '/' + segs.slice(0, 2).join('/');
 }
 
+/**
+ * `symbolExtractor` names an INLINE route handler after the call site that
+ * declares it — `GET /`, `POST /:id/analysis-jobs/:jobId/resume` — because an
+ * arrow function passed straight to `router.post(...)` has no identifier of its
+ * own. Printed in the Handler column beside Method and Path, that name is the
+ * first two columns again, in the un-mounted form, which reads like a second
+ * (and contradictory) path: `backend/src/api/routes/projects.ts:570 POST
+ * /:id/analysis-jobs/:jobId/resume` in a row whose Path cell says
+ * `/api/projects/:id/analysis-jobs/:jobId/resume`. A handler with a real name
+ * (`loginHandler`, `ProjectController.destroy`) is a fact the file:line does not
+ * carry, so those are kept.
+ */
+const SYNTHETIC_HANDLER_NAME = /^[A-Z]+\s+\//;
+
+/**
+ * The Workflow cell, or an em-dash when it would restate Method and Path.
+ *
+ * `workflowExtractor` titles a route flow "<METHOD> <full path>", so for an
+ * ordinary route the fourth column was the first two pasted back together.
+ * Journey titles ("<entry title> → what it reads from onboarding_packages") do
+ * carry something new, and they are exactly what survives this test.
+ */
+function workflowNote(r: RouteRow): string {
+  const title = (r.workflow_title ?? '').trim();
+  if (!title) return '—';
+  return title === `${r.method ?? ''} ${r.route_path ?? ''}`.trim() ? '—' : cell(title);
+}
+
 export async function buildRoutesJobsBackbone(snapshotId: string): Promise<string> {
   const routes = (await query(
     `SELECT e.method, e.route_path, n.file_path, n.line_start,
@@ -82,7 +134,9 @@ export async function buildRoutesJobsBackbone(snapshotId: string): Promise<strin
      JOIN graph_nodes n ON n.id = e.node_id
      LEFT JOIN workflows w ON w.entrypoint_id = e.id
      WHERE e.snapshot_id = $1 AND e.trigger_type = 'http_route' AND e.route_path IS NOT NULL
-     ORDER BY e.route_path, e.method`,
+     -- w.title breaks the tie between the several workflows that can reference
+     -- one entrypoint, so the row this table keeps is the same one every run.
+     ORDER BY e.route_path, e.method, w.title`,
     [snapshotId],
   )).rows as RouteRow[];
 
@@ -104,8 +158,23 @@ export async function buildRoutesJobsBackbone(snapshotId: string): Promise<strin
 
   const parts: string[] = [];
 
-  const groups = new Map<string, RouteRow[]>();
+  // One row per route, not one per workflow that references it. The LEFT JOIN
+  // fans a route out across every flow that starts at it, so
+  // `POST /api/projects/:id/analysis-jobs/:jobId/resume` printed twice —
+  // identical but for the last column, which read as two different endpoints.
+  // Where one of the duplicates carries a journey title, that is the copy kept:
+  // it is the only variant whose Workflow cell is not an em-dash.
+  const byRoute = new Map<string, RouteRow>();
   for (const r of routes) {
+    const id = `${r.method ?? ''} ${r.route_path}`;
+    const kept = byRoute.get(id);
+    if (!kept) byRoute.set(id, r);
+    else if (workflowNote(kept) === '—' && workflowNote(r) !== '—') byRoute.set(id, r);
+  }
+  const deduped = [...byRoute.values()];
+
+  const groups = new Map<string, RouteRow[]>();
+  for (const r of deduped) {
     const g = routeGroup(r.route_path!);
     groups.set(g, [...(groups.get(g) ?? []), r]);
   }
@@ -115,8 +184,9 @@ export async function buildRoutesJobsBackbone(snapshotId: string): Promise<strin
     parts.push('| Method | Path | Handler | Workflow |');
     parts.push('| --- | --- | --- | --- |');
     for (const r of rows) {
-      const handler = `\`${r.file_path}${r.line_start ? `:${r.line_start}` : ''}\`${r.symbol ? ` ${cell(r.symbol)}` : ''}`;
-      parts.push(`| ${cell(r.method)} | \`${cell(r.route_path)}\` | ${handler} | ${cell(r.workflow_title ?? '')} |`);
+      const named = r.symbol && !SYNTHETIC_HANDLER_NAME.test(r.symbol) ? ` ${cell(r.symbol)}` : '';
+      const handler = `\`${cell(`${r.file_path}${r.line_start ? `:${r.line_start}` : ''}`)}\`${named}`;
+      parts.push(`| ${cell(r.method)} | \`${cell(r.route_path)}\` | ${handler} | ${workflowNote(r)} |`);
     }
     parts.push('');
   }
@@ -134,7 +204,7 @@ export async function buildRoutesJobsBackbone(snapshotId: string): Promise<strin
     parts.push('');
   }
 
-  const webhooks = routes.filter((r) => /webhook/i.test(r.route_path ?? ''));
+  const webhooks = deduped.filter((r) => /webhook/i.test(r.route_path ?? ''));
   if (webhooks.length > 0) {
     parts.push('#### Webhooks (externally triggered)');
     for (const w of webhooks) {

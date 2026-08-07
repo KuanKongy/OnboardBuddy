@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import type { RepoFileRecord, RepoInventory, EvidenceNode } from '../types/analysis.js';
-import type { ExtractedWorkflow, WorkflowStep } from './workflowExtractor.js';
+import { andList, type ExtractedWorkflow, type WorkflowStep } from './workflowExtractor.js';
 import type { DetectedEntrypoint } from './entrypointDetector.js';
 import { configKey } from './stableKeys.js';
 
@@ -239,7 +239,13 @@ function ciWorkflow(pipeline: CiPipeline): ExtractedWorkflow | null {
   return {
     title: `CI: on ${triggers}`,
     triggerType: 'ci_pipeline',
-    purpose: `Continuous integration pipeline (${basename(p)}): ${pipeline.jobs.map((j) => j.name).join(', ')}`,
+    // A colon followed by a bare job list read as a label, not a sentence:
+    // a one-job workflow shipped "Continuous integration pipeline (ci.yml):
+    // verify". The job names are still verbatim — they are the fact — but they
+    // now sit in a clause that says what the pipeline does with them.
+    purpose: `Continuous integration pipeline (${basename(p)}); runs the ${
+      andList(pipeline.jobs.map((j) => j.name))
+    } job${pipeline.jobs.length === 1 ? '' : 's'}.`,
     stableKey: `wf:config:ci:${p}`,
     confidence: 'high',
     entrypoint: configEntrypoint(p),

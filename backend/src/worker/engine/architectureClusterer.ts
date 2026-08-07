@@ -547,15 +547,58 @@ function take(values: Iterable<string>, limit: number): string[] {
 /** How many components one side of a boundary names before it says "and others". */
 const MAX_PARTNERS = 3;
 
+/** How many traced flows the boundary names by title; the rest are counted. */
+const MAX_FLOWS = 2;
+
+/** What `<Area> · <Name>` labels are built with, in `clusterArchitecture` above. */
+const AREA_SEPARATOR = ' · ';
+
 /**
- * One direction of a boundary in words: "reads and writes Database Schema,
- * calls into Shared Utilities and Workers".
+ * Names partners as they read from INSIDE this component: within
+ * `Backend · Workers`, `Backend · Shared Utilities` is just "Shared Utilities".
+ * The area is what the two of them already have in common, and repeating it on
+ * every partner cost eight words in a sentence that names three of them.
+ *
+ * A differing area is never dropped — seen from the backend, `Frontend · Modules`
+ * IS the fact, and shortening it to "Modules" would assert the opposite.
+ */
+function partnerNamer(label: string, links: ClusterBoundaryLink[]): (other: string) => string {
+  const sep = label.indexOf(AREA_SEPARATOR);
+  const identity = (other: string) => other;
+  if (sep < 0) return identity;
+  const prefix = label.slice(0, sep + AREA_SEPARATOR.length);
+
+  const short = new Map<string, string>();
+  for (const link of links) {
+    short.set(link.other, link.other.startsWith(prefix) ? link.other.slice(prefix.length) : link.other);
+  }
+  // A repo with a root-scope `Modules` cluster alongside `Backend · Modules`
+  // would print two different components under one name. The shortening is
+  // cosmetic and the distinction is not, so one collision turns it off here.
+  const seen = new Set<string>();
+  for (const name of short.values()) {
+    if (seen.has(name)) return identity;
+    seen.add(name);
+  }
+  return (other) => short.get(other) ?? other;
+}
+
+/**
+ * One direction of a boundary as one clause PER VERB — "reads and writes
+ * Database Schema", then "calls into Shared Utilities and Modules" — so the
+ * caller can end a sentence between them. Joined into a single sentence these
+ * ran to four clauses before the first full stop, which is a paragraph a
+ * reader skips rather than scans.
  *
  * Each partner is named once, under the strongest verb the two of them share,
  * so a component that both imports and calls another appears once rather than
  * in two clauses that a reader has to notice are the same relationship.
  */
-function describeLinks(links: ClusterBoundaryLink[], side: 'out' | 'in'): string {
+function describeLinks(
+  links: ClusterBoundaryLink[],
+  side: 'out' | 'in',
+  name: (other: string) => string,
+): string[] {
   const strongest = new Map<string, ClusterEdgeType>();
   for (const link of links) {
     const current = strongest.get(link.other);
@@ -570,16 +613,40 @@ function describeLinks(links: ClusterBoundaryLink[], side: 'out' | 'in'): string
   return [...byVerb.entries()]
     .sort((a, b) => EDGE_VERB[b[0]].rank - EDGE_VERB[a[0]].rank)
     .map(([type, all]) => {
-      const shown = take(all, MAX_PARTNERS);
-      // `list()` would render "A, B and C and others" — the truncation marker
-      // takes the conjunction slot instead.
-      const named = all.length > shown.length ? `${shown.join(', ')} and others` : list(shown);
       const verb = EDGE_VERB[type];
-      return side === 'out'
-        ? `${verb.out} ${named}`
-        : `${named} ${all.length === 1 ? verb.inOne : verb.inMany}`;
-    })
-    .join(', ');
+      const clause = (labels: string[]): string => {
+        const shown = take(labels, MAX_PARTNERS);
+        // `list()` would render "A, B and C and others" — the truncation marker
+        // takes the conjunction slot instead.
+        const named = labels.length > shown.length ? `${shown.join(', ')} and others` : list(shown);
+        return side === 'out'
+          ? `${verb.out} ${named}`
+          : `${named} ${labels.length === 1 ? verb.inOne : verb.inMany}`;
+      };
+
+      const short = clause(all.map(name));
+      // "Backend · Tests tests it" shortens to "Tests tests it": the area was
+      // the only thing holding the noun and the verb apart, and a doubled word
+      // stops a reader mid-sentence. Costing this one clause its shortening is
+      // cheaper than that, and the long label was never wrong.
+      return /\b(\w+)\s+\1\b/i.test(short) ? clause(all) : short;
+    });
+}
+
+/**
+ * A flow's title, as it reads in a list of flows. Journey titles carry their
+ * terminus — "POST /api/projects/:id/analysis-jobs/:jobId/resume → what it
+ * reads from onboarding_packages" — which identifies nothing here that the
+ * trigger does not already identify, and which swallows the "and" separating
+ * one flow from the next.
+ *
+ * Two journeys off the same trigger collapse to one entry, and the count of
+ * what is left over shrinks with them: naming the same door twice is the
+ * worse answer.
+ */
+function flowLabel(title: string): string {
+  const arrow = title.indexOf(' → ');
+  return arrow > 0 ? title.slice(0, arrow) : title;
 }
 
 export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarrative {
@@ -601,7 +668,8 @@ export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarr
 
   // ── Boundary: what crosses, and what those crossings carry.
   const links = [...facts.inbound, ...facts.outbound];
-  const carried = take(links.flatMap((l) => l.carries), 3);
+  // Deduped after `flowLabel`, so two journeys sharing a trigger count once.
+  const carried = [...new Set(links.flatMap((l) => l.carries).map(flowLabel))].filter(Boolean);
   let boundary: string;
   if (links.length === 0) {
     boundary = 'Nothing in the traced evidence connects it to another component.';
@@ -609,13 +677,23 @@ export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarr
       'No traced connection reaches this component, which is a limit of the tracing as much as a fact about the code.',
     );
   } else {
-    const out = describeLinks(facts.outbound, 'out');
-    const inb = describeLinks(facts.inbound, 'in');
-    const sentences: string[] = [];
-    if (out) sentences.push(`It ${out}.`);
-    if (inb) sentences.push(`${inb[0]!.toUpperCase()}${inb.slice(1)}.`);
-    if (carried.length > 0) {
-      sentences.push(`Traced flows crossing that boundary include ${list(carried)}.`);
+    // One sentence per direction per verb: the reader is looking for one of
+    // "what does this call" and "what calls this", and a full stop is what
+    // lets them stop reading at the answer.
+    const name = partnerNamer(facts.label, links);
+    const sentences = describeLinks(facts.outbound, 'out', name).map((clause) => `It ${clause}.`);
+    for (const clause of describeLinks(facts.inbound, 'in', name)) {
+      sentences.push(`${clause[0]!.toUpperCase()}${clause.slice(1)}.`);
+    }
+    if (carried.length === 1) {
+      sentences.push(`One traced flow crosses this boundary: ${carried[0]}.`);
+    } else if (carried.length > 1) {
+      const shown = carried.slice(0, MAX_FLOWS);
+      const rest = carried.length - shown.length;
+      // Same reason as the partner list: the count takes the conjunction slot
+      // rather than trailing a second "and" behind `list()`.
+      const named = rest > 0 ? `${shown.join(', ')} and ${rest} other${rest === 1 ? '' : 's'}` : list(shown);
+      sentences.push(`Flows that cross this boundary include ${named}.`);
     } else {
       sentences.push('No traced flow crosses that boundary — the links here are imports and calls only.');
       unknowns.push('No traced flow crosses this boundary, so what actually travels between these components at runtime is not established.');

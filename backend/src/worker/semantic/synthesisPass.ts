@@ -183,8 +183,28 @@ export function groupClustersIntoServices(ctx: Pick<SemanticContext, 'inventory'
 
 // ── Batched file records ─────────────────────────────────────────────────────
 
+/**
+ * The `purpose` clauses exist because the batched file pass had two measured
+ * failure modes, both of which cost the reader the one line the file gets:
+ *
+ *  - restating the file name ("Process summary jobs from a queue." for
+ *    `summaryWorker.ts`), which the file tree already told them; and
+ *  - describing THIS task instead of the file ("Synthesize a semantic record
+ *    for backend/src/worker/generation/sectionSpecs.ts"), which was a stored
+ *    summary on a live analysis.
+ *
+ * The anchor requirement is what separates them from a real answer: a produced
+ * artifact, a consumer or a trigger cannot be read off the path.
+ */
 const FILE_BATCH_SYSTEM = [
   'You are synthesizing FILE records for a codebase onboarding tool. For EACH file below, produce one semantic record from its symbol records. Include key_symbols (most important symbols) and file_role (e.g. route file / service / util / config glue).',
+  [
+    'purpose: what this file is FOR in the running system — what it produces, who consumes what it produces, or what sets it off. It must carry at least one concrete anchor from the evidence: an output, a caller, a table, a queue, a route or a trigger.',
+    'Restating the file name is a failure. For a file named summaryWorker.ts, "Process summary jobs from a queue" adds nothing a reader did not have from the path. Name what exists after this file runs, and which part of the system picks it up.',
+    'A title-cased echo of the path ("API Routes for Capabilities", "Parser Interface and Registration") is the same failure with capital letters.',
+    'Never describe this task. You are not writing about records, synthesis, semantics, summaries or documentation — those are what YOU are doing, never what the file does.',
+    'When the evidence does not name a consumer, say what the file produces and leave the consumer out. An invented reader is worse than a missing one.',
+  ].join('\n'),
   OUTPUT_RULES,
   "Set each record's stable_key to the file path exactly as given in its heading.",
 ].join('\n\n');

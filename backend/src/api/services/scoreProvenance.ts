@@ -220,9 +220,13 @@ function leverFor(inputs: ScoreProvenanceInput[], targetType: ProvenanceTargetTy
 function scaleNoteFor(targetType: ProvenanceTargetType): string {
   const noun = targetType === 'workflow' ? 'flow' : targetType;
   const earnable = targetType === 'workflow'
-    ? 'every signal a flow can earn (fan-in and exported surface do not apply to a path through the graph, so they are left out of the total rather than counted as zero)'
+    ? 'every signal a flow can earn (fan-in and exported surface do not apply to a path through the graph, so they leave the total rather than count as zero)'
     : 'every signal at once';
-  return `Every signal is divided by the highest value any ${noun} reaches in THIS snapshot, so 100 would mean leading ${earnable}. The scale is relative to this repository — it is not comparable across projects.`;
+  // The first clause is the arithmetic and does not compress further without
+  // going vague about WHAT the denominator is; the sentence that followed it
+  // said "relative to this repository" and "not comparable across projects"
+  // twice over, and that is the half worth cutting.
+  return `Each signal is divided by the highest value any ${noun} reaches in this snapshot, so 100 would mean leading ${earnable}. Not comparable across repositories.`;
 }
 
 /** Parses `score_breakdown` as written by `persistCandidateRankings`. */
@@ -276,13 +280,19 @@ export function buildCandidateProvenance(opts: CandidateProvenanceOptions): Scor
   const inputs: ScoreProvenanceInput[] = (Object.entries(CANDIDATE_WEIGHTS) as Array<[CandidateSignal, number]>)
     .map(([signal, weight]) => {
       const value = parsed.normalized[signal] ?? 0;
+      const label = labelForSignal(signal, opts.targetType);
+      const measured = measuredText(signal, parsed.raw[signal], opts.targetType);
       return {
         key: signal,
-        label: labelForSignal(signal, opts.targetType),
+        label,
         weight,
         value,
         contribution: value * weight,
-        measured: measuredText(signal, parsed.raw[signal], opts.targetType),
+        // A boolean signal's measured value IS its label, and the UI prints
+        // both: "Entry point (entry point)". The negative case still says
+        // something the label does not ("not an entry point"), so this drops
+        // the echo rather than the column.
+        measured: measured?.toLowerCase() === label.toLowerCase() ? null : measured,
       };
     })
     .sort((a, b) => (b.contribution ?? 0) - (a.contribution ?? 0));
@@ -300,7 +310,10 @@ export function buildCandidateProvenance(opts: CandidateProvenanceOptions): Scor
     caveat:
       opts.caveat ??
       (opts.targetType === 'workflow'
-        ? `${WORKFLOW_INAPPLICABLE.size} of the 9 signals describe a file's position in the import graph and cannot apply to a path through it, so they are excluded from the total rather than counted against the flow. Flows and files both span 0–100, but they are scored over different signal sets — compare flows with flows.`
+        // The clause about excluding them from the total rather than scoring
+        // them zero lives in `scaleNoteFor`, which ships in the same payload —
+        // saying it twice on one panel is what made this read as a wall.
+        ? `${WORKFLOW_INAPPLICABLE.size} of the 9 signals describe a file's position in the import graph, which a path through it does not have. Flows and files both span 0–100, but they are scored over different signal sets — compare flows with flows.`
         : null),
   };
 }
@@ -389,9 +402,8 @@ export function buildMeanProvenance(opts: MeanProvenanceOptions): ScoreProvenanc
         : []),
     ],
     lever:
-      'It is a mean, not a maximum: one critical file cannot lift a large component, and splitting or merging components moves the number without any code changing. Judge a component by its top members, listed above.',
-    scaleNote:
-      `Each member's own score comes from the 9-signal candidate ranking. ${scaleNoteFor('file')}`,
+      'A mean, not a maximum: one critical file cannot lift a large component, and re-drawing component lines moves the number without code changes. Judge it by its top members above.',
+    scaleNote: `Member scores come from the 9-signal candidate ranking. ${scaleNoteFor('file')}`,
     caveat,
   };
 }

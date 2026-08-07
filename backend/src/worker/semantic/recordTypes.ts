@@ -60,7 +60,11 @@ export const PROMPT_VERSIONS = {
   // old unfenced prompt from being served — and re-fed into later prompts —
   // forever (finding P3: records are content-addressed and outlive a snapshot).
   symbol: 'symbol-record-v3',
-  file: 'file-synthesis-v2',
+  // file v3: `purpose` must name what the file is for in the system with a
+  // concrete anchor. Without the bump, the v2 records — a census of which found
+  // filename restatements and one summary describing the synthesis task itself
+  // — keep being served from the content-addressed cache.
+  file: 'file-synthesis-v3',
   module: 'module-synthesis-v2',
   service: 'service-synthesis-v2',
   system: 'system-synthesis-v2',

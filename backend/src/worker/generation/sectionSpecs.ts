@@ -721,6 +721,13 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // own named block written SECOND is the difference between 0/9 and a
       // mechanically checkable 9/9.
       'SECOND, before any component subsection, write "## Why it is built this way": one bullet per entry in `decisionNotes`, up to three, each in the literal form "<decision> ⇒ <consequence>" with the "⇒" character present, each citing that note\'s receipt. `decisionNotes` is rationale the repo\'s own authors wrote in their comments, with the file and line it came from — paraphrase it, never quote verbatim, and never invent a decision no note supports. WRITE THIS BLOCK BEFORE THE SUBSECTIONS: a section without it is incomplete no matter how good the subsections are. If `decisionNotes` is empty, the block is the single line "No rationale comments were found in this repository." and nothing more.',
+      // Measured on OnboardBuddy: "Fired after the analysis job is accepted, so
+      // callers can start polling ⇒ The system initiates analysis jobs and
+      // provides a mechanism for callers to monitor their progress." The arrow
+      // is present, the gate passes, and the right-hand side is the left-hand
+      // side with longer words. The narration check can only count arrows; this
+      // is the half of the contract only the instruction can carry.
+      'THE RIGHT-HAND SIDE OF "⇒" IS A CONSEQUENCE, NOT A RESTATEMENT. It must tell someone about to change this code something the left-hand side does not already say: what breaks if they undo the decision, what they must change in step with it, what it rules out, what it costs. Restating the comment in more formal words ("… so callers can start polling ⇒ the system provides a mechanism for callers to monitor progress") is the failure mode this rule exists to stop. If a note yields no consequence you can state without repeating it, use a DIFFERENT note from `decisionNotes` — you are given more than three. If none of the remaining notes yield one either, write fewer bullets: one honest decision→consequence bullet is worth more than three that say each thing twice.',
       // Two measured failures fixed here. "Its real file count" invited the
       // count to BE the explanation, producing headings like
       // "Configuration & Deployment — File Count: 0 config files". And
@@ -902,7 +909,14 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       const hasWhyBlock = /##\s*Why it is built this way/i.test(content);
       if (notes >= 1) {
         const stated = (content.match(/⇒/g) ?? []).length;
-        const wanted = Math.min(3, notes);
+        // The instructions now tell the model to DROP a bullet whose right-hand
+        // side would only restate its left, rather than pad the count. A gate
+        // demanding one arrow per available note would hand that permission back
+        // with the other hand — so a repo with one or two rationale comments
+        // owes one honest bullet, not one per comment. Three or more notes still
+        // owes three: `loadDecisionNotes` hands over up to eight, so there is
+        // room to swap out a note that yields nothing.
+        const wanted = notes >= 3 ? 3 : 1;
         if (stated < wanted) {
           issues.push(
             `INCOMPLETE: ${stated} of ${wanted} required decision→consequence statements — write a "## Why it is built this way" block BEFORE the component subsections with one "<decision> ⇒ <consequence>" bullet per decisionNotes entry, using a literal "⇒" and citing that note's receipt. Structure without a stated reason is not an explanation.`,

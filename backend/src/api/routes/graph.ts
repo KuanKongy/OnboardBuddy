@@ -101,6 +101,25 @@ function pathSegments(p: string): string[] {
 const LABEL_RESTATEMENT = /^(?:abstract\s+)?(?:interface|class|type|enum|function|method|variable|const)\s+'/i;
 
 /**
+ * A summary that describes the ANALYSIS instead of the code.
+ *
+ * When a record's own instruction leaks into its output, the model answers the
+ * prompt rather than the question: OnboardBuddy shipped the file-level summary
+ * "Synthesize a semantic record for the backend/src/worker/generation/
+ * sectionSpecs.ts file." — our pipeline's task restated as if it were what
+ * `sectionSpecs.ts` does. It passes LABEL_RESTATEMENT (it opens with a verb,
+ * not a declaration keyword) and it is not facts-only, so nothing stopped it
+ * from being printed as that file's one-line explanation.
+ *
+ * Anchored at the start, on the BASE verb form, and requiring the literal
+ * phrase. The echo is always imperative because it is the instruction coming
+ * back; the third-person form is a real description — "Generates a semantic
+ * record store entry for each parsed file" is what `synthesisPass.ts` does, and
+ * suppressing that would delete a true explanation to catch a false one.
+ */
+const META_ECHO = /^(?:synthesi[sz]e|create|produce|generate)\s+(?:a|an|the)?\s*semantic\s+record\b/i;
+
+/**
  * The one line a stored record actually EXPLAINS, or null when it only
  * restates the label.
  *
@@ -124,6 +143,7 @@ export function explanationFromSummary(
   if (!text) return null;
   if (opts.factsOnly === true) return null;
   if (LABEL_RESTATEMENT.test(text)) return null;
+  if (META_ECHO.test(text)) return null;
   return opts.firstSentence ? text.split(/(?<=[.!?])\s/)[0]!.trim() : text;
 }
 
