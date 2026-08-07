@@ -136,9 +136,18 @@ const OPTION_CLASS =
 /** The grade as a sentence opener, so "low confidence" is not shouted in caps. */
 const CONFIDENCE_WORD: Record<ConfidenceLevel, string> = { high: "High", medium: "Medium", low: "Low" };
 
-/** One line on where the grade comes from, wherever the pie is explained. */
-const GRADING_EXPLANATION =
-  "Graded from per-claim validation: claims that cite receipts raise it, claims downgraded during validation lower it.";
+/**
+ * What each grade means, mirroring the thresholds in the backend's
+ * citationValidator: high = nothing downgraded and most claims high, low = a
+ * large share of claims low or untracked, medium = in between, or the model's
+ * own self-assessment capped it.
+ */
+const CONFIDENCE_MEANING: Record<ConfidenceLevel, string> = {
+  high: "Every tracked claim held up in validation, and most cite receipts from the code itself. Nothing had to be downgraded.",
+  medium:
+    "The section held up overall, but some claims lean on weaker support, such as docs instead of code, or confidence was capped because the grader was less sure. Keep the receipts nearby.",
+  low: "A sizeable share of claims failed validation: they cited nothing, cited support that could not be verified, or were not tracked at all. Verify against the cited files before relying on this.",
+};
 
 /**
  * Grades with no claim ledger behind them still have to draw something. These
@@ -738,8 +747,9 @@ export function SectionView({
             </TooltipTrigger>
             <TooltipContent side="bottom" className="max-w-72 text-left">
               <p className="font-medium">{CONFIDENCE_WORD[section.confidence]} confidence</p>
-              {displayReason && <p className="mt-0.5">{displayReason}</p>}
-              <p className="mt-0.5">{GRADING_EXPLANATION}</p>
+              {/* The reason string is already visible in the trigger beside the
+                  pie, so the tooltip carries what the grade means instead. */}
+              <p className="mt-0.5">{CONFIDENCE_MEANING[section.confidence]}</p>
             </TooltipContent>
           </Tooltip>
         )}
@@ -1052,9 +1062,6 @@ export function PackageCardView({
           <span className="inline-flex items-center gap-1 text-warning">
             <AlertTriangle className="h-3 w-3" /> {card.stale_sections} stale
           </span>
-        )}
-        {card.low_confidence_sections > 0 && (
-          <span className="text-danger">{card.low_confidence_sections} low confidence</span>
         )}
         {onRegenerate && (
           <Button

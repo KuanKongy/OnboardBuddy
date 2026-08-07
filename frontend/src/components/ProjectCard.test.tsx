@@ -50,6 +50,22 @@ describe("ProjectCard", () => {
     expect(screen.queryByText("main")).not.toBeInTheDocument();
   });
 
+  it("shows every language the snapshot reported, up to three", () => {
+    renderCard({ ...PROJECT, languages: ["TypeScript", "JavaScript", "CSS"] });
+
+    expect(screen.getByText("TypeScript")).toBeInTheDocument();
+    expect(screen.getByText("JavaScript")).toBeInTheDocument();
+    expect(screen.getByText("CSS")).toBeInTheDocument();
+  });
+
+  // `languages` comes from the analysis snapshot, so a never-analyzed project
+  // has none and the GitHub-reported primary language is all there is to show.
+  it("falls back to the primary language when the snapshot reported none", () => {
+    renderCard({ ...PROJECT, languages: [] });
+
+    expect(screen.getByText("TypeScript")).toBeInTheDocument();
+  });
+
   // The repo name is the card's one real link: without a real href, middle-click
   // and the browser's context menu have nothing to open in a new tab.
   it("makes the repo name a real link to the project", () => {

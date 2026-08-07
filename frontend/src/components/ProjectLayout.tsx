@@ -130,11 +130,6 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
     body: "Generated reading paths, one package per scope, role, and commit. Every claim carries receipts; click one to see the code it's based on.",
   },
   {
-    target: "nav-onboarding",
-    title: "When packages change",
-    body: "Regenerating rewrites a package in place and keeps the same card. Analyzing a new commit re-checks what you already have and stale-flags only the sections whose code actually changed; the card for that commit appears once you generate, and the old one stays.\n\nStaleness is branch-scoped, so re-analyzing a branch only re-checks packages built from it. The 'How packages work' tour inside Your Onboarding has the full rules.",
-  },
-  {
     target: "nav-architecture",
     title: "Architecture map",
     body: "How the codebase groups into layers. Click a component for its summary, its files, and how critical it is; the Open button in its details panel lists the files inside.",

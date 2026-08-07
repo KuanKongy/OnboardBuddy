@@ -39,6 +39,12 @@ export interface Project {
   repo_description?: string | null;
   primary_language?: string | null;
   repo_pushed_at?: string | null;
+  /**
+   * Top languages from the latest analysis snapshot, most files first. Empty or
+   * absent when the project has never been analyzed, which is why the render
+   * still falls back to `primary_language`.
+   */
+  languages?: string[];
 }
 
 const defaultStatus = {
@@ -198,7 +204,11 @@ export function ProjectCard({
 
   const openProject = () => navigate(`/projects/${project.id}`);
   const updatedAt = project.repo_pushed_at ?? project.last_analyzed_at ?? project.created_at ?? null;
-  const languageDot = project.primary_language ? languageColors[project.primary_language] : undefined;
+  const langs = project.languages?.length
+    ? project.languages
+    : project.primary_language
+      ? [project.primary_language]
+      : [];
 
   return (
     <>
@@ -308,16 +318,23 @@ export function ProjectCard({
 
         <div className="flex items-center justify-between gap-2 text-xs">
           <div className="flex min-w-0 items-center gap-3">
-            {project.primary_language && (
-              <span className="flex shrink-0 items-center gap-1.5 text-muted-foreground">
-                <span
-                  aria-hidden
-                  className={`h-2.5 w-2.5 rounded-full ${languageDot ? "" : "bg-muted-foreground/60"}`}
-                  style={languageDot ? { backgroundColor: languageDot } : undefined}
-                />
-                {project.primary_language}
-              </span>
-            )}
+            {/* Three names have to share the slack the single primary language
+                used to have to itself, so each one shrinks and truncates like
+                the rest of the row rather than pushing "Updated …" off the
+                card. The dot keeps its size through that. */}
+            {langs.slice(0, 3).map((lang) => {
+              const dot = languageColors[lang];
+              return (
+                <span key={lang} className="flex min-w-0 shrink items-center gap-1.5 text-muted-foreground">
+                  <span
+                    aria-hidden
+                    className={`h-2.5 w-2.5 shrink-0 rounded-full ${dot ? "" : "bg-muted-foreground/60"}`}
+                    style={dot ? { backgroundColor: dot } : undefined}
+                  />
+                  <span className="truncate">{lang}</span>
+                </span>
+              );
+            })}
             <span className="shrink-0 text-muted-foreground">
               STALE <span className={project.stale_count > 0 ? "font-semibold text-warning" : "font-semibold text-foreground"}>{project.stale_count}</span>
             </span>
