@@ -418,7 +418,7 @@ describe('grounding — every claim carries a receipt', () => {
     ].join('\n');
     const appended =
       `${cited}\n\n> **Not covered here.** Part of this repository is written in Python, which OnboardBuddy ` +
-      'does not parse. No section in this package describes that code — it exists, and nothing here tells you what it does.';
+      'does not parse. No section in this package describes that code. It exists, and nothing here tells you what it does.';
 
     for (const markdown of [heading, appended]) {
       const r = lintExplanation(markdown);

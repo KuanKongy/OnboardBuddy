@@ -120,12 +120,12 @@ async function buildCoverage(snapshotId: string, emitted: number): Promise<Recor
     } else if (byTier.core === 0 && byTier.supporting === 0) {
       reasons.push(
         `${byTier.surface} entry point${byTier.surface === 1 ? " was" : "s were"} found, but no side effect was traced from any of them. ` +
-        "A walkthrough follows a path from an entry point to something it changes — without a traced effect there is no path to follow, only a file to open.",
+        "A walkthrough follows a path from an entry point to something it changes. Without a traced effect there is no path to follow, only a file to open.",
       );
     }
     if (!hasStart && !hasTests) {
       reasons.push(
-        "Nothing in this repository says how to run it — no compose file and no start or test script — so there is no task guide to put beside the walkthroughs.",
+        "Nothing in this repository says how to run it (no compose file and no start or test script), so there is no task guide to put beside the walkthroughs.",
       );
     }
     if (reasons.length === 0 && (selection.skipped?.length ?? 0) === 0) {
@@ -367,7 +367,7 @@ tutorialsRouter.post("/:tutorialId/regenerate", requireProjectAccess("owner", "a
       await query(
         `UPDATE analysis_jobs
          SET status = 'failed', current_step = 'Failed', finished_at = NOW(),
-             error_message = 'Could not submit this regeneration to the job queue. Nothing was started — try again.'
+             error_message = 'Could not submit this regeneration to the job queue. Nothing was started. Try again.'
          WHERE id = $1 AND status = 'queued'`,
         [jobId],
       ).catch(() => {});

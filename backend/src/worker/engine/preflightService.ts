@@ -108,7 +108,7 @@ export async function runPreflight(rootPath: string, opts: PreflightOptions): Pr
 
   if (languageInventory.supportedFileCount === 0) {
     warnings.push(
-      'No supported source files (TypeScript/JavaScript) in this scope — analysis will fail transparently instead of guessing.',
+      'No supported source files (TypeScript/JavaScript) in this scope. Analysis will fail transparently instead of guessing.',
     );
   } else if (languageInventory.unsupportedFileCount > languageInventory.supportedFileCount) {
     warnings.push(
@@ -170,7 +170,7 @@ export async function runPreflight(rootPath: string, opts: PreflightOptions): Pr
     warnings,
     confirmationsRequired: confirmations,
     limitations:
-      'Preflight uses inventory and a shallow syntactic parse only — no TypeChecker, call graph, or ranking — so estimates are coarse by design.',
+      'Preflight uses inventory and a shallow syntactic parse only (no TypeChecker, call graph, or ranking), so estimates are coarse by design.',
   };
 }
 

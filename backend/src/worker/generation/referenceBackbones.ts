@@ -208,7 +208,7 @@ export async function buildRoutesJobsBackbone(snapshotId: string): Promise<strin
   if (webhooks.length > 0) {
     parts.push('#### Webhooks (externally triggered)');
     for (const w of webhooks) {
-      parts.push(`- \`${w.method} ${w.route_path}\` — handled in \`${w.file_path}\``);
+      parts.push(`- \`${w.method} ${w.route_path}\`: handled in \`${w.file_path}\``);
     }
     parts.push('');
   }
@@ -270,7 +270,7 @@ export async function buildGuardrailsBackbone(snapshotId: string, facts: ConfigF
   const parts: string[] = [];
 
   for (const envFile of facts.envFiles) {
-    parts.push(`#### Environment variables (\`${envFile.path}\` — names only, values never analyzed)`);
+    parts.push(`#### Environment variables (\`${envFile.path}\`: names only, values never analyzed)`);
     parts.push('| Variable | Documented purpose |');
     parts.push('| --- | --- |');
     for (const v of envFile.vars) {

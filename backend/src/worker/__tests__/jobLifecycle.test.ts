@@ -163,7 +163,7 @@ describe('analysisStarter — a failed submission fails its row (bug #69)', () =
     // The reason has to reach the user — "waiting for worker" forever is the
     // whole complaint.
     expect(String(failWrite!.params?.[1])).to.include('ECONNREFUSED');
-    expect(String(failWrite!.params?.[1])).to.include('press Analyze again');
+    expect(String(failWrite!.params?.[1])).to.include('Press Analyze again');
 
     // The route set projects.status='analyzing' inside the transaction; with
     // nothing queued the card would claim an analysis that does not exist.

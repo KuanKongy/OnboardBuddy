@@ -14,5 +14,5 @@ export const askRateLimit = fixedWindowRateLimit({
   windowMs: 5 * 60 * 1000,
   max: 20,
   keyOf: (req) => req.user?.id ?? null,
-  message: "Too many questions — try again in a few minutes",
+  message: "Too many questions. Try again in a few minutes.",
 });

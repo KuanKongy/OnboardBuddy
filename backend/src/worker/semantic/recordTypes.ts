@@ -53,44 +53,51 @@ export interface SemanticRecordBody {
 // cache slice. v2 bump (audit §3.8): the voice contract below joined
 // OUTPUT_RULES — without the bump a fresh analysis would keep serving the
 // cached "enhances user engagement"-era summaries.
+//
+// Every entry bumped again for the em-dash ban below. Record bodies are quoted
+// back into later prompts and rendered in receipt viewers, so a cached body
+// written before the rule would keep feeding dashes into both.
 export const PROMPT_VERSIONS = {
   // symbol/capability bumped for the untrusted-data boundary
   // (doc/SECURITY_XSS_PROMPT_INJECTION.md §5.4). These versions are part of the
   // record cache key, so the bump is what stops records extracted under the
   // old unfenced prompt from being served — and re-fed into later prompts —
   // forever (finding P3: records are content-addressed and outlive a snapshot).
-  symbol: 'symbol-record-v3',
+  symbol: 'symbol-record-v4',
   // file v3: `purpose` must name what the file is for in the system with a
   // concrete anchor. Without the bump, the v2 records — a census of which found
   // filename restatements and one summary describing the synthesis task itself
   // — keep being served from the content-addressed cache.
-  file: 'file-synthesis-v3',
-  module: 'module-synthesis-v2',
-  service: 'service-synthesis-v2',
-  system: 'system-synthesis-v2',
+  file: 'file-synthesis-v4',
+  module: 'module-synthesis-v3',
+  service: 'service-synthesis-v3',
+  system: 'system-synthesis-v3',
   // v5 replaced "extract 2-8 capabilities" (a quota, so always filled) with
   // deterministic derivation + a naming-only call. The bump is what stops the
   // v4 records — whose bodies hold invented capabilities — from being served
   // from the content-addressed cache forever.
-  capability: 'capability-naming-v5',
-  refinement: 'refinement-v2',
-  critique: 'critique-v2',
-  workflow: 'workflow-record-v2',
-  rerank: 'rerank-v1',
-  factsOnly: 'facts-only-v1', // deterministic, no LLM
+  capability: 'capability-naming-v6',
+  refinement: 'refinement-v3',
+  critique: 'critique-v3',
+  workflow: 'workflow-record-v3',
+  rerank: 'rerank-v2',
+  factsOnly: 'facts-only-v2', // deterministic, no LLM
 } as const;
 
 /** Shared output rules injected into every semantic prompt. */
 export const OUTPUT_RULES =
   'Rules: use ONLY the provided evidence; cite receipt ids (r1, r2, ...) in claims; ' +
-  'do not guess business intent beyond the evidence; docs receipts may be stale — code receipts win; ' +
+  'do not guess business intent beyond the evidence; docs receipts may be stale, so code receipts win; ' +
   'write "unknown" rather than inventing an answer. ' +
   // Voice contract (audit §3.8): these summaries surface in receipt viewers
   // and tab panels — a 4-line SQL helper must never "enhance user engagement".
   'Voice: flat declarative engineering prose; state what the code does mechanically. ' +
   'FORBIDDEN: crucial, essential, seamless, vital, powerful, robust, comprehensive, ' +
   '"enhances user …", "user engagement/satisfaction/retention", and any consequence ' +
-  'not mechanically derivable from the evidence.';
+  'not mechanically derivable from the evidence. ' +
+  // The one string in this file that still carries the character: a ban has to
+  // print what it bans.
+  'Never use the em dash character (—). Use a comma, colon, parentheses, or a new sentence.';
 
 // ── Structured-output schemas ────────────────────────────────────────────────
 // Strict mode: every property required; optionality is expressed as |null.

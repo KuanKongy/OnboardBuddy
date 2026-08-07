@@ -89,12 +89,12 @@ export function buildContext(bundle: EvidenceBundle): string {
 
   const workflowsList = workflows.length > 0
     ? workflows.map((w) =>
-        `  [${w.trigger_type}] "${w.title}" — ${w.purpose} (score:${w.composite_score}, confidence:${w.confidence})\n` +
+        `  [${w.trigger_type}] "${w.title}": ${w.purpose} (score:${w.composite_score}, confidence:${w.confidence})\n` +
         `    Reasons: ${w.ranking_reasons.length > 0 ? w.ranking_reasons.join('; ') : 'n/a'}\n` +
         `    Steps:\n` +
         w.steps.map((s) =>
           `      ${s.step_order}. ${s.file_path}${s.symbol_name ? `::${s.symbol_name}` : ''}` +
-          (s.explanation ? ` — ${s.explanation}` : ''),
+          (s.explanation ? ` (${s.explanation})` : ''),
         ).join('\n'),
       ).join('\n\n')
     : '  (none detected)';
@@ -119,7 +119,7 @@ Total graph: ${nodes.length} modules, ${edges.length} dependency edges
 DIRECTORY STRUCTURE (top directories by file count):
 ${dirStructure}
 
-CRITICAL MODULES (top ${criticalNodes.length} by connectivity — the 25% that matter most):
+CRITICAL MODULES (top ${criticalNodes.length} by connectivity, the 25% that matter most):
 ${nodesList}
 
 DEPENDENCY EDGES (connections between critical modules):
@@ -142,7 +142,7 @@ ${sideEffects.length > 0
 END-TO-END WORKFLOWS (traced from entrypoints to side effects):
 ${workflowsList}
 
-CRITICAL RANKINGS (files ranked by importance algorithm — use these as primary references):
+CRITICAL RANKINGS (files ranked by importance algorithm, use these as primary references):
 ${criticalRankings.length > 0
     ? criticalRankings.map((r) =>
         `  ${r.file_path}${r.name ? `::${r.name}` : ''} score:${Number(r.composite_score).toFixed(2)} reasons:[${(r.ranking_reasons ?? []).join(', ')}]`,

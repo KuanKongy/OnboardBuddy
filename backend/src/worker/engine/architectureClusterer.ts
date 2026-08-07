@@ -500,7 +500,7 @@ const KIND_RESPONSIBILITY: Record<ClusterKind, string> = {
   worker_layer: 'Runs work outside the request path, so a slow job never blocks whoever asked for it.',
   analysis_engine: 'Turns raw input into the structured facts the rest of the system reasons over.',
   integration_layer: 'Talks to services this repository does not own, and is where their failures land first.',
-  devops_layer: 'Describes how this system is built, configured and shipped — not what it does while running.',
+  devops_layer: 'Describes how this system is built, configured and shipped (not what it does while running).',
   test_layer: 'Holds the checks that fail when behaviour elsewhere changes; nothing at runtime depends on it.',
   shared_module: 'Has no domain of its own: it exists so the components that do are not each writing the same thing.',
   other: 'No structural rule placed this code, so what it is for is not established by the evidence here.',
@@ -695,7 +695,7 @@ export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarr
       const named = rest > 0 ? `${shown.join(', ')} and ${rest} other${rest === 1 ? '' : 's'}` : list(shown);
       sentences.push(`Flows that cross this boundary include ${named}.`);
     } else {
-      sentences.push('No traced flow crosses that boundary — the links here are imports and calls only.');
+      sentences.push('No traced flow crosses that boundary. The links here are imports and calls only.');
       unknowns.push('No traced flow crosses this boundary, so what actually travels between these components at runtime is not established.');
     }
     boundary = sentences.join(' ');
@@ -713,7 +713,7 @@ export function buildClusterNarrative(facts: ClusterNarrativeFacts): ClusterNarr
     separation = `Keeping it separate is what stops ${list(externals)} from spreading into the rest of the codebase.`;
   } else {
     separation = facts.commonPath
-      ? `It is drawn as one component because its files share \`${facts.commonPath}\` — the grouping is by path and convention, not by a declared module boundary.`
+      ? `It is drawn as one component because its files share \`${facts.commonPath}\`. The grouping is by path and convention, not by a declared module boundary.`
       : 'It is drawn as one component by path and convention, not by a declared module boundary.';
   }
 

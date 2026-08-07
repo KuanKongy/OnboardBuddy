@@ -9,7 +9,7 @@ export type PrivacyMode = 'full_ai' | 'facts_only_ai' | 'ai_disabled';
 
 export class AiDisabledError extends Error {
   constructor() {
-    super('privacy_mode is ai_disabled — no LLM calls allowed');
+    super('privacy_mode is ai_disabled: no LLM calls allowed');
     this.name = 'AiDisabledError';
   }
 }

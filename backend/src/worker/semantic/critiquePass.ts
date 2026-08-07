@@ -167,7 +167,7 @@ async function critiqueBatch(ctx: SemanticContext, batch: PendingRecord[]): Prom
     const receiptLines = receipts.map((r) => {
       const evidence = withSnippets && r.snippet
         ? `\n    ${r.snippet.slice(0, RECEIPT_SNIPPET_CAP).replace(/\n/g, '\n    ')}`
-        : '\n    (code snippet withheld by privacy settings — judge from the file/symbol identity above)';
+        : '\n    (code snippet withheld by privacy settings: judge from the file/symbol identity above)';
       return `  - [${r.id}] ${r.receipt_kind} (${r.trust_level}) ${r.file_path ?? r.node_stable_key ?? ''}${evidence}`;
     });
     const claims = (record.record.claims ?? []).map((c) => `  - "${c.claim}" cites [${c.receiptIds.join(', ') || 'nothing'}]`);

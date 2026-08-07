@@ -96,7 +96,7 @@ authRouter.delete("/account", requireAuth, async (req, res) => {
     await deleteAuthUser(userId);
   } catch (err) {
     console.error("Auth user deletion failed after data wipe:", err);
-    res.status(500).json({ error: "Account data deleted, but removing the sign-in failed — please retry" });
+    res.status(500).json({ error: "Account data deleted, but removing the sign-in failed. Please retry." });
     return;
   }
 

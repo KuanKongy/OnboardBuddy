@@ -79,8 +79,11 @@ import {
  * …") in the prompt AND rejects them on the way in. The bump is what stops the
  * v4 cards — whose narration is the filler this gate now refuses — from being
  * cloned forward untouched for as long as the flow itself does not change.
+ *
+ * v6 does the same for the em dash: banned in the prompt, refused at
+ * acceptance. Without the bump, v5 cards keep serving the dashes untouched.
  */
-export const TUTORIAL_PROMPT_VERSION = 'tutorial-v5-walkthrough';
+export const TUTORIAL_PROMPT_VERSION = 'tutorial-v6-walkthrough';
 /** A ceiling on the reader's attention, not a quota to fill. */
 // 6, up from 4: with run-it and run-tests occupying two slots, 4 left only
 // two traced flows — a senior reviewer opening a repo with five real user
@@ -595,7 +598,7 @@ export async function selectProcedures(
       report.skipped.push({
         title: row.title,
         reason: 'surface_tier_no_traced_effects',
-        detail: `"${row.title}" is a real entry point, but nothing was traced from it — there is no path to walk, only a file to open.`,
+        detail: `"${row.title}" is a real entry point, but nothing was traced from it. There is no path to walk, only a file to open.`,
       });
       continue;
     }
@@ -1063,7 +1066,7 @@ const procedureRow = (step: ProcedureStep, why: string): PersistableStep => ({
     evidence: step.evidence,
     ...(step.workflowStepOrder != null ? { workflow_step_order: step.workflowStepOrder } : {}),
   },
-  claim: `${step.action} — expected: ${step.expected}`,
+  claim: `${step.action} (expected: ${step.expected})`,
 });
 
 /** doc/TUTORIAL_REDESIGN.md §2.2 — the walkthrough step contract, verbatim. */
@@ -1241,7 +1244,7 @@ function deterministicAnnotation(candidate: Candidate): Annotation {
       `${visible.length} card${visible.length === 1 ? '' : 's'}${phases > 1 ? ` across ${phases} legs` : ''} over ${where}.`,
       entry?.text ?? null,
       landing,
-      `Written from the structure alone — this project has AI generation switched off, so every line below is the trace and the code, with no prose added.`,
+      `Written from the structure alone. This project has AI generation switched off, so every line below is the trace and the code, with no prose added.`,
     ].filter(Boolean).join(' '),
     confidence: 'medium',
     whyByOrder: new Map(),
@@ -1275,12 +1278,12 @@ async function annotateWalkthrough(
       ? lines.slice(win.start - s.lineStart, win.end - s.lineStart + 1).join('\n')
       : (s.snippet ?? '');
     return [
-      `### Step ${s.order} [${s.role}]${s.phase ? ` — phase ${s.phase.index} of ${s.phase.count}: ${s.phase.title}` : ''}`,
+      `### Step ${s.order} [${s.role}]${s.phase ? ` (phase ${s.phase.index} of ${s.phase.count}: ${s.phase.title})` : ''}`,
       `Location: ${s.filePath}${s.lineStart ? `:${s.lineStart}${s.lineEnd ? `-${s.lineEnd}` : ''}` : ''}${s.symbolName ? ` (\`${s.symbolName}\`)` : ''}`,
       `What the trace records: ${s.narration}`,
       s.highlights.length > 0
         ? `Highlighted for the reader: ${s.highlights.map((h) => `lines ${h.start}-${h.end} (${h.label})`).join('; ')}`
-        : 'No line could be highlighted on this step — do not refer to highlighted lines.',
+        : 'No line could be highlighted on this step. Do not refer to highlighted lines.',
       s.handoff
         ? `Hand-off goes to step ${s.handoff.toStep}: ${s.handoff.toSymbol ? `\`${s.handoff.toSymbol}\` in ` : ''}${s.handoff.toFile}${s.boundary ? ` (crossing: ${s.boundary.detail})` : ''}`
         : `This is the last step. What now exists: ${s.landing ?? 'unknown'}`,
@@ -1300,16 +1303,16 @@ async function annotateWalkthrough(
     `A new contributor is reading the path below in this repository: "${workflow.title}" (${workflow.trigger_type}; ${workflow.purpose}). They have the code on screen with the listed lines highlighted. Your job is the prose between the snippets.`,
     'Every file, line, snippet, highlight and hand-off target below was read out of this repository. You are NOT choosing them and must not restate them.',
     entry
-      ? `How this path is entered — this is a fact, already shown to the reader: ${entry.text}${entry.kind === 'http' ? '' : ' Nothing here is reached by an HTTP request; never write that the reader can send, curl or POST anything to set it off.'}`
+      ? `How this path is entered. This is a fact, already shown to the reader: ${entry.text}${entry.kind === 'http' ? '' : ' Nothing here is reached by an HTTP request; never write that the reader can send, curl or POST anything to set it off.'}`
       : null,
     [
       'Produce:',
       '- title: at most 8 words, naming the path the reader follows.',
       '- goal: ONE sentence "After this, you can …" naming what they will be able to find or change unaided.',
       '- summary: 1-2 plain sentences on what this path does end to end, and one clause on what it does not cover.',
-      '- steps: for each step_order —',
-      '    · narration: 2-3 sentences, at most 55 words, on what this code does IN THIS FLOW. Open on the action — the first word should be doing something to something. Ground every claim in the snippet and the highlight labels.',
-      '    · handoff: EXACTLY ONE sentence saying how control or data reaches the next step. It MUST name the next step\'s symbol or its file name. On the last step, return "" — the landing statement is already written.',
+      '- steps: for each step_order:',
+      '    · narration: 2-3 sentences, at most 55 words, on what this code does IN THIS FLOW. Open on the action. The first word should be doing something to something. Ground every claim in the snippet and the highlight labels.',
+      '    · handoff: EXACTLY ONE sentence saying how control or data reaches the next step. It MUST name the next step\'s symbol or its file name. On the last step, return "". The landing statement is already written.',
       '- confidence: how well the evidence supports this reading end to end.',
     ].join('\n'),
     [
@@ -1321,9 +1324,12 @@ async function annotateWalkthrough(
       '- Never refer to "the highlighted line" on a step whose highlights are listed as none.',
       '- No filler ("this is important", "as we can see", "simply", "essentially"), no tour-guide framing ("let\'s take a look", "we will now"), and no sentence about "this tutorial" or "this step".',
       '- No sentence that would read the same for any other codebase.',
+      // Prints the character in order to ban it. Narration that carries one
+      // anyway is rejected at acceptance and the deterministic sentence is kept.
+      '- Never use the em dash character (—). Use a comma, colon, parentheses, or a new sentence.',
       withSnippets
         ? '- Stay inside the snippets given; write "unknown" rather than guessing.'
-        : '- The code is withheld from you by this project\'s privacy settings — never claim to describe lines you were not given.',
+        : '- The code is withheld from you by this project\'s privacy settings. Never claim to describe lines you were not given.',
     ].join('\n'),
     draft.gaps.length > 0
       ? `Known limits of this reading (the reader is shown these; do not repeat them verbatim, but do not contradict them):\n${draft.gaps.map((g) => `- ${g.detail}`).join('\n')}`
@@ -1393,6 +1399,15 @@ function applyWalkthroughAnnotation(draft: WalkthroughDraft, output: Annotation)
           code: 'narration_filler',
           detail: 'the narration described the step instead of the code, so the deterministic sentence was kept',
         });
+      } else if (narration.includes('—')) {
+        // The prompt bans the character; this is the acceptance-side half of
+        // that rule. The deterministic sentence is already written, so a step
+        // that slips a dash through costs the reader nothing but the AI voice.
+        rejected.push({
+          stepOrder: step.order,
+          code: 'narration_em_dash',
+          detail: 'the narration used an em dash, so the deterministic sentence was kept',
+        });
       } else {
         step.narration = narration;
         step.narrationSource = 'ai';
@@ -1400,7 +1415,15 @@ function applyWalkthroughAnnotation(draft: WalkthroughDraft, output: Annotation)
     }
     const handoff = output.handoffByOrder.get(step.order);
     if (step.handoff && handoff && handoffNamesNext(handoff, step.handoff)) {
-      step.handoff = { ...step.handoff, text: handoff, source: 'ai' };
+      if (handoff.includes('—')) {
+        rejected.push({
+          stepOrder: step.order,
+          code: 'handoff_em_dash',
+          detail: 'the hand-off used an em dash, so the deterministic sentence was kept',
+        });
+      } else {
+        step.handoff = { ...step.handoff, text: handoff, source: 'ai' };
+      }
     }
   }
   return rejected;
@@ -1433,7 +1456,7 @@ async function annotateProcedure(
         // of raw source per step, sent to the provider while the project
         // setting said "no code leaves the system".
         ? '```\n' + s.snippet.slice(0, SNIPPET_CAP) + '\n```'
-        : '(code snippet withheld by privacy settings — write from the facts above only)')
+        : '(code snippet withheld by privacy settings: write from the facts above only)')
       : null,
   ].filter(Boolean).join('\n'));
 
@@ -1445,18 +1468,19 @@ async function annotateProcedure(
       '- title: imperative, at most 8 words, naming what the reader will have DONE (not what they will have read).',
       '- goal: ONE sentence "After this, you can …" naming the concrete thing they can now do unaided.',
       '- summary: 1-2 plain sentences on what running this gets them, and one clause on what it does not cover.',
-      '- steps: for each step_order, `why` — AT MOST ONE short sentence saying what this step proves or why it sits where it does. Return "" when the action already says it; an empty `why` is the correct answer more often than not.',
+      '- steps: for each step_order, `why`: AT MOST ONE short sentence saying what this step proves or why it sits where it does. Return "" when the action already says it; an empty `why` is the correct answer more often than not.',
       '- confidence: how well the evidence supports this procedure end to end.',
     ].join('\n'),
     [
       'Hard rules:',
-      '- Never restate a command, a path, an expected result or a verification — the reader has them on screen next to your text.',
+      '- Never restate a command, a path, an expected result or a verification. The reader has them on screen next to your text.',
       '- Never invent a command, file, port, table or flag that is not written above. If you want to name one and cannot find it, say nothing.',
       '- No filler ("this is important", "as we can see", "simply", "essentially"), no tour-guide framing ("let\'s take a look", "we will now"), and no sentence about "this tutorial" or "this section".',
       '- No sentence that would read the same for any other codebase.',
+      '- Never use the em dash character (—). Use a comma, colon, parentheses, or a new sentence.',
       withSnippets
         ? '- Stay inside the snippets and evidence given; write "unknown" rather than guessing.'
-        : '- The code is withheld from you by this project\'s privacy settings, but the reader still sees it — never claim to quote or describe lines you were not given.',
+        : '- The code is withheld from you by this project\'s privacy settings, but the reader still sees it. Never claim to quote or describe lines you were not given.',
     ].join('\n'),
     draft.gaps.length > 0
       ? `Known limits of this procedure (the reader is shown these; do not repeat them verbatim, but do not contradict them):\n${draft.gaps.map((g) => `- ${g.detail}`).join('\n')}`

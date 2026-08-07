@@ -26,6 +26,13 @@ describe('voiceLint', () => {
     expect(r.hits).to.deep.equal([]);
   });
 
+  it('flags an em dash, except inside a code fence', () => {
+    const r = lintVoice('The worker retries once — then gives up.');
+    expect(r.hits).to.deep.equal(['em dash (write a comma, colon, or a new sentence)']);
+    // Repo content quoted in a fence is not prose the model wrote.
+    expect(lintVoice(['```ts', 'const s = "a — b";', '```', 'It returns 3.'].join('\n')).hits).to.deep.equal([]);
+  });
+
   it('does not flag legitimate technical uses of enhance without user context', () => {
     const r = lintVoice('The index enhances query performance by 3x according to the benchmark output.');
     expect(r.hits).to.deep.equal([]);

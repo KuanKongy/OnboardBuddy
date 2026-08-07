@@ -406,7 +406,7 @@ describe("POST /api/projects/:id/summarize", () => {
     const fail = writes.find((w) => w.text.includes("SET status = 'failed'"));
     expect(fail, "the row must not be left on 'queued'").to.exist;
     expect(fail!.params?.[0]).to.equal("job-9");
-    expect(String(fail!.params?.[1])).to.include("press Analyze again");
+    expect(String(fail!.params?.[1])).to.include("Press Analyze again");
   });
 });
 

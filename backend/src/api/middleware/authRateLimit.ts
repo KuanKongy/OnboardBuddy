@@ -32,14 +32,14 @@ export const perCredentialAuthRateLimit = fixedWindowRateLimit({
   windowMs: WINDOW_MS,
   max: 10,
   keyOf: (req) => `cred:${clientIp(req)}|${emailOf(req)}`,
-  message: "Too many sign-in attempts — try again in a few minutes",
+  message: "Too many sign-in attempts. Try again in a few minutes.",
 });
 
 export const perAddressAuthRateLimit = fixedWindowRateLimit({
   windowMs: WINDOW_MS,
   max: 60,
   keyOf: (req) => `addr:${clientIp(req)}`,
-  message: "Too many sign-in attempts — try again in a few minutes",
+  message: "Too many sign-in attempts. Try again in a few minutes.",
 });
 
 /** Mount with a spread: `router.post("/login", ...authRateLimit, handler)`. */

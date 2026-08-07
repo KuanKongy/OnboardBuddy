@@ -59,10 +59,10 @@ const MAX_NARRATED_CLUSTERS = 6;
  * the user turn, where it is later and more specific. Prepended to all twelve.
  */
 const NO_PREAMBLE = [
-  'OPENING RULE — overrides any earlier instruction about a TL;DR:',
+  'OPENING RULE (overrides any earlier instruction about a TL;DR):',
   'do NOT open with a "**TL;DR:**" block, a summary of what this section covers, or a sentence of the form "After reading you can …".',
   'NEVER write a sentence whose subject is this write-up ("This section …", "This document …", "This guide …", "This chapter …", "In this section …").',
-  'NEVER restate the section\'s own title as a heading — the reader already sees it above your text.',
+  'NEVER restate the section\'s own title as a heading. The reader already sees it above your text.',
   'Start with the single most useful FACT about the system and go straight into the content.',
 ].join(' ');
 
@@ -96,9 +96,9 @@ const NO_REPETITION = [
  * "generic, padded, not useful" complaint.
  */
 const SPECIFICITY_FLOOR = [
-  'SPECIFICITY FLOOR: every sentence must name something only THIS repository has — a real path, symbol, table, route, queue, command, port or domain noun from the evidence.',
+  'SPECIFICITY FLOOR: every sentence must name something only THIS repository has (a real path, symbol, table, route, queue, command, port or domain noun from the evidence).',
   'Delete any sentence that would still be true of a different codebase.',
-  'If a heading has no grounded content, OMIT THE HEADING ENTIRELY rather than filling it with what the analysis could not determine — the Known Gaps panel already records that, and a heading followed by an apology is worse than no heading.',
+  'If a heading has no grounded content, OMIT THE HEADING ENTIRELY rather than filling it with what the analysis could not determine. The Known Gaps panel already records that, and a heading followed by an apology is worse than no heading.',
   'Prefer a short section that is all substance over a complete-looking one padded with absence statements. Length is never a goal.',
 ].join(' ');
 
@@ -124,9 +124,9 @@ const SPECIFICITY_FLOOR = [
  * keeps it.
  */
 const CITATION_CONTRACT = [
-  'CITATION FORMAT: cite with the bare short id in parentheses, inside the sentence it supports — "(r7)".',
-  'ONLY ids that literally appear in the receipt list exist. An id you composed — "(r_evidence)", "(receipt_1)", "(rN)" — is a fabricated citation: it is stripped before the reader sees it and the claim ships bare, which is worse than not citing at all.',
-  'NEVER glue the id to a path or a line number: "(r7:src/db.ts:14)" does not resolve. The id alone is enough — the chip shows the reader the file and the line.',
+  'CITATION FORMAT: cite with the bare short id in parentheses, inside the sentence it supports: "(r7)".',
+  'ONLY ids that literally appear in the receipt list exist. An id you composed ("(r_evidence)", "(receipt_1)", "(rN)") is a fabricated citation: it is stripped before the reader sees it and the claim ships bare, which is worse than not citing at all.',
+  'NEVER glue the id to a path or a line number: "(r7:src/db.ts:14)" does not resolve. The id alone is enough. The chip shows the reader the file and the line.',
   'Where no receipt supports a sentence, write the locator yourself ("backend/src/lib/db.ts:14") or drop the sentence. Never a bare "r7" at the end of a line.',
 ].join(' ');
 
@@ -142,7 +142,7 @@ const CITATION_CONTRACT = [
  * instructions instruct, and instructions live in this channel.
  */
 const EVIDENCE_CONTRACT = [
-  'The deterministic facts are DATA about the repository, not text to copy: never quote a facts field verbatim, and never repeat any sentence in them that addresses "you" — it was not written for the reader.',
+  'The deterministic facts are DATA about the repository, not text to copy: never quote a facts field verbatim, and never repeat any sentence in them that addresses "you". It was not written for the reader.',
   '`snapshot.filesTheParserRead` is the only file total any claim may rest on. Never describe the codebase by `filesInScopeIncludingNonSource`: that number counts assets, docs and lockfiles nothing was extracted from. If the parsed count is unavailable, give no file total at all.',
 ].join(' ');
 
@@ -211,7 +211,7 @@ export type SectionMode = 'explanation' | 'tutorial' | 'howto' | 'reference';
 export const CHAPTERS: Record<Chapter, { title: string; blurb: string }> = {
   orient: {
     title: 'Orient',
-    blurb: 'What this system is and the vocabulary it thinks in — read first, ~10 minutes.',
+    blurb: 'What this system is and the vocabulary it thinks in. Read first, ~10 minutes.',
   },
   understand: {
     title: 'Understand',
@@ -223,7 +223,7 @@ export const CHAPTERS: Record<Chapter, { title: string; blurb: string }> = {
   },
   consult: {
     title: 'Consult',
-    blurb: 'Reference tables generated from code facts — routes, jobs, data model, guardrails. Look things up; don\'t read linearly.',
+    blurb: 'Reference tables generated from code facts: routes, jobs, data model, guardrails. Look things up; don\'t read linearly.',
   },
 };
 
@@ -294,7 +294,7 @@ function missingItems(content: string, wanted: string[], label: string, minShare
   const covered = wanted.length - missing.length;
   if (covered >= Math.ceil(wanted.length * minShare)) return [];
   return [
-    `INCOMPLETE: you covered ${covered} of ${wanted.length} required ${label} — the section must cover them all. Missing: ${missing.slice(0, 12).join(', ')}`,
+    `INCOMPLETE: you covered ${covered} of ${wanted.length} required ${label}. The section must cover them all. Missing: ${missing.slice(0, 12).join(', ')}`,
   ];
 }
 
@@ -572,16 +572,16 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['purpose', 'domain'],
     retrievalTask: () => 'What this system is end to end: its purpose, runtime processes, product journeys, and external services.',
     instructions: withContracts([
-      'Explain what this system IS — the reader has never seen it. The anchor diagram (runtime topology) opens the section; refer to it, never contradict it.',
-      'Cover, as flowing prose with a few short headers: (1) what the system does end to end and for whom, from the evidence; (2) the runtime shape — each compose service/process and its job, plus the external services (from the topology facts); (3) the product journeys BY NAME (the journeys data is authoritative — walk the 2-4 most important in one paragraph each: what enters, what crosses which boundary, what comes out); (4) why the system is shaped this way — the 2-3 structural decisions visible in the evidence (queues between phases, content-addressing, separate worker), each with its receipt.',
-      'No instructions, no tables, no file inventories — link forward: details live in Architecture in Depth, commands in Set Up & Run It, lookup tables in the Consult chapter.',
+      'Explain what this system IS. The reader has never seen it. The anchor diagram (runtime topology) opens the section; refer to it, never contradict it.',
+      'Cover, as flowing prose with a few short headers: (1) what the system does end to end and for whom, from the evidence; (2) the runtime shape: each compose service/process and its job, plus the external services (from the topology facts); (3) the product journeys BY NAME (the journeys data is authoritative. Walk the 2-4 most important in one paragraph each: what enters, what crosses which boundary, what comes out); (4) why the system is shaped this way: the 2-3 structural decisions visible in the evidence (queues between phases, content-addressing, separate worker), each with its receipt.',
+      'No instructions, no tables, no file inventories. Link forward: details live in Architecture in Depth, commands in Set Up & Run It, lookup tables in the Consult chapter.',
       // A reader who is not told forms a wrong model of the whole system, and
       // this is the section where that model is formed.
       // Measured: OnboardBuddy (1 CSS + 1 HTML file of 268) shipped "A
       // substantial part of this repository is written in languages that were
       // not parsed" — the phrase is in the instruction, so the model prints it
       // whatever the count is. Demand the number instead of the adjective.
-      'IF `snapshot.unreadStacks.mustDisclose` is true you MUST state, in the opening paragraphs, the EXACT counts from `snapshot.unreadStacks` — "N files (P% of this repository) are written in <language>, which nothing here parsed" — and say that no section describes that code. Never write "a substantial part" or any other vague quantifier in place of the number. If `mustDisclose` is false, do not mention unparsed languages at all: stylesheets and markup being unparsed is expected and saying so is noise.',
+      'IF `snapshot.unreadStacks.mustDisclose` is true you MUST state, in the opening paragraphs, the EXACT counts from `snapshot.unreadStacks` ("N files (P% of this repository) are written in <language>, which nothing here parsed"), and say that no section describes that code. Never write "a substantial part" or any other vague quantifier in place of the number. If `mustDisclose` is false, do not mention unparsed languages at all: stylesheets and markup being unparsed is expected and saying so is noise.',
     ]),
     deterministic: async (deps) => {
       const facts = await loadConfigFacts(deps.snapshotId);
@@ -639,19 +639,19 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['domain', 'purpose'],
     retrievalTask: () => 'The domain vocabulary this codebase thinks in: its core nouns, what each means here, and where each lives.',
     instructions: withContracts([
-      'Define the load-bearing vocabulary — the nouns a new joiner must know to follow any conversation about this code. Select 10-14 terms FROM THE EVIDENCE: schema table names, capability names, recurring record/workflow nouns, config concepts. Prefer terms this codebase uses with a SPECIFIC meaning over generic industry words.',
+      'Define the load-bearing vocabulary: the nouns a new joiner must know to follow any conversation about this code. Select 10-14 terms FROM THE EVIDENCE: schema table names, capability names, recurring record/workflow nouns, config concepts. Prefer terms this codebase uses with a SPECIFIC meaning over generic industry words.',
       // Measured on Skribbl (996w, the largest concepts in the corpus): 6 of 15
       // "terms" were filenames (`roomManager.js`, `handlers.js`,
       // `socketService.ts`, `GameRoom.tsx`, `ConnectionStatus`, `useGameSocket`)
       // and one was "UI Components". All four hedges in the section sat on file
       // entries — the model hedges because a file is not a concept and it has
       // nothing conceptual to say about it.
-      'A term is a word you could say out loud in a standup ("the room", "the snapshot", "a receipt"). NEVER turn a file path, a module filename, a component filename or a hook name into a term — those belong to Code Map, and repeating them here duplicates a section the same reader will also read. NEVER define a generic industry word ("UI Components", "State Management", "Utilities", "Services", "Helpers"): if the definition would be true of any repo, drop the term.',
-      'If the evidence will not support a confident definition, DROP the term — never ship a hedged one. The words "likely", "probably", "suggests", "appears to", "presumably" and "or a related file" must not appear in this section: a definition you have to hedge is not yet a definition. Twelve solid terms beat eighteen padded ones.',
+      'A term is a word you could say out loud in a standup ("the room", "the snapshot", "a receipt"). NEVER turn a file path, a module filename, a component filename or a hook name into a term. Those belong to Code Map, and repeating them here duplicates a section the same reader will also read. NEVER define a generic industry word ("UI Components", "State Management", "Utilities", "Services", "Helpers"): if the definition would be true of any repo, drop the term.',
+      'If the evidence will not support a confident definition, DROP the term. Never ship a hedged one. The words "likely", "probably", "suggests", "appears to", "presumably" and "or a related file" must not appear in this section: a definition you have to hedge is not yet a definition. Twelve solid terms beat eighteen padded ones.',
       // The narration fix: `mustDefineTerms` is ranked by how connected each
       // table is in the schema, so the section stops picking readable-but-
       // peripheral nouns over the ones every conversation depends on.
-      'START from `mustDefineTerms`. Those are the most connected nouns in this system\'s schema, ranked, and EVERY one of them needs its own "### term" entry — they are the words the rest of the vocabulary is defined in terms of. Add further terms from capabilities, journeys and config to reach 10-18 total.',
+      'START from `mustDefineTerms`. Those are the most connected nouns in this system\'s schema, ranked, and EVERY one of them needs its own "### term" entry. They are the words the rest of the vocabulary is defined in terms of. Add further terms from capabilities, journeys and config to reach 10-18 total.',
       'Format: "### term" then 2-4 sentences: what it means IN THIS SYSTEM (not the dictionary meaning), where it lives (the table and/or module, from the evidence), and how it relates to neighboring terms. Cite a receipt per term.',
       'Order terms so each definition only uses terms already defined. Close with one short paragraph on how the 3-4 most central terms connect end to end.',
     ]),
@@ -682,14 +682,14 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     completenessCheck: (content, det) => {
       const issues: string[] = [];
       const terms = (content.match(/### /g) ?? []).length;
-      if (terms < 8) issues.push(`INCOMPLETE: only ${terms} "### term" entries — define 10-14 load-bearing terms from the evidence (domain nouns, not filenames).`);
+      if (terms < 8) issues.push(`INCOMPLETE: only ${terms} "### term" entries. Define 10-14 load-bearing terms from the evidence (domain nouns, not filenames).`);
       // Judged against the SAME ranked list the prompt was given, so the
       // complaint names exactly the terms the model was told to start from.
       const stems = (det.mustDefineTerms as string[] ?? []);
       const lower = content.toLowerCase();
       const missing = stems.filter((stem) => !lower.includes(stem));
       if (stems.length >= 3 && missing.length * 2 > stems.length) {
-        issues.push(`INCOMPLETE: the schema's most connected concepts are missing — add a "### term" entry for each of: ${missing.join(', ')}`);
+        issues.push(`INCOMPLETE: the schema's most connected concepts are missing. Add a "### term" entry for each of: ${missing.join(', ')}`);
       }
       return issues;
     },
@@ -712,7 +712,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // which pauses the whole package. The fix is to demand less prose, not to
       // buy more tokens: `clusters` below is already capped at the components
       // worth covering, and the per-component budget is stated in sentences.
-      'The anchor diagram (cluster map) opens the section — the prose walks it. Open with "## How a request flows": ONE real end-to-end path across components, naming them in the order it touches them, from `clusterEdges`. One short paragraph.',
+      'The anchor diagram (cluster map) opens the section. The prose walks it. Open with "## How a request flows": ONE real end-to-end path across components, naming them in the order it touches them, from `clusterEdges`. One short paragraph.',
       // The measured failure: 0 of 9 live sections contained a single "⇒",
       // even though `loadDecisionNotes` returned 8 notes for OnboardBuddy, 5
       // for Skribbl, 4 for CourseInsights and 3 for FloowForge/MasterPokedex.
@@ -720,14 +720,14 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // writes LAST, under a budget it has already spent. Hoisting it into its
       // own named block written SECOND is the difference between 0/9 and a
       // mechanically checkable 9/9.
-      'SECOND, before any component subsection, write "## Why it is built this way": one bullet per entry in `decisionNotes`, up to three, each in the literal form "<decision> ⇒ <consequence>" with the "⇒" character present, each citing that note\'s receipt. `decisionNotes` is rationale the repo\'s own authors wrote in their comments, with the file and line it came from — paraphrase it, never quote verbatim, and never invent a decision no note supports. WRITE THIS BLOCK BEFORE THE SUBSECTIONS: a section without it is incomplete no matter how good the subsections are. If `decisionNotes` is empty, the block is the single line "No rationale comments were found in this repository." and nothing more.',
+      'SECOND, before any component subsection, write "## Why it is built this way": one bullet per entry in `decisionNotes`, up to three, each in the literal form "<decision> ⇒ <consequence>" with the "⇒" character present, each citing that note\'s receipt. `decisionNotes` is rationale the repo\'s own authors wrote in their comments, with the file and line it came from. Paraphrase it, never quote verbatim, and never invent a decision no note supports. WRITE THIS BLOCK BEFORE THE SUBSECTIONS: a section without it is incomplete no matter how good the subsections are. If `decisionNotes` is empty, the block is the single line "No rationale comments were found in this repository." and nothing more.',
       // Measured on OnboardBuddy: "Fired after the analysis job is accepted, so
       // callers can start polling ⇒ The system initiates analysis jobs and
       // provides a mechanism for callers to monitor their progress." The arrow
       // is present, the gate passes, and the right-hand side is the left-hand
       // side with longer words. The narration check can only count arrows; this
       // is the half of the contract only the instruction can carry.
-      'THE RIGHT-HAND SIDE OF "⇒" IS A CONSEQUENCE, NOT A RESTATEMENT. It must tell someone about to change this code something the left-hand side does not already say: what breaks if they undo the decision, what they must change in step with it, what it rules out, what it costs. Restating the comment in more formal words ("… so callers can start polling ⇒ the system provides a mechanism for callers to monitor progress") is the failure mode this rule exists to stop. If a note yields no consequence you can state without repeating it, use a DIFFERENT note from `decisionNotes` — you are given more than three. If none of the remaining notes yield one either, write fewer bullets: one honest decision→consequence bullet is worth more than three that say each thing twice.',
+      'THE RIGHT-HAND SIDE OF "⇒" IS A CONSEQUENCE, NOT A RESTATEMENT. It must tell someone about to change this code something the left-hand side does not already say: what breaks if they undo the decision, what they must change in step with it, what it rules out, what it costs. Restating the comment in more formal words ("… so callers can start polling ⇒ the system provides a mechanism for callers to monitor progress") is the failure mode this rule exists to stop. If a note yields no consequence you can state without repeating it, use a DIFFERENT note from `decisionNotes`. You are given more than three. If none of the remaining notes yield one either, write fewer bullets: one honest decision→consequence bullet is worth more than three that say each thing twice.',
       // Two measured failures fixed here. "Its real file count" invited the
       // count to BE the explanation, producing headings like
       // "Configuration & Deployment — File Count: 0 config files". And
@@ -736,7 +736,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // identical numbers. `clusters[].responsibility` / `.boundary` are the
       // SAME sentences the Architecture tab renders for that component, so the
       // two surfaces can no longer describe one component differently.
-      'THEN one "## <label>" subsection for each entry in `clusters` — those only, no subsection for anything else. THREE SENTENCES EACH, hard limit; the limit binds no matter how many facts the entry carries. Sentence 1: what this component is FOR, in this repo\'s own nouns. Sentence 2: the ONE crossing a newcomer would get wrong, and what data rides it. Sentence 3: what the separation means for someone changing code here ("touch X and you must also …"). Each entry gives you `responsibility`, `boundary`, `separation` and `unknowns` — put them in your own words and keep the meaning.',
+      'THEN one "## <label>" subsection for each entry in `clusters`: those only, no subsection for anything else. THREE SENTENCES EACH, hard limit; the limit binds no matter how many facts the entry carries. Sentence 1: what this component is FOR, in this repo\'s own nouns. Sentence 2: the ONE crossing a newcomer would get wrong, and what data rides it. Sentence 3: what the separation means for someone changing code here ("touch X and you must also …"). Each entry gives you `responsibility`, `boundary`, `separation` and `unknowns`. Put them in your own words and keep the meaning.',
       // Measured: Skribbl's architecture_deep is an import ledger — "It calls
       // into Shared Utilities, Services, and State, and Modules call into it
       // while State imports it" — and one sentence came out garbled ("It
@@ -744,13 +744,13 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // Dependencies tab draws that graph; prose cannot beat it and should not
       // try. Two clusters (UI, Modules) also received interchangeable
       // responsibility sentences.
-      'NEVER write a responsibility that is just the label reworded ("API Routes — handles API requests" says nothing) or its cluster kind restated. NEVER list who imports whom or who calls whom: the Dependencies tab draws that graph, an import ledger in prose is unreadable, and it crowds out the explanation. NEVER put a file or symbol count in a sentence; the interface shows counts beside the component already.',
+      'NEVER write a responsibility that is just the label reworded ("API Routes: handles API requests" says nothing) or its cluster kind restated. NEVER list who imports whom or who calls whom: the Dependencies tab draws that graph, an import ledger in prose is unreadable, and it crowds out the explanation. NEVER put a file or symbol count in a sentence; the interface shows counts beside the component already.',
       // Measured: "This component has no unknown runtime interactions or
       // data." / "Its standalone nature in the map might indicate a limitation
       // in tracing." / "its specific responsibilities are inferred solely from
       // its kind." — three sentences about the pipeline's knowledge state, in
       // the section that is supposed to explain the architecture.
-      'NEVER write a sentence about what the analysis or the evidence could or could not establish — the reader has the codebase, not our evidence bundle, and the Known Gaps panel already records it. If a component\'s purpose is only inferable from its cluster kind, give it ONE line — "<label> — purpose not established from the code; see the Dependencies tab." — and move on to the next component.',
+      'NEVER write a sentence about what the analysis or the evidence could or could not establish. The reader has the codebase, not our evidence bundle, and the Known Gaps panel already records it. If a component\'s purpose is only inferable from its cluster kind, give it ONE line ("<label>: purpose not established from the code; see the Dependencies tab."), and move on to the next component.',
       // The narration fix: the decisions are handed over as data, and the
       // required sentence shape is stated as a hard format rule rather than an
       // aspiration. Structure-only prose was the measured failure mode.
@@ -761,9 +761,9 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // separation "prevents" its own imports from spreading — and naming npm
       // packages is not a design decision.
       'The `separation` fact is NOT a licence to write "keeping it separate prevents <dependency> from spreading into the rest of the codebase". That sentence is true of every module in every repo, it names libraries rather than decisions, and it must appear AT MOST ONCE in the whole section. Say instead what breaks, or what you must change in step, when someone edits this component.',
-      'Close with "## Tensions to know about": exactly three bullets, one line each, on coupling or asymmetry a newcomer will trip on (highest fan-in modules, cycles, wide-blast-radius shared code — from centralNodes). Give the real number from `centralNodes` where you have it ("`db.ts` has 47 dependents"), never "a high fan-in".',
+      'Close with "## Tensions to know about": exactly three bullets, one line each, on coupling or asymmetry a newcomer will trip on (from centralNodes: highest fan-in modules, cycles, wide-blast-radius shared code). Give the real number from `centralNodes` where you have it ("`db.ts` has 47 dependents"), never "a high fan-in".',
       'If `otherClusters` is non-empty, name those components in ONE sentence at the end and say they are smaller and left out of this walkthrough. Do not give them subsections.',
-      'The interactive Architecture tab holds the full drill-down graph — say so once at the end, not per cluster.',
+      'The interactive Architecture tab holds the full drill-down graph. Say so once at the end, not per cluster.',
       // The citation desert, and why the general "cite your claims" rule never
       // reached this section. Measured across 11 stored packages: SEVEN
       // architecture_deep sections carry zero citations of any kind — no
@@ -780,7 +780,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // so the model could not tell which of forty file paths went with which
       // heading. They are labelled now ("evidence for: …") — this makes using
       // them the contract.
-      'EVERY "## <label>" COMPONENT SUBSECTION MUST CARRY AT LEAST ONE CITATION. The receipt list below labels each receipt with what it is evidence for — "evidence for: Member of the \\"Backend · Workers\\" cluster", "evidence for: Design rationale recorded in the code: …". Match the label to the heading you are writing and cite that receipt as "(r7)". The responsibility and boundary sentences come from the deterministic facts, and that does NOT excuse the subsection from a citation: a reader who cannot open one real file for a component has been given a shape, not an explanation. Every "<decision> ⇒ <consequence>" bullet cites the rationale note it paraphrases, by its short id.',
+      'EVERY "## <label>" COMPONENT SUBSECTION MUST CARRY AT LEAST ONE CITATION. The receipt list below labels each receipt with what it is evidence for ("evidence for: Member of the \\"Backend · Workers\\" cluster", "evidence for: Design rationale recorded in the code: …"). Match the label to the heading you are writing and cite that receipt as "(r7)". The responsibility and boundary sentences come from the deterministic facts, and that does NOT excuse the subsection from a citation: a reader who cannot open one real file for a component has been given a shape, not an explanation. Every "<decision> ⇒ <consequence>" bullet cites the rationale note it paraphrases, by its short id.',
       'IF `snapshot.unreadStacks.mustDisclose` is true, add a "## Not covered here" subsection of at most three sentences naming the unparsed language(s) and saying plainly that those files form part of this system but no component above describes them. A component map that silently omits an entire stack reads as the complete architecture.',
     ]),
     deterministic: async (deps) => {
@@ -919,12 +919,12 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
         const wanted = notes >= 3 ? 3 : 1;
         if (stated < wanted) {
           issues.push(
-            `INCOMPLETE: ${stated} of ${wanted} required decision→consequence statements — write a "## Why it is built this way" block BEFORE the component subsections with one "<decision> ⇒ <consequence>" bullet per decisionNotes entry, using a literal "⇒" and citing that note's receipt. Structure without a stated reason is not an explanation.`,
+            `INCOMPLETE: ${stated} of ${wanted} required decision→consequence statements. Write a "## Why it is built this way" block BEFORE the component subsections with one "<decision> ⇒ <consequence>" bullet per decisionNotes entry, using a literal "⇒" and citing that note's receipt. Structure without a stated reason is not an explanation.`,
           );
         }
       } else if (!hasWhyBlock) {
         issues.push(
-          'INCOMPLETE: the "## Why it is built this way" block is missing — no rationale comments were found in this repository, so the block must say exactly that in one line rather than being omitted.',
+          'INCOMPLETE: the "## Why it is built this way" block is missing. No rationale comments were found in this repository, so the block must say exactly that in one line rather than being omitted.',
         );
       }
       if (!/##\s*Tensions/i.test(content)) {
@@ -942,7 +942,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // the reader cannot open.
       if (!CITATION_IN_PROSE.test(content)) {
         issues.push(
-          'INCOMPLETE: this section cites NOTHING — not one receipt id, not one file:line. Every component subsection has member receipts in the list, each labelled "evidence for: Member of the …" with the component it belongs to. Cite one per subsection as "(r7)", and cite each decision note on the bullet that paraphrases it.',
+          'INCOMPLETE: this section cites NOTHING, not one receipt id, not one file:line. Every component subsection has member receipts in the list, each labelled "evidence for: Member of the …" with the component it belongs to. Cite one per subsection as "(r7)", and cite each decision note on the bullet that paraphrases it.',
         );
       } else {
         // Judged only on the components that actually got a subsection, so the
@@ -966,7 +966,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
           .map((s) => s.heading);
         if (narrated >= 2 && bare.length * 2 > narrated) {
           issues.push(
-            `INCOMPLETE: ${bare.length} of ${narrated} component subsections cite nothing — ${bare.slice(0, 4).join(', ')}. Each of these has at least one receipt in the list labelled "evidence for: Member of the “<component>” cluster"; cite it as "(r7)" in the sentence it supports. A component the reader cannot open one file of has been described, not explained.`,
+            `INCOMPLETE: ${bare.length} of ${narrated} component subsections cite nothing: ${bare.slice(0, 4).join(', ')}. Each of these has at least one receipt in the list labelled "evidence for: Member of the “<component>” cluster"; cite it as "(r7)" in the sentence it supports. A component the reader cannot open one file of has been described, not explained.`,
           );
         }
       }
@@ -987,7 +987,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['purpose', 'operations'],
     retrievalTask: () => 'End-to-end flows: what each product journey does step by step across boundaries, and why each hop exists.',
     instructions: withContracts([
-      'Walk the provided journeys end to end — journeys are the authoritative flow layer (they already stitch route -> queue -> worker hops; member workflows are the drill-down). One "## <journey title>" per journey, most important first; each journey\'s sequence diagram is attached in order — refer to it.',
+      'Walk the provided journeys end to end. Journeys are the authoritative flow layer (they already stitch route -> queue -> worker hops; member workflows are the drill-down). One "## <journey title>" per journey, most important first; each journey\'s sequence diagram is attached in order. Refer to it.',
       'Per journey: one sentence on what it accomplishes, then the steps IN ORDER. Each step is ONE line: the real `file::symbol`, then what that code DOES to the request or the data, in this repo\'s nouns. When a hop crosses a boundary (queue, redirect, external service) say which boundary and what carries across it.',
       // Measured on OnboardBuddy: "**Data Write:** …:sign persists data." —
       // the kind label said twice. "**Auth Guard:** …verifyInstallationState
@@ -995,8 +995,8 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // crosses a boundary within the same integration surface" appeared three
       // times verbatim in one journey, and steps 3+4, 6+7, 9+10, 12+13 were the
       // same route twice — 8 of 14 steps were duplicates.
-      'NEVER RESTATE THE STEP KIND. A step labelled Data Write may not say "persists data" or "writes data"; an Auth Guard may not say "checks authentication"; a Trigger may not say "is the entry point"; a Transform may not say "crosses a boundary". Those words are already the label — say what is written, what is checked, or what is transformed. If the only thing known about a hop is its kind, fold it into the neighbouring step instead of giving it a line, and NEVER give two consecutive steps to the same `file::symbol` — collapse them into one.',
-      'Use only traced steps — never invent steps. Describe failure handling only from visible evidence; if none is visible for a journey, write "failure handling not visible in the trace".',
+      'NEVER RESTATE THE STEP KIND. A step labelled Data Write may not say "persists data" or "writes data"; an Auth Guard may not say "checks authentication"; a Trigger may not say "is the entry point"; a Transform may not say "crosses a boundary". Those words are already the label. Say what is written, what is checked, or what is transformed. If the only thing known about a hop is its kind, fold it into the neighbouring step instead of giving it a line, and NEVER give two consecutive steps to the same `file::symbol`. Collapse them into one.',
+      'Use only traced steps, never invent steps. Describe failure handling only from visible evidence; if none is visible for a journey, write "failure handling not visible in the trace".',
       // Measured on FloowForge: the "Why this design" block answered the
       // prompt's own checklist out loud — "Queue between phases: Not
       // applicable as this is a linear CI process. / Auth guard placement: Not
@@ -1008,7 +1008,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // up" (Trigger + three "Starts service X") and "Run the test suite"
       // (Trigger + "Runs tests") — setup_run duplicated at lower quality.
       'Journeys whose trigger is a development command (docker compose, a test runner, a CI pipeline) belong to Set Up & Run It. Name them in ONE line and point there; do not walk their steps here.',
-      'When a step WRITES data, say so explicitly — do not soften writes into reads.',
+      'When a step WRITES data, say so explicitly. Do not soften writes into reads.',
     ]),
     deterministic: async (deps) => ({
       // Role-scoped ordering: "most important first" now means most important
@@ -1061,10 +1061,10 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'understand',
     mode: 'explanation',
     views: ['purpose', 'dependency'],
-    retrievalTask: (role) => `The files that matter most and why — what each does, its key functions, and how they connect, for a ${roleDescriptor(role)} developer.`,
+    retrievalTask: (role) => `The files that matter most and why: what each does, its key functions, and how they connect, for a ${roleDescriptor(role)} developer.`,
     instructions: withContracts([
-      'A guided map of the files that matter, GROUPED BY SUBSYSTEM (the groups come from fileGroups — never present a flat ranked list; ranking selected the entries, grouping presents them).',
-      'One "## <subsystem>" per group. Per file: `path` as a sub-heading or bold lead, then 1-2 sentences on why it matters HERE (from its record evidence: what it orchestrates, who depends on it — the dependents number is provided), then its key functions in the micro-format: `name(signature)` — one-liner · params worth knowing · returns · gotcha (only when the evidence shows one). Then one line: what calls it / what it calls (from the evidence).',
+      'A guided map of the files that matter, GROUPED BY SUBSYSTEM (the groups come from fileGroups. Never present a flat ranked list; ranking selected the entries, grouping presents them).',
+      'One "## <subsystem>" per group. Per file: `path` as a sub-heading or bold lead, then 1-2 sentences on why it matters HERE (from its record evidence: what it orchestrates, who depends on it, and the dependents number is provided), then its key functions in the micro-format: `name(signature)`: one-liner · params worth knowing · returns · gotcha (only when the evidence shows one). Then one line: what calls it / what it calls (from the evidence).',
       // Measured: 44.4× length spread, the widest of any section type.
       // FloowForge shipped 36 words and mapped ZERO files at `confidence:
       // high`; MasterPokedex shipped 1,095 words over 36 files with ZERO
@@ -1072,21 +1072,21 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // file") plus a completeness check that counted PATH MENTIONS actively
       // rewarded the padding: naming 36 paths scored 100%, while ten files
       // documented properly would have failed.
-      'DEPTH BEATS BREADTH. Cover the 8-14 files from `fileGroups` a newcomer opens first — NOT all of them. A file entry without at least one `name(signature)` line is not worth its space: drop the file rather than write a blurb about it. Name the files you left out in ONE closing line.',
+      'DEPTH BEATS BREADTH. Cover the 8-14 files from `fileGroups` a newcomer opens first, NOT all of them. A file entry without at least one `name(signature)` line is not worth its space: drop the file rather than write a blurb about it. Name the files you left out in ONE closing line.',
       // Measured on OnboardBuddy: the file blurbs were the criticality
       // scorer's own `reasons` re-narrated — "its functionality is a direct
       // dependency for application operation", "Compromising this module poses
       // significant security and business risk", "It supports critical
       // business flows". A newcomer opening the file learns nothing from any
       // of them.
-      'NEVER narrate WHY a file ranked highly ("central to", "critical for", "a direct dependency for application operation", "compromising this module poses significant risk", "supports critical business flows"). The ranking is why the file is on this page, not a fact about the code — say what the file DOES and what is inside it. No scores in prose.',
+      'NEVER narrate WHY a file ranked highly ("central to", "critical for", "a direct dependency for application operation", "compromising this module poses significant risk", "supports critical business flows"). The ranking is why the file is on this page, not a fact about the code. Say what the file DOES and what is inside it. No scores in prose.',
       // Measured: 8 prose statements of "This component has 0 direct
       // dependents." — AUDIT_LEDGER C1 leaking out of the graph API into text.
-      'Numbers (dependents, counts) come verbatim from the facts, but NEVER state a dependent count of zero — omit the sentence instead; a zero here means the graph did not resolve the edge, not that nothing imports the file.',
+      'Numbers (dependents, counts) come verbatim from the facts, but NEVER state a dependent count of zero. Omit the sentence instead; a zero here means the graph did not resolve the edge, not that nothing imports the file.',
       // Measured: 65 unresolved bare aliases survived into the corpus, 46 of
       // them in one Multiplayer-Tetris code_map, as trailing "· r17, r26".
       // rewriteInlineCitations only rewrites "(r3)" and "[r3]".
-      'Cite with the short id in parentheses — "(r7)" — inside the sentence it supports. A bare "r17" or a trailing "· r17, r26" at the end of a line is NOT a citation, will not resolve, and ships to the reader as noise.',
+      'Cite with the short id in parentheses ("(r7)") inside the sentence it supports. A bare "r17" or a trailing "· r17, r26" at the end of a line is NOT a citation, will not resolve, and ships to the reader as noise.',
     ]),
     deterministic: async (deps) => {
       // Role-general precondition fix (doc/ROLE_DIFFERENTIATION_PLAN.md §1):
@@ -1197,7 +1197,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       const covered = paths.filter((p) => content.includes(p)).length;
       if (covered < wanted) {
         issues.push(
-          `INCOMPLETE: only ${covered} of the ${paths.length} candidate files are mapped — map at least ${wanted}, each with its key functions.`,
+          `INCOMPLETE: only ${covered} of the ${paths.length} candidate files are mapped. Map at least ${wanted}, each with its key functions.`,
         );
       }
       // One `name(...)` in backticks per mapped file is the floor: the
@@ -1206,7 +1206,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       const signatures = (content.match(/`[A-Za-z_$][\w.$]*\([^`\n]*\)`/g) ?? []).length;
       if (covered > 0 && signatures < covered) {
         issues.push(
-          `INCOMPLETE: ${signatures} function signatures across ${covered} mapped files — every mapped file needs at least one \`name(signature)\` line in the micro-format, or drop that file from the map.`,
+          `INCOMPLETE: ${signatures} function signatures across ${covered} mapped files. Every mapped file needs at least one \`name(signature)\` line in the micro-format, or drop that file from the map.`,
         );
       }
       return issues;
@@ -1221,7 +1221,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     retrievalTask: () => 'The product capabilities: what the system does for its users and where each capability lives in the code.',
     instructions: withContracts([
       'Every capability below was DERIVED from evidence and then named: it exists because a group of traced flows binds to an entry point, a flow that goes somewhere, and the schema table or external service it touches. Write about the ones you are given and invent none.',
-      'For each: what a user of the system gets from it, which flows deliver it (by title), which tables or services it touches, and the seam to change when EXTENDING it — take that from `seams`, which are the entry points and effect sites it binds to, never the file the capability happens to be named after.',
+      'For each: what a user of the system gets from it, which flows deliver it (by title), which tables or services it touches, and the seam to change when EXTENDING it. Take that from `seams`, which are the entry points and effect sites it binds to, never the file the capability happens to be named after.',
       // Measured on OnboardBuddy: "the evidence does not specify the exact
       // tables, services, or extension seams for this capability" appeared in
       // 7 of 8 entries, paraphrased just enough to defeat string dedupe —
@@ -1234,7 +1234,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // same class on CourseInsights ("40% of the answer is about the build").
       'A capability is something a USER of the product would ask for by name. NEVER emit one that is page chrome (navigation bar, footer, layout, theme, styling), a repo toolchain concern (development environment, testing, CI, build, linting, deployment) or a settings screen: if it would not appear on the product\'s pricing page or in a support ticket, leave it out and say in one closing line that it was excluded as infrastructure. Four sharp capabilities beat eight padded ones.',
       'If `capabilities` is empty, that is the finding, not a gap in your writing: say plainly that no capability could be derived from this snapshot, quote `bindingRule` and the counts in `notBound`, and stop. Never describe the repo\'s directories, layers or utilities as capabilities to fill the space.',
-      'This is business context anchored in code, not code documentation. If a capability has no user_value in the evidence, omit that line entirely — never print "N/A".',
+      'This is business context anchored in code, not code documentation. If a capability has no user_value in the evidence, omit that line entirely. Never print "N/A".',
     ]),
     deterministic: async (deps) => {
       // Members arrive as human-readable titles, not stable keys. The old
@@ -1306,22 +1306,22 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['purpose'],
     retrievalTask: () => 'How to set up and run this project locally: prerequisites, environment, run commands, and how to verify each step.',
     instructions: withContracts([
-      'A guaranteed-success first run. Steps come ONLY from evidence: compose files (the topology facts and devJourneys are parsed from them), package scripts, README receipts, and env templates. If evidence contains no run path, say exactly that and stop — never invent a command.',
-      'Structure: "## Prerequisites" → "## Configure" → "## Run" → "## Run the tests" → "## If it breaks". OMIT ANY HEADING YOU CANNOT FILL WITH A CONCRETE INSTRUCTION. A heading followed by "the evidence does not specify …" is worse than no heading at all — the Known Gaps panel already records what was missing, and five apologies under five headings is the single most common way this section wastes the reader\'s time.',
+      'A guaranteed-success first run. Steps come ONLY from evidence: compose files (the topology facts and devJourneys are parsed from them), package scripts, README receipts, and env templates. If evidence contains no run path, say exactly that and stop. Never invent a command.',
+      'Structure: "## Prerequisites" → "## Configure" → "## Run" → "## Run the tests" → "## If it breaks". OMIT ANY HEADING YOU CANNOT FILL WITH A CONCRETE INSTRUCTION. A heading followed by "the evidence does not specify …" is worse than no heading at all. The Known Gaps panel already records what was missing, and five apologies under five headings is the single most common way this section wastes the reader\'s time.',
       // Measured on our own golden repo: OnboardBuddy/setup_run (149 words)
       // shipped "No explicit configuration files need to be created" for a repo
       // that will not start without backend/.env, frontend/.env and a
       // github-app.pem — every one of those names present in the same package's
       // guardrails_ops env table. AUDIT_LEDGER A6; ONBOARDING_UX_GOALS calls a
       // wrong setup_run a hard fail.
-      '"## Configure": if `envFiles` is non-empty you MUST tell the reader to copy each template to its real filename, and you MUST NAME the variables that have no default, from `envFiles[].varNames` — plus any key or certificate file a compose service mounts. A repository that ships an env template ALWAYS needs configuration: never write "no configuration is needed" or "no explicit configuration files need to be created".',
+      '"## Configure": if `envFiles` is non-empty you MUST tell the reader to copy each template to its real filename, and you MUST NAME the variables that have no default, from `envFiles[].varNames`, plus any key or certificate file a compose service mounts. A repository that ships an env template ALWAYS needs configuration: never write "no configuration is needed" or "no explicit configuration files need to be created".',
       // Measured: not one setup_run in the corpus named the URL that proves the
       // app is up, though the topology facts carry the ports.
-      '"## Run": each step is ONE command in a code block plus a "You should see:" line naming the EXACT URL and port from the topology facts (e.g. "the app at http://localhost:5173 and the API at http://localhost:3000"). A verify line that paraphrases the command ("you should see the services starting") proves nothing — name the port, the URL, or the log string a receipt shows.',
+      '"## Run": each step is ONE command in a code block plus a "You should see:" line naming the EXACT URL and port from the topology facts (e.g. "the app at http://localhost:5173 and the API at http://localhost:3000"). A verify line that paraphrases the command ("you should see the services starting") proves nothing: name the port, the URL, or the log string a receipt shows.',
       // Measured on MasterPokedex: a "Port in use" failure box that names no
       // port, a "Missing configuration file" box that names no file.
-      '"## If it breaks": write a failure box ONLY when you can name the specific variable, port or file involved. A box that says "a port may already be in use" without naming the port, or "ensure all necessary environment variables are set" without naming them, is filler — drop it. Zero honest boxes beats three generic ones.',
-      'Every promised result must be checkable. One unbranching path — no alternatives, no "you could also".',
+      '"## If it breaks": write a failure box ONLY when you can name the specific variable, port or file involved. A box that says "a port may already be in use" without naming the port, or "ensure all necessary environment variables are set" without naming them, is filler. Drop it. Zero honest boxes beats three generic ones.',
+      'Every promised result must be checkable. One unbranching path: no alternatives, no "you could also".',
     ]),
     deterministic: async (deps) => {
       const facts = await loadConfigFacts(deps.snapshotId);
@@ -1363,7 +1363,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       const envFiles = (det.envFiles as Array<{ path: string }> | undefined) ?? [];
       if (envFiles.length > 0 && !envFiles.some((f) => f.path && content.includes(f.path))) {
         issues.push(
-          `INCOMPLETE: this repository ships ${envFiles.length} environment template(s) (${envFiles.map((f) => f.path).join(', ')}) and the Configure step names none of them — a repo with an env template always needs configuration.`,
+          `INCOMPLETE: this repository ships ${envFiles.length} environment template(s) (${envFiles.map((f) => f.path).join(', ')}) and the Configure step names none of them. A repo with an env template always needs configuration.`,
         );
       }
       // Ports come from the compose topology, so a repo without compose is
@@ -1371,7 +1371,7 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       const ports = [...new Set(JSON.stringify(det.topology ?? null).match(/\b\d{4,5}\b/g) ?? [])];
       if (ports.length > 0 && !ports.some((p) => content.includes(p))) {
         issues.push(
-          `INCOMPLETE: no verify line names a port — the topology exposes ${ports.join(', ')}; the reader must be told the URL that proves the run worked.`,
+          `INCOMPLETE: no verify line names a port. The topology exposes ${ports.join(', ')}; the reader must be told the URL that proves the run worked.`,
         );
       }
       return issues;
@@ -1391,8 +1391,8 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
       // is projections.slice(3, 25) — deliberately mid-rank — with nothing
       // excluding fixtures or static content, so the section is structurally
       // biased toward code that teaches the reader nothing.
-      'Design ONE starter exercise — a small, real, safe change in this repo — from the evidence: prefer an area that (a) appears in safeCandidates (moderate rank, low dependents), (b) has a test in testGuards, (c) follows an existing visible pattern (an exemplar snippet in the receipts), and (d) SITS ON A REAL PRODUCT PATH — the file must belong to a journey or capability in the evidence. NEVER pick a test file, an e2e fixture, a mock or stub, a snapshot, or a static content array (testimonials, marketing copy, nav labels): editing those teaches nothing about how the system works, which is the whole point of the exercise. If nothing satisfies (d), choose the lowest-risk file that does sit on a product path and say in one sentence why it carries slightly more risk.',
-      'Structure: "## The exercise" (one paragraph: what to add/change and why it is safe) → "## Files you will touch" (the exact files, each with one line on its role) → "## Steps" (numbered, imperative, one action each; point at the exemplar pattern to copy from with its receipt; state the expected diff shape — which file gains roughly how many lines where) → "## Verify" (the EXACT test file/command from the evidence; if testGuards has no test for the area, say plainly that tests are not visible and give the manual check instead) → "## What this teaches" (ONE sentence naming the specific journey or capability the edited file belongs to, and which section of this package walks it).',
+      'Design ONE starter exercise (a small, real, safe change in this repo) from the evidence: prefer an area that (a) appears in safeCandidates (moderate rank, low dependents), (b) has a test in testGuards, (c) follows an existing visible pattern (an exemplar snippet in the receipts), and (d) SITS ON A REAL PRODUCT PATH: the file must belong to a journey or capability in the evidence. NEVER pick a test file, an e2e fixture, a mock or stub, a snapshot, or a static content array (testimonials, marketing copy, nav labels): editing those teaches nothing about how the system works, which is the whole point of the exercise. If nothing satisfies (d), choose the lowest-risk file that does sit on a product path and say in one sentence why it carries slightly more risk.',
+      'Structure: "## The exercise" (one paragraph: what to add/change and why it is safe) → "## Files you will touch" (the exact files, each with one line on its role) → "## Steps" (numbered, imperative, one action each; point at the exemplar pattern to copy from with its receipt; state the expected diff shape: which file gains roughly how many lines where) → "## Verify" (the EXACT test file/command from the evidence; if testGuards has no test for the area, say plainly that tests are not visible and give the manual check instead) → "## What this teaches" (ONE sentence naming the specific journey or capability the edited file belongs to, and which section of this package walks it).',
       // Measured on UBCPSS: "You have now modified a component's data source
       // and observed its effect on the UI. This exercise demonstrates how to
       // integrate new content into existing sections… You also learned how to
@@ -1427,23 +1427,23 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'do',
     mode: 'howto',
     views: ['purpose', 'dependency'],
-    retrievalTask: () => 'The recurring engineering tasks in this repo: how to add a route, a table, a job, a page, a test — following existing patterns.',
+    retrievalTask: () => 'The recurring engineering tasks in this repo: how to add a route, a table, a job, a page, a test, following existing patterns.',
     instructions: withContracts([
-      'How-to recipes for THIS repo\'s recurring tasks. The taskShapes data lists the task patterns detected in this repo with exemplar files — write ONE "## How to <goal>" recipe per shape (skip shapes with no exemplars). Assume competence: no basics, no theory, no motivation paragraphs.',
+      'How-to recipes for THIS repo\'s recurring tasks. The taskShapes data lists the task patterns detected in this repo with exemplar files. Write ONE "## How to <goal>" recipe per shape (skip shapes with no exemplars). Assume competence: no basics, no theory, no motivation paragraphs.',
       // Measured on OnboardBuddy: five recipes, five verifications, every one a
       // tautology — "Send a request to the newly added API endpoint and verify
       // the response", "Run the migration scripts and confirm the table
       // structure", "Run the relevant test command and ensure all tests pass".
       // The real command (`docker compose -f docker-compose.test.yml run --rm
       // test`) was sitting in the same section's last recipe.
-      'Per recipe: goal-first title; then numbered steps in conditional-imperative voice ("If the route needs auth, wrap it in …"); each step names the REAL file to touch and points at the exemplar to copy from. End with a one-line verification that is a RUNNABLE COMMAND copied from `taskShapes[].testCommands` or the package scripts. If the evidence holds no command, write "no verification command is defined in this repo" — NEVER "verify the response", "confirm it worked", "ensure all tests pass" or any sentence that restates the step as its own check.',
+      'Per recipe: goal-first title; then numbered steps in conditional-imperative voice ("If the route needs auth, wrap it in …"); each step names the REAL file to touch and points at the exemplar to copy from. End with a one-line verification that is a RUNNABLE COMMAND copied from `taskShapes[].testCommands` or the package scripts. If the evidence holds no command, write "no verification command is defined in this repo". NEVER "verify the response", "confirm it worked", "ensure all tests pass" or any sentence that restates the step as its own check.',
       // Measured: step 1 of OnboardBuddy's "add an API route" carried 23
       // receipt chips across 6 bullets, up to 6 on a single line, every one
       // pointing at the file the bullet already named. In the reader those
       // render as a run of chips that reads as punctuation (UX §8.5).
-      'Cite the exemplar ONCE, with ONE receipt. Never put more than two receipts on a bullet, and never cite a receipt for a file whose path you already printed in that same line — the path IS the citation. Surplus ids belong in usedReceiptIds, not in the prose.',
+      'Cite the exemplar ONCE, with ONE receipt. Never put more than two receipts on a bullet, and never cite a receipt for a file whose path you already printed in that same line. The path IS the citation. Surplus ids belong in usedReceiptIds, not in the prose.',
       'Never write a step the reader cannot act on: "consider using existing modules", "this typically involves updating X", "implement the UI logic" are not steps. Name the file, the symbol and the edit, or drop the step.',
-      'Steps are for someone who knows how to code — they need the repo\'s way, not a tutorial. Link to Consult tables for full option lists instead of enumerating them.',
+      'Steps are for someone who knows how to code. They need the repo\'s way, not a tutorial. Link to Consult tables for full option lists instead of enumerating them.',
     ]),
     deterministic: async (deps) => {
       // Task shapes detected from repo structure — each with real exemplars.
@@ -1503,10 +1503,10 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'consult',
     mode: 'reference',
     views: ['purpose'],
-    retrievalTask: () => 'Every route, queue, job type, and webhook — grouped for lookup.',
+    retrievalTask: () => 'Every route, queue, job type, and webhook, grouped for lookup.',
     instructions: withContracts([
-      'Reference for lookup, not reading. Write: (1) a 2-3 sentence intro stating what the tables cover and how they are grouped, then the marker [[backbone]] on its own line (the deterministic route/queue/webhook tables are inserted there — you never write route tables yourself), then (2) "### Notes per group" — ONE line per route group, using the EXACT group headings from the inserted tables, saying something the table does not already show: which journey the group serves, what it guards, or the one route in the group a newcomer will touch first. A line that rewords the group name ("Authentication: routes for user authentication", "Project Management: routes for managing projects") is FORBIDDEN — omit that group instead. If no group earns a line, omit the "### Notes per group" heading entirely.',
-      'Route paths in your prose must be FULL mounted paths copied from the evidence. Never instruct, never opine — describe.',
+      'Reference for lookup, not reading. Write: (1) a 2-3 sentence intro stating what the tables cover and how they are grouped, then the marker [[backbone]] on its own line (the deterministic route/queue/webhook tables are inserted there, and you never write route tables yourself), then (2) "### Notes per group": ONE line per route group, using the EXACT group headings from the inserted tables, saying something the table does not already show: which journey the group serves, what it guards, or the one route in the group a newcomer will touch first. A line that rewords the group name ("Authentication: routes for user authentication", "Project Management: routes for managing projects") is FORBIDDEN. Omit that group instead. If no group earns a line, omit the "### Notes per group" heading entirely.',
+      'Route paths in your prose must be FULL mounted paths copied from the evidence. Never instruct, never opine: describe.',
     ]),
     deterministic: async (deps) => ({
       routeCount: Number(((await query(
@@ -1535,12 +1535,12 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     views: ['operations', 'dependency'],
     retrievalTask: () => 'The data model: what each table group stores and which invariants matter.',
     instructions: withContracts([
-      'Reference for lookup. Write: (1) a 2-3 sentence intro naming the schema source file(s) and the total table count VERBATIM from schemaTableCount (never count yourself), then the marker [[backbone]] on its own line (the deterministic table inventory is inserted there — you never write the table list yourself), then (2) "### Table groups" — group the tables into 3-6 domains by name/relationships and give ONE factual line per group on what it stores and the key relationship, grounded in the refs/access evidence.',
-      'The anchor ER diagram is drawn from parsed foreign keys — refer to it; never contradict it. Do NOT add a note that column-level detail is not included: the reader can see the table has no column list, and the Known Gaps panel records it.',
+      'Reference for lookup. Write: (1) a 2-3 sentence intro naming the schema source file(s) and the total table count VERBATIM from schemaTableCount (never count yourself), then the marker [[backbone]] on its own line (the deterministic table inventory is inserted there, and you never write the table list yourself), then (2) "### Table groups": group the tables into 3-6 domains by name/relationships and give ONE factual line per group on what it stores and the key relationship, grounded in the refs/access evidence.',
+      'The anchor ER diagram is drawn from parsed foreign keys. Refer to it; never contradict it. Do NOT add a note that column-level detail is not included: the reader can see the table has no column list, and the Known Gaps panel records it.',
       // Measured: "Semantic and Embedding Data: Stores and manages semantic
       // records, capabilities, and embeddings." — the group name reworded plus
       // a vague purpose, the same failure as routes_jobs' group notes.
-      'Each group line must state the INVARIANT or the lifecycle that binds those tables — what is created first, what cascades on delete, what has to stay consistent. Listing the group\'s tables again in prose is forbidden; the table above already does that.',
+      'Each group line must state the INVARIANT or the lifecycle that binds those tables: what is created first, what cascades on delete, what has to stay consistent. Listing the group\'s tables again in prose is forbidden; the table above already does that.',
     ]),
     deterministic: async (deps) => {
       const schemaTableCount = Number(((await query(
@@ -1573,14 +1573,14 @@ export const SECTION_SPECS: Record<SectionType, SectionSpec> = {
     chapter: 'consult',
     mode: 'reference',
     views: ['operations'],
-    retrievalTask: () => 'Operational guardrails: budgets, kill switches, privacy modes, secret handling, env configuration — what each protects and where it is enforced.',
+    retrievalTask: () => 'Operational guardrails: budgets, kill switches, privacy modes, secret handling, env configuration. What each protects and where it is enforced.',
     instructions: withContracts([
-      'Reference for lookup. Write: (1) a 2-3 sentence intro on what the tables cover, then the marker [[backbone]] on its own line (the deterministic env-var and guardrail-code tables are inserted there), then (2) "### What each guardrail protects" — for each guardrail SYMBOL in the backbone evidence, one factual line: what it protects and when it fires, ONLY where the record/receipt evidence shows it; omit symbols you cannot ground. Where the evidence shows an operational risk with no guardrail, state it as a gap.',
+      'Reference for lookup. Write: (1) a 2-3 sentence intro on what the tables cover, then the marker [[backbone]] on its own line (the deterministic env-var and guardrail-code tables are inserted there), then (2) "### What each guardrail protects": for each guardrail SYMBOL in the backbone evidence, one factual line: what it protects and when it fires, ONLY where the record/receipt evidence shows it; omit symbols you cannot ground. Where the evidence shows an operational risk with no guardrail, state it as a gap.',
       // Measured on OnboardBuddy: 13 of 26 backend rows and 3 of 3 frontend
       // rows rendered an empty "—" purpose cell, and `ACTIVITY_LIMIT`
       // (DashboardPage.tsx) / `DEPTH_BUDGET_DEFAULTS` (ProjectSettingsPage.tsx)
       // were listed as guardrails though they are display constants.
-      'Env var VALUES are never in the evidence and never in the output — names and documented purposes only. Where the template carries no comment for a variable, do not leave an empty cell: gather those names into ONE line below the table ("No documented purpose in the template: NODE_ENV, PORT, …"). A guardrail is an ENFORCEMENT point — something that refuses, throws, redirects, caps or strips. A constant that is only read for display is not one: name it in the closing line as "matched by name but not an enforcement point" rather than giving it a row.',
+      'Env var VALUES are never in the evidence and never in the output: names and documented purposes only. Where the template carries no comment for a variable, do not leave an empty cell: gather those names into ONE line below the table ("No documented purpose in the template: NODE_ENV, PORT, …"). A guardrail is an ENFORCEMENT point, something that refuses, throws, redirects, caps or strips. A constant that is only read for display is not one: name it in the closing line as "matched by name but not an enforcement point" rather than giving it a row.',
     ]),
     deterministic: async (deps) => {
       const facts = await loadConfigFacts(deps.snapshotId);

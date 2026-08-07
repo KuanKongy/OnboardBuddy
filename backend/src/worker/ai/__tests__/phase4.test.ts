@@ -368,7 +368,7 @@ describe('phase 4 — budget enforcer', () => {
       expect((err as BudgetExceededError).limit).to.equal('max_llm_calls');
       // The stop message has to say what was spent against what.
       expect((err as Error).message).to.equal(
-        'budget exceeded (max_llm_calls) — used 1 of 1 calls this run (lifetime across runs: 1); stop behavior: degrade',
+        'budget exceeded (max_llm_calls), used 1 of 1 calls this run (lifetime across runs: 1); stop behavior: degrade',
       );
     }
     expect(budget.usage.budget_events[0]).to.include({ kind: 'budget_tripped', limit: 'max_llm_calls', scope: 'per_run' });

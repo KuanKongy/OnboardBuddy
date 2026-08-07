@@ -29,9 +29,9 @@ const BINDING_RULE = {
   summary:
     "A capability is derived from evidence and then named, never named and then justified. It is emitted only when a group of traced flows binds to all three legs below.",
   legs: [
-    "At least one entry point — an HTTP route, page, event handler, job or command something outside the code can trigger.",
+    "At least one entry point: an HTTP route, page, event handler, job or command something outside the code can trigger.",
     "At least one traced flow that reaches past its own trigger, so there is a path to follow.",
-    "At least one persistence or external surface those flows actually reach — a schema table, a named data resource or service, the filesystem, a queue, or the network.",
+    "At least one persistence or external surface those flows actually reach: a schema table, a named data resource or service, the filesystem, a queue, or the network.",
   ],
 } as const;
 
