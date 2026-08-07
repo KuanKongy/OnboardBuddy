@@ -82,13 +82,23 @@ describe("GET /api/projects/:id/members/invitations", () => {
     expect(res.status).to.equal(401);
   });
 
-  // Postgres evaluates the filter, so the predicate itself is what a route test
-  // can assert; real expired rows are exercised by the live probe.
-  it("filters expired invitations with the accept path's own predicate", async () => {
+  // The team page shows invitation history beside the roster, so retired rows
+  // have to survive the query. Postgres evaluates `live`, so what a route test
+  // can assert is that the column is asked for and that nothing filters the
+  // history away again; real expired rows are exercised by the live probe.
+  it("lists retired invitations and asks Postgres for live", async () => {
     installTestAuth();
     const seen: string[] = [];
     mockQuery((text) => {
       seen.push(text);
+      if (text.includes("FROM project_invitations")) {
+        return {
+          rows: [
+            { id: "inv-1", status: "declined", live: false },
+            { id: "inv-2", status: "pending", live: true },
+          ],
+        };
+      }
       if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
       return { rows: [] };
     });
@@ -98,8 +108,14 @@ describe("GET /api/projects/:id/members/invitations", () => {
       .set(authHeader());
 
     expect(res.status).to.equal(200);
+    expect(res.body.invitations.map((i: { status: string }) => i.status))
+      .to.deep.equal(["declined", "pending"]);
     const list = seen.find((s) => s.includes("FROM project_invitations"))!;
-    expect(list).to.include("(pi.expires_at IS NULL OR pi.expires_at > NOW())");
+    expect(list).to.include(
+      "(pi.status = 'pending' AND (pi.expires_at IS NULL OR pi.expires_at > NOW())) AS live",
+    );
+    // The project match is the whole WHERE clause.
+    expect(list).to.match(/WHERE pi\.project_id = \$1\s+ORDER BY/);
   });
 });
 
@@ -247,6 +263,110 @@ describe("POST /api/projects/:id/members/invitations", () => {
       .send({ email: "bob@acme.test", permission_tier: "developer" });
 
     expect(res.status).to.equal(409);
+  });
+});
+
+describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () => {
+  afterEach(resetTestHarness);
+
+  const INVITATION_ID = "55555555-5555-5555-5555-555555555555";
+
+  /**
+   * Serves one invitation row to the resend route and records every statement.
+   * `member` decides what the already-a-member JOIN finds.
+   */
+  function installInvitation(
+    row: { email: string; permission_tier: string; developer_role: string | null; status: string },
+    { member = false } = {},
+  ) {
+    const statements: Array<{ text: string; params: unknown[] }> = [];
+    installTestAuth();
+    mockQuery((text, params = []) => {
+      statements.push({ text, params: params as unknown[] });
+      // The already-a-member lookup joins users; the generic branch below is the
+      // access gate, whose text also names project_members.
+      if (text.includes("FROM project_members pm")) return { rows: member ? [{ "?column?": 1 }] : [] };
+      if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      if (text.includes("FROM project_invitations")) return { rows: [{ id: INVITATION_ID, ...row }] };
+      if (text.includes("INSERT INTO project_invitations")) {
+        return { rows: [{ id: "invitation-2", ...row, status: "pending", live: true }] };
+      }
+      return { rows: [] };
+    });
+    return statements;
+  }
+
+  const resend = () =>
+    request(app)
+      .post(`/api/projects/${PROJECT_ID}/members/invitations/${INVITATION_ID}/resend`)
+      .set(authHeader());
+
+  // The dead row is retired rather than revived: its id stops being redeemable,
+  // it stays in the history the team page now shows, and — the reason the UPDATE
+  // is not optional — a 'pending' original holds the partial unique index slot
+  // that would otherwise reject the replacement with a duplicate-key 500.
+  it("expires the original and writes a fresh invitation from its email, tier and role", async () => {
+    const statements = installInvitation({
+      email: "Bob@Acme.test",
+      permission_tier: "developer",
+      developer_role: "backend",
+      status: "pending",
+    });
+
+    const res = await resend();
+
+    expect(res.status).to.equal(201);
+    expect(res.body.invitation.live).to.equal(true);
+
+    const expired = statements.find((s) => s.text.includes("SET status = 'expired'"))!;
+    expect(expired, "the pending original must be retired first").to.not.equal(undefined);
+    expect(expired.params).to.deep.equal([INVITATION_ID]);
+
+    const insert = statements.find((s) => s.text.includes("INSERT INTO project_invitations"))!;
+    expect(insert.params.slice(0, 4)).to.deep.equal([
+      PROJECT_ID,
+      "Bob@Acme.test",
+      "developer",
+      "backend",
+    ]);
+    expect(insert.params[5], "TTL in days").to.equal(14);
+    // The row the client re-keys on is live by construction; it was just written.
+    expect(insert.text).to.include("true AS live");
+  });
+
+  // Re-sending after accept writes a second invitation that accept itself can
+  // only answer with a members-PK 409.
+  it("refuses to re-send an accepted invitation, and writes nothing", async () => {
+    const statements = installInvitation({
+      email: "bob@acme.test",
+      permission_tier: "developer",
+      developer_role: null,
+      status: "accepted",
+    });
+
+    const res = await resend();
+
+    expect(res.status).to.equal(409);
+    expect(res.body.error).to.include("already been accepted");
+    expect(statements.filter((s) => s.text.includes("INSERT INTO project_invitations"))).to.deep.equal([]);
+  });
+
+  it("refuses to re-send to somebody who has since joined, and writes nothing", async () => {
+    const statements = installInvitation(
+      {
+        email: "bob@acme.test",
+        permission_tier: "developer",
+        developer_role: null,
+        status: "declined",
+      },
+      { member: true },
+    );
+
+    const res = await resend();
+
+    expect(res.status).to.equal(409);
+    expect(res.body.error).to.include("already a member");
+    expect(statements.filter((s) => s.text.includes("INSERT INTO project_invitations"))).to.deep.equal([]);
   });
 });
 

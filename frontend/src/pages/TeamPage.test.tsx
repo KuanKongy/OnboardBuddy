@@ -59,6 +59,37 @@ const MEMBERS = [
   },
 ];
 
+/** Invitation rows the list endpoint serves; set by a test before it renders. */
+interface InviteFixture {
+  id: string;
+  email: string;
+  permission_tier: string;
+  developer_role: string | null;
+  invited_by_email: string | null;
+  created_at: string;
+  expires_at: string | null;
+  status: string;
+  live: boolean;
+}
+
+const LIVE_INVITE: InviteFixture = {
+  id: "inv-1", email: "new@acme.test", permission_tier: "developer",
+  developer_role: "backend", invited_by_email: "lead@acme.test",
+  created_at: "2026-07-01T00:00:00.000Z", expires_at: "2026-08-01T00:00:00.000Z",
+  status: "pending", live: true,
+};
+
+const DECLINED_INVITE: InviteFixture = {
+  ...LIVE_INVITE, id: "inv-2", email: "nope@acme.test", status: "declined", live: false,
+};
+
+// Same person as the u-dev member row: the table must not spell them twice.
+const ACCEPTED_INVITE: InviteFixture = {
+  ...LIVE_INVITE, id: "inv-3", email: "dev@acme.test", status: "accepted", live: false,
+};
+
+let inviteRows: InviteFixture[] = [];
+
 const mockApi = vi.mocked(apiFetch);
 
 /**
@@ -95,9 +126,10 @@ describe("TeamPage", () => {
     navigate.mockReset();
     refetch.mockReset();
     mockApi.mockReset();
+    inviteRows = [];
     mockApi.mockImplementation((path: string) => {
       if (path === "/projects/p1/members") return Promise.resolve({ members: MEMBERS });
-      if (path === "/projects/p1/members/invitations") return Promise.resolve({ invitations: [] });
+      if (path === "/projects/p1/members/invitations") return Promise.resolve({ invitations: inviteRows });
       return Promise.resolve({});
     });
   });
@@ -211,5 +243,92 @@ describe("TeamPage", () => {
 
     expect(within(own).getByText("You")).toBeInTheDocument();
     expect(within(other).queryByText("You")).not.toBeInTheDocument();
+  });
+
+  // The dialog is the only place the full address is shown while managing
+  // someone, and as a bare paragraph it read as a subtitle of "Manage member".
+  it("shows the member's address as an icon row in the manage dialog", async () => {
+    const user = userEvent.setup();
+    renderTeam("owner");
+
+    await screen.findByText("dev");
+    await user.click(screen.getByRole("button", { name: "Manage dev@acme.test" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector("svg.lucide-mail")).not.toBeNull();
+    expect(within(dialog).getByTitle("dev@acme.test")).toHaveTextContent("dev@acme.test");
+  });
+
+  // Invitations live in the members table now. Every one of these regresses
+  // silently: the page renders, the row is just wrong about what can be done
+  // with it (or opens a profile for a user that does not exist yet).
+  it("lists a live invitation as a roster row with Resend and Revoke", async () => {
+    inviteRows = [LIVE_INVITE, ACCEPTED_INVITE];
+    renderTeam("owner");
+
+    const row = (await screen.findByText("new@acme.test")).closest("tr")!;
+    expect(within(row).getByText("Invited")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /Resend/ })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /Revoke/ })).toBeInTheDocument();
+
+    // The accepted invitation is the same person as the u-dev member row, which
+    // renders the local part — a full address on screen means an invitation row.
+    expect(screen.queryByText("dev@acme.test")).toBeNull();
+  });
+
+  it("offers Re-invite and no Revoke once an invitation is dead", async () => {
+    inviteRows = [DECLINED_INVITE];
+    renderTeam("owner");
+
+    const row = (await screen.findByText("nope@acme.test")).closest("tr")!;
+    expect(within(row).getByText("declined")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /Re-invite/ })).toBeInTheDocument();
+    // Nothing to revoke: the invitation is already over.
+    expect(within(row).queryByRole("button", { name: /Revoke/ })).toBeNull();
+  });
+
+  it("resends through the resend route and re-keys the row from the refetch", async () => {
+    const user = userEvent.setup();
+    let listCalls = 0;
+    mockApi.mockImplementation((path: string) => {
+      if (path === "/projects/p1/members") return Promise.resolve({ members: MEMBERS });
+      if (path === "/projects/p1/members/invitations") {
+        listCalls++;
+        // The route retires the old row and INSERTs a new one with a NEW id.
+        return Promise.resolve({
+          invitations: [listCalls === 1 ? LIVE_INVITE : { ...LIVE_INVITE, id: "inv-9" }],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderTeam("owner");
+
+    await screen.findByText("new@acme.test");
+    await user.click(screen.getByRole("button", { name: /Resend/ }));
+    expect(mockApi).toHaveBeenCalledWith(
+      "/projects/p1/members/invitations/inv-1/resend",
+      { method: "POST" },
+    );
+
+    // Without the refetch the row keeps pointing at inv-1, which the resend just
+    // expired — the second Resend would then 404.
+    await waitFor(() => expect(listCalls).toBe(2));
+    await user.click(screen.getByRole("button", { name: /Resend/ }));
+    expect(mockApi).toHaveBeenCalledWith(
+      "/projects/p1/members/invitations/inv-9/resend",
+      { method: "POST" },
+    );
+  });
+
+  it("opens no profile when an invitation row is clicked", async () => {
+    const user = userEvent.setup();
+    inviteRows = [LIVE_INVITE];
+    renderTeam("owner");
+
+    const row = (await screen.findByText("new@acme.test")).closest("tr")!;
+    // A plain part of the row, the click a member row answers with a profile.
+    await user.click(within(row).getByText("Invited"));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

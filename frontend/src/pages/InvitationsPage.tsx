@@ -6,7 +6,6 @@ import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { apiFetch } from "@/lib/api";
@@ -20,7 +19,35 @@ interface Invitation {
   permission_tier: string;
   developer_role: string | null;
   invited_by_email: string;
+  /** 'pending' | 'accepted' | 'revoked' | 'expired' | 'declined'. */
   status: string;
+  /**
+   * Server-computed "still acceptable": pending AND not past its TTL. Expiry
+   * cannot be derived from `status` — an untouched invitation stays 'pending'
+   * forever — and this is the accept route's own predicate, so it is what
+   * decides whether Accept is offered at all.
+   */
+  live: boolean;
+  created_at?: string;
+}
+
+/**
+ * The word on the badge. `status` alone cannot say "expired": nothing rewrites
+ * a pending row when its TTL passes, so the live flag is what separates an
+ * invitation you can still take from one that quietly ran out.
+ */
+function statusWord(inv: Invitation): string {
+  if (inv.live) return "Pending";
+  if (inv.status === "pending") return "Expired";
+  return inv.status;
+}
+
+/** What the pane says where the buttons would be, once nothing can be done. */
+function closedStateLine(inv: Invitation): string {
+  if (inv.status === "accepted") return "You already accepted this invitation. The project is on your dashboard.";
+  if (inv.status === "declined") return "You declined this invitation. Ask an owner or admin to send a new one.";
+  if (inv.status === "revoked") return "This invitation was revoked. Ask an owner or admin to send a new one.";
+  return "This invitation has expired. Ask an owner or admin to send a new one.";
 }
 
 export function InvitationsPage() {
@@ -29,7 +56,6 @@ export function InvitationsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedRole, setSelectedRole] = useState<string>(FALLBACK_ROLE);
   const [accepting, setAccepting] = useState(false);
   const [declining, setDeclining] = useState(false);
 
@@ -37,7 +63,10 @@ export function InvitationsPage() {
     apiFetch("/invitations")
       .then((data: { invitations: Invitation[] }) => {
         setInvitations(data.invitations);
-        const first = data.invitations[0];
+        // The list is history, newest first, so row 0 can easily be something
+        // already dealt with. Open on the one there is a decision to make about,
+        // and only fall back to the newest row when there is none.
+        const first = data.invitations.find((inv) => inv.live) ?? data.invitations[0];
         if (first) setSelectedId(first.id);
       })
       .catch((err) => setError(err.message))
@@ -55,21 +84,21 @@ export function InvitationsPage() {
   function selectInvitation(inv: Invitation) {
     setError("");
     setSelectedId(inv.id);
-    if (inv.developer_role) setSelectedRole(inv.developer_role);
   }
 
-  // Dropped from the list on success and the next one selected through
-  // selectInvitation, so the #14 error-clearing rule holds here too.
+  // The declined row stays listed and stays selected. Dropping it deleted the
+  // only record that the invitation ever existed — a user who declined by
+  // mistake had nothing left on screen to explain where it went.
   async function handleDecline(invitation: Invitation) {
     setDeclining(true);
     setError("");
     try {
       await apiFetch(`/invitations/${invitation.id}/decline`, { method: "POST" });
-      const remaining = invitations.filter((inv) => inv.id !== invitation.id);
-      setInvitations(remaining);
-      const next = remaining[0];
-      if (next) selectInvitation(next);
-      else setSelectedId(null);
+      setInvitations((prev) =>
+        prev.map((inv) =>
+          inv.id === invitation.id ? { ...inv, status: "declined", live: false } : inv,
+        ),
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to decline invitation");
     } finally {
@@ -77,13 +106,17 @@ export function InvitationsPage() {
     }
   }
 
+  // The role is the inviter's, not the invitee's: it is shown, not chosen. The
+  // fallback covers invitations written before the inviter picked one, and it is
+  // the same value the pane displays, so nobody is joined under a role they were
+  // not shown.
   async function handleAccept(invitation: Invitation) {
     setAccepting(true);
     setError("");
     try {
       await apiFetch(`/invitations/${invitation.id}/accept`, {
         method: "POST",
-        body: JSON.stringify({ developer_role: selectedRole }),
+        body: JSON.stringify({ developer_role: invitation.developer_role ?? FALLBACK_ROLE }),
       });
       navigate(`/projects/${invitation.project_id}`);
     } catch (err: unknown) {
@@ -101,8 +134,8 @@ export function InvitationsPage() {
   return (
     <div>
       <PageHeader
-        title="Pending invitations"
-        subtitle="Project invitations from teammates, waiting for you to accept."
+        title="Invitations"
+        subtitle="Invitations from teammates, current and past."
         actions={<BackLink />}
       />
 
@@ -113,7 +146,7 @@ export function InvitationsPage() {
       {invitations.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border py-12 text-center">
           <Users className="mx-auto h-6 w-6 text-muted-foreground" />
-          <p className="mt-2 text-sm text-muted-foreground">No pending invitations</p>
+          <p className="mt-2 text-sm text-muted-foreground">No invitations yet.</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
             New invitations from project owners will appear here.
           </p>
@@ -123,8 +156,11 @@ export function InvitationsPage() {
           {/* Left panel */}
           <div className="space-y-2">
             <p className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
-              Pending invitations ({invitations.length})
+              Invitations ({invitations.length})
             </p>
+            {/* Every row opens, including the ones nothing can be done about:
+                the pane is where "what happened to that invitation?" is
+                answered, so a closed row has to be inspectable. */}
             {invitations.map((inv) => (
               <Card
                 key={inv.id}
@@ -149,7 +185,7 @@ export function InvitationsPage() {
                     <div>
                       <p className="text-[0.8125rem] font-medium text-foreground">{inv.repo_name}</p>
                       <p className="mt-0.5 text-xs text-muted-foreground">
-                        Invited by {inv.invited_by_email || "a team member"}
+                        Invited by {inv.invited_by_email || "a teammate"}
                       </p>
                     </div>
                     <Badge variant="secondary" className="text-[0.6875rem] capitalize">
@@ -157,11 +193,16 @@ export function InvitationsPage() {
                     </Badge>
                   </div>
                   <div className="mt-1.5 flex items-center gap-1.5">
-                    <Badge variant="outline" className="text-[0.6875rem]">Pending</Badge>
+                    <Badge
+                      variant={inv.live ? "secondary" : "outline"}
+                      className="text-[0.6875rem] capitalize"
+                    >
+                      {statusWord(inv)}
+                    </Badge>
+                    {/* The role the accept will send, fallback included, so this
+                        chip and the pane never name two different roles. */}
                     <Badge variant="outline" className="text-[0.6875rem]">
-                      {inv.developer_role
-                        ? `${roleLabel(inv.developer_role)} role`
-                        : "Role not selected"}
+                      {roleLabel(inv.developer_role || FALLBACK_ROLE)} role
                     </Badge>
                   </div>
                 </CardContent>
@@ -172,15 +213,15 @@ export function InvitationsPage() {
           {/* Right panel */}
           {selected && (
             <Card>
-              <CardContent className="p-4">
+              <CardContent className="p-3">
                 <h2 className="text-sm font-semibold text-foreground">
                   Join {selected.repo_name}
                 </h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Select your role to continue.
+                  Invited by {selected.invited_by_email || "a teammate"}.
                 </p>
 
-                <div className="mt-3 flex gap-3">
+                <div className="mt-2.5 flex gap-3">
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
                     <p className="text-[0.6875rem] text-muted-foreground">Permission</p>
                     <p className="text-xs font-medium capitalize text-foreground">
@@ -193,71 +234,54 @@ export function InvitationsPage() {
                   </div>
                 </div>
 
-                <Separator className="my-3" />
-                {selected.developer_role ? (
-                  // Inviter preassigned the role — show it read-only (design: "read-only or omitted").
-                  <>
-                    <p className="mb-2 text-xs font-medium text-foreground">Developer Role</p>
-                    {(() => {
-                      const role = ROLE_OPTIONS.find((r) => r.value === selected.developer_role);
-                      return (
-                        <div className="flex w-full items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
-                          <span className="text-xs font-medium capitalize text-foreground">
-                            {role?.title ?? selected.developer_role}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {role?.description ?? "Assigned by inviter"}
-                          </span>
-                        </div>
-                      );
-                    })()}
-                  </>
-                ) : (
-                  <>
-                    <p className="mb-2 text-xs font-medium text-foreground">Select Developer Role</p>
-                    <div className="space-y-1.5">
-                      {ROLE_OPTIONS.map((role) => (
-                        <button
-                          key={role.value}
-                          type="button"
-                          onClick={() => setSelectedRole(role.value)}
-                          className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left transition-colors ${
-                            selectedRole === role.value
-                              ? "border-primary bg-primary/5"
-                              : "border-border hover:border-border/80 hover:bg-accent/50"
-                          }`}
-                        >
-                          <span className="text-xs font-medium text-foreground">{role.title}</span>
-                          <span className="text-xs text-muted-foreground">{role.description}</span>
-                        </button>
-                      ))}
+                {/* Read-only, always: the inviter chose the role, and offering a
+                    chooser here let an invitee overwrite that choice on the way
+                    in. TITLE register — this line names the person joining. */}
+                {(() => {
+                  const role = ROLE_OPTIONS.find(
+                    (r) => r.value === (selected.developer_role || FALLBACK_ROLE),
+                  );
+                  return (
+                    <div className="mt-2 flex w-full items-center justify-between rounded-md border border-border bg-muted/30 px-2.5 py-1.5">
+                      <span className="text-xs font-medium capitalize text-foreground">
+                        {role?.title ?? selected.developer_role}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {role?.description ?? "Assigned by the inviter"}
+                      </span>
                     </div>
-                  </>
-                )}
+                  );
+                })()}
 
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={declining || accepting}
-                    onClick={() => handleDecline(selected)}
-                  >
-                    {declining ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <XCircle className="h-3 w-3" />
-                    )}
-                    Decline
-                  </Button>
-                  <Button size="sm" disabled={accepting || declining} onClick={() => handleAccept(selected)}>
-                    {accepting ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : (
-                      <CheckCircle className="h-3 w-3" />
-                    )}
-                    Accept invitation
-                  </Button>
-                </div>
+                {selected.live ? (
+                  <div className="mt-3 flex justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={declining || accepting}
+                      onClick={() => handleDecline(selected)}
+                    >
+                      {declining ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <XCircle className="h-3 w-3" />
+                      )}
+                      Decline
+                    </Button>
+                    <Button size="sm" disabled={accepting || declining} onClick={() => handleAccept(selected)}>
+                      {accepting ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <CheckCircle className="h-3 w-3" />
+                      )}
+                      Accept invitation
+                    </Button>
+                  </div>
+                ) : (
+                  // No buttons rather than disabled ones: accept would be refused
+                  // by the route, and the reason is worth more than a dead control.
+                  <p className="mt-3 text-xs text-muted-foreground">{closedStateLine(selected)}</p>
+                )}
               </CardContent>
             </Card>
           )}

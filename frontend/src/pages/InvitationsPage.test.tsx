@@ -24,18 +24,29 @@ vi.mock("react-router-dom", async () => {
 
 const mockApi = vi.mocked(apiFetch);
 
+// `live` is the server's accept predicate (pending AND unexpired): it decides
+// whether the pane offers buttons at all, so every fixture has to carry it.
 const INVITATIONS = [
   {
     id: "inv-1", project_id: "p1", repo_owner: "acme", repo_name: "alpha",
     permission_tier: "developer", developer_role: "backend",
-    invited_by_email: "lead@acme.test", status: "pending",
+    invited_by_email: "lead@acme.test", status: "pending", live: true,
+    created_at: "2026-07-01T00:00:00.000Z",
   },
   {
     id: "inv-2", project_id: "p2", repo_owner: "acme", repo_name: "beta",
     permission_tier: "developer", developer_role: "frontend",
-    invited_by_email: "lead@acme.test", status: "pending",
+    invited_by_email: "lead@acme.test", status: "pending", live: true,
+    created_at: "2026-07-02T00:00:00.000Z",
   },
 ];
+
+const REVOKED = {
+  id: "inv-0", project_id: "p0", repo_owner: "acme", repo_name: "gamma",
+  permission_tier: "developer", developer_role: "backend",
+  invited_by_email: "lead@acme.test", status: "revoked", live: false,
+  created_at: "2026-06-01T00:00:00.000Z",
+};
 
 describe("InvitationsPage error lifecycle (#14)", () => {
   beforeEach(() => {
@@ -97,7 +108,7 @@ describe("InvitationsPage error lifecycle (#14)", () => {
   });
 });
 
-describe("InvitationsPage decline (#72)", () => {
+describe("InvitationsPage invitation lifecycle (#72)", () => {
   function renderPage() {
     return render(
       <MemoryRouter>
@@ -112,12 +123,15 @@ describe("InvitationsPage decline (#72)", () => {
   // run as teardown — here `apiFetch()` with no arguments, unhandled.
   beforeEach(() => { mockApi.mockReset(); });
 
-  it("drops the declined invitation and selects the next one", async () => {
+  // The list is history now: a declined invitation stays on it, stays selected,
+  // and loses its buttons. Dropping the row left a user who declined by mistake
+  // with nothing on screen to explain where the invitation went.
+  it("keeps the declined invitation listed and turns the pane read-only", async () => {
     const user = userEvent.setup();
     mockApi.mockImplementation((path: string) =>
       path === "/invitations"
         ? Promise.resolve({ invitations: INVITATIONS })
-        : Promise.resolve({ invitation: { id: "inv-1", status: "revoked" } }),
+        : Promise.resolve({ invitation: { id: "inv-1", status: "declined" } }),
     );
     renderPage();
 
@@ -125,9 +139,52 @@ describe("InvitationsPage decline (#72)", () => {
     await user.click(screen.getByRole("button", { name: /^Decline$/ }));
 
     expect(mockApi).toHaveBeenCalledWith("/invitations/inv-1/decline", { method: "POST" });
-    // The declined one is gone from the list and the pane follows to the next.
+    expect(await screen.findByText("declined")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Join alpha" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /accept invitation/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Decline$/ })).toBeNull();
+    expect(screen.getByText(/You declined this invitation/i)).toBeInTheDocument();
+  });
+
+  // The role is the inviter's choice; the invitee is shown it, not asked for it.
+  // A body that sent anything else would join them under a role they never saw.
+  it("accepts with the role the invitation carries", async () => {
+    const user = userEvent.setup();
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: INVITATIONS })
+        : Promise.resolve({}),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Join alpha" });
+    await user.click(screen.getByRole("button", { name: /accept invitation/i }));
+
+    expect(mockApi).toHaveBeenCalledWith("/invitations/inv-1/accept", {
+      method: "POST",
+      body: JSON.stringify({ developer_role: "backend" }),
+    });
+  });
+
+  it("opens on the live invitation and shows a closed one read-only", async () => {
+    const user = userEvent.setup();
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: [REVOKED, INVITATIONS[1]] })
+        : Promise.resolve({}),
+    );
+    renderPage();
+
+    // Newest-first ordering puts a dead row at the top often enough; the pane
+    // has to open on the one there is still a decision to make about.
     expect(await screen.findByRole("heading", { name: "Join beta" })).toBeInTheDocument();
-    expect(screen.queryByText("alpha")).toBeNull();
+
+    // Closed rows are still inspectable: that is where "what happened to that
+    // invitation?" is answered.
+    await user.click(screen.getByText("gamma"));
+    expect(await screen.findByRole("heading", { name: "Join gamma" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /accept invitation/i })).toBeNull();
+    expect(screen.getByText(/This invitation was revoked/i)).toBeInTheDocument();
   });
 
   it("reports a failed decline and clears it when another invitation is selected", async () => {

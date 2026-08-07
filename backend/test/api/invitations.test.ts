@@ -21,20 +21,35 @@ describe("GET /api/invitations", () => {
     expect(res.body).to.have.property("error");
   });
 
-  // Copied from the accept path, including the IS NULL arm that keeps pre-TTL
-  // rows redeemable.
-  it("filters expired invitations with the accept path's own predicate", async () => {
+  // The inbox is history: an invitation the caller declined, or one that ran out
+  // of time, stays on screen with an explanation. `live` is what replaces the
+  // filter — it carries the accept path's own predicate (IS NULL arm included,
+  // so pre-TTL rows stay redeemable) to the client that decides where to offer
+  // Accept.
+  it("lists invitations that are no longer pending, and asks Postgres for live", async () => {
     installTestAuth();
     const seen: string[] = [];
     mockQuery((text) => {
       seen.push(text);
-      return { rows: [] };
+      return {
+        rows: [
+          { id: "inv-1", status: "pending", live: true },
+          { id: "inv-2", status: "declined", live: false },
+        ],
+      };
     });
 
     const res = await request(app).get("/api/invitations").set(authHeader());
 
     expect(res.status).to.equal(200);
-    expect(seen[0]).to.include("(pi.expires_at IS NULL OR pi.expires_at > NOW())");
+    expect(res.body.invitations.map((i: { status: string }) => i.status))
+      .to.deep.equal(["pending", "declined"]);
+    expect(seen[0]).to.include(
+      "(pi.status = 'pending' AND (pi.expires_at IS NULL OR pi.expires_at > NOW())) AS live",
+    );
+    // The email match is the whole WHERE clause — a status or expiry predicate
+    // creeping back in is what would silently empty the history again.
+    expect(seen[0]).to.match(/WHERE LOWER\(pi\.email\) = LOWER\(\$1\)\s+ORDER BY/);
   });
 });
 
@@ -93,7 +108,7 @@ describe("POST /api/invitations/:invitationId/decline", () => {
         return { rows: [{ id: INVITATION_ID, ...row }] };
       }
       if (text.includes("UPDATE project_invitations")) {
-        return { rows: [{ id: INVITATION_ID, status: "revoked" }] };
+        return { rows: [{ id: INVITATION_ID, status: "declined" }] };
       }
       return { rows: [] };
     });
@@ -109,17 +124,18 @@ describe("POST /api/invitations/:invitationId/decline", () => {
     expect(res.status).to.equal(401);
   });
 
-  // #72: the CHECK has no 'declined'; 'revoked' is the terminal stand-in, so this
-  // also pins that the route writes a value the constraint accepts.
-  it("retires a pending invitation addressed to the caller", async () => {
+  // #72: 'declined' only became a legal status in migration 004. Writing it
+  // against an un-migrated database is a CHECK violation and a 500, so this pins
+  // the word the route writes — the migration and this line ship together.
+  it("declines a pending invitation addressed to the caller", async () => {
     const statements = installInvitation({ email: "TESTER@example.com", status: "pending" });
 
     const res = await decline();
 
     expect(res.status).to.equal(200);
-    expect(res.body.invitation.status).to.equal("revoked");
+    expect(res.body.invitation.status).to.equal("declined");
     const write = statements.find((s) => s.includes("UPDATE project_invitations"))!;
-    expect(write).to.include("SET status = 'revoked'");
+    expect(write).to.include("SET status = 'declined'");
     // The write refuses to run against a row that stopped being pending.
     expect(write).to.include("AND status = 'pending'");
   });
