@@ -511,8 +511,8 @@ export function GraphPage() {
         }
         subtitle={
           view === "classes"
-            ? "Which classes extend or implement which — grouped by folder, each with a line saying what it does."
-            : "Which files depend on which — follow the arrows to see how changes ripple."
+            ? "Which classes extend or implement which, grouped by folder, each with a line saying what it does."
+            : "Which files depend on which. Follow the arrows to see how changes ripple."
         }
         actions={
           <>
@@ -705,15 +705,15 @@ export function GraphPage() {
           {data.clustered ? (
             <p className="mb-2 text-xs text-muted-foreground">
               {currentFrame
-                ? `${currentFrame.label} holds ${data.totalNodes} files — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. `
-                : `${data.totalNodes} files, too many to draw at once — showing ${groupCount} directory group${groupCount === 1 ? "" : "s"}. `}
+                ? `${currentFrame.label} holds ${data.totalNodes} files, showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${fileCount > 0 ? ` and ${fileCount} file${fileCount === 1 ? "" : "s"}` : ""}. `
+                : `${data.totalNodes} files, too many to draw at once, so this shows ${groupCount} directory group${groupCount === 1 ? "" : "s"}. `}
               Click a group for its numbers, then use the Open button in its details panel to list its
               files, each with a line saying what it does. Numbers on a group box count links crossing
               its boundary, not links inside it.
             </p>
           ) : (
             <p className="mb-2 text-xs text-muted-foreground">
-              {currentFrame ? `Files in ${currentFrame.label}` : "Files in this project"} — each card says
+              {currentFrame ? `Files in ${currentFrame.label}` : "Files in this project"}: each card says
               what the file does, what it imports and what imports it.{" "}
               {describedFiles > 0
                 ? `${describedFiles} of ${nodes.length} carry a generated description; the rest show what the analyzer could infer from their path.`
@@ -728,7 +728,7 @@ export function GraphPage() {
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <span className="flex-1 text-foreground">
                 Showing {truncation.shown} of {truncation.total} {truncation.unit}
-                {currentFrame ? ` in ${currentFrame.label}` : ""} — {truncation.hidden} not drawn. A single
+                {currentFrame ? ` in ${currentFrame.label}` : ""}, {truncation.hidden} not drawn. A single
                 view is capped at {truncation.limit} nodes, so this kept {truncation.keptBy}.
                 {truncation.seeRest ? ` ${truncation.seeRest}` : ""}
               </span>

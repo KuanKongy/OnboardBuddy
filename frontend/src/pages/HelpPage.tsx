@@ -39,14 +39,14 @@ const TOUR_ROWS: TourRow[] = [
   {
     name: "project",
     title: "Project tour",
-    description: "What each project tab does — overview, onboarding, architecture, dependencies, workflows.",
+    description: "What each project tab does: overview, onboarding, architecture, dependencies, workflows.",
     projectScoped: true,
     path: (id) => `/projects/${id}`,
   },
   {
     name: "import",
     title: "Import tour",
-    description: "Configuring the first analysis — branch, commit, scope, and the cost preview.",
+    description: "Configuring the first analysis: branch, commit, scope, and the cost preview.",
     hint: "Starts on step 2, once a repository has been imported.",
     projectScoped: false,
     path: () => "/import",
@@ -61,7 +61,7 @@ const TOUR_ROWS: TourRow[] = [
   {
     name: "onboardingReader",
     title: "Reader tour",
-    description: "How to read a generated package — sections, receipts, and review status.",
+    description: "How to read a generated package: sections, receipts, and review status.",
     hint: "Starts when you open a generated package's reader.",
     projectScoped: true,
     path: (id) => `/projects/${id}/onboarding`,
@@ -121,13 +121,13 @@ export function HelpPage() {
               <Route className="h-4 w-4 text-primary" /> Tours
             </h2>
             <p className="mb-3 text-[0.78125rem] text-muted-foreground">
-              Re-run any guided tour any time — starting one doesn't affect whether it auto-starts
+              Re-run any guided tour any time; starting one doesn't affect whether it auto-starts
               again on its own.
             </p>
 
             {sortedProjects.length === 0 && (
               <p className="mb-3 text-[0.71875rem] text-muted-foreground/80">
-                Project-scoped tours need a project to open — import one first.
+                Project-scoped tours need a project to open, so import one first.
               </p>
             )}
             {sortedProjects.length > 0 && (
@@ -207,11 +207,11 @@ export function HelpPage() {
                   </tr>
                   <tr className="border-b border-border/60">
                     <td className="px-3 py-1.5 font-medium text-foreground">{PRIVACY_MODES[1]!.label}</td>
-                    <td className="px-3 py-1.5 text-muted-foreground">Facts and structure only — no code</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">Facts and structure only, no code</td>
                   </tr>
                   <tr>
                     <td className="px-3 py-1.5 font-medium text-foreground">{PRIVACY_MODES[2]!.label}</td>
-                    <td className="px-3 py-1.5 text-muted-foreground">Nothing — zero LLM calls, deterministic outputs only</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">Nothing: zero LLM calls, deterministic outputs only</td>
                   </tr>
                 </tbody>
               </table>
@@ -233,7 +233,7 @@ export function HelpPage() {
                 Switch to Facts-only or AI-disabled privacy mode
                 {selectedProjectId && (
                   <>
-                    {" — "}
+                    {": "}
                     <Link to={`/projects/${selectedProjectId}/settings`} className="text-primary hover:underline">
                       open Project Settings
                     </Link>

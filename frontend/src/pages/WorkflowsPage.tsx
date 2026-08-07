@@ -501,7 +501,7 @@ export function WorkflowsPage() {
     >
       <PageHeader
         title="Workflows"
-        subtitle="Traced request flows — from the entry point through every function to its side effects, ranked by how critical they are."
+        subtitle="Traced request flows, from the entry point through every function to its side effects, ranked by how critical they are."
         actions={
           <>
             {detail && (
@@ -589,7 +589,7 @@ export function WorkflowsPage() {
         <EmptyState
           icon={<Info className="h-4 w-4 shrink-0 text-muted-foreground" />}
           heading="No workflows were traced in this snapshot"
-          description="A workflow is traced from an entry point — an HTTP route, page, event handler, queue consumer, command or CI pipeline — and kept when the trace reaches a side effect. Zero can mean none of those were detected, or that every trace stopped before reaching one. Both are findings about what the analyzer could see, not proof that the repository does nothing."
+          description="A workflow is traced from an entry point (an HTTP route, page, event handler, queue consumer, command or CI pipeline) and kept when the trace reaches a side effect. Zero can mean none of those were detected, or that every trace stopped before reaching one. Both are findings about what the analyzer could see, not proof that the repository does nothing."
         />
       )}
 
@@ -614,7 +614,7 @@ export function WorkflowsPage() {
                   ? `${visibleWorkflows.length} of ${workflows.length} flows`
                   : workflows.length === 1
                     ? "1 traced flow"
-                    : `Traced flows (${workflows.length}) — most critical first`}
+                    : `Traced flows (${workflows.length}), most critical first`}
               </p>
               {/* What "most critical first" actually means here is the rail's
                   sort order, not any one flow's score — tier decides before a
@@ -811,7 +811,7 @@ export function WorkflowsPage() {
                     <AlertTriangle className="mx-auto mb-2 h-5 w-5 text-danger" />
                     <p className="text-sm font-medium text-foreground">Couldn&apos;t load this flow&apos;s steps</p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      The request failed — this flow&apos;s steps were not fetched. It is not a flow
+                      The request failed, so this flow&apos;s steps were not fetched. It is not a flow
                       without steps.
                     </p>
                     <p className="mt-1 break-words text-[0.6875rem] text-muted-foreground/80">{stepsError}</p>
@@ -830,7 +830,7 @@ export function WorkflowsPage() {
               {untraceable && (
                 <div className="absolute left-2 top-2 z-10 max-w-md rounded-md border border-warning/40 bg-warning-soft px-2 py-1 text-[0.6875rem] leading-snug text-foreground">
                   All {steps.length} steps of this flow are in <span className="font-mono">{untraceable}</span> with no
-                  symbols resolved — there is one file here, counted {steps.length} times, not a traced path between
+                  symbols resolved: there is one file here, counted {steps.length} times, not a traced path between
                   {" "}{steps.length} places.
                 </div>
               )}
@@ -895,7 +895,7 @@ export function WorkflowsPage() {
                       Written by the narration pass for this step
                     </>
                   ) : (
-                    "Deterministic description — derived from the step's kind and target, not written about this code"
+                    "Deterministic description, derived from the step's kind and target, not written about this code"
                   )}
                 </p>
 

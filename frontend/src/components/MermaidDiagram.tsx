@@ -70,7 +70,7 @@ export function MermaidDiagram({ code, label, projectId }: { code: string; label
         {label && <figcaption className="section-label mb-2">{label}</figcaption>}
         <p className="mb-2 flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
           <AlertTriangle className="h-3 w-3 shrink-0" />
-          Couldn't render this diagram — showing its source instead.
+          Couldn't render this diagram; showing its source instead.
         </p>
         <pre className="overflow-x-auto rounded-md border border-border bg-muted px-3 py-2 text-[0.6875rem] text-muted-foreground">
           {code}

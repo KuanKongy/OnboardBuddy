@@ -26,7 +26,7 @@ export const SECTION_NAV_ORDER: readonly SectionId[] = [
 export const SECTION_GROUPS: ReadonlyArray<{ label: string; blurb?: string; ids: readonly SectionId[] }> = [
   {
     label: "Orient",
-    blurb: "What this system is and the vocabulary it thinks in — read first.",
+    blurb: "What this system is and the vocabulary it thinks in. Read first.",
     ids: ["big-picture", "concepts"],
   },
   {
@@ -41,7 +41,7 @@ export const SECTION_GROUPS: ReadonlyArray<{ label: string; blurb?: string; ids:
   },
   {
     label: "Consult",
-    blurb: "Lookup tables from code facts — routes, data model, guardrails.",
+    blurb: "Lookup tables from code facts: routes, data model, guardrails.",
     ids: ["routes-jobs", "data-model", "guardrails-ops"],
   },
   {
@@ -105,18 +105,18 @@ export const ROLE_READING_ORDER: Record<DeveloperRole, readonly SectionId[]> = {
 
 /** One-liner "why you specifically" per section, shown in the suggested rail. */
 export const SECTION_WHY: Partial<Record<SectionId, string>> = {
-  "big-picture": "The 10-minute map — everything else refers back to it.",
+  "big-picture": "The 10-minute map; everything else refers back to it.",
   "setup-run": "Get it running on day one; every later section assumes you can.",
   "concepts": "The nouns you need before any code review makes sense.",
   "traced-flows": "The product's real end-to-end paths, hop by hop.",
   "first-change": "A safe, verified change to break the ice.",
   "code-map": "The files you'll actually open, grouped by subsystem.",
   "common-tasks": "This repo's recipes for the changes you'll make weekly.",
-  "architecture-deep": "Why the system is shaped this way — decisions and tensions.",
+  "architecture-deep": "Why the system is shaped this way: decisions and tensions.",
   "capabilities": "What the product does for users, mapped to the code.",
   "routes-jobs": "Look up any route, queue, or webhook.",
   "data-model": "Tables, relationships, and who touches them.",
-  "guardrails-ops": "Budgets, kill switches, env config — before you operate it.",
+  "guardrails-ops": "Budgets, kill switches, env config: read before you operate it.",
 };
 
 /**
@@ -132,32 +132,32 @@ export const SECTION_WHY: Partial<Record<SectionId, string>> = {
  */
 export const ROLE_SECTION_WHY: Partial<Record<DeveloperRole, Partial<Record<SectionId, string>>>> = {
   backend: {
-    "routes-jobs": "Every endpoint and queue you will extend — the surface you own.",
+    "routes-jobs": "Every endpoint and queue you will extend: the surface you own.",
     "data-model": "The tables your handlers write, and the constraints that will reject you.",
     "traced-flows": "Where a request becomes a job and a job becomes rows.",
     "code-map": "The handlers, workers and services you will open first.",
     "guardrails-ops": "The budgets and kill switches your code has to respect.",
   },
   frontend: {
-    "routes-jobs": "The API surface your components call — payloads, methods, mounted paths.",
+    "routes-jobs": "The API surface your components call: payloads, methods, mounted paths.",
     "capabilities": "What users can do, and which screen delivers each one.",
     "traced-flows": "What happens after your click, all the way to the write.",
     "code-map": "The pages, components and hooks you will open first.",
     "data-model": "The shapes behind the JSON your views render.",
   },
   devops: {
-    "guardrails-ops": "Budgets, kill switches, secrets and env config — your first read, not your last.",
+    "guardrails-ops": "Budgets, kill switches, secrets and env config: your first read, not your last.",
     "setup-run": "The services, ports and env this repo actually needs to boot.",
-    "architecture-deep": "Process topology and boundaries — what runs where, and what crosses.",
+    "architecture-deep": "Process topology and boundaries: what runs where, and what crosses.",
     "routes-jobs": "The queues and workers you will scale, and the routes you will front.",
     "code-map": "The config, compose and pipeline files that decide how it runs.",
   },
   qa: {
-    "common-tasks": "The repo's own test recipes — the pattern to copy, not invent.",
+    "common-tasks": "The repo's own test recipes: the pattern to copy, not invent.",
     "traced-flows": "The end-to-end paths worth covering, with their effect steps named.",
     "first-change": "Your first change is a test: the missing assertion on a real flow.",
     "routes-jobs": "Every endpoint that needs a case, in one table.",
-    "capabilities": "What the product promises — the acceptance criteria behind each promise.",
+    "capabilities": "What the product promises, and the acceptance criteria behind each one.",
   },
 };
 

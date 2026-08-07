@@ -94,6 +94,22 @@ describe("ProjectCard", () => {
     expect(screen.queryByText("PROJECT PAGE")).not.toBeInTheDocument();
   });
 
+  // The card takes its status word from the left of the separator
+  // `pipelineProgress` writes into `stageLabel`. The two live in different
+  // files, and a mismatch is invisible until a run is actually live: the chip
+  // silently carries the whole "Analyzing code · reading files" sentence.
+  it("shows the stage word alone while a run is live", async () => {
+    vi.mocked(apiFetch).mockResolvedValueOnce({
+      jobs: [{ job_type: "analyze_scope", status: "running", progress_pct: 70, current_step: "reading files" }],
+    });
+    renderCard({ ...PROJECT, status: "analyzing" });
+
+    expect(await screen.findByText("Analyzing code")).toBeInTheDocument();
+    expect(screen.queryByText(/reading files/)).not.toBeInTheDocument();
+    // Analysis fills 0-70% of the combined bar: 70 × 0.7.
+    expect(screen.getByText("49%")).toBeInTheDocument();
+  });
+
   // `DELETE /api/projects/:id` is owner-only, so an admin's menu item could only ever
   // 403. Delete is the menu's one item, so the trigger goes with it.
   it.each(["admin", "developer"])("offers no delete to an %s", (tier) => {

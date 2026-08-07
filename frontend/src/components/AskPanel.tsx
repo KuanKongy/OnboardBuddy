@@ -67,7 +67,7 @@ export function AskPanel({
       if (err instanceof ApiError && err.status === 403) {
         setError("AI is disabled for this project (privacy settings), so questions can't be answered.");
       } else if (err instanceof ApiError && err.status === 429) {
-        setError("The analysis budget for this snapshot is exhausted — try again after raising it in Settings.");
+        setError("The analysis budget for this snapshot is exhausted. Try again after raising it in Settings.");
       } else {
         setError(err instanceof Error ? err.message : "Failed to get an answer");
       }
@@ -99,7 +99,7 @@ export function AskPanel({
             Ask about this codebase
           </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Answers come from the analyzed evidence with numbered receipts — gaps are stated, not guessed.
+            Answers come from the analyzed evidence with numbered receipts; gaps are stated, not guessed.
           </p>
         </DialogHeader>
 
@@ -132,7 +132,7 @@ export function AskPanel({
 
           {busy && (
             <p className="text-xs text-muted-foreground">
-              Retrieving evidence and validating citations — usually 10–30 seconds…
+              Retrieving evidence and validating citations, usually 10–30 seconds…
             </p>
           )}
 

@@ -140,8 +140,8 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
                     >
                       <AlertTriangle className="mr-1 h-2.5 w-2.5" />
                       {verification?.status === "missing"
-                        ? "Review required — symbol removed"
-                        : "Review required — code changed"}
+                        ? "Review required: symbol removed"
+                        : "Review required: code changed"}
                     </Badge>
                   </span>
                 </TooltipTrigger>

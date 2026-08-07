@@ -71,7 +71,7 @@ export function ProvenancePanel({
             How this package was made
           </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            The stored audit trail for this exact package — models, calls, validation. Nothing here is generated.
+            The stored audit trail for this exact package: models, calls, validation. Nothing here is generated.
           </p>
         </DialogHeader>
 
@@ -107,7 +107,7 @@ export function ProvenancePanel({
                 <div className="divide-y">
                   {data.models.length === 0 && (
                     <p className="px-3 py-2 text-xs text-muted-foreground">
-                      No LLM calls recorded — this package was built deterministically.
+                      No LLM calls recorded: this package was built deterministically.
                     </p>
                   )}
                   {/* Cost with no cap beside it is a number, not a budget.

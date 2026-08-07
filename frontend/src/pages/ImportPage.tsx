@@ -97,12 +97,12 @@ const IMPORT_TOUR_STEPS: TourStep[] = [
   {
     target: "import-config-form",
     title: "Configure the first analysis",
-    body: "Nothing runs yet. Pick the branch and commit to analyze (no SHA hunting — recent commits are listed), narrow the scope to a directory like backend/, and choose depth and the first package's role.",
+    body: "Nothing runs yet. Pick the branch and commit to analyze (no SHA hunting: recent commits are listed), narrow the scope to a directory like backend/, and choose depth and the first package's role.",
   },
   {
     target: "import-preview",
     title: "Preview before you spend",
-    body: "The preview scans the repo and shows file counts, estimated AI calls, cost tier, and exactly what would be sent to the AI provider — before any tokens are used.",
+    body: "The preview scans the repo and shows file counts, estimated AI calls, cost tier, and exactly what would be sent to the AI provider, before any tokens are used.",
   },
   {
     target: "import-start",
@@ -521,7 +521,7 @@ export function ImportPage() {
       <>
         <PageHeader
           title="Configure the first analysis"
-          subtitle={`Step 2 of 2 — ${configuredRepo.full_name} is imported; nothing runs until you press Start.`}
+          subtitle={`Step 2 of 2: ${configuredRepo.full_name} is imported; nothing runs until you press Start.`}
           actions={<BackLink />}
         />
         <div className="mx-auto max-w-lg">
@@ -556,7 +556,7 @@ export function ImportPage() {
               {previewing && (
                 <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground" role="status">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
-                  Building the analysis preview — scanning files and estimating cost…
+                  Building the analysis preview: scanning files and estimating cost…
                 </div>
               )}
               {/*
@@ -570,7 +570,7 @@ export function ImportPage() {
                 <div className="rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground">
                   <p className="font-medium text-foreground">What gets analysed</p>
                   <p className="mt-1 leading-relaxed">
-                    TypeScript and JavaScript are parsed all the way down — symbols, call graph,
+                    TypeScript and JavaScript are parsed all the way down: symbols, call graph,
                     entry points, side effects. Everything else in the repository (other languages,
                     docs, config, SQL, scripts) is read and cited as evidence, but is not parsed into
                     a call graph, so a repository whose core logic is in another language produces a
@@ -578,8 +578,8 @@ export function ImportPage() {
                   </p>
                   <p className="mt-1.5 leading-relaxed">
                     <span className="font-medium text-foreground">Preview first</span> reports this
-                    repository&rsquo;s actual numbers — how many files we cannot parse, and the
-                    estimated cost — before anything runs.
+                    repository&rsquo;s actual numbers (how many files we cannot parse, and the
+                    estimated cost) before anything runs.
                   </p>
                 </div>
               )}
@@ -625,7 +625,7 @@ export function ImportPage() {
     <>
       <PageHeader
         title="Import a repository"
-        subtitle="Step 1 of 2 — connect a GitHub repository. The analysis is configured in the next step."
+        subtitle="Step 1 of 2: connect a GitHub repository. The analysis is configured in the next step."
         actions={<BackLink />}
       />
       <div className="mx-auto max-w-lg">
@@ -638,7 +638,7 @@ export function ImportPage() {
                 <div className="mt-1.5">
                   <Button variant="link" size="xs" className="h-auto p-0 text-destructive underline" asChild>
                     <Link to={`/projects/${strandedProjectId}`}>
-                      The project was created — open it to finish setting it up
+                      The project was created; open it to finish setting it up
                     </Link>
                   </Button>
                 </div>
@@ -790,7 +790,7 @@ export function ImportPage() {
                           {repoFilter.trim()
                             ? `${visibleRepos.length} of ${repos.length} match "${repoFilter.trim()}"`
                             : `${repos.length} repositories available`}
-                          {visibleRepos.length === 0 && " — no match. Check the App is installed on it."}
+                          {visibleRepos.length === 0 && ". No match. Check the App is installed on it."}
                         </p>
                       )}
                       {allReposImported && (

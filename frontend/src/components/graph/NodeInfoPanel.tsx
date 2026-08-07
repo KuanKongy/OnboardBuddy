@@ -203,7 +203,7 @@ export function NodeInfoPanel({
             </Button>
             <p className="mt-1 text-[0.65625rem] leading-snug text-muted-foreground">
               Opens the project-wide class graph focused on {node.label}. It is a separate view, not a level
-              inside this file — extends/implements relationships cross files.
+              inside this file, because extends/implements relationships cross files.
             </p>
           </div>
         )}
@@ -232,7 +232,7 @@ export function NodeInfoPanel({
               </li>
               <li>
                 <span className="tabular-nums text-foreground">{node.metadata.internalImportCount ?? 0}</span>{" "}
-                inside it, between its own {groupNoun} — not drawn on this canvas
+                inside it, between its own {groupNoun} (not drawn on this canvas)
               </li>
             </ul>
             {onOpenGroup && (
@@ -266,7 +266,7 @@ export function NodeInfoPanel({
             )}
             <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
               {doc.factsOnly ? (
-                "Deterministic facts only — no AI summary here"
+                "Deterministic facts only, no AI summary here"
               ) : (
                 <>
                   <Sparkles className="h-2.5 w-2.5" /> AI summary ({doc.summaryConfidence} confidence), backed by the receipts below
@@ -347,7 +347,7 @@ export function NodeInfoPanel({
                     <span className="text-[0.65625rem] text-muted-foreground">
                       / 100 critical-path score
                       {detail.ranking_scope === "file_fallback" &&
-                        " — from this symbol's file (symbol not individually ranked)"}
+                        ", from this symbol's file (symbol not individually ranked)"}
                     </span>
                   </div>
                 )}
@@ -447,8 +447,8 @@ export function NodeInfoPanel({
             )}
             {detail.cluster && (
               <p className="text-[0.71875rem] text-muted-foreground">
-                Part of the <span className="font-medium text-foreground">{detail.cluster.label}</span> component
-                — see the Architecture tab.
+                Part of the <span className="font-medium text-foreground">{detail.cluster.label}</span> component.
+                See the Architecture tab.
               </p>
             )}
           </div>

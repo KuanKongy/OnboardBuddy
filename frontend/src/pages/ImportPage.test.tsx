@@ -247,7 +247,7 @@ describe("ImportPage — finding a repository in a large account (bug #67)", () 
     await user.type(screen.getByLabelText("Filter repositories"), "no-such-repo");
 
     expect(screen.getByText(/0 of 137 match/)).toBeInTheDocument();
-    expect(screen.getByText(/no match\. Check the App is installed on it\./)).toBeInTheDocument();
+    expect(screen.getByText(/No match\. Check the App is installed on it\./)).toBeInTheDocument();
   });
 });
 

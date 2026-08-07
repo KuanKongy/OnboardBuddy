@@ -119,7 +119,7 @@ export function clusterCountDerivation(c: {
     .map(([type, n]) => `${n} ${type}`);
 
   const lines = [
-    `${count} ${noun}${count === 1 ? "" : "s"} — counted over this component's ${counted} members only.`,
+    `${count} ${noun}${count === 1 ? "" : "s"}, counted over this component's ${counted} members only.`,
   ];
   if (others.length > 0) {
     lines.push(`It also holds ${others.join(", ")} node${others.length === 1 && !others[0]!.startsWith("1 ") ? "s" : ""}, which are not in this number.`);
@@ -127,7 +127,7 @@ export function clusterCountDerivation(c: {
   if (c.metadata.memberCount != null && c.metadata.memberCount !== count) {
     lines.push(`${c.metadata.memberCount} members in total.`);
   }
-  lines.push("The number changes when files move between directories — grouping is by path, so a rename can move a file to another component without any behaviour changing.");
+  lines.push("The number changes when files move between directories: grouping is by path, so a rename can move a file to another component without any behaviour changing.");
   return lines.join(" ");
 }
 

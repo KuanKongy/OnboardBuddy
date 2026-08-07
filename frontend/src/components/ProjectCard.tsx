@@ -57,7 +57,7 @@ const statusConfig = {
     tone: "text-primary",
     bar: "bg-primary",
     icon: Loader2,
-    hint: "One or more analysis runs are in progress — the repository is being parsed and its onboarding content generated.",
+    hint: "One or more analysis runs are in progress: the repository is being parsed and its onboarding content generated.",
   },
   complete: {
     label: "Complete",
@@ -167,7 +167,10 @@ export function ProjectCard({
    * Now the stage IS the status word while a run is live, the percentage is
    * printed once beside it, and an unknown percentage says it is unknown.
    */
-  const stageToken = live.stageLabel ? live.stageLabel.split(" — ")[0]! : null;
+  // Paired with the separator pipelineProgress writes into `stageLabel`: the
+  // two have to move together, or this split misses and the chip carries the
+  // whole "Analyzing code · reading files" sentence instead of the stage word.
+  const stageToken = live.stageLabel ? live.stageLabel.split(" · ")[0]! : null;
   const statusLabel = analyzing ? stageToken ?? status.label : status.label;
   const progressText = !analyzing
     ? ""
