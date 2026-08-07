@@ -33,6 +33,14 @@ export interface DetectedSideEffect {
    * it against consumer entrypoints' queue constants ('SUMMARY_QUEUE').
    */
   queueHint?: string;
+  /**
+   * The identifier `queueHint` was normalized FROM (`analysisQueue`), kept for
+   * display. Normalization strips a trailing 's' so singular producers match
+   * plural queue names, which turned 'analysis' into 'analysi' — a join key,
+   * fine to match on and not a word, so a boundary that quoted it told the
+   * reader to look for a token no line of the repo contains.
+   */
+  queueRaw?: string;
   /** Defaults to 'medium' at persist time; 'low' for unknown_external. */
   confidence?: 'high' | 'medium' | 'low';
 }
@@ -369,7 +377,10 @@ export function detectSideEffects(fileAnalyses: FileAnalysis[]): DetectedSideEff
             if (enqueue) {
               if (enqueue[2]) effect.target = enqueue[2];
               const hint = normalizeQueueToken(enqueue[1]!);
-              if (hint) effect.queueHint = hint;
+              if (hint) {
+                effect.queueHint = hint;
+                effect.queueRaw = enqueue[1]!;
+              }
             }
           }
           if (family.kind === 'process_exec') effect.target = 'child_process';
@@ -543,6 +554,10 @@ export async function persistSideEffects(
           symbolName: eff.symbolName,
           detectorKind: eff.kind,
           ...(eff.queueHint ? { queueHint: eff.queueHint } : {}),
+          // Beside the join key, never instead of it: `referenceBackbones`
+          // reads `queueHint` to match producers to consumers, and this one
+          // is only ever quoted at a reader.
+          ...(eff.queueRaw ? { queueRaw: eff.queueRaw } : {}),
         }),
       );
       const base = j * 7;

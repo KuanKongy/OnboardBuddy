@@ -74,6 +74,13 @@ export interface JourneyBoundary {
   kind: BoundaryKind;
   /** Machine-readable hand-off token for `async_token` (the gate reads it). */
   token?: string;
+  /**
+   * The same token as the publishing code spells it (`analysisQueue`,
+   * `draw-ops`). `token` is normalized for matching and is frequently not a
+   * string any file contains, so anything that quotes it at a reader — or
+   * searches a snippet for it — wants this one.
+   */
+  tokenRaw?: string;
   detail: string;
   confidence: BoundaryConfidence;
   receipts: BoundaryReceipt[];
@@ -268,6 +275,8 @@ interface BoundaryEdge {
   to: string;
   kind: BoundaryKind;
   token?: string;
+  /** The publisher's own spelling of `token`; see `JourneyBoundary.tokenRaw`. */
+  tokenRaw?: string;
   detail: string;
   confidence: BoundaryConfidence;
   receipts: BoundaryReceipt[];
@@ -327,23 +336,41 @@ function admissibleToken(token: string): boolean {
 }
 
 /**
- * Tokens a consumer registration answers to. A registration may namespace
- * itself (`socket:draw-ops`, `jobs:resize`); the producing side writes the bare
- * name, so both forms are admitted and uniqueness is enforced per token.
+ * Tokens a consumer registration answers to, each paired with the identifier
+ * it was normalized from. A registration may namespace itself
+ * (`socket:draw-ops`, `jobs:resize`); the producing side writes the bare name,
+ * so both forms are admitted and uniqueness is enforced per token.
+ *
+ * `raw` never matches anything — matching is what the normalized token is for.
+ * It exists so a message about a registration can name it as the code spells
+ * it ('ANALYSIS_QUEUE') instead of as the matcher spells it ('analysi').
  */
-function registrationTokens(routePattern: string): string[] {
+function registrationTokens(routePattern: string): Array<{ token: string; raw: string }> {
   if (!routePattern) return [];
   const forms = [routePattern];
   const colon = routePattern.indexOf(':');
   if (colon > 0) forms.push(routePattern.slice(colon + 1));
-  return unique(forms.map(normalizeHandoffToken).filter(admissibleToken));
+  const out: Array<{ token: string; raw: string }> = [];
+  for (const form of forms) {
+    const token = normalizeHandoffToken(form);
+    if (!admissibleToken(token) || out.some((t) => t.token === token)) continue;
+    out.push({ token, raw: form });
+  }
+  return out;
 }
 
 /** First string-literal argument of a publish-shaped call, from verified bytes. */
 const PUBLISH_LITERAL_RE =
   /\.(?:emit|publish|send|add|xAdd|xadd|lPush|rPush|lpush|rpush)\s*\(\s*['"`]([\w:.\-/]{2,64})['"`]/g;
 
-interface TokenSource { token: string; evidence: string; symbolKey: string; score: number }
+interface TokenSource {
+  token: string;
+  /** The literal the code actually contains, for prose. Never matched on. */
+  raw: string;
+  evidence: string;
+  symbolKey: string;
+  score: number;
+}
 
 /**
  * Every hand-off token a workflow publishes, with the bytes that prove it.
@@ -363,10 +390,10 @@ function publishedTokens(wf: ExtractedWorkflow, idx: ComposerIndex): TokenSource
 
   const out: TokenSource[] = [];
   const seen = new Set<string>();
-  const add = (token: string, evidence: string, symbolKey: string, score: number): void => {
+  const add = (token: string, raw: string, evidence: string, symbolKey: string, score: number): void => {
     if (!admissibleToken(token) || seen.has(token)) return;
     seen.add(token);
-    out.push({ token, evidence, symbolKey, score });
+    out.push({ token, raw: raw || token, evidence, symbolKey, score });
   };
 
   for (const se of effects) {
@@ -376,15 +403,17 @@ function publishedTokens(wf: ExtractedWorkflow, idx: ComposerIndex): TokenSource
     const evidence = se.evidence ?? `${se.kind} in ${se.filePath}`;
     if (se.queueHint) {
       const token = normalizeHandoffToken(se.queueHint);
-      add(token, callSiteFor(token, bytes) ?? evidence, symbolKey, 3);
+      // `queueRaw` is the enqueue receiver as written (`analysisQueue`); rows
+      // detected before it existed have only the normalized hint to offer.
+      add(token, se.queueRaw ?? se.queueHint, callSiteFor(token, bytes) ?? evidence, symbolKey, 3);
     }
     if (se.target) {
       const token = normalizeHandoffToken(se.target);
-      add(token, callSiteFor(token, bytes) ?? `${evidence} '${se.target}'`, symbolKey, 2);
+      add(token, se.target, callSiteFor(token, bytes) ?? `${evidence} '${se.target}'`, symbolKey, 2);
     }
     if (!bytes) continue;
     for (const m of bytes.matchAll(PUBLISH_LITERAL_RE)) {
-      add(normalizeHandoffToken(m[1]!), m[0]!.trim(), symbolKey, 1);
+      add(normalizeHandoffToken(m[1]!), m[1]!, m[0]!.trim(), symbolKey, 1);
     }
   }
   return out;
@@ -417,10 +446,12 @@ function detectAsyncTokenEdges(
   pool: ExtractedWorkflow[], idx: ComposerIndex, unknowns: Array<Record<string, unknown>>,
 ): BoundaryEdge[] {
   const consumersByToken = new Map<string, ExtractedWorkflow[]>();
+  const registrationByToken = new Map<string, string>();
   for (const wf of pool) {
     if (wf.entrypoint.kind !== 'message_consumer' && wf.entrypoint.kind !== 'event_handler') continue;
-    for (const token of registrationTokens(wf.entrypoint.routePattern ?? '')) {
+    for (const { token, raw } of registrationTokens(wf.entrypoint.routePattern ?? '')) {
       push(consumersByToken, token, wf);
+      if (!registrationByToken.has(token)) registrationByToken.set(token, raw);
     }
   }
 
@@ -432,7 +463,12 @@ function detectAsyncTokenEdges(
     if (distinct.length === 1) consumerByToken.set(token, list[0]!);
     else {
       unknowns.push({
-        kind: 'ambiguous_handoff_token', token, consumers: distinct.length,
+        kind: 'ambiguous_handoff_token', token,
+        // `token` is the matcher's spelling and stays as the key; this is the
+        // registration as the code writes it, so the gap names something a
+        // reader can grep for.
+        registration: registrationByToken.get(token) ?? token,
+        consumers: distinct.length,
         detail: 'token matches more than one consumer registration; no boundary formed',
       });
     }
@@ -456,7 +492,11 @@ function detectAsyncTokenEdges(
         to: consumer.stableKey,
         kind: 'async_token',
         token: src.token,
-        detail: `token '${src.token}' published by ${wf.title} is consumed by ${consumer.title}`
+        tokenRaw: src.raw,
+        // The reader is told to go find this token in the code, so it is the
+        // publisher's own literal — `src.token` is the normalized join key and
+        // 'analysi' appears in no file.
+        detail: `token '${src.raw}' published by ${wf.title} is consumed by ${consumer.title}`
           + (sameFile ? ' (both ends are registered in the same file; the direction of the hand-off is not recorded)' : ''),
         confidence: sameFile ? 'medium' : 'high',
         score: src.score,
@@ -883,6 +923,7 @@ function assembleChains(
         after: i,
         kind: e.kind,
         ...(e.token ? { token: e.token } : {}),
+        ...(e.tokenRaw ? { tokenRaw: e.tokenRaw } : {}),
         detail: e.detail,
         confidence: e.confidence,
         receipts: e.receipts,

@@ -306,9 +306,19 @@ describe('architecture_deep — the gate that forces decision→consequence pros
   });
 
   it('scales the requirement to how much rationale actually exists', () => {
+    // Thin evidence owes ONE honest bullet, not one per comment. The
+    // instructions tell the model to DROP a bullet whose right-hand side would
+    // only restate its left ("… so callers can start polling ⇒ the system
+    // provides a mechanism for callers to monitor progress" was live), and a
+    // gate demanding an arrow per available note takes that permission straight
+    // back — the cheapest way to satisfy it is to pad. Three or more notes still
+    // owes three: `loadDecisionNotes` hands over up to eight, so a note that
+    // yields no consequence can be swapped for one that does.
     const twoNotes = { ...det, decisionNotes: det.decisionNotes.slice(0, 2) };
     const oneStatement = structureOnly.replace('Holds 12 files.', 'Pooler in transaction mode ⇒ no session state.');
-    expect(spec.completenessCheck!(oneStatement, twoNotes).join(' ')).to.include('1 of 2');
+    expect(spec.completenessCheck!(structureOnly, twoNotes).join(' ')).to.include('0 of 1');
+    expect(spec.completenessCheck!(oneStatement, twoNotes).join(' ')).to.not.include('decision→consequence');
+    expect(spec.completenessCheck!(oneStatement, det).join(' ')).to.include('1 of 3');
   });
 
   it('still requires cluster coverage and the closing tensions section', () => {

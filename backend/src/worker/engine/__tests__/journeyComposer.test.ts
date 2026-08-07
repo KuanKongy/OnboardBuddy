@@ -99,7 +99,7 @@ describe('journeyComposer', () => {
       {
         nodeStableKey: 'routes/projects.ts', symbolStableKey: 'routes/projects.ts#analyzeHandler',
         filePath: 'routes/projects.ts', kind: 'message_publish', target: 'analyze_scope',
-        queueHint: 'analysi', evidence: 'getAnalysisQueue().add',
+        queueHint: 'analysi', queueRaw: 'analysisQueue', evidence: 'getAnalysisQueue().add',
       },
       {
         nodeStableKey: 'worker/index.ts', symbolStableKey: 'worker/index.ts#processAnalysisJob',
@@ -118,6 +118,19 @@ describe('journeyComposer', () => {
       'wf:worker/summaryWorker.ts:processSummaryJob',
     ]);
     expect(boundaryKinds(journeys[0]!)).to.deep.equal(['async_token', 'async_token']);
+
+    // The token the reader is told to go find is the one the code contains.
+    // `normalizeQueueToken` strips a trailing 's' so singular producers match
+    // plural queue names, and the join key it produces — 'analysi' — appears
+    // in no file, so quoting it sent readers looking for a string that is not
+    // there. The key itself must stay on the boundary for the gate to match.
+    const boundaries = (journeys[0]!.metadata!.journey as {
+      boundaries: Array<{ token?: string; tokenRaw?: string; detail: string }>;
+    }).boundaries;
+    expect(boundaries[0]!.detail).to.contain("token 'analysisQueue' published by");
+    expect(boundaries[0]!.detail).to.not.contain("'analysi'");
+    expect(boundaries[0]!.token).to.equal('analysi');
+    expect(boundaries[0]!.tokenRaw).to.equal('analysisQueue');
   });
 
   it('forms no boundary when a hand-off token matches two consumer registrations', () => {

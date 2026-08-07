@@ -1020,6 +1020,44 @@ function purposeSubject(steps: WorkflowStep[], ctx: TraversalContext): { on: str
   return { on, against: against.filter((s) => !on.includes(s)) };
 }
 
+/** "a, b and c" — a list read aloud, not a comma-joined dump. */
+export function andList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? '';
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/**
+ * The trigger as a clause a person would say.
+ *
+ * The old template pasted the raw entrypoint enum into the sentence, so the
+ * Workflows tab shipped "Handles ui action via App" and "Handles ui route via
+ * About" — a member name with its underscores stripped, standing where the verb
+ * belongs. Only `http_route` ever read as English, because only it had a method
+ * and a path to fill the slots. Same facts either way; this one is a sentence.
+ */
+function triggerClause(ep: DetectedEntrypoint, seed: EvidenceNode): string {
+  switch (ep.kind) {
+    case 'http_route':
+      return ep.routePattern
+        ? `Handles ${ep.method ?? 'HTTP'} ${ep.routePattern}`
+        : `Handles ${ep.method ?? 'HTTP'} requests in ${seed.name}`;
+    case 'ui_action': return `A UI action in ${seed.name}`;
+    case 'ui_route': return `The ${seed.name} page`;
+    // "the SUMMARY_QUEUE queue" — the noun is already in most queue names.
+    case 'message_consumer': {
+      const queue = ep.routePattern ?? seed.name;
+      return /queue$/i.test(queue) ? `Consumes ${queue}` : `Consumes the ${queue} queue`;
+    }
+    case 'cron_job': return `A scheduled job in ${seed.name}`;
+    case 'cli_command': return `A command run through ${seed.name}`;
+    case 'event_handler':
+      return ep.routePattern
+        ? `Handles the ${ep.routePattern} event in ${seed.name}`
+        : `An event handler in ${seed.name}`;
+    default: return `An exported entry point in ${seed.name}`;
+  }
+}
+
 /** Deterministic purpose: trigger + what the flow's own evidence names + outcomes. */
 function classifyPurpose(
   ep: DetectedEntrypoint,
@@ -1027,22 +1065,32 @@ function classifyPurpose(
   steps: WorkflowStep[],
   ctx: TraversalContext,
 ): string {
-  const outcomes: string[] = [];
-  if (steps.some((s) => s.stepKind === 'data_write')) outcomes.push('writes data');
-  else if (steps.some((s) => s.stepKind === 'data_read')) outcomes.push('reads data');
-  if (steps.some((s) => s.stepKind === 'async_work')) outcomes.push('enqueues async work');
-  if (steps.some((s) => s.stepKind === 'response')) outcomes.push('responds to the caller');
-
-  const trigger = ep.kind === 'http_route'
-    ? `Handles ${ep.method ?? 'HTTP'} ${ep.routePattern ?? `requests via ${seed.name}`}`
-    : `Handles ${ep.kind.replace(/_/g, ' ')} via ${seed.name}`;
-
   const { on, against } = purposeSubject(steps, ctx);
-  const subject = [
-    on.length > 0 ? ` on ${on.join(', ')}` : '',
-    against.length > 0 ? ` against ${against.join(', ')}` : '',
-  ].join('');
-  return outcomes.length > 0 ? `${trigger}${subject}: ${outcomes.join(', ')}` : `${trigger}${subject}`;
+
+  // The subject is the OBJECT of the flow's verb, not a trailing fragment.
+  // "on github_connections, github_installations: writes data" is two half
+  // sentences competing to state one fact; "writes github_connections and
+  // github_installations" is the fact. `touches` covers the case where the
+  // evidence names a resource but no step was classified as a read or a write
+  // (a file_write effect hanging off a `side_effect` step) — a verb we can
+  // stand behind rather than one of the two we cannot.
+  const clauses: string[] = [];
+  const dataVerb = steps.some((s) => s.stepKind === 'data_write') ? 'writes'
+    : steps.some((s) => s.stepKind === 'data_read') ? 'reads'
+      : on.length > 0 ? 'touches' : null;
+  if (dataVerb) clauses.push(on.length > 0 ? `${dataVerb} ${andList(on)}` : `${dataVerb} data`);
+  if (against.length > 0) clauses.push(`calls ${andList(against)}`);
+  if (steps.some((s) => s.stepKind === 'async_work')) clauses.push('enqueues async work');
+
+  // The response is what happens LAST, so it trails the rest rather than
+  // joining the list as a peer.
+  let tail = andList(clauses);
+  if (steps.some((s) => s.stepKind === 'response')) {
+    tail = tail ? `${tail}, then responds to the caller` : 'responds to the caller';
+  }
+
+  const trigger = triggerClause(ep, seed);
+  return tail ? `${trigger}; ${tail}.` : `${trigger}.`;
 }
 
 // ─── Persistence ─────────────────────────────────────────────────────────────

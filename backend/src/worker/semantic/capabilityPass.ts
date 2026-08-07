@@ -137,6 +137,43 @@ const SURFACE_BY_SIGNAL: Record<string, string> = {
 };
 
 /**
+ * Data targets that are browser storage, not schema tables.
+ *
+ * `schemas` holds two shapes of evidence: the name of a schema node (parsed
+ * from migration DDL) and the `target` of a `database_read`/`database_write`
+ * effect. `resolveDataResource` is what names the second, and two of its return
+ * values are literals — "local storage" and "session storage" for
+ * `localStorage.setItem` / `sessionStorage.getItem`. Every other value it can
+ * produce is a SQL/collection identifier captured by `[\w.$-]+` or `[a-z][\w]*`,
+ * and a table name out of DDL cannot carry a space either. So the space IS the
+ * test, and the literals are listed as well so a rename in the detector cannot
+ * silently re-file them as tables.
+ *
+ * Calling these tables is not a wording quibble: the live derivation said
+ * "Touches 2 schema tables: session storage, local storage", which sends a
+ * reader looking for a migration that does not exist and, worse, tells them
+ * data lives on the server when it lives in the visitor's browser.
+ */
+const STORAGE_SURFACE_TARGETS = new Set(['local storage', 'session storage']);
+
+function isStorageSurface(target: string): boolean {
+  return /\s/.test(target) || STORAGE_SURFACE_TARGETS.has(target.toLowerCase());
+}
+
+/**
+ * Journey titles are "<entry workflow title> → <terminal effect noun>"
+ * (`journeyComposer`), and a capability's `whereToStart` reason quotes a title
+ * inside a sentence. Quoting the whole thing shipped `Entry point of "POST
+ * /api/projects/:id/analysis-jobs/:jobId/resume → what it reads from
+ * onboarding_packages" — the HTTP request that starts this capability.`: a
+ * sentence carrying another sentence's tail. The arrow half belongs to the
+ * journey, not to the entry point being pointed at.
+ */
+function quotableTitle(title: string): string {
+  return title.split(' → ')[0]!.trim();
+}
+
+/**
  * URL segments that are routing scaffolding rather than domain nouns. Every
  * route in a repo shares them, so keying on one collapses the whole product
  * into a single "api" capability.
@@ -534,7 +571,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
     };
     pushStart(
       top.workflow.entrypoint.symbolStableKey ?? top.workflow.entrypoint.nodeStableKey,
-      `Entry point of "${top.workflow.title}" — the ${describeTrigger(top.workflow.entrypoint.kind)} that starts this capability.`,
+      `Entry point of "${quotableTitle(top.workflow.title)}" — the ${describeTrigger(top.workflow.entrypoint.kind)} that starts this capability.`,
     );
     const seam = ordered.find((m) => m.effectStep)?.effectStep;
     if (seam) {
@@ -546,7 +583,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
     if (ordered[1]) {
       pushStart(
         ordered[1].workflow.entrypoint.symbolStableKey ?? ordered[1].workflow.entrypoint.nodeStableKey,
-        `Entry point of "${ordered[1].workflow.title}", the next flow in this capability.`,
+        `Entry point of "${quotableTitle(ordered[1].workflow.title)}", the next flow in this capability.`,
       );
     }
 
@@ -567,9 +604,21 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
       .slice(0, 4)
       .map(([k]) => k);
 
+    // Split before either sentence names them: the two lists read differently
+    // to someone deciding where the data lives.
+    const tables = schemas.filter((s) => !isStorageSurface(s));
+    const storage = schemas.filter((s) => isStorageSurface(s));
+    const named = (list: string[]) =>
+      `${list.slice(0, 5).join(', ')}${list.length > 5 ? ', …' : ''}`;
+    const touched: string[] = [];
+    if (tables.length > 0) touched.push(`${tables.length} schema table${tables.length === 1 ? '' : 's'}`);
+    if (storage.length > 0) touched.push(`${storage.length} storage surface${storage.length === 1 ? '' : 's'}`);
+
     const derivation: string[] = [
       top.keySource === 'schema'
-        ? `Grouped on the \`${top.primaryTable}\` table these ${members.length === 1 ? 'flow writes' : 'flows write'}.`
+        // "these flow writes" — the determiner never agreed with the noun it
+        // was switched against, so every single-flow capability shipped it.
+        ? `Grouped on the \`${top.primaryTable}\` ${top.primaryTable && isStorageSurface(top.primaryTable) ? 'surface' : 'table'} ${members.length === 1 ? 'this flow writes' : 'these flows write'}.`
         : top.keySource === 'route'
           ? `Grouped on the \`${key}\` segment of ${members.length === 1 ? 'its route' : 'their routes'}.`
           : top.keySource === 'symbol'
@@ -577,7 +626,12 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
             : `Grouped on the \`${key}\` service these flows call.`,
       `${members.length} traced flow${members.length === 1 ? '' : 's'} from ${new Set(ordered.map((m) => m.workflow.entrypoint.nodeStableKey)).size} entry point${new Set(ordered.map((m) => m.workflow.entrypoint.nodeStableKey)).size === 1 ? '' : 's'}.`,
       schemas.length > 0
-        ? `Touches ${schemas.length} schema table${schemas.length === 1 ? '' : 's'}: ${schemas.slice(0, 5).join(', ')}${schemas.length > 5 ? ', …' : ''}.`
+        // One kind keeps the colon list; a mixed group cannot, because the two
+        // halves need their own counts — "2 schema tables: a, b, session
+        // storage" would file browser storage under the table count.
+        ? touched.length === 1
+          ? `Touches ${touched[0]}: ${named(tables.length > 0 ? tables : storage)}.`
+          : `Touches ${touched[0]} (${named(tables)}) and ${touched[1]} (${named(storage)}).`
         : services.length > 0
           ? `Reaches ${services.length === 1 ? 'the service' : 'services'} ${services.slice(0, 4).join(', ')} — no schema table was traced.`
           : effects.length > 0

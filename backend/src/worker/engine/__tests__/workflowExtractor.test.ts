@@ -78,10 +78,19 @@ describe('workflowExtractor (call-graph traversal)', () => {
     expect(symbols.join(' ')).to.not.contain('formatLabel');
   });
 
+  /**
+   * The template used to fill slots rather than write a sentence: the subject
+   * hung off the trigger as " on sessions" and the outcomes followed a colon,
+   * so a UI flow read "Handles ui action via App on session storage against
+   * supabase.auth: writes data" — the entrypoint enum with its underscores
+   * stripped, standing where the verb belongs. Pinned whole, because the shape
+   * is the fix; the facts in it are the same three the old string carried.
+   */
   it('classifies purpose deterministically from trigger and outcomes', () => {
     const login = workflows.find((w) => w.stableKey.endsWith(':loginHandler'))!;
-    expect(login.purpose).to.contain('writes data');
-    expect(login.purpose).to.contain('responds to the caller');
+    expect(login.purpose).to.equal(
+      'Handles HTTP requests in loginHandler; writes sessions, then responds to the caller.',
+    );
     expect(login.triggerType).to.contain('HTTP');
   });
 
@@ -97,7 +106,7 @@ describe('workflowExtractor (call-graph traversal)', () => {
   it('names only what the flow itself reaches, never a product-domain phrase', () => {
     const login = workflows.find((w) => w.stableKey.endsWith(':loginHandler'))!;
     // `sessions` is this fixture's own table, from its own migration.
-    expect(login.purpose).to.contain('on sessions');
+    expect(login.purpose).to.contain('writes sessions');
 
     const domainPhrases = [
       'onboarding generation', 'project management', 'repository analysis',
@@ -112,8 +121,7 @@ describe('workflowExtractor (call-graph traversal)', () => {
 
   it('says nothing about a subject when the flow reaches no named resource', () => {
     const logout = workflows.find((w) => w.stableKey.endsWith(':logoutHandler'))!;
-    expect(logout.purpose).to.not.contain(' on ');
-    expect(logout.purpose).to.not.contain(' against ');
+    expect(logout.purpose).to.equal('Handles HTTP requests in logoutHandler; responds to the caller.');
   });
 
   it('sorts workflows by importance score descending', () => {

@@ -1216,7 +1216,7 @@ export interface WalkthroughJourney {
   members: string[];
   memberTitles: string[];
   /** `kind` is read as an opaque string — boundary vocabulary is the composer's. */
-  boundaries: Array<{ after: number; kind: string; detail?: string; token?: string }>;
+  boundaries: Array<{ after: number; kind: string; detail?: string; token?: string; tokenRaw?: string }>;
 }
 
 export interface WalkthroughInput extends TraceInput {
@@ -1357,7 +1357,7 @@ function locate(snippet: string, startLine: number, needle: string): { start: nu
  * range is located in the snippet's bytes — the same bytes the receipts prove
  * — and clamped to the step's own span. Zero highlights is a legal outcome.
  */
-function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary: { detail?: string; token?: string } | null): WalkthroughHighlight[] {
+function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary: { detail?: string; token?: string; tokenRaw?: string } | null): WalkthroughHighlight[] {
   const snippet = step.snippet;
   const startLine = step.lineStart;
   if (!snippet || startLine == null) return [];
@@ -1395,11 +1395,16 @@ function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary
   }
 
   // 3. boundary_token — the literal the hand-off matches on. The composer's
-  //    own normalized token when it carried one; otherwise any literal quoted
-  //    in its detail text. No boundary vocabulary is assumed either way.
+  //    raw token first, then its normalized one, and otherwise any literal
+  //    quoted in its detail text. No boundary vocabulary is assumed either way.
+  //
+  //    Raw first because `locate` searches the snippet case-sensitively and
+  //    the normalized token is lowercased with a trailing 's' stripped: the
+  //    queue hand-off's own token, 'analysi', is in no snippet that spells it
+  //    `getAnalysisQueue`, so the step lost the one highlight it had.
   if (boundary) {
-    const tokens = boundary.token
-      ? [boundary.token]
+    const tokens = boundary.tokenRaw || boundary.token
+      ? [boundary.tokenRaw || boundary.token!]
       : [...(boundary.detail ?? '').matchAll(/['"`]([\w.:@/-]{3,})['"`]/g)].map((m) => m[1]!);
     for (const token of tokens) {
       const found = locate(snippet, startLine, `'${token}'`)
@@ -1890,8 +1895,32 @@ export interface WalkthroughFinding {
   code:
     | 'handoff_missing' | 'handoff_does_not_name_next' | 'landing_missing'
     | 'highlight_out_of_range' | 'narration_cites_absent_highlight'
-    | 'member_not_covered' | 'boundary_not_covered' | 'narration_invents_a_request';
+    | 'member_not_covered' | 'boundary_not_covered' | 'narration_invents_a_request'
+    | 'narration_filler';
   detail: string;
+}
+
+/**
+ * Openings that spend the reader's attention naming the thing they are already
+ * looking at. The output that forced this gate, verbatim off a live step:
+ * "This step involves interacting with the database table named
+ * `analysis_jobs`. This interaction is a database read operation as part of
+ * the overall job resumption process." — 27 words whose only fact, a read of
+ * `analysis_jobs`, is already printed on the card as the step's own effect.
+ */
+const NARRATION_FILLER_OPENER =
+  /^\s*(?:this (?:step|interaction|code|snippet)\b|this (?:function|method|file|handler|component|module) is responsible for\b)/i;
+
+/** True of every step in every flow, therefore evidence of nothing. */
+const NARRATION_FILLER_PHRASE = /\bas part of the (?:overall|larger|broader|wider|whole)\b/i;
+
+/**
+ * Whether narration describes the step instead of the code. Applied where the
+ * model's prose is accepted, not in `lintWalkthrough`: a rejected narration is
+ * replaced by the deterministic template before the lint ever sees the draft.
+ */
+export function narrationIsFiller(text: string): boolean {
+  return NARRATION_FILLER_OPENER.test(text) || NARRATION_FILLER_PHRASE.test(text);
 }
 
 /**
