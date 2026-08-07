@@ -837,7 +837,7 @@ export function CapabilitiesPage() {
         }
         subtitle={
           level === "capabilities"
-            ? "What this product does, derived from traced flows — click one to see the flows and data behind it."
+            ? "What this product does, derived from traced flows. Click one to see the flows and data behind it."
             : level === "flows"
               ? "The flows that deliver this capability and the tables and services they reach. Click a flow to open its code."
               : "The traced path of one flow, step by step."
@@ -1013,7 +1013,7 @@ export function CapabilitiesPage() {
                           </span>
                         </TooltipTrigger>
                         <TooltipContent side="right" className="max-w-xs text-left">
-                          {`${u.title} — ${u.missing}`}
+                          {`${u.title}: ${u.missing}`}
                         </TooltipContent>
                       </Tooltip>
                     </li>
@@ -1085,7 +1085,7 @@ export function CapabilitiesPage() {
                   <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
                     {selectedResource.kind === "table"
                       ? "This capability exists partly because its flows reach this table. It is one of the three legs of the binding rule."
-                      : "A named external service these flows call. Unrecognised packages are deliberately not counted — only named services bind a capability."}
+                      : "A named external service these flows call. Unrecognised packages are deliberately not counted: only named services bind a capability."}
                   </p>
                   <p className="mt-3 text-[0.71875rem] text-muted-foreground">
                     Reached by {activeCapability?.workflows.length ?? 0} flow
@@ -1115,7 +1115,7 @@ export function CapabilitiesPage() {
                         Written by the narration pass for this step
                       </>
                     ) : (
-                      "Deterministic description — derived from the step's kind and target, not written about this code"
+                      "Deterministic description, derived from the step's kind and target, not written about this code"
                     )}
                   </p>
                   <Link
@@ -1316,7 +1316,7 @@ function EmptyFinding({
           </p>
           <p className="mt-1 text-[0.8125rem] leading-relaxed text-muted-foreground">
             {noAnalysis
-              ? "Capabilities are derived from traced flows. Nothing has been traced here, so there is nothing to derive from — run an analysis, or retry if one has just finished."
+              ? "Capabilities are derived from traced flows. Nothing has been traced here, so there is nothing to derive from. Run an analysis, or retry if one has just finished."
               : "This is the honest answer, not a missing step. Capabilities are derived from evidence and then named; nothing is emitted to fill a quota."}
           </p>
 
@@ -1352,7 +1352,7 @@ function EmptyFinding({
               <ul className="space-y-0.5 text-[0.71875rem] text-muted-foreground">
                 {derivation.unbound.slice(0, 8).map((u) => (
                   <li key={u.title} className="truncate">
-                    <span className="text-foreground">{u.title}</span> — {u.missing}
+                    <span className="text-foreground">{u.title}</span>: {u.missing}
                   </li>
                 ))}
               </ul>

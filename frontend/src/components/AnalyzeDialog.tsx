@@ -141,7 +141,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
           <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
             <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
             <span>
-              This exact scope and commit are already being analyzed — that run's progress
+              This exact scope and commit are already being analyzed; that run's progress
               is on the Project Overview. Change the branch, commit, or scope to start
               another run in parallel.
             </span>
@@ -166,7 +166,7 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
         {previewing && (
           <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-3 text-xs text-muted-foreground" role="status">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" aria-hidden="true" />
-            Building the analysis preview — scanning files and estimating cost…
+            Building the analysis preview: scanning files and estimating cost…
           </div>
         )}
 

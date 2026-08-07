@@ -69,14 +69,14 @@ export function ConfigErrorScreen({ missing }: { missing: readonly string[] }) {
           {bundleFailure ? (
             <>
               The application bundle could not be loaded. If this page was open across a
-              deployment, reload it (hard-refresh) — the browser may be holding a stale
+              deployment, reload it (hard-refresh); the browser may be holding a stale
               index. Otherwise check the frontend container&rsquo;s logs.
             </>
           ) : (
             <>
               The frontend loaded, but it was not told where its backend lives, so it stopped
               instead of failing later with an unexplained error. Set the value
-              {missing.length === 1 ? "" : "s"} below and restart the frontend container — no
+              {missing.length === 1 ? "" : "s"} below and restart the frontend container. No
               rebuild is needed.
             </>
           )}
@@ -87,7 +87,7 @@ export function ConfigErrorScreen({ missing }: { missing: readonly string[] }) {
             <li key={name} style={{ marginBottom: "0.5rem" }}>
               <code style={code}>{name}</code>
               <span style={{ color: "#3d4a66" }}>
-                {" — "}
+                {": "}
                 {SETTINGS[name] ?? "required"}
               </span>
             </li>

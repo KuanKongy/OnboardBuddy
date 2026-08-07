@@ -48,7 +48,7 @@ const WEIGHT_VIEWS = [
 // providers meet the privacy filter (data_collection: deny).
 const DEFAULT_ANALYSIS_MODEL = "auto";
 const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: "auto", label: "Auto — fastest private provider right now" },
+  { id: "auto", label: "Auto: fastest private provider right now" },
   { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (fast, 1M context)" },
   { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (1M context)" },
   { id: "meta-llama/llama-4-scout", label: "Llama 4 Scout (fastest bursts, smaller context)" },
@@ -363,7 +363,7 @@ export function ProjectSettingsPage() {
     try {
       await apiFetch(`/projects/${id}/llm-key`, { method: "DELETE" });
       setKeyInfo({ exists: false });
-      setKeySaved("Key removed — the server key is used again.");
+      setKeySaved("Key removed. The server key is used again.");
       setTimeout(() => setKeySaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to remove key");
@@ -392,7 +392,7 @@ export function ProjectSettingsPage() {
       });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
-      setWeightsSaved(`Saved — ${roleLabel(weightRole)} scores re-projected.`);
+      setWeightsSaved(`Saved. ${roleLabel(weightRole)} scores re-projected.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to save weights");
@@ -409,7 +409,7 @@ export function ProjectSettingsPage() {
       await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, { method: "DELETE" });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
       setWeightRoles(data.roles);
-      setWeightsSaved(`Reverted — ${roleLabel(weightRole)} is back on the built-in weights.`);
+      setWeightsSaved(`Reverted. ${roleLabel(weightRole)} is back on the built-in weights.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to revert weights");
@@ -468,7 +468,7 @@ export function ProjectSettingsPage() {
                   pinned to the one it was built from. Showing a single "Branch"
                   value on a settings page implied it applied to everything. */}
               <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-                Branch and commit are chosen per analysis run — see the branch/commit chooser
+                Branch and commit are chosen per analysis run: see the branch/commit chooser
                 in the sidebar and the Analyze dialog.
               </p>
             </CardContent>
@@ -550,8 +550,8 @@ export function ProjectSettingsPage() {
                   <Select value={stopBehavior} onValueChange={setStopBehavior} disabled={!canEdit}>
                     <SelectTrigger id="stop-behavior" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="pause">Pause — resume later</SelectItem>
-                      <SelectItem value="degrade">Degrade — finish without AI</SelectItem>
+                      <SelectItem value="pause">Pause (resume later)</SelectItem>
+                      <SelectItem value="degrade">Degrade (finish without AI)</SelectItem>
                       <SelectItem value="fail">Fail the run</SelectItem>
                     </SelectContent>
                   </Select>
@@ -610,7 +610,7 @@ export function ProjectSettingsPage() {
                   <p className="text-[0.8125rem] font-medium text-foreground">Re-analyze on push</p>
                   <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                     When GitHub pushes to a branch that has onboarding packages, run an incremental
-                    re-analysis per affected scope. Changed sections get stale badges — rebuilding
+                    re-analysis per affected scope. Changed sections get stale badges, and rebuilding
                     them is left to the switch below, so on its own this costs no generation spend.
                     Requires the GitHub App webhook to be configured (see the DevOps guide).
                   </p>
@@ -643,7 +643,7 @@ export function ProjectSettingsPage() {
                   <p className="text-[0.8125rem] font-medium text-foreground">Auto-regenerate stale sections</p>
                   <p className="mt-0.5 text-[0.6875rem] text-muted-foreground">
                     After a re-analysis marks sections stale, regenerate them immediately against the
-                    new analysis — this spends AI budget without a click. Off: stale badges only;
+                    new analysis. This spends AI budget without a click. Off: stale badges only;
                     regenerate from the reader or the package card when you're ready.
                   </p>
                 </div>
@@ -722,7 +722,7 @@ export function ProjectSettingsPage() {
                 )}
               </div>
               <p className="mb-2 text-[0.6875rem] text-muted-foreground">
-                How much each signal counts toward "critical for this role". Changes apply instantly —
+                How much each signal counts toward "critical for this role". Changes apply instantly:
                 scores are re-projected, never re-analyzed.
               </p>
               {weightsError ? (
@@ -732,7 +732,7 @@ export function ProjectSettingsPage() {
                 >
                   <p className="text-xs text-danger">
                     <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                    Couldn&apos;t load ranking weights. The saved weights are unchanged — this is a
+                    Couldn&apos;t load ranking weights. The saved weights are unchanged: this is a
                     failed request, not a project without them.
                   </p>
                   <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadWeights}>
@@ -776,7 +776,7 @@ export function ProjectSettingsPage() {
                     const total = Math.round(WEIGHT_VIEWS.reduce((s, v) => s + (activeWeights.weights[v] ?? 0), 0) * 100);
                     return (
                       <p className={`text-right text-[0.6875rem] tabular-nums ${total === 100 ? "text-muted-foreground" : "text-warning"}`}>
-                        Total: {total}%{total !== 100 ? " — aim for 100% so scores stay comparable across roles" : ""}
+                        Total: {total}%{total !== 100 ? " (aim for 100% so scores stay comparable across roles)" : ""}
                       </p>
                     );
                   })()}
@@ -799,7 +799,7 @@ export function ProjectSettingsPage() {
                     // where every slider is disabled and both buttons are gone,
                     // with nothing saying why (audit §20.1 dead end).
                     <p className="pt-1 text-[0.6875rem] text-muted-foreground">
-                      Read-only for your tier — these are the weights your criticality scores are
+                      Read-only for your tier: these are the weights your criticality scores are
                       computed with. Only owners and admins can change them; ask one of them if a
                       signal is weighted wrong for your work.
                     </p>
@@ -872,9 +872,9 @@ export function ProjectSettingsPage() {
                   <Select value={analysisDepth} onValueChange={setAnalysisDepth} disabled={!canEdit}>
                     <SelectTrigger id="analysis-depth" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue className="truncate" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="cheap">Cheap — fewest LLM calls</SelectItem>
-                      <SelectItem value="standard">Standard — balanced</SelectItem>
-                      <SelectItem value="full">Full — every eligible symbol</SelectItem>
+                      <SelectItem value="cheap">Cheap (fewest LLM calls)</SelectItem>
+                      <SelectItem value="standard">Standard (balanced)</SelectItem>
+                      <SelectItem value="full">Full (every eligible symbol)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -915,7 +915,7 @@ export function ProjectSettingsPage() {
                   <p className="text-xs text-danger">
                     <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
                     Couldn&apos;t check whether a key is configured. Don&apos;t add one until this
-                    loads — you could overwrite a key the team is already using.
+                    loads: you could overwrite a key the team is already using.
                   </p>
                   <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadKeyInfo}>
                     <RefreshCw className="h-3 w-3" /> Retry
@@ -924,7 +924,7 @@ export function ProjectSettingsPage() {
               ) : keyInfo?.exists ? (
                 <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
                   <p className="text-xs text-success">
-                    Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""} — all AI calls use it.
+                    Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""}. All AI calls use it.
                   </p>
                   {canEdit && (
                     <Button variant="outline" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
@@ -949,7 +949,7 @@ export function ProjectSettingsPage() {
                   </Button>
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">No project key — the server key is used.</p>
+                <p className="text-xs text-muted-foreground">No project key: the server key is used.</p>
               )}
               {/* Same silent-mutation class as Save weights: PUT/DELETE fired and
                   the page said nothing either way (audit §20.3). */}

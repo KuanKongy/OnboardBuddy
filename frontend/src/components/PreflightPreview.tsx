@@ -87,7 +87,7 @@ export function usePreflight(projectId: string) {
             setPreviewing(false);
           } else if (Date.now() - started > 180_000) {
             window.clearInterval(pollRef.current);
-            setError("Preview timed out — retry, or start the analysis directly.");
+            setError("Preview timed out. Retry, or start the analysis directly.");
             setPreviewing(false);
           }
         } catch {
@@ -140,11 +140,11 @@ export function PreflightPreviewCard({
         <Shield className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <p className="text-[0.71875rem] text-muted-foreground">
           Privacy: <span className="font-medium text-foreground">{preview.privacy.mode.replace(/_/g, " ")}</span>
-          {" — "}
+          {", "}
           {preview.privacy.codeSnippetsLeaveSystem
             ? "selected code snippets are sent to the AI provider."
             : preview.privacy.llmCallsPlanned
-              ? "only extracted facts are sent — never code."
+              ? "only extracted facts are sent, never code."
               : "nothing is sent anywhere; fully local analysis."}
         </p>
       </div>

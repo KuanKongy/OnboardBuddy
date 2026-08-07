@@ -373,7 +373,7 @@ function WalkthroughStepCard({
         </>
       ) : (
         <p className="rounded-md border border-dashed border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
-          No snippet was captured for this step — open the file above to read it.
+          No snippet was captured for this step. Open the file above to read it.
         </p>
       )}
 
@@ -431,7 +431,7 @@ function AppendixCard({ step }: { step: WalkthroughStepData }) {
       >
         <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")} />
         Optional: prove it live
-        <span className="font-normal text-muted-foreground">— plant a marker, set the flow off, revert</span>
+        <span className="font-normal text-muted-foreground">(plant a marker, set the flow off, revert)</span>
       </button>
       {open && (
         <div className="space-y-2 border-t border-border px-3 py-3">

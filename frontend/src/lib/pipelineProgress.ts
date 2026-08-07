@@ -17,7 +17,7 @@ export interface PipelineProgress {
   pct: number;
   /** "analysis" | "generation" | "other" | null when no job. */
   stage: "analysis" | "generation" | "other" | null;
-  /** Human stage label ("Analyzing code — …") while active, else null. */
+  /** Human stage label ("Analyzing code · …") while active, else null. */
   stageLabel: string | null;
   isActive: boolean;
 }
@@ -44,11 +44,14 @@ export function pipelineProgress(job: PipelineJobLite | null | undefined): Pipel
         ? 70 + Math.round(raw * 0.3)
         : raw;
 
+  // " · " is a parsed separator, not decoration: ProjectCard splits on it to
+  // take the stage word alone for its status chip. Change it here and you must
+  // change the split there in the same edit, or the chip prints the sentence.
   const stageLabel = isActive
     ? stage === "analysis"
-      ? `Analyzing code — ${job.current_step ?? "working…"}`
+      ? `Analyzing code · ${job.current_step ?? "working…"}`
       : stage === "generation"
-        ? `Generating onboarding — ${job.current_step ?? "working…"}`
+        ? `Generating onboarding · ${job.current_step ?? "working…"}`
         : job.current_step ?? "Processing…"
     : null;
 

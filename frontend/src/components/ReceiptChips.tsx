@@ -33,7 +33,7 @@ export function ReceiptChip({
         receipt.staleness === "stale" ? "border-warning/40 bg-warning-soft" : "border-border bg-muted/40",
       )}
       title={`${receipt.filePath}${lineRange}${receipt.symbolName ? ` · ${receipt.symbolName}` : ""}${
-        receipt.snippet ? " — click to view the code snippet" : ""
+        receipt.snippet ? " (click to view the code snippet)" : ""
       }`}
     >
       {index != null && (

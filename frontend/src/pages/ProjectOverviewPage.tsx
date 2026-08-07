@@ -29,7 +29,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { apiFetch } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import { buildGithubRepoUrl } from "@/lib/githubUrl";
-import { ROLE_OPTIONS, roleLabel, roleTitle } from "@/lib/roles";
+import { ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 import { pipelineProgress } from "@/lib/pipelineProgress";
 import { useProgress } from "@/lib/useProgress";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
@@ -74,9 +74,9 @@ function runActionLabel(run: RunHistoryEntry): string {
       // labelling it "Generated … package" reads as a second package being
       // paid for, when the run replaced a few sections in place.
       if (run.only_stale) {
-        return `Regenerated stale content of ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
+        return `Regenerated stale content of ${role ? `${roleLabel(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
       }
-      return `Generated ${role ? `${roleTitle(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
+      return `Generated ${role ? `${roleLabel(role)} ` : ""}package${branch ? ` on ${branch}` : ""}`;
     }
     case "regenerate_section":
       // Bug #36: a single-tutorial regeneration shares this job type (the
@@ -153,7 +153,7 @@ function RunCard({
                         </Button>
                       </span>
                     </TooltipTrigger>
-                    <TooltipContent side="top">Worker pauses at the next step — completed work is checkpointed</TooltipContent>
+                    <TooltipContent side="top">Worker pauses at the next step; completed work is checkpointed</TooltipContent>
                   </Tooltip>
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -185,7 +185,7 @@ function RunCard({
           </span>
           <span className="flex items-center gap-1.5">
             {job.attempt > 1 && (
-              <Badge variant="outline" className="text-[0.6875rem] text-muted-foreground" title="The queue re-delivered this run — earlier attempt(s) were interrupted; cached work is not re-paid">
+              <Badge variant="outline" className="text-[0.6875rem] text-muted-foreground" title="The queue re-delivered this run: earlier attempt(s) were interrupted, and cached work is not re-paid">
                 attempt #{job.attempt}
               </Badge>
             )}
@@ -198,7 +198,7 @@ function RunCard({
                     </Badge>
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="top">Running but no worker signal for 2+ minutes — it will be auto-marked failed shortly, then you can resume it</TooltipContent>
+                <TooltipContent side="top">Running but no worker signal for 2+ minutes. It will be auto-marked failed shortly, then you can resume it</TooltipContent>
               </Tooltip>
             )}
             <Badge variant={statusBadgeVariant(job.status)} className="text-[0.6875rem]">{job.status}</Badge>
@@ -302,7 +302,7 @@ export function partialRunSteps(run: Pick<RunHistoryEntry, "tutorial_title">): A
   if (run.tutorial_title) {
     return [{
       label: "Generate tutorial",
-      desc: "Rebuilds this one walkthrough from the traced flow — nothing else in the package is touched or paid for",
+      desc: "Rebuilds this one walkthrough from the traced flow. Nothing else in the package is touched or paid for",
     }];
   }
   return GENERATION_PHASE_KEYS.map((key) => {
@@ -342,7 +342,7 @@ function PartialRunSteps({ run }: { run: RunHistoryEntry }) {
   return (
     <div className="rounded-md border border-border bg-muted/25 px-3 py-2">
       <p className="mb-1.5 text-[0.65625rem] text-muted-foreground">
-        Steps this run performed — a regeneration replaces only what it targets, so the rest of the pipeline never re-runs.
+        Steps this run performed. A regeneration replaces only what it targets, so the rest of the pipeline never re-runs.
       </p>
       <ol className="space-y-0.5">
         {steps.map((step, i) => {
@@ -784,8 +784,12 @@ function QuickAction({
             // `truncate` on the inline-flex row itself was inert (the flex
             // children set the width), so a long resume label pushed the arrow
             // out of the card. The text truncates, the icon never shrinks.
+            //
+            // The underline belongs to the words, not the row: on the row it
+            // ran under the arrow glyph too, which reads as a rule through the
+            // icon rather than as a link.
             <span className="flex items-center gap-1 text-xs font-medium text-primary">
-              <span className="min-w-0 truncate">{cta}</span>
+              <span className="min-w-0 truncate hover:underline">{cta}</span>
               {pending
                 ? <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
                 : <ArrowRight className="h-3 w-3 shrink-0" />}
@@ -1038,7 +1042,7 @@ export function ProjectOverviewPage() {
           title={onboardingProgress ? "Continue onboarding" : "Onboarding"}
           cta={
             onboardingProgress
-              ? `Resume — ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
+              ? `Resume: ${((onboardingProgress.position.sectionType as string) ?? "").replace(/-/g, " ") || "where you left off"}`
               : "Start reading"
           }
           to={hasReadablePackage ? onboardingResumeLink : null}
@@ -1055,7 +1059,7 @@ export function ProjectOverviewPage() {
           title={tutorialProgress ? "Continue tutorial" : "Tutorials"}
           cta={
             tutorialProgress
-              ? `Resume — step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
+              ? `Resume: step ${(tutorialProgress.position.stepOrder as number) ?? 1}${tutorialProgress.title ? ` of ${tutorialProgress.title}` : ""}`
               : "Start a tutorial"
           }
           to={hasTutorials ? tutorialResumeLink : null}
@@ -1073,7 +1077,7 @@ export function ProjectOverviewPage() {
         <QuickAction
           icon={User}
           iconTone="bg-warning/10 text-warning"
-          title={`${roleTitle(project.developer_role)} role`}
+          title={`${roleLabel(project.developer_role)} role`}
           cta="View team"
           to={`/projects/${id}/team`}
           pending={pendingQuickAction === "role"}
@@ -1144,7 +1148,7 @@ export function ProjectOverviewPage() {
                   )}
                 </div>
                 {canManage && ["analyze_scope", "incremental_update", "generate_package"].includes(job.job_type) && (
-                  <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job — checkpointed phases and cached AI work are skipped">
+                  <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job; checkpointed phases and cached AI work are skipped">
                     <RotateCcw className="mr-1 h-3 w-3" />
                     Resume run
                   </Button>
@@ -1178,7 +1182,7 @@ export function ProjectOverviewPage() {
         >
           <p className="text-xs text-danger">
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-            Couldn&apos;t load this project&apos;s packages and analysis status — what you see below
+            Couldn&apos;t load this project&apos;s packages and analysis status. What you see below
             may be incomplete.
           </p>
           <Button
@@ -1199,7 +1203,7 @@ export function ProjectOverviewPage() {
             <h2 className="text-sm font-semibold text-foreground">Not yet analyzed</h2>
             <p className="mt-1 max-w-sm text-xs text-muted-foreground">
               Run the first analysis to build the dependency graph, workflows, and a role-based
-              onboarding package — with a cost preview before anything runs.
+              onboarding package, with a cost preview before anything runs.
             </p>
             {canManage && (
               <Button size="sm" className="mt-4" onClick={() => setAnalyzeOpen(true)}>
@@ -1232,7 +1236,7 @@ export function ProjectOverviewPage() {
                 <SelectTrigger aria-label="Filter packages by role" className="h-7 w-[140px] text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All roles</SelectItem>
-                  {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
+                  {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -1255,19 +1259,30 @@ export function ProjectOverviewPage() {
             </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {filteredPackages.map((card) => (
-              <div key={card.id} className={selectedPackageId === card.id ? "rounded-xl ring-2 ring-primary/50" : ""}>
-                <PackageCardView
-                  card={card}
-                  onOpen={() => {
-                    // Opening makes it the sidebar selection and pins the
-                    // reader to this exact package.
-                    selectPackage(card.id);
-                    navigate(`/projects/${id}/onboarding?view=reader&package=${card.id}&role=${card.role}`);
-                  }}
-                />
-              </div>
-            ))}
+            {filteredPackages.map((card) => {
+              // One destination, two ways in: the card body's click handler and
+              // the real link the card now puts on its scope name. Built once so
+              // a middle-click on the name can never land somewhere else than a
+              // plain click on the card.
+              const readerLink = `/projects/${id}/onboarding?view=reader&package=${card.id}&role=${card.role}`;
+              return (
+                <div key={card.id} className={selectedPackageId === card.id ? "rounded-xl ring-2 ring-primary/50" : ""}>
+                  <PackageCardView
+                    card={card}
+                    to={readerLink}
+                    // The link navigates on its own; this is the sidebar
+                    // selection that has to be pinned before it does.
+                    onSelect={() => selectPackage(card.id)}
+                    onOpen={() => {
+                      // Opening makes it the sidebar selection and pins the
+                      // reader to this exact package.
+                      selectPackage(card.id);
+                      navigate(readerLink);
+                    }}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1289,7 +1304,7 @@ export function ProjectOverviewPage() {
           >
             <p className="text-xs text-danger">
               <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-              Couldn&apos;t load run history — {runsError}
+              Couldn&apos;t load run history: {runsError}
             </p>
             <Button size="xs" variant="outline" className="gap-1.5" onClick={loadRuns}>
               <RefreshCw className="h-3 w-3" /> Retry

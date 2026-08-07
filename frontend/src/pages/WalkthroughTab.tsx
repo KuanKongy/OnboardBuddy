@@ -187,13 +187,13 @@ const MODE_GROUPS: Array<{ mode: TutorialMode; label: string; caption: string; i
   {
     mode: "walkthrough",
     label: "Code walkthroughs",
-    caption: "guided readings — the code of one real path, annotated",
+    caption: "guided readings: the code of one real path, annotated",
     icon: BookOpen,
   },
   {
     mode: "howto",
     label: "Run & verify",
-    caption: "task guides — for when you need the stack up or the suite green",
+    caption: "task guides: for when you need the stack up or the suite green",
     icon: Wrench,
   },
 ];
@@ -366,12 +366,12 @@ function CoverageNote({ coverage }: { coverage: Coverage }) {
         <div className="mt-2 space-y-1 border-t border-border pt-2">
           {coverage.overflow.map((o, i) => (
             <p key={`o-${i}`} className="text-[0.6875rem] text-muted-foreground">
-              <span className="text-foreground">{o.title}</span> — a real {o.kind.replace(/_/g, " ")}, dropped by the cap.
+              <span className="text-foreground">{o.title}</span>: a real {o.kind.replace(/_/g, " ")}, dropped by the cap.
             </p>
           ))}
           {coverage.skipped.map((s, i) => (
             <p key={`s-${i}`} className="text-[0.6875rem] text-muted-foreground">
-              <span className="text-foreground">{s.title}</span> — {s.detail}
+              <span className="text-foreground">{s.title}</span>: {s.detail}
             </p>
           ))}
         </div>
@@ -626,7 +626,7 @@ export function WalkthroughTab() {
           stop();
           setRegenerating(false);
           setRegenError(
-            "Regeneration is taking longer than expected — the tutorial will replace itself when the worker finishes. Check the Overview page for job status.",
+            "Regeneration is taking longer than expected. The tutorial will replace itself when the worker finishes. Check the Overview page for job status.",
           );
         }
       }, 4000);
@@ -672,7 +672,7 @@ export function WalkthroughTab() {
       <div data-tour="tutorials-header">
         <PageHeader
           title="Tutorials"
-          subtitle="Guided readings of the paths this repository actually runs — real code, the lines that matter in it, and how each step hands off to the next. Task guides for running and testing the stack sit in their own group below. Follows the package selected in the sidebar."
+          subtitle="Guided readings of the paths this repository actually runs: real code, the lines that matter in it, and how each step hands off to the next. Task guides for running and testing the stack sit in their own group below. Follows the package selected in the sidebar."
         />
       </div>
 
@@ -734,7 +734,7 @@ export function WalkthroughTab() {
               {detailError && !loadingDetail ? (
                 <DetailErrorPane
                   title="Couldn't open this tutorial"
-                  body="The tutorial is still there — this is a failure to fetch it, not a missing guide."
+                  body="The tutorial is still there; this is a failure to fetch it, not a missing guide."
                   error={detailError}
                 />
               ) : !detail && !loadingDetail ? (
@@ -756,7 +756,7 @@ export function WalkthroughTab() {
                       )}
                       <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
                         {detail.tutorial.annotation === "deterministic"
-                          ? "Built from repo evidence · no prose written — AI generation is off for this project"
+                          ? "Built from repo evidence · no prose written (AI generation is off for this project)"
                           : isWalkthrough
                             ? "Code and line ranges from repo evidence · narration written by AI"
                             : isProcedural
@@ -776,7 +776,7 @@ export function WalkthroughTab() {
                       <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2">
                         <p className="text-xs text-warning">
                           <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                          Stale — files this walkthrough steps through changed since it was written.{" "}
+                          Stale: files this walkthrough steps through changed since it was written.{" "}
                           {canManage
                             ? "Regenerating rebuilds just this one against the newest analysis."
                             : "An owner or admin can rebuild it against the newest analysis."}
@@ -861,7 +861,7 @@ export function WalkthroughTab() {
                           />
                         ) : (
                           <p className="rounded-md border border-dashed border-border px-3 py-2 text-[0.71875rem] text-muted-foreground">
-                            No snippet was captured for this step — open it in Dependencies to read the code.
+                            No snippet was captured for this step. Open it in Dependencies to read the code.
                           </p>
                         )}
                         <div className="h-fit rounded-md border border-border px-4 py-3">
@@ -951,14 +951,14 @@ export function WalkthroughTab() {
               ))}
               <p className="mt-1.5 text-[0.71875rem] text-muted-foreground">
                 A tutorial here is a procedure: a command to run, a result to see, a way to check it. Rather than
-                print prose that looks like one, the traced flows are listed below as what they are — a reading
+                print prose that looks like one, the traced flows are listed below as what they are: a reading
                 aid, not something you can run.
               </p>
             </div>
           ) : (
             <div className="mb-3 flex items-center gap-2 rounded-lg border border-info/40 bg-info-soft px-3 py-2 text-xs text-info">
               <HelpCircle className="h-3.5 w-3.5 shrink-0" />
-              No generated procedures for this package yet — showing the deterministic traced workflows instead.
+              No generated procedures for this package yet; showing the deterministic traced workflows instead.
               Generate an onboarding package to get runnable, verifiable procedures.
             </div>
           )}
@@ -1060,7 +1060,7 @@ export function WalkthroughTab() {
             </div>
             <h2 className="text-sm font-semibold text-foreground">No procedure could be built for this repository</h2>
             <p className="mt-2 text-xs text-muted-foreground">
-              A tutorial here is a procedure — a command to run, a result you should see, and a way to check it.
+              A tutorial here is a procedure: a command to run, a result you should see, and a way to check it.
               Where the evidence cannot support one, this tab says so instead of printing prose that looks like a
               section.
             </p>

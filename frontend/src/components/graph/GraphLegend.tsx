@@ -103,7 +103,7 @@ export function GraphLegend({
       {expanded && (
         <p className="mt-1 max-w-[100ch] text-[0.6875rem] leading-snug text-muted-foreground">
           Each node is a file or module. An edge means the source file imports (depends on) the
-          target file. Click a node to select it — its direct neighbors stay lit while everything
+          target file. Click a node to select it: its direct neighbors stay lit while everything
           else dims.
         </p>
       )}

@@ -50,7 +50,7 @@ export function GraphFirstVisitHint({
       {variant === "classes" ? (
         <>
           <p className="text-muted-foreground">
-            This is a map of the classes and interfaces in this project — arrows are
+            This is a map of the classes and interfaces in this project. Arrows are
             extends/implements links.
           </p>
           {/* No GitHub offer: this view's panel has no repository link. */}

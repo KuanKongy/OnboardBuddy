@@ -291,7 +291,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
           <p className="mt-0.5 text-xs text-muted-foreground">
             {currentFrame && !error
               ? "This folder came back empty. It may have been renamed or removed since this link was made."
-              : "The class graph is built from classes and interfaces found during analysis. Run a (re-)analysis first — snapshots from before this feature have no class data."}
+              : "The class graph is built from classes and interfaces found during analysis. Run a (re-)analysis first: snapshots from before this feature have no class data."}
           </p>
         </div>
         {currentFrame && !error && (
@@ -371,8 +371,8 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         <div className="mb-3 flex items-center gap-2 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2 text-xs">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
           <span className="flex-1 text-foreground">
-            <code className="font-mono">{focusNodeId}</code> is not in the class graph for this snapshot —
-            showing the whole graph instead.
+            <code className="font-mono">{focusNodeId}</code> is not in the class graph for this snapshot.
+            Showing the whole graph instead.
           </span>
         </div>
       )}
@@ -382,8 +382,8 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         {data.clustered ? (
           <>
             {currentFrame
-              ? `${currentFrame.label} holds ${data.totalNodes} classes — showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${classCount > 0 ? ` and ${classCount} class${classCount === 1 ? "" : "es"}` : ""}. `
-              : `${data.totalNodes} classes and interfaces, too many to draw at once — showing ${groupCount} folder${groupCount === 1 ? "" : "s"}. `}
+              ? `${currentFrame.label} holds ${data.totalNodes} classes, showing ${groupCount} subfolder${groupCount === 1 ? "" : "s"}${classCount > 0 ? ` and ${classCount} class${classCount === 1 ? "" : "es"}` : ""}. `
+              : `${data.totalNodes} classes and interfaces, too many to draw at once, so this shows ${groupCount} folder${groupCount === 1 ? "" : "s"}. `}
             {groupCount > 0
               ? "Open a folder below, or select its box and use the Open button in its details panel, to see its classes, each with a line saying what it does. "
               : "Each class card carries a line saying what it does. "}
@@ -391,11 +391,11 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
           </>
         ) : (
           <>
-            {currentFrame ? `Classes and interfaces in ${currentFrame.label}` : "Classes and interfaces in this project"}{" "}
-            — arrows are extends/implements links, so a class with none stands alone.{" "}
+            {currentFrame ? `Classes and interfaces in ${currentFrame.label}` : "Classes and interfaces in this project"}
+            : arrows are extends/implements links, so a class with none stands alone.{" "}
             {describedNodes > 0
               ? `${describedNodes} of ${classCount} carry a generated description; the rest were recorded by name and kind only, which the card already shows.`
-              : "None of them carry a generated description in this snapshot — the cards show where each one is declared."}{" "}
+              : "None of them carry a generated description in this snapshot; the cards show where each one is declared."}{" "}
             Click one for its score, callers and receipts.
           </>
         )}
@@ -452,7 +452,7 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <span className="flex-1 text-foreground">
             Showing {truncation.shown} of {truncation.total} {truncation.unit}
-            {currentFrame ? ` in ${currentFrame.label}` : ""} — {truncation.hidden} not drawn. A single view is
+            {currentFrame ? ` in ${currentFrame.label}` : ""}, {truncation.hidden} not drawn. A single view is
             capped at {truncation.limit} nodes, so this kept {truncation.keptBy}. Search to reach the rest.
           </span>
         </div>

@@ -65,7 +65,7 @@ class RouteErrorBoundaryInner extends Component<
           </div>
           <h1 className="mb-1.5 text-sm font-semibold text-foreground">This page failed to render</h1>
           <p className="mb-1.5 text-xs text-muted-foreground">
-            The rest of the app is fine — only this panel stopped. Nothing you did was lost, and no
+            The rest of the app is fine; only this panel stopped. Nothing you did was lost, and no
             analysis was started or charged.
           </p>
           <p className="mb-4 break-words text-[0.6875rem] text-muted-foreground/80">{error.message}</p>
