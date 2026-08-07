@@ -25,6 +25,7 @@
 
 import { query } from '../../lib/db.js';
 import { latestSnapshotOrderSql } from '../../lib/snapshotOrdering.js';
+import { resolveApiKey } from './keyResolver.js';
 
 export interface CandidateModel {
   id: string;
@@ -94,9 +95,10 @@ type FetchLike = (url: string, init?: { headers?: Record<string, string> }) => P
 async function fetchModelEndpoints(
   modelId: string,
   fetchImpl: FetchLike,
+  apiKey: string,
 ): Promise<EndpointStat[]> {
   const res = await fetchImpl(`https://openrouter.ai/api/v1/models/${modelId}/endpoints`, {
-    headers: { Authorization: `Bearer ${process.env.OPENROUTER_API_KEY ?? ''}` },
+    headers: { Authorization: `Bearer ${apiKey}` },
   });
   if (!res.ok) throw new Error(`endpoints API ${res.status} for ${modelId}`);
   const body = (await res.json()) as {
@@ -185,10 +187,30 @@ export async function selectModel(opts: SelectModelOptions = {}): Promise<ModelS
 
   try {
     const fetchImpl = opts.fetchImpl ?? (fetch as unknown as FetchLike);
+    // The probe used to read OPENROUTER_API_KEY directly, so a project on its
+    // own BYO key had its model chosen against an account that is not the one
+    // paying for the calls — and on a deployment with no server key at all the
+    // endpoints API saw `Bearer ` and every candidate was excluded.
+    //
+    // The selection cache below is module-global, so a selection probed with
+    // one project's key can be served to another inside the 5 min TTL. That is
+    // acceptable because selection is not billing: every chat call resolves its
+    // own key (aiClient -> resolveApiKey) and stamps key_source on the run.
+    //
+    // resolveApiKey throws when neither key exists; the env fallback is what
+    // keeps this function's "throws never" contract.
+    let apiKey = process.env.OPENROUTER_API_KEY ?? '';
+    if (opts.projectId) {
+      try {
+        apiKey = (await resolveApiKey(opts.projectId)).apiKey;
+      } catch {
+        apiKey = process.env.OPENROUTER_API_KEY ?? '';
+      }
+    }
     const rankings = await Promise.all(
       AUTO_CANDIDATES.map(async (c) => {
         try {
-          return rankModel(c, await fetchModelEndpoints(c.id, fetchImpl));
+          return rankModel(c, await fetchModelEndpoints(c.id, fetchImpl, apiKey));
         } catch (err) {
           return {
             id: c.id, label: c.label, score: null, providerOrder: [],

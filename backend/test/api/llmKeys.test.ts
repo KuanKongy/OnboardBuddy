@@ -89,6 +89,38 @@ describe("project LLM key endpoints (BYO key)", () => {
     expect(decrypt(storedEncrypted!)).to.equal("sk-or-v1-abcdef123456");
   });
 
+  // Rotating a key is the common case, and (project_id, provider) is unique:
+  // without the upsert clause the second PUT would come back a 500 that reads
+  // as "saving your key is broken" with the old key still in force.
+  it("PUT replaces an existing key instead of colliding on the unique index", async () => {
+    installTestAuth();
+    const upserts: Array<{ text: string; params?: unknown[] }> = [];
+    mockQuery((text, params) => {
+      if (text.includes("FROM project_members")) return { rows: [memberRow("owner")] };
+      if (text.includes("INSERT INTO project_llm_keys")) {
+        upserts.push({ text, params });
+        return { rows: [] };
+      }
+      return { rows: [] };
+    });
+
+    const first = await request(app)
+      .put(`/api/projects/${TEST_PROJECT_ID}/llm-key`)
+      .set(authHeader())
+      .send({ api_key: "sk-or-v1-first111111" });
+    const second = await request(app)
+      .put(`/api/projects/${TEST_PROJECT_ID}/llm-key`)
+      .set(authHeader())
+      .send({ api_key: "sk-or-v1-second22222" });
+
+    expect(first.status).to.equal(200);
+    expect(second.status).to.equal(200);
+    expect(upserts).to.have.length(2);
+    expect(upserts[1]!.text).to.include("ON CONFLICT (project_id, provider) DO UPDATE");
+    // The replacement is what gets stored, not the key it replaced.
+    expect(decrypt(upserts[1]!.params?.[2] as string)).to.equal("sk-or-v1-second22222");
+  });
+
   it("PUT rejects trivial keys and unknown providers", async () => {
     installTestAuth();
     mockQuery((text) => {
