@@ -169,6 +169,8 @@ describe("POST /api/projects/:id/members/invitations", () => {
     mockQuery((text, params = []) => {
       if (text.includes("FROM project_members pm")) return { rows: [] };
       if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) return { rows: [], rowCount: 1 };
       if (text.includes("FROM project_invitations")) return { rows: [] };
       if (text.includes("INSERT INTO project_invitations")) {
         inserts.push({ text, params: params as unknown[] });
@@ -223,13 +225,18 @@ describe("POST /api/projects/:id/members/invitations", () => {
 
   // An expired-but-still-'pending' row is invisible in both lists, yet the partial
   // unique index blocks its replacement — a 409 with nothing on screen to revoke.
-  it("replaces an expired pending invitation instead of refusing forever", async () => {
+  // Retiring that one row was not enough: a revoked or declined row for the same
+  // address survived beside the replacement, and the team page showed the address
+  // twice. The cleanup is therefore keyed on the address, not on the row found.
+  it("clears every row for the address before inserting, so one invitation per email survives", async () => {
     installTestAuth();
-    const statements: string[] = [];
-    mockQuery((text) => {
-      statements.push(text);
+    const statements: Array<{ text: string; params: unknown[] }> = [];
+    mockQuery((text, params = []) => {
+      statements.push({ text, params: params as unknown[] });
       if (text.includes("FROM project_members pm")) return { rows: [] };
       if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) return { rows: [], rowCount: 1 };
       if (text.includes("FROM project_invitations")) {
         return { rows: [{ id: "stale-invitation", live: false }] };
       }
@@ -243,7 +250,13 @@ describe("POST /api/projects/:id/members/invitations", () => {
       .send({ email: "bob@acme.test", permission_tier: "developer" });
 
     expect(res.status).to.equal(201);
-    expect(statements.some((s) => s.includes("SET status = 'expired'"))).to.equal(true);
+    const del = statements.find((s) => s.text.includes("DELETE FROM project_invitations"))!;
+    expect(del, "every row for the address must go before the replacement").to.not.equal(undefined);
+    expect(del.params).to.deep.equal([PROJECT_ID, "bob@acme.test"]);
+    // The status flip is what left the dead rows on screen; nothing may still do it.
+    expect(statements.some((s) => s.text.includes("SET status = 'expired'"))).to.equal(false);
+    expect(statements.filter((s) => s.text.includes("INSERT INTO project_invitations")))
+      .to.have.lengthOf(1);
   });
 
   it("refuses a second live invitation for the same address", async () => {
@@ -251,6 +264,8 @@ describe("POST /api/projects/:id/members/invitations", () => {
     mockQuery((text) => {
       if (text.includes("FROM project_members pm")) return { rows: [] };
       if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) return { rows: [], rowCount: 1 };
       if (text.includes("FROM project_invitations")) {
         return { rows: [{ id: "live-invitation", live: true }] };
       }
@@ -263,6 +278,34 @@ describe("POST /api/projects/:id/members/invitations", () => {
       .send({ email: "bob@acme.test", permission_tier: "developer" });
 
     expect(res.status).to.equal(409);
+  });
+
+  // Delete-then-insert leaves nothing for the live-pending guard to see, so two
+  // admins inviting the same address at once both reach the INSERT and the partial
+  // unique index decides. The loser gets the guard's own answer, not a 500.
+  it("answers the loser of two concurrent invites with 409, not 500", async () => {
+    installTestAuth();
+    mockQuery((text) => {
+      if (text.includes("FROM project_members pm")) return { rows: [] };
+      if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) return { rows: [], rowCount: 1 };
+      if (text.includes("FROM project_invitations")) return { rows: [] };
+      if (text.includes("INSERT INTO project_invitations")) {
+        throw new Error(
+          'duplicate key value violates unique constraint "idx_project_invitations_pending_unique_email"',
+        );
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .post(`/api/projects/${PROJECT_ID}/members/invitations`)
+      .set(authHeader())
+      .send({ email: "bob@acme.test", permission_tier: "developer" });
+
+    expect(res.status).to.equal(409);
+    expect(res.body.error).to.include("A pending invitation already exists");
   });
 });
 
@@ -287,6 +330,8 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
       // access gate, whose text also names project_members.
       if (text.includes("FROM project_members pm")) return { rows: member ? [{ "?column?": 1 }] : [] };
       if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) return { rows: [], rowCount: 1 };
       if (text.includes("FROM project_invitations")) return { rows: [{ id: INVITATION_ID, ...row }] };
       if (text.includes("INSERT INTO project_invitations")) {
         return { rows: [{ id: "invitation-2", ...row, status: "pending", live: true }] };
@@ -301,11 +346,13 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
       .post(`/api/projects/${PROJECT_ID}/members/invitations/${INVITATION_ID}/resend`)
       .set(authHeader());
 
-  // The dead row is retired rather than revived: its id stops being redeemable,
-  // it stays in the history the team page now shows, and — the reason the UPDATE
-  // is not optional — a 'pending' original holds the partial unique index slot
-  // that would otherwise reject the replacement with a duplicate-key 500.
-  it("expires the original and writes a fresh invitation from its email, tier and role", async () => {
+  // One invitation row per (project, email): the source row is deleted, not left
+  // beside the replacement. The team page and the invitee's inbox read that same
+  // row, so a survivor is an address listed twice. The replacement carries a new
+  // id, which is what stops the old one being redeemable — and clearing a
+  // 'pending' original also frees the partial unique index slot that would
+  // otherwise reject the INSERT with a duplicate-key 500.
+  it("replaces the source row and writes a fresh invitation from its email, tier and role", async () => {
     const statements = installInvitation({
       email: "Bob@Acme.test",
       permission_tier: "developer",
@@ -318,9 +365,10 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
     expect(res.status).to.equal(201);
     expect(res.body.invitation.live).to.equal(true);
 
-    const expired = statements.find((s) => s.text.includes("SET status = 'expired'"))!;
-    expect(expired, "the pending original must be retired first").to.not.equal(undefined);
-    expect(expired.params).to.deep.equal([INVITATION_ID]);
+    const del = statements.find((s) => s.text.includes("DELETE FROM project_invitations"))!;
+    expect(del, "the source row must go, not stand beside the replacement").to.not.equal(undefined);
+    // The address as stored, mixed case and all: the LOWER() is in the SQL.
+    expect(del.params).to.deep.equal([PROJECT_ID, "Bob@Acme.test"]);
 
     const insert = statements.find((s) => s.text.includes("INSERT INTO project_invitations"))!;
     expect(insert.params.slice(0, 4)).to.deep.equal([
@@ -332,6 +380,24 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
     expect(insert.params[5], "TTL in days").to.equal(14);
     // The row the client re-keys on is live by construction; it was just written.
     expect(insert.text).to.include("true AS live");
+  });
+
+  // The bug users hit: only a 'pending' source was retired, so a revoked row
+  // stayed put and Re-invite left two team rows for the one address.
+  it("replaces a revoked source row too, so nothing survives beside the new invitation", async () => {
+    const statements = installInvitation({
+      email: "bob@acme.test",
+      permission_tier: "developer",
+      developer_role: null,
+      status: "revoked",
+    });
+
+    const res = await resend();
+
+    expect(res.status).to.equal(201);
+    const del = statements.find((s) => s.text.includes("DELETE FROM project_invitations"))!;
+    expect(del, "a revoked source row must go as well").to.not.equal(undefined);
+    expect(del.params).to.deep.equal([PROJECT_ID, "bob@acme.test"]);
   });
 
   // Re-sending after accept writes a second invitation that accept itself can
@@ -349,6 +415,9 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
     expect(res.status).to.equal(409);
     expect(res.body.error).to.include("already been accepted");
     expect(statements.filter((s) => s.text.includes("INSERT INTO project_invitations"))).to.deep.equal([]);
+    // The cleanup sits past the guard: a refused resend must not take the row
+    // it refused to replace.
+    expect(statements.filter((s) => s.text.includes("DELETE FROM project_invitations"))).to.deep.equal([]);
   });
 
   it("refuses to re-send to somebody who has since joined, and writes nothing", async () => {
@@ -367,6 +436,7 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
     expect(res.status).to.equal(409);
     expect(res.body.error).to.include("already a member");
     expect(statements.filter((s) => s.text.includes("INSERT INTO project_invitations"))).to.deep.equal([]);
+    expect(statements.filter((s) => s.text.includes("DELETE FROM project_invitations"))).to.deep.equal([]);
   });
 });
 
