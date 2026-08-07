@@ -12,6 +12,8 @@ const app = createApp();
 const originalFetch = globalThis.fetch;
 
 describe("GET /api/projects", () => {
+  afterEach(() => resetTestHarness());
+
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).get("/api/projects");
 
@@ -25,6 +27,48 @@ describe("GET /api/projects", () => {
       .set("Authorization", "Token abc123");
 
     expect(res.status).to.equal(401);
+  });
+
+  // The card's language row comes from the analyzer's own file counts, not
+  // from GitHub's single `language` field. Two things regress silently here:
+  // an evidenceOnly bucket leaking in (every repo would claim to be written in
+  // JSON), and a slug reaching the reader in the wrong casing, which loses its
+  // linguist colour without any error.
+  it("derives the top three languages from the latest snapshot's inventory", async () => {
+    installTestAuth();
+    mockQuery((text) => {
+      if (text.includes("FROM projects p")) {
+        return {
+          rows: [
+            {
+              id: "p-analyzed", repo_owner: "acme", repo_name: "api",
+              primary_language: null, stale_count: 0,
+              language_inventory: {
+                supported: { typescript: 99, javascript: 3 },
+                unsupported: { css: 2 },
+                evidenceOnly: { json: 12 },
+              },
+            },
+            {
+              id: "p-unanalyzed", repo_owner: "acme", repo_name: "web",
+              primary_language: "Go", stale_count: 0,
+              language_inventory: null,
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const res = await request(app).get("/api/projects").set(authHeader());
+
+    expect(res.status).to.equal(200);
+    // json (12 files) outranks every real language and must not appear.
+    expect(res.body.projects[0].languages).to.deep.equal(["TypeScript", "JavaScript", "CSS"]);
+    expect(res.body.projects[1].languages).to.deep.equal([]);
+    // Existing fields survive the reshape; the raw inventory stays server-side.
+    expect(res.body.projects[1].primary_language).to.equal("Go");
+    expect(res.body.projects[0]).to.not.have.property("language_inventory");
   });
 });
 

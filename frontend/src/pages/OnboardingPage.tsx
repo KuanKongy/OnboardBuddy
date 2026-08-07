@@ -376,7 +376,7 @@ export function PackageGapsPanel({
 /**
  * CONSULT sections are deterministic reference tables. Zero receipts is their
  * CORRECT state — "the table is the evidence" (audit §8.1/A13) — so they get
- * a provenance sentence instead of the self-indicting "no receipts — content
+ * a provenance sentence instead of the self-indicting "no receipts; content
  * is not independently verifiable" framing.
  */
 const REFERENCE_SECTION_IDS = new Set<string>(["routes-jobs", "data-model", "guardrails-ops", "data-schema"]);

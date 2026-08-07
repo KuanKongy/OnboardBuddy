@@ -141,7 +141,7 @@ export function confidenceReasonFor(generationContext: unknown, receiptCount: nu
   if (!counts) {
     return receiptCount > 0
       ? `${receipts} · per-claim tracking not available for this generation`
-      : "no receipts — content is not independently verifiable";
+      : "no receipts; content is not independently verifiable";
   }
   const parts = [`${counts.cited}/${counts.total} tracked claims cite receipts`];
   if (counts.low > 0) parts.push(`${counts.low} downgraded to low`);
@@ -198,7 +198,7 @@ export function packageGenerationMode(generationContexts: unknown[]): PackageGen
       deterministicSections: deterministic,
       totalSections: total,
       label:
-        "Structural only — built without AI (privacy mode: AI disabled). Every item below was extracted directly from the code by static analysis, so it reads as facts and tables rather than explanation.",
+        "Structural only: built without AI (privacy mode: AI disabled). Every item below was extracted directly from the code by static analysis, so it reads as facts and tables rather than explanation.",
     };
   }
   if (deterministic > 0) {
@@ -207,7 +207,7 @@ export function packageGenerationMode(generationContexts: unknown[]): PackageGen
       privacyMode: null,
       deterministicSections: deterministic,
       totalSections: total,
-      label: `Mixed package — ${deterministic} of ${total} sections were built without AI (structural only); the rest carry AI narration from an earlier run.`,
+      label: `Mixed package: ${deterministic} of ${total} sections were built without AI (structural only); the rest carry AI narration from an earlier run.`,
     };
   }
   return {
@@ -217,7 +217,7 @@ export function packageGenerationMode(generationContexts: unknown[]): PackageGen
     totalSections: total,
     label:
       unanimous === "facts_only_ai"
-        ? "Facts-only AI — no code left the system: explanations were written from extracted facts, signatures and graph metadata, with every code snippet withheld from the model."
+        ? "Facts-only AI, and no code left the system: explanations were written from extracted facts, signatures and graph metadata, with every code snippet withheld from the model."
         : null,
   };
 }

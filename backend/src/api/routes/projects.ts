@@ -4,6 +4,7 @@ import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import { parseInstallationId } from "../lib/installationId.js";
+import { languageDisplayName } from "../lib/languageDisplay.js";
 import { getAnalysisQueue, getSummaryQueue } from "../../lib/queue.js";
 import type { AnalysisJobData, SummaryJobData } from "../../lib/queue.js";
 import { getInstallationTokenForUser, userCanAccessInstallation } from "../../lib/github-connection.js";
@@ -111,6 +112,37 @@ const WRITABLE_SETTINGS: Record<string, SettingSpec> = {
 
 export const projectsRouter = Router();
 
+/**
+ * The languages on a project card, taken from what the analyzer actually saw.
+ *
+ * The card used to have only `projects.primary_language`, which is GitHub's
+ * own field: it is null for repos linguist has no stats for, and even when set
+ * it names exactly one language — so a repo that is half TypeScript and half
+ * Python reads as "TypeScript" or as nothing at all. The inventory is a file
+ * count per language from the scan itself.
+ *
+ * `evidenceOnly` is excluded on purpose: json, markdown and yaml are evidence
+ * the pipeline reads, not languages the project is written in.
+ */
+function topLanguages(inventory: unknown): string[] {
+  const inv = inventory as { supported?: unknown; unsupported?: unknown } | null;
+  if (!inv || typeof inv !== "object") return [];
+
+  const counts = new Map<string, number>();
+  for (const bucket of [inv.supported, inv.unsupported]) {
+    if (!bucket || typeof bucket !== "object") continue;
+    for (const [language, files] of Object.entries(bucket as Record<string, unknown>)) {
+      if (typeof files !== "number" || !Number.isFinite(files) || files <= 0) continue;
+      counts.set(language, (counts.get(language) ?? 0) + files);
+    }
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([language]) => languageDisplayName(language));
+}
+
 projectsRouter.get("/", async (req, res) => {
   try {
     const userId = req.user!.id;
@@ -120,23 +152,30 @@ projectsRouter.get("/", async (req, res) => {
               p.created_at, p.last_analyzed_at,
               p.repo_description, p.primary_language, p.repo_pushed_at,
               pm.permission_tier, pm.developer_role,
-              COALESCE(stale.stale_count, 0) AS stale_count
+              COALESCE(stale.stale_count, 0) AS stale_count,
+              snap.language_inventory
        FROM projects p
        INNER JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
        LEFT JOIN LATERAL (
+         SELECT s.id, s.language_inventory FROM analysis_snapshots s
+         WHERE s.project_id = p.id
+         ORDER BY ${latestSnapshotOrderSql('s', 'p.branch')} LIMIT 1
+       ) snap ON true
+       LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS stale_count
          FROM stale_flags sf
-         WHERE sf.snapshot_id = (
-           SELECT s.id FROM analysis_snapshots s
-           WHERE s.project_id = p.id
-           ORDER BY ${latestSnapshotOrderSql('s', 'p.branch')} LIMIT 1
-         )
+         WHERE sf.snapshot_id = snap.id
        ) stale ON true
        ORDER BY p.created_at DESC`,
       [userId],
     );
 
-    res.json({ projects: result.rows });
+    // The inventory itself stays server-side; the card wants three names.
+    const projects = (result.rows as Array<Record<string, unknown>>).map(
+      ({ language_inventory, ...project }) => ({ ...project, languages: topLanguages(language_inventory) }),
+    );
+
+    res.json({ projects });
   } catch (err) {
     console.error("List projects error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -270,7 +309,7 @@ projectsRouter.post("/", async (req, res) => {
         if (err instanceof GitHubApiError && [401, 403, 404].includes(err.status)) {
           console.warn(`Repo fetch denied for ${repo_owner}/${repo_name}:`, err);
           res.status(422).json({
-            error: "Repository not accessible — check the GitHub App installation has access to it",
+            error: "Repository not accessible: check the GitHub App installation has access to it",
           });
           return;
         }
@@ -548,7 +587,7 @@ projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), as
       [projectId, typeof req.body?.branch === "string" && req.body.branch !== "" ? req.body.branch : null],
     );
     if (snapResult.rows.length === 0) {
-      res.status(409).json({ error: "No completed analysis snapshot found — run analysis first" });
+      res.status(409).json({ error: "No completed analysis snapshot found. Run analysis first." });
       return;
     }
     const snap = snapResult.rows[0] as { id: string; commit_hash: string; branch: string | null; scope_id: string | null };
@@ -850,7 +889,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owne
     const result = await query(
       `UPDATE analysis_jobs
        SET status = 'failed', current_step = 'Stopped by user',
-           error_message = 'Stopped by user — completed phases stay checkpointed; Resume or a new Analyze… picks up from cache.',
+           error_message = 'Stopped by user. Completed phases stay checkpointed; Resume or a new Analyze… picks up from cache.',
            finished_at = NOW()
        WHERE id = $1 AND project_id = $2 AND status IN ('queued', 'running', 'paused')
        RETURNING id`,
@@ -895,11 +934,11 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("ow
       return;
     }
     if (row.job_type === "regenerate_section") {
-      res.status(409).json({ error: "Regenerations restart from the section — use its Regenerate button" });
+      res.status(409).json({ error: "Regenerations restart from the section. Use its Regenerate button." });
       return;
     }
     if (row.job_type === "preflight") {
-      res.status(409).json({ error: "Preflight previews are not resumable — run a new preview" });
+      res.status(409).json({ error: "Preflight previews are not resumable. Run a new preview." });
       return;
     }
     // Per-tuple guard, mirroring POST /analyze: only an identical active run

@@ -204,7 +204,7 @@ describe("receiptPresentation.confidenceReasonFor", () => {
       "4 receipts · per-claim tracking not available for this generation",
     );
     expect(confidenceReasonFor({}, 0)).to.equal(
-      "no receipts — content is not independently verifiable",
+      "no receipts; content is not independently verifiable",
     );
     // An empty claim array reads as untracked, not as "0 of 0 cited" — the one
     // boundary the shared-counts refactor could have moved.
