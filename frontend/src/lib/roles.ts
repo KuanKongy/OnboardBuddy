@@ -25,8 +25,10 @@
  * table, so `general` stays `general` on the wire while it reads "Full-Stack"
  * on screen. Rendering the stored value raw would put the word "general" in
  * front of a reader, which names no role anyone would recognize — that is what
- * these helpers exist to prevent. `general` is the one role whose two
- * registers coincide: the short word and the person are both "Full-Stack".
+ * these helpers exist to prevent. Every role, `general` included, differs
+ * between the two registers: the filter word is "Full-Stack" and the person is
+ * "Full-Stack Developer", so a surface that names a reader must call `roleTitle`
+ * even for the superset role.
  */
 
 export const DEVELOPER_ROLES = ["backend", "frontend", "devops", "qa", "general"] as const;
@@ -48,7 +50,7 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
   { value: "frontend", label: "Frontend", title: "Frontend Developer", description: "UI & client-side code" },
   { value: "devops", label: "DevOps", title: "DevOps Engineer", description: "Infrastructure & deployments" },
   { value: "qa", label: "QA", title: "QA Engineer", description: "Testing & quality assurance" },
-  { value: "general", label: "Full-Stack", title: "Full-Stack", description: "The whole stack, end to end" },
+  { value: "general", label: "Full-Stack", title: "Full-Stack Developer", description: "The whole stack, end to end" },
 ];
 
 /**
@@ -57,7 +59,8 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * it as the role to rank, score or generate for (doc/REWORK_PLAN.md Phase 10 —
  * "nothing in Phases 1–7 may hardcode `general`").
  *
- * It reads as "Full-Stack" everywhere a person sees it; the stored value is
+ * A person never sees the stored word: it reads as "Full-Stack" in the short
+ * register and "Full-Stack Developer" in the long one. The stored value is
  * frozen, so use this constant rather than typing the value into a surface.
  */
 export const FALLBACK_ROLE: DeveloperRole = "general";

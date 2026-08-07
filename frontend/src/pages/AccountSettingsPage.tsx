@@ -214,8 +214,8 @@ export function AccountSettingsPage() {
       setEmailDialogOpen(false);
       setEmailLoginNotice(
         emailChanged
-          ? `Almost done — confirm from your inbox at ${newEmail}; email sign-in activates once confirmed.`
-          : "Email sign-in enabled — you can now sign in with this email and password.",
+          ? `Almost done: confirm from your inbox at ${newEmail}; email sign-in activates once confirmed.`
+          : "Email sign-in enabled. You can now sign in with this email and password.",
       );
     } catch (err: unknown) {
       setEmailLoginError(err instanceof Error ? err.message : "Failed to set up email sign-in");
@@ -313,15 +313,6 @@ export function AccountSettingsPage() {
               {/* No card heading: SettingsShell already renders the section's
                   `h2` "Profile" directly above this card, and the two stacked
                   read as two separate Profile blocks. */}
-              <div className="mb-2 flex items-center justify-end">
-                {!editingProfile && (
-                  <Button variant="outline" size="xs" onClick={startEditProfile}>
-                    <Pencil className="h-3 w-3" />
-                    Edit
-                  </Button>
-                )}
-              </div>
-
               {editingProfile ? (
                 <>
                   <div className="flex items-start gap-3">
@@ -381,6 +372,13 @@ export function AccountSettingsPage() {
                       </p>
                       <p className="text-xs text-muted-foreground">Member since {memberSince}</p>
                     </div>
+                    {/* In the row, not above it: its own justify-end wrapper left
+                        an empty 24px band over the form once editing started,
+                        because the button is the only thing the wrapper held. */}
+                    <Button variant="outline" size="xs" className="shrink-0" onClick={startEditProfile}>
+                      <Pencil className="h-3 w-3" />
+                      Edit
+                    </Button>
                   </div>
                   {profileNotice && <p className="mt-2 text-[0.6875rem] text-success">{profileNotice}</p>}
                   {profileError && <p className="mt-2 text-[0.6875rem] text-destructive">{profileError}</p>}
@@ -433,7 +431,7 @@ export function AccountSettingsPage() {
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">Not linked — you can sign in with GitHub after linking</span>
+                  <span className="text-xs text-muted-foreground">Not linked; you can sign in with GitHub after linking</span>
                   <Button variant="outline" size="xs" onClick={handleLinkGithub} disabled={linkingGithub}>
                     {linkingGithub ? <Loader2 className="h-3 w-3 animate-spin" /> : <Link2 className="h-3 w-3" />}
                     Link GitHub account
@@ -484,7 +482,7 @@ export function AccountSettingsPage() {
               ) : (
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-muted-foreground">
-                    Not set up — add an email &amp; password so you can sign in without GitHub
+                    Not set up: add an email &amp; password so you can sign in without GitHub
                   </span>
                   <Button
                     variant="outline"
@@ -505,7 +503,7 @@ export function AccountSettingsPage() {
               )}
               {pendingEmail && pendingEmail !== user?.email && (
                 <p className="mt-2 text-[0.6875rem] text-warning">
-                  Pending confirmation: {pendingEmail} — check that inbox to finish.
+                  Pending confirmation: {pendingEmail}. Check that inbox to finish.
                 </p>
               )}
               {emailLoginNotice && <p className="mt-2 text-[0.6875rem] text-success">{emailLoginNotice}</p>}
@@ -547,7 +545,7 @@ export function AccountSettingsPage() {
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">Not connected — required for repo import</span>
+                  <span className="text-xs text-muted-foreground">Not connected: required for repo import</span>
                   <Button variant="outline" size="xs" onClick={() => connectGithub("/settings")}>
                     <Github className="h-3 w-3" />
                     Authorize GitHub App
@@ -700,7 +698,7 @@ export function AccountSettingsPage() {
           <form className="space-y-3" onSubmit={handleAddEmailLogin}>
             <p className="text-xs text-muted-foreground">
               Works like signing up: pick the email and password you'll use to sign in to
-              OnboardBuddy — it doesn't have to match your GitHub email.
+              OnboardBuddy; it doesn't have to match your GitHub email.
             </p>
             <div>
               <Label htmlFor="login-email" className="text-[0.6875rem] text-muted-foreground">Email</Label>
@@ -768,7 +766,7 @@ export function AccountSettingsPage() {
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
               <span>
                 This permanently deletes your sign-in, your profile, and <strong>every project you
-                own</strong> — including all analyses, onboarding packages, and team memberships.
+                own</strong>, including all analyses, onboarding packages, and team memberships.
                 Runs you started in other people's projects are re-attributed to those projects'
                 owners. This cannot be undone.
               </span>
@@ -838,8 +836,8 @@ export function AccountSettingsPage() {
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
               GitHub stops being a way to sign in to this account. Your email sign-in
-              ({user?.email}) keeps working, and you can link GitHub — the same account or a
-              different one — again afterwards. This does not touch the GitHub App connection
+              ({user?.email}) keeps working, and you can link GitHub (the same account or a
+              different one) again afterwards. This does not touch the GitHub App connection
               used for importing repositories.
             </p>
             {unlinkError && <p className="text-[0.6875rem] text-destructive">{unlinkError}</p>}
@@ -863,7 +861,7 @@ export function AccountSettingsPage() {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Email and password stop being a way to sign in to this account — GitHub becomes the
+              Email and password stop being a way to sign in to this account; GitHub becomes the
               only one. You can add email sign-in again afterwards, but it needs a fresh password
               (and a confirmation click if you pick a different address).
             </p>

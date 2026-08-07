@@ -9,6 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 /**
  * Where ProtectedRoute wanted the user, as a path GitHub can be asked to come back
@@ -69,9 +70,14 @@ export function LoginPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <Link to="/" title="Homepage" className="mx-auto mb-3 inline-block">
-            <LogoMark className="h-10 w-10" />
-          </Link>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Link to="/" className="mx-auto mb-3 inline-block">
+                <LogoMark className="h-10 w-10" />
+              </Link>
+            </TooltipTrigger>
+            <TooltipContent>Homepage</TooltipContent>
+          </Tooltip>
           <h1 className="text-lg font-semibold text-foreground">Welcome back</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">Sign in to OnboardBuddy</p>
         </div>

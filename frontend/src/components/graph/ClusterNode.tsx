@@ -95,7 +95,11 @@ export function ClusterNode({ data }: NodeProps<ClusterNodeData>) {
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          <span className="h-1 w-10 overflow-hidden rounded-full bg-muted">
+          {/* The empty part of the bar is the reading: without a boundary, a 12%
+              score is a stub floating in the card and there is nothing to read it
+              against. --input is the token engineered to clear 3.0:1 as a control
+              boundary in both themes, which is exactly what this track needs. */}
+          <span className="h-1.5 w-10 overflow-hidden rounded-full border border-input bg-muted">
             <span
               className="block h-full rounded-full"
               style={{ width: `${Math.min(100, Math.round(data.criticalScore * 100))}%`, background: color }}
@@ -173,7 +177,7 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
           <span className="ml-auto text-[0.65625rem] text-muted-foreground">not ranked</span>
         ) : (
           <span className="ml-auto flex items-center gap-1.5">
-            <span className="h-1 w-8 overflow-hidden rounded-full bg-muted">
+            <span className="h-1.5 w-8 overflow-hidden rounded-full border border-input bg-muted">
               <span
                 className="block h-full rounded-full"
                 style={{ width: `${Math.min(100, Math.round(data.criticalScore * 100))}%`, background: color }}

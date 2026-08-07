@@ -444,8 +444,8 @@ export function ArchitecturePage() {
           }
           subtitle={
             insideCluster
-              ? "Inside one component — the files it is made of, most critical first."
-              : "How the codebase is organized into layers — click a component to read what it is for, then Open in its details panel to list its files."
+              ? "Inside one component: the files it is made of, most critical first."
+              : "How the codebase is organized into layers. Click a component to read what it is for, then Open in its details panel to list its files."
           }
           actions={
             <>
@@ -512,7 +512,7 @@ export function ArchitecturePage() {
             isEmpty
               ? insideCluster
                 ? "The component exists on the map but none of its members survived into the graph, so there is nothing to open. Re-analyzing the project rebuilds them."
-                : "The analysis finished but grouped no files into components — usually because nothing in the scope was in a language this parser reads. The Dependencies tab shows whatever files were parsed."
+                : "The analysis finished but grouped no files into components, usually because nothing in the scope was in a language this parser reads. The Dependencies tab shows whatever files were parsed."
               : "The architecture map comes from analysis. Run an analysis first, or retry if one just finished."
           }
           actions={
@@ -569,7 +569,7 @@ export function ArchitecturePage() {
                 what the component contains. */}
             {insideCluster && (level?.truncated ?? 0) > 0 && (
               <span className="text-[0.6875rem] text-warning">
-                Showing the {level!.nodes.length} most critical of {level!.totalNodes} members — {level!.truncated} not drawn.
+                Showing the {level!.nodes.length} most critical of {level!.totalNodes} members, {level!.truncated} not drawn.
               </span>
             )}
           </div>
@@ -707,7 +707,7 @@ export function ArchitecturePage() {
                       </div>
                     )}
                     <p className="text-[0.65625rem] text-muted-foreground">
-                      Derived from the traced structure — no AI involved.
+                      Derived from the traced structure, with no AI involved.
                     </p>
                   </div>
                 ) : (
@@ -720,7 +720,7 @@ export function ArchitecturePage() {
                             <Sparkles className="h-2.5 w-2.5" /> AI summary ({asideCluster.confidence} confidence)
                           </>
                         ) : (
-                          "Derived from code structure — no AI involved"
+                          "Derived from code structure, with no AI involved"
                         )}
                       </p>
                     </div>
@@ -745,7 +745,7 @@ export function ArchitecturePage() {
                   showCaveat={false}
                   headline={
                     <div className="flex items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full border border-input bg-muted">
                         <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, Math.round(asideCluster.criticalScore * 100))}%` }} />
                       </div>
                       <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
@@ -847,7 +847,7 @@ export function ArchitecturePage() {
                   headline={
                     selectedMember.criticalScore === null ? (
                       <p className="text-[0.71875rem] text-muted-foreground">
-                        Not ranked in this snapshot — tests and fixtures are excluded, and only the top
+                        Not ranked in this snapshot: tests and fixtures are excluded, and only the top
                         500 scores per snapshot are kept.
                       </p>
                     ) : (
