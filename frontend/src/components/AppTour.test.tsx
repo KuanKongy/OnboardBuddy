@@ -19,6 +19,28 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
+it("renders a blank line in the body as a paragraph break", () => {
+  // The anchor has to be in the DOM before the tour mounts: AppTour filters its
+  // steps once, in a useState initializer, and a step whose target does not
+  // exist yet is dropped for the whole run.
+  const { rerender } = render(<button data-tour="anchor">anchor</button>);
+  rerender(
+    <>
+      <button data-tour="anchor">anchor</button>
+      <AppTour
+        steps={[{ target: "anchor", title: "Here", body: "First point.\n\nSecond point." }]}
+        onDone={() => {}}
+      />
+    </>,
+  );
+
+  // As one text node the accessible text would be "First point. Second point.",
+  // and neither of these exact-text queries would match. The lifecycle tour's
+  // steps are several sentences long and were unreadable as a single block.
+  expect(screen.getByText("First point.")).toBeInTheDocument();
+  expect(screen.getByText("Second point.")).toBeInTheDocument();
+});
+
 it("hands focus back to whatever opened it", async () => {
   const user = userEvent.setup();
   const onDone = vi.fn();

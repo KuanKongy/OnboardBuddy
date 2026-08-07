@@ -20,6 +20,7 @@ const SECTION: OnboardingSection = {
   label: "Guardrails & Operations",
   status: "complete",
   confidence: "medium",
+  claims: { total: 9, cited: 7, low: 1 },
   blocks: [
     {
       title: "Guardrails & Operations",
@@ -34,11 +35,11 @@ const SECTION: OnboardingSection = {
   ],
 };
 
-function renderSection() {
+function renderSection(section: OnboardingSection = SECTION) {
   return render(
     <MemoryRouter>
       <TooltipProvider>
-        <SectionView section={SECTION} projectId="p1" onReceiptClick={() => {}} />
+        <SectionView section={section} projectId="p1" onReceiptClick={() => {}} />
       </TooltipProvider>
     </MemoryRouter>,
   );
@@ -61,6 +62,20 @@ describe("reader gaps & citations (K1)", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /2 known gaps/ }));
     expect(screen.getByText(/analysis budget ran out/i)).toBeInTheDocument();
+  });
+
+  it("draws the grade as a pie labelled with the arithmetic behind it", () => {
+    const { unmount } = renderSection();
+    expect(
+      screen.getByRole("img", { name: "Medium confidence: 7 of 9 claims cite receipts" }),
+    ).toBeInTheDocument();
+    unmount();
+
+    // `claims: null` is a real answer (generations that predate the claim
+    // ledger), not a missing field: the pie still has to draw and still has to
+    // name the grade, rather than render a NaN arc with no label.
+    renderSection({ ...SECTION, claims: null });
+    expect(screen.getByRole("img", { name: "Medium confidence" })).toBeInTheDocument();
   });
 
   it("renders GFM tables as real tables, not literal pipe characters", () => {
