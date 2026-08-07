@@ -23,6 +23,24 @@ export function useProgress(projectId: string | undefined) {
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The debounced write, held whole so it can be flushed rather than dropped.
+  // projectId is captured here (not read off the closure at flush time) so a
+  // project switch flushes the pending mark to the project it was made in.
+  const pendingRef = useRef<
+    { projectId: string; kind: "onboarding" | "tutorial"; refId: string; position: Record<string, unknown> } | null
+  >(null);
+
+  // Send whatever is waiting on the debounce timer, now. Fire and forget: the
+  // callers are unmount and project-switch cleanups, which cannot await.
+  const flush = useCallback(() => {
+    const pending = pendingRef.current;
+    if (!pending) return;
+    pendingRef.current = null;
+    apiFetch(`/projects/${pending.projectId}/progress`, {
+      method: "PUT",
+      body: JSON.stringify({ kind: pending.kind, ref_id: pending.refId, position: pending.position }),
+    }).catch(() => { /* progress is best-effort */ });
+  }, []);
 
   // Bug #68, and the one instance here that destroys data rather than just
   // misinforming: a rejected fetch used to do `setItems([])` and *still* flip
@@ -45,21 +63,23 @@ export function useProgress(projectId: string | undefined) {
         setItems([]);
         setLoadError(true);
       });
-    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
-  }, [projectId]);
+    // Flush on the way out, don't just cancel: a mark made in the last 2s of a
+    // visit used to die with the timer, so the section a member read right
+    // before navigating away came back unread.
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      flush();
+    };
+  }, [projectId, flush]);
 
   const save = useCallback(
     (kind: "onboarding" | "tutorial", refId: string, position: Record<string, unknown>) => {
       if (!projectId) return;
+      pendingRef.current = { projectId, kind, refId, position };
       if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        apiFetch(`/projects/${projectId}/progress`, {
-          method: "PUT",
-          body: JSON.stringify({ kind, ref_id: refId, position }),
-        }).catch(() => { /* progress is best-effort */ });
-      }, 2000);
+      timerRef.current = setTimeout(flush, 2000);
     },
-    [projectId],
+    [projectId, flush],
   );
 
   return { items, loaded, loadError, save };
