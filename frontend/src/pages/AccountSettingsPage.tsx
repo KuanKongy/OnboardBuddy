@@ -12,7 +12,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackLink } from "@/components/BackLink";
 import { useFullBleedMain } from "@/components/MainRegion";
@@ -654,7 +653,6 @@ export function AccountSettingsPage() {
           <Card className="border-destructive/30">
             <CardContent className="p-3">
               <h3 className="mb-2 text-xs font-medium text-destructive">Danger Zone</h3>
-              <Separator className="mb-2" />
               <div className="flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => signOut()}>
                   <LogOut className="h-3 w-3" />
