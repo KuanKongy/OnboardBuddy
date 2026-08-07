@@ -274,6 +274,7 @@ export function ProjectSettingsPage() {
   const [autoDrill, setAutoDrill] = useState(() => ({
     dependencies: autoDrillEnabled("dependencies", projectId ?? ""),
     architecture: autoDrillEnabled("architecture", projectId ?? ""),
+    capabilities: autoDrillEnabled("capabilities", projectId ?? ""),
   }));
   // Seeded from the first render's project, which is null on a cold load — and
   // this page stays mounted across a project switch, so the toggles would
@@ -282,6 +283,7 @@ export function ProjectSettingsPage() {
     setAutoDrill({
       dependencies: autoDrillEnabled("dependencies", projectId ?? ""),
       architecture: autoDrillEnabled("architecture", projectId ?? ""),
+      capabilities: autoDrillEnabled("capabilities", projectId ?? ""),
     });
   }, [projectId]);
 
@@ -1149,6 +1151,7 @@ export function ProjectSettingsPage() {
               [
                 { surface: "architecture", label: "Architecture map drill-down on click" },
                 { surface: "dependencies", label: "Dependency graph drill-down on click" },
+                { surface: "capabilities", label: "Capabilities map drill-down on click" },
               ] as const
             ).map((pref) => (
               <div key={pref.surface}>
@@ -1184,8 +1187,8 @@ export function ProjectSettingsPage() {
               </div>
             ))}
             <p className="mt-1 text-[0.6875rem] text-muted-foreground">
-              On: clicking a group or component opens it immediately. Off: a click selects it and the
-              Open button in its details panel drills down.
+              On: clicking a group, component, capability or flow opens it immediately. Off: a
+              click selects it and the button in its details panel drills down.
             </p>
             <p className="mt-1 text-[0.6875rem] text-muted-foreground">
               Saved in this browser for you; not shared with the team.
