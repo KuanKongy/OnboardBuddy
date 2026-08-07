@@ -706,19 +706,11 @@ export function WorkflowsPage() {
                     <Zap className="mt-0.5 h-3 w-3 shrink-0 text-primary/70" />
                   )}
                   <span className="min-w-0">
-                    {/* The row is the tab stop; this tooltip is hover-only
-                        overflow relief. It shows what the truncation hides,
-                        which is the one thing a tooltip is for. */}
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="block truncate text-[0.78125rem] font-medium">
-                          {middleTruncate(wf.title, RAIL_TITLE_CHARS)}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent side="right" className="max-w-xs text-left">
-                        {wf.title}
-                      </TooltipContent>
-                    </Tooltip>
+                    {/* Native title only: overflow relief without a styled
+                        tooltip layer (same treatment as the Capabilities rail). */}
+                    <span className="block truncate text-[0.78125rem] font-medium" title={wf.title}>
+                      {middleTruncate(wf.title, RAIL_TITLE_CHARS)}
+                    </span>
                     <span className="block text-[0.6875rem]">
                       {triggerLabel(wf.trigger_type)}
                       {key === "surface" ? "" : ` · ${wf.step_count} steps`}

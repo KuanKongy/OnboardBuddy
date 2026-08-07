@@ -288,7 +288,10 @@ function CapabilityNode({ data }: NodeProps<CapNodeData>) {
       </div>
       <div className="mt-1.5 flex items-center gap-1.5">
         <ConfidenceBadge confidence={data.confidence} />
-        <span className="min-w-0 truncate text-[0.65625rem] text-muted-foreground">
+        <span
+          className="min-w-0 truncate text-[0.65625rem] text-muted-foreground"
+          title={`${data.flows} flow${data.flows === 1 ? "" : "s"}${data.tables > 0 ? ` · ${data.tables} table${data.tables === 1 ? "" : "s"}` : ""}${data.services > 0 ? ` · ${data.services} service${data.services === 1 ? "" : "s"}` : ""}`}
+        >
           {data.flows} flow{data.flows === 1 ? "" : "s"}
           {data.tables > 0 && ` · ${data.tables} table${data.tables === 1 ? "" : "s"}`}
           {data.services > 0 && ` · ${data.services} service${data.services === 1 ? "" : "s"}`}

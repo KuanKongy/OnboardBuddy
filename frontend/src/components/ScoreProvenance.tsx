@@ -49,8 +49,20 @@ function points(value: number): string {
   return p % 1 === 0 ? p.toFixed(0) : p.toFixed(1);
 }
 
-/** How many terms a tooltip lists before collapsing the rest to a count. */
-const TOOLTIP_INPUTS = 4;
+/**
+ * How many MEMBERS a tooltip lists before collapsing the rest to a count.
+ *
+ * Signal methods (`weighted_signals`, `weight_table`) are deliberately not
+ * capped: the ranker has 9 signals, 9 rows fit inside `max-w-sm`, and capping
+ * them printed "+ 5 more signals, 2 of them scoring 0" under a list a reader
+ * could not expand — a tooltip cannot hold a control, because tooltip content
+ * and its Radix popper wrapper are `pointer-events: none` app-wide (see
+ * `components/ui/tooltip.interactive.test.tsx`). So the count named signals and
+ * then hid them. A member list has no such bound — a component can average
+ * hundreds of files — so members keep the cap, and "+ N more" now only ever
+ * appears where there is a panel behind it to open.
+ */
+const TOOLTIP_MEMBERS = 4;
 
 /**
  * How many terms the first, unasked-for level of detail lists.
@@ -153,8 +165,8 @@ export function ScoreProvenance({
     : data.inputs;
   const visible = brief
     ? ranked.slice(0, HEADLINE_INPUTS)
-    : compact
-      ? ranked.slice(0, TOOLTIP_INPUTS)
+    : compact && data.method === "member_mean"
+      ? ranked.slice(0, TOOLTIP_MEMBERS)
       : ranked;
   const hiddenCount = data.inputs.length - visible.length;
   const lead = brief ? leadReason(data) : null;

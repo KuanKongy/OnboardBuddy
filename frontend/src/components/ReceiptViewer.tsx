@@ -95,7 +95,24 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
-      <DialogContent className="flex max-h-[85vh] w-full flex-col overflow-hidden p-0 sm:max-w-2xl">
+      <DialogContent
+        className="flex max-h-[85vh] w-full flex-col overflow-hidden p-0 sm:max-w-2xl"
+        // Radix focuses the first tabbable child on open, and here that is the
+        // confidence badge's `tabIndex={0}` tooltip trigger — with
+        // `delayDuration={0}` app-wide, opening a receipt fired "How strongly
+        // this claim is backed by code evidence." over the modal before the
+        // reader had looked at it.
+        //
+        // The dialog panel takes focus instead of nothing: bare
+        // `preventDefault()` leaves focus on `<body>`, and from there the first
+        // Tab walked out of the modal onto a control on the page behind it
+        // (measured in jsdom — Radix's focus trap only caught it on the tab
+        // after). Focused on the panel, Tab goes badge → close as before.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement | null)?.focus();
+        }}
+      >
         <DialogHeader className="border-b px-5 py-4 pr-10 text-left">
           <DialogTitle className="flex items-center gap-2 text-[0.875rem] font-semibold text-foreground">
             <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />

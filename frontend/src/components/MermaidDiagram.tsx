@@ -34,6 +34,15 @@ export function MermaidDiagram({ code, label, projectId }: { code: string; label
           themeVariables: {
             fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
             fontSize: "13px",
+            // Dark theme only: mermaid derives the edge-label chip from
+            // `lighten(labelBackground, 25)` = ~34% grey, and its label text is
+            // #ccc — 4.4:1, the one contrast failure the M5 visual audit found
+            // across every tab and both themes (it measured 4.43 on "depends
+            // on" in the reader's topology diagram; the same pair computes to
+            // 4.45). Reusing the node fill instead puts edge labels on the same
+            // material as the boxes they connect and takes the pair to 10.2:1.
+            // Left alone in light/neutral, which already passes.
+            ...(isDark ? { edgeLabelBackground: "#1f2020" } : {}),
           },
         });
         const id = `mmd-${reactId.replace(/[^a-zA-Z0-9]/g, "")}-${isDark ? "d" : "l"}`;
@@ -42,7 +51,13 @@ export function MermaidDiagram({ code, label, projectId }: { code: string; label
           containerRef.current.innerHTML = svg;
           const el = containerRef.current.querySelector("svg");
           if (el) {
-            el.style.maxWidth = "100%";
+            // Only `height`. Mermaid already emits `width: 100%` plus an inline
+            // `max-width: <natural width>px`, which is what stops a diagram
+            // growing past the size it was laid out at; overwriting that cap
+            // with `100%` stretched a four-participant sequence diagram across
+            // the full card and blew its labels up with it. The container is
+            // `overflow-x-auto`, so wide diagrams still scroll rather than
+            // overflow.
             el.style.height = "auto";
           }
           if (el && projectId) {

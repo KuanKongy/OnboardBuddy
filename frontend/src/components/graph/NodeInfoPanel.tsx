@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import type { NodeDetail } from "@/lib/graphData";
+import type { NodeDetail, SymbolDoc } from "@/lib/graphData";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
 import { CodeRef } from "@/components/CodeRef";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
@@ -14,6 +14,26 @@ import type { GraphNode } from "@/types/graph";
 
 /** Tiers whose members can actually move the ranking weights. */
 const CAN_ADJUST_WEIGHTS = new Set(["owner", "admin", "manager"]);
+
+/**
+ * What a relation row points at, in both forms the two canvases use as node
+ * ids: the Files ladder ids a node by its path, the Classes view by the
+ * `<path>#<Name>` stable key. The panel does not know which view it is in, so
+ * it hands over both and the caller takes the one it can use.
+ */
+export interface RelationTarget {
+  stableKey: string;
+  /** Null for a symbol with no recorded file. */
+  filePath: string | null;
+}
+
+/**
+ * The API fills `file_path`/`line_start` on a `record_reference` receipt at
+ * request time and names the record it cites (backend graph.ts,
+ * `resolveReferenceReceipts`). Declared here rather than on `SymbolDoc`
+ * because lib/graphData.ts is not this change's to edit.
+ */
+type ReceiptRow = SymbolDoc["receipts"][number] & { referenced_key?: string | null };
 
 interface NodeInfoPanelProps {
   node: GraphNode;
@@ -39,6 +59,20 @@ interface NodeInfoPanelProps {
    * this the panel would describe a door with no handle.
    */
   onOpenGroup?: () => void;
+  /**
+   * Takes the reader to the node a caller/callee row names. Owner report: the
+   * list "doesn't show full links, can't even click it" — without this the
+   * rows stay plain text, which is what every one of them was.
+   */
+  onFocusNode?: (target: RelationTarget) => void;
+  /**
+   * Whether `onFocusNode` can actually reach a target. Defaults to yes for any
+   * row that has one: the Files ladder can always get to a file, drilling if it
+   * is not on the level the reader is standing on. The Classes view draws only
+   * classes and interfaces, so it answers no for the plain functions among a
+   * class's callees rather than offering a button that would do nothing.
+   */
+  canFocusNode?: (target: RelationTarget) => boolean;
 }
 
 async function copyToClipboard(text: string): Promise<boolean> {
@@ -70,27 +104,51 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * in a Next.js App Router repo — "six identical rows look like a rendering bug
  * and convey nothing. Show the parent path." For an import relation the path
  * IS the identity, so it is what the row prints; a symbol relation keeps the
- * symbol name and prints the file under it. Neither needs a tooltip any more
- * (owner H1): the disambiguator is on screen.
+ * symbol name and prints the file under it.
+ *
+ * `title` is back after owner H1 had it removed, because H1's complaint does
+ * not apply here: that was a tooltip repeating a path the panel had already
+ * printed in full, and these rows are `truncate`d inside a 340px column, so a
+ * long path really is cut off mid-way. The owner's report is exactly that —
+ * the list "doesn't show full links".
+ *
+ * A row with somewhere to go is a CodeRef, which is the one treatment this app
+ * gives "monospace thing you can open"; a row the current view cannot reach
+ * stays text, because a button that goes nowhere is the worse answer.
  */
 function RelationItem({
   name,
   filePath,
   isFileRelation,
+  onFocus,
 }: {
   name: string;
   filePath: string | null;
   isFileRelation: boolean;
+  onFocus?: () => void;
 }) {
-  if (isFileRelation && filePath) {
-    return <li className="truncate font-mono text-[0.6875rem] text-muted-foreground">{filePath}</li>;
+  const pathOnly = isFileRelation && !!filePath;
+  const title = pathOnly ? filePath! : filePath ? `${name}\n${filePath}` : name;
+  const body = pathOnly ? (
+    <span className="block truncate text-[0.6875rem]">{filePath}</span>
+  ) : (
+    <>
+      <span className="block truncate text-[0.6875rem]">{name}</span>
+      {filePath && <span className="block truncate text-[0.625rem] opacity-80">{filePath}</span>}
+    </>
+  );
+  if (!onFocus) {
+    return (
+      <li className="min-w-0 font-mono text-muted-foreground" title={title}>
+        {body}
+      </li>
+    );
   }
   return (
     <li className="min-w-0">
-      <p className="truncate font-mono text-[0.6875rem] text-muted-foreground">{name}</p>
-      {filePath && (
-        <p className="truncate font-mono text-[0.625rem] text-muted-foreground">{filePath}</p>
-      )}
+      <CodeRef onClick={onFocus} title={title} className="block w-full min-w-0 text-left">
+        {body}
+      </CodeRef>
     </li>
   );
 }
@@ -108,6 +166,8 @@ export function NodeInfoPanel({
   onClose,
   onSeeInheritance,
   onOpenGroup,
+  onFocusNode,
+  canFocusNode,
 }: NodeInfoPanelProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
@@ -130,6 +190,15 @@ export function NodeInfoPanel({
   const isFileRelation = detail?.relation_labels?.inbound === "Imported by";
   const inboundTotal = detail?.relation_totals?.inbound ?? detail?.callers?.length ?? 0;
   const outboundTotal = detail?.relation_totals?.outbound ?? detail?.callees?.length ?? 0;
+
+  /** The click handler for one relation row, or undefined to leave it text. */
+  function focusHandler(relation: { stable_key: string; file_path: string | null }) {
+    if (!onFocusNode) return undefined;
+    const target: RelationTarget = { stableKey: relation.stable_key, filePath: relation.file_path };
+    if (!target.stableKey && !target.filePath) return undefined;
+    if (canFocusNode && !canFocusNode(target)) return undefined;
+    return () => onFocusNode(target);
+  }
 
   async function handleCopyPath() {
     const ok = await copyToClipboard(displayPath);
@@ -390,6 +459,7 @@ export function NodeInfoPanel({
                         name={c.name}
                         filePath={c.file_path}
                         isFileRelation={isFileRelation}
+                        onFocus={focusHandler(c)}
                       />
                     ))}
                   </ul>
@@ -410,6 +480,7 @@ export function NodeInfoPanel({
                         name={c.name}
                         filePath={c.file_path}
                         isFileRelation={isFileRelation}
+                        onFocus={focusHandler(c)}
                       />
                     ))}
                   </ul>
@@ -479,35 +550,62 @@ export function NodeInfoPanel({
             <Separator className="mb-3" />
             <p className="section-label mb-1.5">Receipts</p>
             <ul className="space-y-1">
-              {doc.receipts.map((r) => {
+              {(doc.receipts as ReceiptRow[]).map((r) => {
                 const receiptUrl =
                   githubRepo && r.file_path
                     ? buildGithubBlobUrl(githubRepo, r.file_path, { lineStart: r.line_start, lineEnd: r.line_end })
                     : null;
-                const label = (
-                  <>
-                    {r.file_path ?? r.receipt_kind}
-                    {r.line_start ? `:${r.line_start}` : ""}
-                  </>
-                );
+                // "record_reference" is a column value, not English, and it was
+                // the whole row for every receipt with no path of its own —
+                // owner report: the rows read "CODE record_reference" with no
+                // code reference on them. The API now resolves those to a real
+                // file and line; the fallbacks below are what is left when it
+                // cannot (a reference to a cluster or service record bottoms
+                // out at no code at all).
+                const kindLabel = r.receipt_kind.replace(/_/g, " ");
+                const lines = r.line_start
+                  ? `:${r.line_start}${r.line_end && r.line_end !== r.line_start ? `-${r.line_end}` : ""}`
+                  : "";
+                const label = r.file_path ? `${r.file_path}${lines}` : (r.symbol_name ?? kindLabel);
+                // Everything the row knows, for the parts truncation eats.
+                const title = [
+                  kindLabel,
+                  r.file_path ? `${r.file_path}${lines}` : null,
+                  r.symbol_name,
+                  r.referenced_key ? `cites ${r.referenced_key}` : null,
+                  `${r.trust_level} trust`,
+                ]
+                  .filter(Boolean)
+                  .join("\n");
+                // A resolved reference still IS a citation of another record,
+                // so the row says whose line it landed on rather than passing
+                // the location off as the receipt's own. Suppressed when it
+                // would only repeat the label an unresolved row fell back to.
+                const cited =
+                  r.receipt_kind === "record_reference" ? (r.symbol_name ?? r.referenced_key) : null;
+                const cites = cited === label ? null : cited;
                 return (
-                  // No tooltip: it repeated the path already printed on the row
-                  // (owner H1). The row wraps instead, so the whole path is
-                  // readable without hovering.
-                  <li key={r.id} className="flex items-start gap-1.5 text-[0.6875rem]">
+                  <li key={r.id} className="flex items-start gap-1.5 text-[0.6875rem]" title={title}>
                     <Badge variant="outline" className="h-4 shrink-0 px-1 py-0 text-[0.5625rem] uppercase">
                       {r.trust_level}
                     </Badge>
-                    {receiptUrl ? (
-                      <CodeRef href={receiptUrl} className="inline-flex min-w-0 flex-1 items-baseline gap-1 break-all">
-                        <span className="min-w-0 break-all">{label}</span>
-                        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
-                      </CodeRef>
-                    ) : (
-                      <span className="min-w-0 flex-1 break-all font-mono text-muted-foreground">
-                        {label}
-                      </span>
-                    )}
+                    <div className="min-w-0 flex-1">
+                      {receiptUrl ? (
+                        <CodeRef href={receiptUrl} className="inline-flex min-w-0 items-baseline gap-1 break-all">
+                          <span className="min-w-0 break-all">{label}</span>
+                          <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+                        </CodeRef>
+                      ) : (
+                        <span className="block min-w-0 break-all font-mono text-muted-foreground">
+                          {label}
+                        </span>
+                      )}
+                      {cites && (
+                        <p className="truncate text-[0.5625rem] text-muted-foreground">
+                          cites <span className="font-mono">{cites}</span>
+                        </p>
+                      )}
+                    </div>
                   </li>
                 );
               })}
