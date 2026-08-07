@@ -264,6 +264,109 @@ async function symbolCountsByFile(snapshotId: string, filePaths: string[]): Prom
   return counts;
 }
 
+/** One row of the node panel's Receipts list. */
+interface ReceiptRow {
+  id: string;
+  receipt_kind: string;
+  trust_level: string;
+  file_path: string | null;
+  symbol_name: string | null;
+  line_start: number | null;
+  line_end: number | null;
+  snippet: string | null;
+  /** Set on `record_reference` rows only; not serialised. */
+  referenced_record_id?: string | null;
+  /** The stable key of the record a `record_reference` row points at. */
+  referenced_key?: string | null;
+}
+
+/**
+ * Gives `record_reference` receipts a code location to point at.
+ *
+ * A record_reference cites another semantic record rather than a span of code,
+ * so it has no file_path by nature — every one of the 17,167 in the live DB is
+ * pathless. The panel rendered them as a bare, inert "record_reference" with no
+ * link, and because they sort at trust level `code` they take the top of the
+ * six-receipt list: measured on OnboardBuddy's `workflowExtractor.ts` and
+ * StudyFlow's `sidebar.tsx`, ALL SIX rows were that placeholder.
+ *
+ * The referenced record names its own target, so the location is one hop away.
+ * Two sources, in this order:
+ *  1. the referenced record's graph node — its declaration site, which is what
+ *     a reader following a citation wants to land on;
+ *  2. any path-bearing receipt the referenced record carries, for records with
+ *     no node in this snapshot.
+ * The node lookup leads because it covers far more: over the pathless reference
+ * receipts this endpoint can serve, 454/459 resolve via the node against
+ * 239/459 via a receipt (latest StudyFlow snapshot; same ratio on the other
+ * seven complete snapshots).
+ *
+ * One hop only, and one query for the whole page of receipts — a reference to a
+ * cluster, service or workflow record (`cluster:frontend/state`) bottoms out at
+ * no code at all, and chasing chains would cost a query per link for the ~1%
+ * that are not already resolved here. Unresolved rows are served exactly as
+ * before, now carrying `referenced_key` so the panel can at least name what
+ * they cite.
+ */
+async function resolveReferenceReceipts(snapshotId: string, receipts: ReceiptRow[]): Promise<ReceiptRow[]> {
+  const pending = receipts.filter(
+    (r) => r.receipt_kind === "record_reference" && !r.file_path && r.referenced_record_id,
+  );
+  if (pending.length === 0) return receipts;
+  const result = await query(
+    `SELECT r.id,
+            ref.stable_key AS referenced_key,
+            node.file_path AS node_path, node.line_start AS node_line_start,
+            node.line_end AS node_line_end, node.name AS node_name,
+            ev.file_path AS ev_path, ev.line_start AS ev_line_start,
+            ev.line_end AS ev_line_end, ev.symbol_name AS ev_symbol
+     FROM source_receipts r
+     JOIN semantic_records ref ON ref.id = r.referenced_record_id
+     LEFT JOIN LATERAL (
+       SELECT gn.file_path, gn.line_start, gn.line_end, gn.name
+       FROM graph_nodes gn
+       WHERE gn.snapshot_id = $2 AND gn.stable_key = ref.stable_key
+       LIMIT 1
+     ) node ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT r2.file_path, r2.line_start, r2.line_end, r2.symbol_name
+       FROM source_receipts r2
+       WHERE r2.id = ANY(ref.receipt_ids) AND r2.file_path IS NOT NULL
+       ORDER BY array_position(ARRAY['code','config','tests','docs','llm_inference'], r2.trust_level)
+       LIMIT 1
+     ) ev ON TRUE
+     WHERE r.id = ANY($1)`,
+    [pending.map((r) => r.id), snapshotId],
+  );
+  type Row = {
+    id: string; referenced_key: string;
+    node_path: string | null; node_line_start: number | null; node_line_end: number | null; node_name: string | null;
+    ev_path: string | null; ev_line_start: number | null; ev_line_end: number | null; ev_symbol: string | null;
+  };
+  const byId = new Map((result.rows as Row[]).map((r) => [r.id, r]));
+  return receipts.map((receipt) => {
+    const hit = byId.get(receipt.id);
+    if (!hit) return receipt;
+    // Path and lines are taken from ONE source together. Coalescing them
+    // column by column would pair the node's file with the receipt's line
+    // numbers and point the GitHub link at the wrong span.
+    const located = hit.node_path
+      ? { file_path: hit.node_path, line_start: hit.node_line_start, line_end: hit.node_line_end, symbol_name: hit.node_name }
+      : hit.ev_path
+        ? { file_path: hit.ev_path, line_start: hit.ev_line_start, line_end: hit.ev_line_end, symbol_name: hit.ev_symbol }
+        : null;
+    return {
+      ...receipt,
+      // The kind stays `record_reference`: the row is still a citation of
+      // another record, and the panel labels it as one. Only the location it
+      // resolves to is new.
+      ...(located ?? {}),
+      symbol_name: receipt.symbol_name ?? located?.symbol_name ?? null,
+      referenced_key: hit.referenced_key,
+    };
+  });
+}
+
 graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -1409,9 +1512,11 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
         [snapshotId, node.id],
       ),
       // Receipts attached to the node's active record (file/line links).
+      // `referenced_record_id` comes along for the record_reference rows, which
+      // carry no file_path of their own — see resolveReferenceReceipts below.
       query(
         `SELECT r.id, r.receipt_kind, r.trust_level, r.file_path, r.symbol_name,
-                r.line_start, r.line_end, r.snippet
+                r.line_start, r.line_end, r.snippet, r.referenced_record_id
          FROM source_receipts r
          JOIN snapshot_semantic_records ssr ON ssr.record_id = r.record_id
          WHERE ssr.snapshot_id = $1 AND ssr.stable_key = $2 AND ssr.record_level = $3
@@ -1477,6 +1582,15 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
     const caller = callerResult.rows[0] as
       | { stable_key: string; name: string; file_path: string; line_start: number | null; snippet: string }
       | undefined;
+
+    // `record_reference` receipts arrive pathless and would render as an inert
+    // "record_reference" row; one extra query gives the whole page of them a
+    // code location. `referenced_record_id` is the input to that and is dropped
+    // here — the panel is served the resolved location and the stable key it
+    // came from, not our primary keys.
+    const receipts = (await resolveReferenceReceipts(snapshotId, receiptsResult.rows as ReceiptRow[])).map(
+      ({ referenced_record_id: _unused, ...row }) => row,
+    );
 
     // Symbol doc format (doc/Pipeline.md "Symbol doc format"): one-line
     // summary + deterministic signature/params/returns + example call site.
@@ -1547,7 +1661,7 @@ graphRouter.get("/nodes/:nodeId", requireProjectAccess(), async (req, res) => {
           exampleUsage: caller
             ? { caller: caller.name, filePath: caller.file_path, lineStart: caller.line_start, snippet: caller.snippet }
             : null,
-          receipts: receiptsResult.rows,
+          receipts,
         },
       },
     });

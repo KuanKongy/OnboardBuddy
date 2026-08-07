@@ -352,21 +352,29 @@ export function PackageGapsPanel({
 
   return (
     <div className="border-b bg-muted/20 px-3 py-1.5 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5">
+      {/* A dot per row: at 85ch a row with several section names wraps, and a
+          wrapped row with no start marker ran into the one below it. */}
       <ul id="package-known-gaps" className="space-y-1">
         {rows.map((row) => (
-          <li key={row.kind} className="max-w-[85ch]">
-            <span className="font-medium text-foreground/80">
-              {UNKNOWN_LABELS[row.kind] ?? row.kind.replace(/_/g, " ")}
+          <li key={row.kind} className="flex max-w-[85ch] items-start gap-1.5">
+            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" aria-hidden />
+            <span className="min-w-0">
+              <span className="font-medium text-foreground/80">
+                {UNKNOWN_LABELS[row.kind] ?? row.kind.replace(/_/g, " ")}
+              </span>
+              <span className="ml-1.5 rounded bg-muted px-1 tabular-nums">× {row.count}</span>
+              {/* Which sections raised it — the section footers hold the wording. */}
+              <span className="ml-1.5">in {row.sections.join(", ")}</span>
             </span>
-            <span className="ml-1.5 rounded bg-muted px-1 tabular-nums">× {row.count}</span>
-            {/* Which sections raised it — the section footers hold the wording. */}
-            <span className="ml-1.5">in {row.sections.join(", ")}</span>
           </li>
         ))}
         {detection.map((u, ui) => (
-          <li key={`detection-${ui}`} className="max-w-[85ch]">
-            <span className="font-medium text-foreground/80">{describeDetectionUnknown(u)}</span>
-            <span className="ml-1.5">found by detection</span>
+          <li key={`detection-${ui}`} className="flex max-w-[85ch] items-start gap-1.5">
+            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" aria-hidden />
+            <span className="min-w-0">
+              <span className="font-medium text-foreground/80">{describeDetectionUnknown(u)}</span>
+              <span className="ml-1.5">found by detection</span>
+            </span>
           </li>
         ))}
       </ul>
@@ -913,19 +921,26 @@ export function SectionView({
                         // inline rather than repeating the sentence per name.
                         const others = variant.members.slice(1);
                         return (
-                          <li key={vi} className="text-muted-foreground">
-                            {detail}
-                            {clipped ? "…" : ""}
-                            {variant.count > 1 && (
-                              <span className="text-muted-foreground">
-                                {" "}
-                                (× {variant.count}
-                                {others.length > 0
-                                  ? `: ${others.slice(0, 8).join(", ")}${others.length > 8 ? `, +${others.length - 8} more` : ""}`
-                                  : ""}
-                                )
-                              </span>
-                            )}
+                          // A dot per item: these details run to several lines
+                          // at reading width, and indentation alone gave a
+                          // wrapped item no start marker, so two gaps read as
+                          // one paragraph.
+                          <li key={vi} className="flex items-start gap-1.5 text-muted-foreground">
+                            <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" aria-hidden />
+                            <span className="min-w-0">
+                              {detail}
+                              {clipped ? "…" : ""}
+                              {variant.count > 1 && (
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  (× {variant.count}
+                                  {others.length > 0
+                                    ? `: ${others.slice(0, 8).join(", ")}${others.length > 8 ? `, +${others.length - 8} more` : ""}`
+                                    : ""}
+                                  )
+                                </span>
+                              )}
+                            </span>
                           </li>
                         );
                       })}

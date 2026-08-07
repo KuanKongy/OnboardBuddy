@@ -232,6 +232,87 @@ export function GraphPage() {
     [drill],
   );
 
+  /**
+   * A file the reader asked for by clicking a row of the panel's "Imported by"
+   * / "Imports" list, while it was not drawn on the level they were standing
+   * on. Held in a ref rather than pushed into `?focus=` because that param is
+   * only consulted by a LOAD, and `loadedKeyRef` below deliberately suppresses
+   * the load for a level that is already on screen — a same-level focus param
+   * would sit in the URL and resolve never.
+   *
+   * `fromRoot` records that the search has already restarted from the top once,
+   * which is what stops root → group → nothing → root from looping forever when
+   * a group's own level cuts the file to the node cap.
+   */
+  const pendingRelationFocusRef = useRef<{ path: string; fromRoot: boolean } | null>(null);
+
+  /**
+   * Selects that file as soon as a level that draws it is loaded, drilling one
+   * group at a time until it is. Mirrors the `?focus=` resolver inside
+   * `loadLevel` — asking the returned nodes which group covers the path rather
+   * than recomputing the server's directory rule — and terminates for the same
+   * reason: every hop goes strictly deeper.
+   */
+  const resolveRelationFocus = useCallback(
+    (level: GraphResponse) => {
+      const pending = pendingRelationFocusRef.current;
+      if (!pending) return;
+      if (level.graph.nodes.some((n) => n.id === pending.path)) {
+        pendingRelationFocusRef.current = null;
+        setSelectedNodeId(pending.path);
+        return;
+      }
+      const owningGroup = level.graph.nodes.find(
+        (n) => n.id.startsWith("cluster:") && clusterContains(n.id, pending.path),
+      );
+      if (owningGroup) {
+        // Kept pending: the level this opens has to try again.
+        openGroup(owningGroup.id);
+        return;
+      }
+      // Nothing here covers it — a file imported from another branch of the
+      // tree, which is normal once drilled. The root is the only level that
+      // covers every file, so go back up and walk down from there.
+      if (stack.depth > 0 && !pending.fromRoot) {
+        pendingRelationFocusRef.current = { path: pending.path, fromRoot: true };
+        stack.reset();
+        return;
+      }
+      pendingRelationFocusRef.current = null;
+      setFocusNotFoundId(pending.path);
+    },
+    [openGroup, stack],
+  );
+
+  useEffect(() => {
+    if (data) resolveRelationFocus(data);
+  }, [data]);
+
+  /**
+   * Click on a caller/callee row in the panel. Owner report: that list
+   * "doesn't show full links, can't even click it".
+   */
+  const focusRelation = useCallback(
+    (target: { stableKey: string; filePath: string | null }) => {
+      // A file node's canvas id IS its path; a symbol relation carries its file
+      // in the `<path>#<Name>` key, and the file is what this ladder can show.
+      const path = target.filePath ?? target.stableKey.split("#")[0] ?? null;
+      if (!path || !data) return;
+      setFocusNotFoundId(null);
+      if (data.graph.nodes.some((n) => n.id === path)) {
+        // Already on screen: select it outright. Nothing has to load, so the
+        // camera only nudges rather than reframing.
+        setFocusIntent("user");
+        setSelectedNodeId(path);
+        return;
+      }
+      setFocusIntent("deeplink");
+      pendingRelationFocusRef.current = { path, fromRoot: stack.depth === 0 };
+      resolveRelationFocus(data);
+    },
+    [data, stack.depth, resolveRelationFocus],
+  );
+
   // The level comes straight from the URL, so the first render already
   // reflects it — including a cold load on a shared link. A real
   // project/package switch invalidates a drill path built from another
@@ -831,6 +912,7 @@ export function GraphPage() {
                   loading={detailLoading}
                   githubRepo={githubRepo}
                   onClose={() => setSelectedNodeId(null)}
+                  onFocusNode={focusRelation}
                   onOpenGroup={
                     panelNode.id.startsWith("cluster:") ? () => openGroup(panelNode.id) : undefined
                   }

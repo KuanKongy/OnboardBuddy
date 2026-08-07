@@ -188,6 +188,15 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
 
   // ← / → cycle the selectable (non-group) nodes, Esc deselects.
   const cycleIds = useMemo(() => nodes.map((n) => n.id).filter((nid) => !nid.startsWith("cluster:")), [nodes]);
+  /**
+   * What the panel's Called by / Calls rows can actually reach. This canvas
+   * draws classes and interfaces only, so most of a class's callees are plain
+   * functions with no node here at all, and a grouped level folds the rest into
+   * folder boxes. Rows outside the set stay plain text (with the full key on
+   * hover) rather than turning into buttons that would do nothing — unlike the
+   * Files ladder, which drills to reach anything it is asked for.
+   */
+  const drawnNodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
   useHotkeys(
     {
       ArrowRight: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") + 1 + cycleIds.length) % cycleIds.length] ?? null),
@@ -517,6 +526,8 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
               loading={detailLoading}
               githubRepo={githubRepo}
               onClose={() => setSelectedNodeId(null)}
+              onFocusNode={(target) => setSelectedNodeId(target.stableKey)}
+              canFocusNode={(target) => drawnNodeIds.has(target.stableKey)}
               onOpenGroup={
                 selectedNode.id.startsWith("cluster:") ? () => openFolder(selectedNode.id) : undefined
               }

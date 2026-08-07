@@ -104,12 +104,16 @@ describe("ScoreProvenance", () => {
       expect(screen.getByText("2 of 9 signals contributed nothing.")).toBeInTheDocument();
     });
 
-    it("truncates to the top signals in a tooltip and counts the rest", () => {
+    it("lists every signal in a tooltip, because nothing in a tooltip can expand it", () => {
+      // It used to stop at 4 and print "+ 5 more signals" — a count of things
+      // the reader had no way to reach, since tooltip content is
+      // `pointer-events: none` (see ui/tooltip.interactive.test.tsx).
       render(<ScoreProvenance data={FULL} variant="tooltip" />);
 
       expect(screen.getByText("Workflow participation")).toBeInTheDocument();
-      expect(screen.queryByText("Config & environment")).not.toBeInTheDocument();
-      expect(screen.getByText(/\+ 5 more signals, 2 of them scoring 0/)).toBeInTheDocument();
+      expect(screen.getByText("Config & environment")).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem")).toHaveLength(9);
+      expect(screen.queryByText(/more signals/)).not.toBeInTheDocument();
     });
 
     it("drops the stored reasons where the host already prints them", () => {

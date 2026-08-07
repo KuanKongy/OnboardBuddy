@@ -320,8 +320,23 @@ function WalkthroughStepCard({
   // The window is computed over the snippet as captured; the stored copy is
   // capped, so clamp rather than slice past the end and render a blank block.
   const raw = step.window;
+  const clampToSnippet = (n: number) => Math.min(Math.max(n, firstLine), lastLine);
+  // Every chip below names a line range, so the window has to reach the ones it
+  // can reach: the stored window is built around the FIRST highlight only, and a
+  // step with highlights at 399, 405 and 412 showed 399–410 with a chip for 412
+  // pointing off the bottom of the block. Widening to the highlights' own extent
+  // means a chip rendered against the snippet always has a lit line under it.
+  //
+  // Only the highlights the snippet actually contains count here. One that lands
+  // past the captured bytes cannot be shown at any window size — it becomes a
+  // GitHub link below instead — and letting it drag the window out would undo
+  // the windowing on exactly the long handlers windowing exists for.
+  const reachable = highlights.filter((h) => h.start <= lastLine && h.end >= firstLine);
   const win = raw && raw.start <= lastLine
-    ? { start: Math.max(raw.start, firstLine), end: Math.min(raw.end, lastLine) }
+    ? {
+        start: clampToSnippet(Math.min(raw.start, ...reachable.map((h) => h.start))),
+        end: clampToSnippet(Math.max(raw.end, ...reachable.map((h) => h.end))),
+      }
     : null;
   const windowed = Boolean(win && !whole && (win.start > firstLine || win.end < lastLine));
   const shown = windowed && win ? lines.slice(win.start - firstLine, win.end - firstLine + 1).join("\n") : step.snippet ?? "";
@@ -362,14 +377,51 @@ function WalkthroughStepCard({
             highlightRanges={ranges}
           />
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-            {highlights.map((h, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
-                <span className="rounded bg-primary/15 px-1 font-mono tabular-nums text-primary">
-                  {h.start}{h.end > h.start ? `–${h.end}` : ""}
+            {highlights.map((h, i) => {
+              const range = `${h.start}${h.end > h.start ? `–${h.end}` : ""}`;
+              // Some highlights name lines the captured snippet never reached —
+              // the stored snippet is capped, and a live step showing 399–421
+              // carried chips for 423, 508 and 609, each of them a label with
+              // nothing on screen behind it. Those get sent to the file on
+              // GitHub instead of pretending to point into the block.
+              const outside = h.start > lastLine || h.end < firstLine;
+              const url = outside && repo
+                ? buildGithubBlobUrl(repo, step.file_path, { lineStart: h.start, lineEnd: h.end })
+                : null;
+              if (!outside) {
+                return (
+                  <span key={i} className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                    <span className="rounded bg-primary/15 px-1 font-mono tabular-nums text-primary">{range}</span>
+                    {h.label}
+                  </span>
+                );
+              }
+              return url ? (
+                <a
+                  key={i}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Outside the captured snippet, opens on GitHub"
+                  className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground hover:text-foreground"
+                >
+                  <span className="inline-flex items-center gap-0.5 rounded bg-muted px-1 font-mono tabular-nums">
+                    {range}
+                    <ExternalLink className="h-3 w-3" />
+                  </span>
+                  <span className="hover:underline">{h.label}</span>
+                </a>
+              ) : (
+                <span
+                  key={i}
+                  title="Outside the captured snippet"
+                  className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground/60"
+                >
+                  <span className="rounded bg-muted px-1 font-mono tabular-nums">{range}</span>
+                  {h.label}
                 </span>
-                {h.label}
-              </span>
-            ))}
+              );
+            })}
             {win && (windowed || whole) && lines.length > win.end - win.start + 1 && (
               <button
                 type="button"
