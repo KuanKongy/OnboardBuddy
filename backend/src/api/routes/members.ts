@@ -157,14 +157,16 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
       res.status(409).json({ error: "A pending invitation already exists for this email" });
       return;
     }
-    if (pending) {
-      // Expired but still 'pending': invisible in every list, yet
-      // idx_project_invitations_pending_unique_email would reject the replacement.
-      await query(
-        `UPDATE project_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'`,
-        [pending.id],
-      );
-    }
+    // One row per (project, email): a re-invite replaces whatever record exists
+    // rather than landing beside it. Retiring only the stale-pending row left the
+    // revoked/declined/expired ones in place, and the team page showed one address
+    // twice. Keyed on the address like the leave/remove cleanups below, so it also
+    // releases the slot idx_project_invitations_pending_unique_email holds for an
+    // expired-but-still-'pending' row, which would reject the INSERT.
+    await query(
+      `DELETE FROM project_invitations WHERE project_id = $1 AND LOWER(email) = LOWER($2)`,
+      [projectId, email],
+    );
 
     const result = await query(
       `INSERT INTO project_invitations (project_id, email, permission_tier, developer_role, invited_by, expires_at)
@@ -175,6 +177,14 @@ membersRouter.post("/invitations", requireProjectAccess("owner", "admin"), async
 
     res.status(201).json({ invitation: result.rows[0] });
   } catch (err) {
+    // Delete-then-insert leaves no row for the live-pending 409 to catch, so two
+    // admins inviting the same address at once both reach the INSERT. The partial
+    // unique index arbitrates, and the loser is told an invitation is already out
+    // rather than 500'd — same answer the guard above would have given.
+    if (err instanceof Error && err.message.includes("duplicate key")) {
+      res.status(409).json({ error: "A pending invitation already exists for this email" });
+      return;
+    }
     console.error("Create invitation error:", err);
     res.status(500).json({ error: "Internal server error" });
   }
@@ -205,10 +215,12 @@ membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", 
   }
 });
 
-// Re-send an invitation that went nowhere: expired, revoked, or declined. The
-// row is never revived — a new row with a new id and a fresh TTL is written from
-// the old one's email/tier/role, so the dead invitation stays in the history
-// where the team page shows it, and its id stops being redeemable.
+// Re-send an invitation that went nowhere: expired, revoked, or declined. At most
+// one invitation row per (project, email) — the project side is the authority, and
+// the team page and the invitee's inbox both read that one row. So a resend, like a
+// re-invite, replaces whatever row exists: the source row is deleted and a new row
+// with a new id and a fresh TTL is written from its email/tier/role, which leaves
+// nothing to show the address twice and stops the old id being redeemable.
 membersRouter.post(
   "/invitations/:invitationId/resend",
   requireProjectAccess("owner", "admin"),
@@ -269,15 +281,16 @@ membersRouter.post(
         return;
       }
 
-      // idx_project_invitations_pending_unique_email is partial on 'pending', so
-      // a still-pending original (live or merely past its TTL) blocks the
-      // replacement. Retire it first, exactly as the POST route does.
-      if (invitation.status === "pending") {
-        await query(
-          `UPDATE project_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'`,
-          [invitation.id],
-        );
-      }
+      // The source row goes, whatever its status: one row per (project, email), so
+      // the replacement takes its place instead of standing beside it. Keyed on the
+      // address rather than the id, exactly as the POST route does, so any other
+      // row for the same address goes too — and so a still-'pending' original stops
+      // holding the idx_project_invitations_pending_unique_email slot that would
+      // reject the INSERT.
+      await query(
+        `DELETE FROM project_invitations WHERE project_id = $1 AND LOWER(email) = LOWER($2)`,
+        [projectId, invitation.email],
+      );
 
       const result = await query(
         `INSERT INTO project_invitations (project_id, email, permission_tier, developer_role, invited_by, expires_at)
@@ -314,7 +327,7 @@ membersRouter.post(
 // that it was withdrawn rather than watching it vanish.
 // Deleting an expired-but-still-'pending' row releases the slot held by
 // idx_project_invitations_pending_unique_email, which is harmless: the POST route
-// already retires such a row itself before inserting a replacement.
+// clears every row for the address itself before inserting a replacement.
 membersRouter.delete(
   "/invitations/:invitationId",
   requireProjectAccess("owner", "admin"),
