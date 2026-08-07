@@ -324,7 +324,8 @@ describe("TeamPage", () => {
       if (path === "/projects/p1/members") return Promise.resolve({ members: MEMBERS });
       if (path === "/projects/p1/members/invitations") {
         listCalls++;
-        // The route retires the old row and INSERTs a new one with a NEW id.
+        // The route DELETEs every row for the email and INSERTs a fresh one, so
+        // the surviving invitation carries a new id either way.
         return Promise.resolve({
           invitations: [listCalls === 1 ? LIVE_INVITE : { ...LIVE_INVITE, id: "inv-9" }],
         });
@@ -348,6 +349,43 @@ describe("TeamPage", () => {
       "/projects/p1/members/invitations/inv-9/resend",
       { method: "POST" },
     );
+  });
+
+  // The POST replaces every existing row for that address, so the new invitation
+  // has to come from the list, not from a local prepend: prepending would leave
+  // the row the server just deleted on the table beside its replacement.
+  it("re-reads the list after an invite instead of prepending the new row", async () => {
+    const user = userEvent.setup();
+    const REPLACED = {
+      ...LIVE_INVITE, id: "inv-8", status: "revoked", live: false,
+    };
+    let listCalls = 0;
+    mockApi.mockImplementation((path: string, options: RequestInit = {}) => {
+      if (path === "/projects/p1/members") return Promise.resolve({ members: MEMBERS });
+      if (path === "/projects/p1/members/invitations") {
+        if (options.method === "POST") {
+          return Promise.resolve({ invitation: { ...LIVE_INVITE, id: "inv-9" } });
+        }
+        listCalls++;
+        return Promise.resolve({
+          invitations: listCalls === 1 ? [REPLACED] : [{ ...LIVE_INVITE, id: "inv-9" }],
+        });
+      }
+      return Promise.resolve({});
+    });
+    renderTeam("owner");
+
+    await screen.findByText("revoked");
+    await user.click(screen.getByRole("button", { name: "Invite" }));
+    await user.type(await screen.findByLabelText("Email address"), "new@acme.test");
+    await user.click(screen.getByRole("button", { name: /Create invitation/ }));
+
+    await waitFor(() => expect(listCalls).toBe(2));
+    // One row for the address, and it is the live replacement — the revoked row
+    // the POST deleted is gone because the refetch, not the response, wrote it.
+    await waitFor(() => expect(screen.queryByText("revoked")).toBeNull());
+    expect(screen.getAllByText("new@acme.test")).toHaveLength(1);
+    expect(screen.getByText("Invited")).toBeInTheDocument();
   });
 
   it("opens no profile when an invitation row is clicked", async () => {

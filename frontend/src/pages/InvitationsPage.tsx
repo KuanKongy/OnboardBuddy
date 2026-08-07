@@ -273,10 +273,12 @@ export function InvitationsPage() {
                     chooser here let an invitee overwrite that choice on the way
                     in. TITLE register — this line names the person joining.
 
-                    Labelled like Permission and Organization above it, and full
-                    width because the description is a sentence. Without the
-                    label the two lines read as a stray caption: nothing on the
-                    card said this was the role you would be joining under. */}
+                    Labelled like Permission and Organization above it, then
+                    title and description on one row: the description is a short
+                    sentence that reads as an aside to the title, not as a line
+                    of its own. Without the label the whole box read as a stray
+                    caption — nothing said this was the role you would be joining
+                    under. */}
                 {(() => {
                   const role = ROLE_OPTIONS.find(
                     (r) => r.value === (selected.developer_role || FALLBACK_ROLE),
@@ -284,12 +286,16 @@ export function InvitationsPage() {
                   return (
                     <div className="mt-2 w-full rounded-md border border-border bg-card p-2">
                       <p className="text-[0.6875rem] text-muted-foreground">Joining as</p>
-                      <p className="text-sm font-medium capitalize text-foreground">
-                        {role?.title ?? selected.developer_role}
-                      </p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        {role?.description ?? "Assigned by the inviter"}
-                      </p>
+                      {/* flex-wrap + min-w-0: a long title pushes the description
+                          onto its own line instead of colliding with it. */}
+                      <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                        <p className="text-sm font-medium capitalize text-foreground">
+                          {role?.title ?? selected.developer_role}
+                        </p>
+                        <p className="min-w-0 text-right text-xs text-muted-foreground">
+                          {role?.description ?? "Assigned by the inviter"}
+                        </p>
+                      </div>
                     </div>
                   );
                 })()}
@@ -323,23 +329,23 @@ export function InvitationsPage() {
                   // refused by the route, and the reason is worth more than a dead
                   // control. Delete is the one thing still on offer, because the
                   // row is now nothing but the user's own record of what happened.
-                  <div className="mt-3">
-                    <p className="text-xs text-muted-foreground">{closedStateLine(selected)}</p>
-                    <div className="mt-2 flex justify-end">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={deleting}
-                        onClick={() => handleDelete(selected)}
-                      >
-                        {deleting ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3 w-3" />
-                        )}
-                        Delete invitation
-                      </Button>
-                    </div>
+                  <div className="mt-3 flex items-center justify-between gap-3">
+                    <p className="flex-1 min-w-0 text-xs text-muted-foreground">
+                      {closedStateLine(selected)}
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={deleting}
+                      onClick={() => handleDelete(selected)}
+                    >
+                      {deleting ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3" />
+                      )}
+                      Delete invitation
+                    </Button>
                   </div>
                 )}
               </CardContent>
