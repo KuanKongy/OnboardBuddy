@@ -7,6 +7,7 @@ import { buildWeightTableProvenance } from "../services/scoreProvenance.js";
 import { CHAPTERS, SECTION_SPECS, SECTION_TYPES, type SectionType } from "../../worker/generation/sectionSpecs.js";
 import {
   ageLabelFrom,
+  claimCounts,
   claimForReceipt,
   confidenceReasonFor,
   inlineMarkersToText,
@@ -17,7 +18,12 @@ import {
 import { groupGaps, summarizeGaps, type RawGap } from "../lib/gapSummary.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
 import { requireUuidParam } from "../middleware/requireUuidParam.js";
-import { BadPackageParamError, readPackageParam, resolveForRequest } from "../services/packageResolver.js";
+import {
+  BadPackageParamError,
+  readPackageParam,
+  resolveForRequest,
+  resolvePackageContext,
+} from "../services/packageResolver.js";
 import { summarizeRunBudget } from "../../worker/ai/budgetEnforcer.js";
 
 export const onboardingRouter = Router({ mergeParams: true });
@@ -293,6 +299,19 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
               sec.section_count, sec.stale_sections, sec.approved_sections,
               sec.low_confidence_sections,
               tut.tutorial_count, tut.stale_tutorials,
+              -- The subject line of the commit this package was built from,
+              -- carried on the analyze job that produced the snapshot
+              -- (checkpoint.commitMessage, stamped at INSERT by
+              -- analysisStarter). EARLIEST matching job wins: that is the run
+              -- that created the snapshot, so its message is the one that
+              -- describes this commit. Null for every package analyzed before
+              -- the key existed — the card falls back to the short SHA rather
+              -- than inventing a subject.
+              (SELECT aj.checkpoint->>'commitMessage' FROM analysis_jobs aj
+               WHERE aj.snapshot_id = op.snapshot_id
+                 AND aj.job_type IN ('analyze_scope', 'incremental_update')
+                 AND aj.checkpoint ? 'commitMessage'
+               ORDER BY aj.created_at ASC LIMIT 1) AS commit_message,
               (op.analyzed_commit = COALESCE(
                 (SELECT aj.commit_hash FROM analysis_jobs aj
                  WHERE aj.project_id = op.project_id AND aj.scope_id = op.scope_id
@@ -326,7 +345,16 @@ onboardingRouter.get("/packages", requireProjectAccess(), async (req, res) => {
        LIMIT ${PACKAGE_LIST_LIMIT}`,
       [projectId],
     )).rows;
-    res.json({ packages: rows });
+
+    // Which of these cards the tabs are actually serving right now. The client
+    // cannot derive it from this list: the order is `updated_at DESC`, while
+    // resolution runs member-default first and only then "latest", so the
+    // selector's idea of the current package would disagree with every other
+    // tab the moment a member pinned an older one. No packageId argument, so
+    // this can never throw PackageNotFoundError — it only reads.
+    const ctx = await resolvePackageContext({ projectId: String(projectId), userId: req.user?.id ?? null });
+
+    res.json({ packages: rows, resolved_package_id: ctx?.packageId ?? null });
   } catch (err) {
     console.error("Packages list error:", err);
     res.status(500).json({ error: "Internal server error" });
@@ -514,11 +542,9 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
           prompt_version?: unknown;
           retrieval?: unknown;
           validation?: { issues?: unknown[]; retried?: unknown; hardFailure?: unknown };
-          claims?: Array<{ receiptIds?: unknown; confidence?: unknown }>;
           inline_citations?: unknown;
           voice_lint?: { remaining_hits?: unknown[] };
         };
-        const claims = Array.isArray(ctx2.claims) ? ctx2.claims : [];
         return {
           sectionId: sec.id,
           type: sec.type,
@@ -536,11 +562,11 @@ onboardingRouter.get("/provenance", requireProjectAccess(), async (req, res) => 
           },
           voiceLintHits: Array.isArray(ctx2.voice_lint?.remaining_hits) ? ctx2.voice_lint!.remaining_hits : [],
           inlineCitations: ctx2.inline_citations ?? null,
-          claims: {
-            total: claims.length,
-            cited: claims.filter((c) => Array.isArray(c.receiptIds) && (c.receiptIds as unknown[]).length > 0).length,
-            low: claims.filter((c) => c.confidence === "low").length,
-          },
+          // Same tally the reader's confidence dial draws, from the same
+          // helper — the panel and the dial disagreeing about how many claims
+          // cite receipts would undo the point of showing either. Zeros rather
+          // than null here: the panel prints "cited/total" unconditionally.
+          claims: claimCounts(sec.generation_context) ?? { total: 0, cited: 0, low: 0 },
           unknownsCount: Array.isArray(sec.unknowns) ? sec.unknowns.length : 0,
         };
       }),
@@ -839,6 +865,12 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             ),
             analyzedCommit: sec.analyzed_commit,
             confidenceReason: confidenceReasonFor(sec.generation_context, sec.receipts.length),
+            // The counts behind `confidenceReason`, so the reader can draw the
+            // cited fraction instead of parsing the sentence for it. Null (not
+            // zeros) on generations that stored no claim array — a section that
+            // predates per-claim tracking has no fraction to draw, and 0/0 in
+            // its place would read as "nothing here is cited".
+            claims: claimCounts(sec.generation_context),
             blocks: [
               {
                 title: sec.title,

@@ -73,9 +73,49 @@ describe("prepareAnalysisRun", () => {
       commit: "c0ffee1234",
     });
     expect(result.ok).to.equal(true);
-    // (project, scope, requested_by, job_type, role, branch, commit, depth)
+    // (project, scope, requested_by, job_type, role, branch, commit, depth, checkpoint)
     expect(insertParams![2]).to.equal("webhook-owner");
     expect(insertParams![5]).to.equal("main");
     expect(insertParams![6]).to.equal("c0ffee1234");
+  });
+
+  /**
+   * The commit subject rides `checkpoint` because M5 freezes the schema. Two
+   * things can go wrong silently: a run started without a message writing
+   * `null` into a NOT NULL column (every analysis 500s), and the webhook's
+   * `head_commit.message` — full body, unbounded — landing verbatim on a row
+   * that the packages list reads back for every card.
+   */
+  it("stamps the capped commit subject on the job checkpoint, and '{}' when there is none", async () => {
+    const insertFor = async (commitMessage?: string | null) => {
+      let insertParams: unknown[] | undefined;
+      const { client } = fakeClient((text, params) => {
+        if (text.includes("FROM analysis_snapshots")) return { rows: [] };
+        if (text.includes("FROM analysis_jobs") && !text.startsWith("INSERT")) return { rows: [] };
+        if (text.startsWith("INSERT INTO analysis_jobs")) {
+          insertParams = params;
+          return { rows: [{ id: "job-3", status: "queued" }] };
+        }
+        return { rows: [] };
+      });
+      const result = await prepareAnalysisRun(client, { ...BASE, commit: "abc", commitMessage });
+      expect(result.ok).to.equal(true);
+      return insertParams![8];
+    };
+
+    expect(await insertFor("Fix the webhook HEAD check")).to.equal(
+      JSON.stringify({ commitMessage: "Fix the webhook HEAD check" }),
+    );
+    // Subject only, capped: a GitHub push payload carries the whole message.
+    const long = await insertFor(`Fix the guard\n\nLong body explaining why.\n${"x".repeat(400)}`);
+    expect(JSON.parse(String(long))).to.deep.equal({ commitMessage: "Fix the guard" });
+    const capped = JSON.parse(String(await insertFor("y".repeat(500)))) as { commitMessage: string };
+    expect(capped.commitMessage).to.have.length(200);
+
+    // No message = an empty object, never NULL (the column is NOT NULL) and
+    // never a `commitMessage` key the packages list would read back as "".
+    expect(await insertFor()).to.equal("{}");
+    expect(await insertFor(null)).to.equal("{}");
+    expect(await insertFor("\n\n")).to.equal("{}");
   });
 });

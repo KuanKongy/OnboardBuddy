@@ -51,6 +51,8 @@ interface PushPayload {
   ref?: string;
   after?: string;
   deleted?: boolean;
+  /** The pushed commit itself; its message is what the package card shows. */
+  head_commit?: { message?: string };
   repository?: { name?: string; owner?: { login?: string; name?: string } };
   installation?: { id?: number | string };
 }
@@ -290,6 +292,9 @@ githubWebhookRouter.post("/", async (req, res) => {
             scopeId: scope_id,
             branch,
             commit,
+            // GitHub already told us what this push was; a run started from a
+            // webhook has no other chance to learn its commit subject.
+            commitMessage: payload.head_commit?.message ?? null,
           });
           // active_twin = an identical run is already queued/running (e.g. a
           // redelivered webhook) — skipping keeps deliveries idempotent.

@@ -48,6 +48,7 @@ const NEW_PKG = {
   role: "backend",
   status: "draft",
   analyzed_commit: "abc1234def",
+  commit_message: "Extract the session store",
   branch: "dev",
   created_at: "2026-07-15T10:00:00Z",
   updated_at: "2026-07-15T10:00:00Z",
@@ -109,14 +110,16 @@ function makeStatusScript(jobType: string) {
       });
     }
     if (path.includes("/onboarding/packages")) {
-      return Promise.resolve({ packages: [NEW_PKG, OTHER_PKG] });
+      // resolved_package_id is what a request with no package_id gets served;
+      // the server picks it, so it is deliberately NOT the first row here.
+      return Promise.resolve({ packages: [NEW_PKG, OTHER_PKG], resolved_package_id: OTHER_PKG.id });
     }
     return Promise.resolve({});
   };
 }
 
 function Probe() {
-  const { registerSessionJob, selectedPackageId, selectPackage, pinnedPackageId } = usePackages();
+  const { registerSessionJob, selectedPackageId, selectPackage, pinnedPackageId, resolvedPackage } = usePackages();
   return (
     <div>
       <button onClick={() => registerSessionJob("job-1", { navigateOnDone: true })}>watch</button>
@@ -124,6 +127,7 @@ function Probe() {
       <button onClick={() => selectPackage(OTHER_PKG.id)}>pick other</button>
       <span data-testid="selected">{selectedPackageId ?? "latest"}</span>
       <span data-testid="pinned">{pinnedPackageId ?? "none"}</span>
+      <span data-testid="resolved">{resolvedPackage ? `${resolvedPackage.id}:${resolvedPackage.branch}` : "none"}</span>
     </div>
   );
 }
@@ -179,6 +183,18 @@ describe("PackagesContext completion watcher", () => {
     // next new tab are untouched.
     expect(sessionStorage.getItem(TAB_KEY)).toBe(NEW_PKG.id);
     expect(localStorage.getItem(PIN_KEY)).toBeNull();
+  });
+
+  it("surfaces the package the server serves when nothing is selected", async () => {
+    vi.mocked(apiFetch).mockImplementation(makeStatusScript("generate_package") as never);
+    renderProvider();
+
+    // The whole row, not just the id: the sidebar renders branch, scope and
+    // role off it, so a resolved id the list does not contain is useless.
+    await waitFor(() =>
+      expect(screen.getByTestId("resolved")).toHaveTextContent(`${OTHER_PKG.id}:main`),
+    );
+    expect(screen.getByTestId("selected")).toHaveTextContent("latest");
   });
 
   it("does not navigate for a section regeneration", async () => {

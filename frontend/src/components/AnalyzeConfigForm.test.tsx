@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApiError, apiFetch } from "@/lib/api";
-import { AnalyzeConfigForm, DEFAULT_ANALYZE_CONFIG } from "./AnalyzeConfigForm";
+import { AnalyzeConfigForm, DEFAULT_ANALYZE_CONFIG, analyzeRequestBody } from "./AnalyzeConfigForm";
 
 /**
  * Import bug A, the client half.
@@ -90,7 +90,7 @@ describe("AnalyzeConfigForm — a dead GitHub connection names its own fix", () 
     renderForm();
 
     expect(
-      await screen.findByText(/Branch list couldn't be loaded — only main is offered/),
+      await screen.findByText(/Branch list couldn't be loaded, so only main is offered/),
     ).toBeInTheDocument();
     expect(screen.getByText(/Commit history couldn't be loaded/)).toBeInTheDocument();
 
@@ -98,5 +98,40 @@ describe("AnalyzeConfigForm — a dead GitHub connection names its own fix", () 
     // instruction, not a harmless extra one.
     expect(screen.queryByRole("link", { name: /Reconnect GitHub/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/needs to be re-authorized/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The commit subject is the one thing about a run the API cannot look up for
+ * itself, so the form carries it. It is only meaningful next to the sha it came
+ * from: sent on its own it would label the run with a commit it did not
+ * analyze, which is exactly what the branch-head case would do with a stale
+ * message left in the config.
+ */
+describe("analyzeRequestBody — commit subject", () => {
+  it("forwards the subject alongside a pinned sha", () => {
+    const body = analyzeRequestBody({
+      ...DEFAULT_ANALYZE_CONFIG,
+      commit: "abc1234def5678",
+      commitMessage: "Add refresh-token rotation",
+    });
+    expect(body.commit).toBe("abc1234def5678");
+    expect(body.commit_message).toBe("Add refresh-token rotation");
+  });
+
+  it("omits it on the branch head, even with a message still in the config", () => {
+    const body = analyzeRequestBody({
+      ...DEFAULT_ANALYZE_CONFIG,
+      commit: "",
+      commitMessage: "Add refresh-token rotation",
+    });
+    expect(body).not.toHaveProperty("commit_message");
+    expect(body).not.toHaveProperty("commit");
+  });
+
+  it("omits it for a sha the picker never supplied a message for", () => {
+    const body = analyzeRequestBody({ ...DEFAULT_ANALYZE_CONFIG, commit: "abc1234def5678" });
+    expect(body.commit).toBe("abc1234def5678");
+    expect(body).not.toHaveProperty("commit_message");
   });
 });

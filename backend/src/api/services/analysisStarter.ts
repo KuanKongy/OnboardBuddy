@@ -29,6 +29,29 @@ export interface PrepareRunOpts {
   commit?: string | null;
   depth?: string | null;
   role?: string | null;
+  /**
+   * The commit's message, when the caller knows it (the branch picker's
+   * selected commit, or the push webhook's head_commit). Stored on the job,
+   * not on the snapshot: the schema is frozen for M5 and `checkpoint` is the
+   * only jsonb already there to carry it. Normalized here — see commitSubject.
+   */
+  commitMessage?: string | null;
+}
+
+/** How much of a commit message a card can use. Beyond this it is a body. */
+const COMMIT_SUBJECT_MAX = 200;
+
+/**
+ * Subject line of a commit message. Normalized in one place because both
+ * callers feed it something different: POST /analyze forwards whatever the
+ * picker had, and the push webhook forwards GitHub's `head_commit.message`,
+ * which carries the entire body. This value is display-only and the display is
+ * one line on a package card, so a full body would be stored to be thrown away
+ * — and an unbounded one would ride every packages-list row that reads it back.
+ */
+export function commitSubject(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return raw.split("\n")[0]!.slice(0, COMMIT_SUBJECT_MAX) || null;
 }
 
 export type PrepareRunResult =
@@ -83,13 +106,24 @@ export async function prepareAnalysisRun(client: TxClient, opts: PrepareRunOpts)
     return { ok: false, reason: "active_twin", activeJobId: (activeTwin.rows[0] as { id: string }).id };
   }
 
+  // The commit subject rides `checkpoint` because M5 freezes the schema and
+  // analysis_jobs has no column for it. Safe to seed at INSERT: every later
+  // writer of this row's checkpoint MERGES rather than replaces — summaryWorker
+  // (`checkpoint || $2`), jobRecovery and budgetEnforcer (both `jsonb_set` over
+  // COALESCE(checkpoint,'{}')) — so the key survives resumes, recoveries and
+  // budget baselining. The one blind `SET checkpoint = $1` (worker/index.ts,
+  // "Preview ready") belongs to preflight rows, which come from a different
+  // INSERT and never carry this key. Never NULL: the column is NOT NULL.
+  const commitMessage = commitSubject(opts.commitMessage);
+  const checkpoint = JSON.stringify(commitMessage ? { commitMessage } : {});
+
   const jobResult = await client.query(
     `INSERT INTO analysis_jobs (project_id, scope_id, requested_by, job_type, status, current_step,
-                                role, branch, commit_hash, semantic_depth)
-     VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker', $5, $6, $7, $8)
+                                role, branch, commit_hash, semantic_depth, checkpoint)
+     VALUES ($1, $2, $3, $4, 'queued', 'Waiting for worker', $5, $6, $7, $8, $9::jsonb)
      RETURNING id, status`,
     [projectId, effectiveScopeId, requestedBy, jobType,
-     opts.role ?? null, branch ?? projectDefaultBranch, commit, opts.depth ?? null],
+     opts.role ?? null, branch ?? projectDefaultBranch, commit, opts.depth ?? null, checkpoint],
   );
   const row = jobResult.rows[0] as { id: string; status: string };
   return { ok: true, jobId: row.id, jobStatus: row.status, jobType };

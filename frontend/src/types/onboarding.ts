@@ -113,6 +113,14 @@ export interface OnboardingSection {
   confidence: ConfidenceLevel;
   /** Mechanical explanation of the grade ("7/9 tracked claims cite receipts · …"). */
   confidenceReason?: string;
+  /**
+   * The arithmetic behind `confidenceReason`, served so the reader can draw it
+   * instead of only spelling it out. `null` is a real answer, not a missing
+   * field: generations that predate per-claim validation recorded no claim
+   * ledger, so the pie falls back to the grade itself rather than inventing a
+   * denominator.
+   */
+  claims?: { total: number; cited: number; low: number } | null;
   reviewedBy?: string;
   reviewedAt?: string;
   blocks: ContentBlock[];
@@ -289,6 +297,10 @@ export interface PackageCard {
   role: string;
   status: PackageStatus;
   analyzed_commit: string;
+  /** Subject line of `analyzed_commit`, recorded by the run that produced this
+   *  package. Null for packages analyzed before it was recorded, and for runs
+   *  whose caller had no message to pass (a sha typed straight into the API). */
+  commit_message: string | null;
   branch: string;
   created_at: string;
   updated_at: string;
