@@ -19,6 +19,10 @@ const badgeVariants = cva(
         // The app's chip family: tinted fill + /40 border + semantic text.
         success:
           "border-success/40 bg-success-soft text-success",
+        warning:
+          "border-warning/40 bg-warning-soft text-warning",
+        danger:
+          "border-danger/40 bg-danger-soft text-danger",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
       },

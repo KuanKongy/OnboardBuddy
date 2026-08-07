@@ -83,6 +83,10 @@ const DECLINED_INVITE: InviteFixture = {
   ...LIVE_INVITE, id: "inv-2", email: "nope@acme.test", status: "declined", live: false,
 };
 
+const REVOKED_INVITE: InviteFixture = {
+  ...LIVE_INVITE, id: "inv-4", email: "gone@acme.test", status: "revoked", live: false,
+};
+
 // Same person as the u-dev member row: the table must not spell them twice.
 const ACCEPTED_INVITE: InviteFixture = {
   ...LIVE_INVITE, id: "inv-3", email: "dev@acme.test", status: "accepted", live: false,
@@ -141,11 +145,20 @@ describe("TeamPage", () => {
     expect(screen.getByRole("columnheader", { name: "Approvals" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Read" })).toBeInTheDocument();
 
-    // Approved nothing (an owner/admin action) but has read seven sections — the case
-    // a single column collapses to 0. Indexed from the end, past the actions cell.
+    // The owner is the row where both numbers are real and different: four
+    // approvals against one read mark. Indexed from the end, past the actions
+    // cell. A single column collapses the pair into one wrong figure.
+    const ownerRow = screen.getByRole("button", { name: "View lead@acme.test" }).closest("tr")!;
+    const ownerCells = within(ownerRow).getAllByRole("cell");
+    expect(ownerCells[ownerCells.length - 3]).toHaveTextContent("4");
+    expect(ownerCells[ownerCells.length - 2]).toHaveTextContent("1");
+
+    // The developer has read seven sections and approved nothing — but approving
+    // is not something their tier can do, so the cell is a placeholder rather
+    // than a 0 that reads as a failing grade.
     const row = screen.getByRole("button", { name: "View dev@acme.test" }).closest("tr")!;
     const cells = within(row).getAllByRole("cell");
-    expect(cells[cells.length - 3]).toHaveTextContent("0");
+    expect(cells[cells.length - 3]).toHaveTextContent("—");
     expect(cells[cells.length - 2]).toHaveTextContent("7");
   });
 
@@ -232,6 +245,9 @@ describe("TeamPage", () => {
 
     const profile = await screen.findByRole("dialog");
     expect(within(profile).getByText("dev@acme.test")).toBeInTheDocument();
+    // Same non-fact as the table placeholder: a developer gets no approvals line
+    // at all, rather than a "0 sections approved" that reads as a shortfall.
+    expect(within(profile).queryByText(/sections? approved/)).toBeNull();
   });
 
   it("marks only the caller's own row with You", async () => {
@@ -279,16 +295,43 @@ describe("TeamPage", () => {
   });
 
   it("offers Re-invite and no Revoke once an invitation is dead", async () => {
-    inviteRows = [DECLINED_INVITE];
+    inviteRows = [DECLINED_INVITE, REVOKED_INVITE];
     renderTeam("owner");
 
     const row = (await screen.findByText("nope@acme.test")).closest("tr")!;
-    expect(within(row).getByText("declined")).toBeInTheDocument();
+    // Declined and revoked are not the same event — they differ on who ended the
+    // invitation — so they cannot share the one grey chip the raw status gave both.
+    expect(within(row).getByText("Declined")).toHaveAttribute("data-variant", "danger");
     expect(within(row).getByRole("button", { name: /Re-invite/ })).toBeInTheDocument();
     // Nothing to revoke: the invitation is already over. Clearing the row off
     // the table is what takes Revoke's place once it is.
     expect(within(row).queryByRole("button", { name: /Revoke/ })).toBeNull();
     expect(within(row).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+
+    const revoked = screen.getByText("gone@acme.test").closest("tr")!;
+    expect(within(revoked).getByText("Revoked")).toHaveAttribute("data-variant", "warning");
+    expect(within(revoked).getByRole("button", { name: /Re-invite/ })).toBeInTheDocument();
+  });
+
+  // The word names the state; it does not say what the team can do next, and the
+  // native `title` that used to carry the expiry took about a second to appear
+  // and never reached the keyboard at all.
+  it("explains a dead invitation in a tooltip on its status chip", async () => {
+    const user = userEvent.setup();
+    inviteRows = [DECLINED_INVITE];
+    renderTeam("owner");
+
+    const row = (await screen.findByText("nope@acme.test")).closest("tr")!;
+    await user.hover(within(row).getByText("Declined"));
+
+    const content = await waitFor(() => {
+      const el = document.querySelector('[data-slot="tooltip-content"]');
+      if (!el) throw new Error("tooltip did not open");
+      return el as HTMLElement;
+    });
+    // Radix mirrors the content into a visually-hidden twin inside the same node,
+    // so the text arrives doubled: match it, do not compare it.
+    expect(content.textContent).toMatch(/They declined this invitation/);
   });
 
   // Nothing is patched locally, so a missing refetch leaves the deleted row on
@@ -375,7 +418,7 @@ describe("TeamPage", () => {
     });
     renderTeam("owner");
 
-    await screen.findByText("revoked");
+    await screen.findByText("Revoked");
     await user.click(screen.getByRole("button", { name: "Invite" }));
     await user.type(await screen.findByLabelText("Email address"), "new@acme.test");
     await user.click(screen.getByRole("button", { name: /Create invitation/ }));
@@ -383,7 +426,7 @@ describe("TeamPage", () => {
     await waitFor(() => expect(listCalls).toBe(2));
     // One row for the address, and it is the live replacement — the revoked row
     // the POST deleted is gone because the refetch, not the response, wrote it.
-    await waitFor(() => expect(screen.queryByText("revoked")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Revoked")).toBeNull());
     expect(screen.getAllByText("new@acme.test")).toHaveLength(1);
     expect(screen.getByText("Invited")).toBeInTheDocument();
   });

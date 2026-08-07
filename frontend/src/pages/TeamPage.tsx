@@ -122,6 +122,34 @@ const TIER_LABELS: Record<string, string> = {
   developer: "Dev",
 };
 
+/** The team-side word for where an invitation is in its lifecycle. */
+function inviteStatusWord(inv: InvitationRow): string {
+  if (inv.live) return "Invited";
+  if (inv.status === "pending" || inv.status === "expired") return "Expired";
+  if (inv.status === "declined") return "Declined";
+  if (inv.status === "revoked") return "Revoked";
+  return inv.status.charAt(0).toUpperCase() + inv.status.slice(1);
+}
+
+function inviteStatusVariant(inv: InvitationRow): "secondary" | "outline" | "warning" | "danger" {
+  if (inv.live) return "secondary";
+  if (inv.status === "declined") return "danger";
+  if (inv.status === "revoked") return "warning";
+  return "outline";
+}
+
+/** What happened and what the team can do next, from the team's side. */
+function inviteStatusTooltip(inv: InvitationRow): string {
+  if (inv.live) {
+    return inv.expires_at
+      ? `Waiting for them to respond. Expires ${fmtDate(inv.expires_at)}.`
+      : "Waiting for them to respond.";
+  }
+  if (inv.status === "declined") return "They declined this invitation. Re-invite to send a new one, or delete the record.";
+  if (inv.status === "revoked") return "You revoked this invitation. Re-invite if you change your mind, or delete the record.";
+  return "It expired before they answered. Resend to give it a fresh window.";
+}
+
 export function TeamPage() {
   const { project, refetch } = useProject();
   const { user } = useAuth();
@@ -494,7 +522,7 @@ export function TeamPage() {
           when they joined, and both progress counts — approvals (editorial)
           and read marks (personal), which #74/F16 kept confusing for each
           other — and the empty two thirds of the screen stop being empty. */}
-      <div className="mx-auto max-w-3xl">
+      <div className="mx-auto max-w-4xl">
       {loading ? (
         <PageSpinner className="py-12" iconClassName="h-4 w-4" label="Loading team members" />
       ) : (
@@ -600,13 +628,22 @@ export function TeamPage() {
                   </td>
                   {/* `select-text` on the data cells: the row is clickable now,
                       and these are the values someone copies out of it. */}
-                  <td className="select-text px-2 py-1.5 text-muted-foreground">{roleLabel(member.developer_role)}</td>
-                  <td className="hidden select-text px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
+                  <td className="select-text whitespace-nowrap px-2 py-1.5 text-muted-foreground">{roleLabel(member.developer_role)}</td>
+                  <td className="hidden select-text whitespace-nowrap px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
                     {fmtDate(member.joined_at)}
                   </td>
-                  <td className="select-text px-2 py-1.5 text-right tabular-nums text-muted-foreground">
-                    {member.sections_reviewed}
-                  </td>
+                  {/* Developers cannot approve a section, so a 0 here reads as a
+                      failing grade for something they were never asked to do.
+                      The placeholder says "not a number about you" instead. */}
+                  {member.permission_tier === "developer" ? (
+                    <td className="px-2 py-1.5 text-right text-muted-foreground">
+                      <span aria-label="Not applicable: developers do not approve sections">—</span>
+                    </td>
+                  ) : (
+                    <td className="select-text px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                      {member.sections_reviewed}
+                    </td>
+                  )}
                   <td className="select-text px-2 py-1.5 text-right tabular-nums text-muted-foreground">
                     {member.sections_read}
                   </td>
@@ -733,25 +770,37 @@ export function TeamPage() {
                             {/* A 'pending' row past its TTL is not pending to
                                 anyone who matters: accept refuses it. `live` is
                                 the server's own accept predicate, so it decides
-                                the word. */}
-                            <Badge
-                              variant={inv.live ? "secondary" : "outline"}
-                              className="shrink-0 capitalize text-[0.625rem]"
-                              // The TTL is no longer a line of its own, but "how
-                              // long has this one got?" is still what an admin
-                              // asks before nudging someone. Pre-TTL rows say
-                              // nothing rather than guess.
-                              title={inv.live && inv.expires_at ? `Expires ${fmtDate(inv.expires_at)}` : undefined}
-                            >
-                              {inv.live ? "Invited" : inv.status === "pending" ? "Expired" : inv.status}
-                            </Badge>
+                                the word.
+
+                                Radix rather than a native `title`, for the same
+                                reason the column headers above use one: the
+                                browser tooltip takes about a second to appear
+                                and is unreachable from the keyboard. The word
+                                alone says what state the row is in but not what
+                                to do about it, and the TTL an admin asks about
+                                before nudging someone now lives in the live
+                                row's tooltip. */}
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant={inviteStatusVariant(inv)}
+                                  tabIndex={0}
+                                  className="shrink-0 cursor-help text-[0.625rem]"
+                                >
+                                  {inviteStatusWord(inv)}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="max-w-64">
+                                {inviteStatusTooltip(inv)}
+                              </TooltipContent>
+                            </Tooltip>
                           </span>
                         </div>
                       </td>
-                      <td className="select-text px-2 py-1.5 text-muted-foreground">
+                      <td className="select-text whitespace-nowrap px-2 py-1.5 text-muted-foreground">
                         {roleLabel(inv.developer_role) || "—"}
                       </td>
-                      <td className="hidden select-text px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
+                      <td className="hidden select-text whitespace-nowrap px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
                         Invited {fmtDate(inv.created_at)}
                       </td>
                       {/* Approvals and read marks are member facts. Nobody has
@@ -888,12 +937,17 @@ export function TeamPage() {
                   })}
                 </span>
               </div>
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
-                <span>
-                  {profileMember.sections_reviewed} section{profileMember.sections_reviewed === 1 ? "" : "s"} approved
-                </span>
-              </div>
+              {/* Same reason the table shows a placeholder for them: a developer
+                  has no approvals to report, and "0 sections approved" reads as
+                  a shortfall rather than a role. */}
+              {profileMember.permission_tier !== "developer" && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <FileCheck2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {profileMember.sections_reviewed} section{profileMember.sections_reviewed === 1 ? "" : "s"} approved
+                  </span>
+                </div>
+              )}
               <div className="flex items-center gap-2 text-muted-foreground">
                 <BookOpenCheck className="h-3.5 w-3.5 shrink-0" />
                 <span>
