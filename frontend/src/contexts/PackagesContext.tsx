@@ -44,6 +44,13 @@ interface PackagesContextValue {
   selectedPackageId: string | null;
   selectedPackage: PackageCard | null;
   selectPackage: (id: string | null) => void;
+  /**
+   * The package the server serves when this tab has no selection: member
+   * default, else latest. It comes from the list response because the client
+   * cannot derive it — "latest" is the server's own ordering and the member
+   * default lives on a row this list does not carry.
+   */
+  resolvedPackage: PackageCard | null;
   /** The package new tabs of this project open on; null = follow the newest. */
   pinnedPackageId: string | null;
   /** Set or clear the pin. Never touches this tab's selection. */
@@ -86,6 +93,8 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
   const [packages, setPackages] = useState<PackageCard[] | null>(null);
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
   const [selectedPackageId, setSelectedPackageId] = useState<string | null>(null);
+  // What a request with no package_id gets served, as the LIST route reports it.
+  const [resolvedPackageId, setResolvedPackageId] = useState<string | null>(null);
   const [pinnedPackageId, setPinnedPackageId] = useState<string | null>(() =>
     localStorage.getItem(pinKey(projectId)),
   );
@@ -115,8 +124,9 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
 
   const refreshPackages = useCallback(() => {
     apiFetch(`/projects/${projectId}/onboarding/packages`)
-      .then((data: { packages: PackageCard[] }) => {
+      .then((data: { packages: PackageCard[]; resolved_package_id?: string | null }) => {
         setPackages(data.packages ?? []);
+        setResolvedPackageId(data.resolved_package_id ?? null);
         setPackagesError(false);
       })
       .catch(() => setPackagesError(true));
@@ -282,6 +292,11 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     [packages, selectedPackageId],
   );
 
+  const resolvedPackage = useMemo(
+    () => (resolvedPackageId ? (packages ?? []).find((p) => p.id === resolvedPackageId) ?? null : null),
+    [packages, resolvedPackageId],
+  );
+
   const packageQuery = selectedPackageId ? `?package_id=${selectedPackageId}` : "";
 
   const value = useMemo<PackagesContextValue>(() => ({
@@ -290,6 +305,7 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     selectedPackageId,
     selectedPackage,
     selectPackage,
+    resolvedPackage,
     pinnedPackageId,
     pinPackage,
     defaultPackageId,
@@ -300,7 +316,7 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
     packageQuery,
     packagesError,
     statusError,
-  }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage,
+  }), [packages, refreshPackages, selectedPackageId, selectedPackage, selectPackage, resolvedPackage,
        pinnedPackageId, pinPackage, defaultPackageId, status, refreshStatus, activeJobs,
        registerSessionJob, packageQuery, packagesError, statusError]);
 

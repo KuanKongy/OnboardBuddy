@@ -346,6 +346,17 @@ describe("GET /api/projects/:id/onboarding/packages", () => {
           }],
         };
       }
+      // The resolver's own read of onboarding_packages (member default), which
+      // the route now runs alongside the card query — matched first because
+      // both select FROM onboarding_packages op.
+      if (text.includes("AS package_id")) {
+        return {
+          rows: [{
+            package_id: "pkg-default", snapshot_id: "snap-1", scope_id: "scope-1",
+            role: "general", branch: "main", commit_hash: "abc", snapshot_status: "complete",
+          }],
+        };
+      }
       if (text.includes("FROM onboarding_packages op")) {
         packagesSql = text;
         return {
@@ -356,7 +367,7 @@ describe("GET /api/projects/:id/onboarding/packages", () => {
             path_prefix: "", scope_kind: "repo", semantic_depth: "standard",
             privacy_mode: "full_ai", section_count: 12, stale_sections: 1,
             approved_sections: 2, low_confidence_sections: 3, tutorial_count: 6,
-            is_latest_commit: true,
+            is_latest_commit: true, commit_message: "Fix the webhook HEAD check",
           }],
         };
       }
@@ -372,11 +383,18 @@ describe("GET /api/projects/:id/onboarding/packages", () => {
     expect(res.body.packages[0]).to.include({
       section_count: 12, stale_sections: 1, approved_sections: 2,
       low_confidence_sections: 3, tutorial_count: 6, is_latest_commit: true,
+      commit_message: "Fix the webhook HEAD check",
     });
+    // The selector renders whichever card the tabs are actually serving, and
+    // cannot derive it from this list: the rows are ordered updated_at DESC
+    // while resolution prefers the member default.
+    expect(res.body.resolved_package_id).to.equal("pkg-default");
     expect(packagesSql).to.match(/LIMIT 100/);
     // A correlated subquery creeping back in is the regression this pins.
     expect(packagesSql).to.include("LEFT JOIN LATERAL");
     expect(packagesSql).to.not.include("SELECT count(*)::int FROM package_sections");
+    // Read-back of what analysisStarter stamps on the job at INSERT.
+    expect(packagesSql).to.include("checkpoint->>'commitMessage'");
   });
 });
 

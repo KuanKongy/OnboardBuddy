@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, apiFetch } from "@/lib/api";
-import { FALLBACK_ROLE, ROLE_OPTIONS, roleTitle } from "@/lib/roles";
+import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel } from "@/lib/roles";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -16,6 +16,12 @@ export interface AnalyzeConfig {
   branch: string;
   /** "" = branch head. */
   commit: string;
+  /**
+   * Subject of the pinned commit, "" = none. Carried so the run can record
+   * what the commit was: the picker is the only place that knows it, and the
+   * API resolves a sha rather than reading a message back out of GitHub.
+   */
+  commitMessage: string;
   /** "whole" | scope uuid | "custom". */
   scopeId: string;
   /** Free-text path prefix, used when scopeId === "custom" (e.g. "backend/"). */
@@ -29,6 +35,7 @@ export interface AnalyzeConfig {
 export const DEFAULT_ANALYZE_CONFIG: AnalyzeConfig = {
   branch: "",
   commit: "",
+  commitMessage: "",
   scopeId: "whole",
   scopePath: "",
   depth: "",
@@ -45,6 +52,10 @@ export function analyzeRequestBody(config: AnalyzeConfig): Record<string, string
   }
   if (config.branch) body.branch = config.branch;
   if (config.commit) body.commit = config.commit;
+  // Only with a pinned sha: on a branch head the run resolves the commit
+  // itself, and a message left over from a previous pick would label the run
+  // with a commit it did not analyze.
+  if (config.commit && config.commitMessage) body.commit_message = config.commitMessage;
   if (config.depth) body.depth = config.depth;
   if (config.role) body.role = config.role;
   return body;
@@ -96,9 +107,9 @@ function repoIsEmpty(err: unknown): boolean {
 const RECONNECT_LINK_CLASS = "font-medium underline underline-offset-2 hover:text-warning/80";
 
 const DEPTHS = [
-  { value: "cheap", label: "Cheap — fewest AI calls" },
-  { value: "standard", label: "Standard — balanced" },
-  { value: "full", label: "Full — most thorough" },
+  { value: "cheap", label: "Cheap: fewest AI calls" },
+  { value: "standard", label: "Standard: balanced" },
+  { value: "full", label: "Full: most thorough" },
 ];
 
 /** What a run gets when the project stores no depth: worker/index.ts resolves
@@ -231,7 +242,7 @@ export function AnalyzeConfigForm({
         <Label htmlFor="analyze-branch" className="text-xs">Branch</Label>
         <Select
           value={branch}
-          onValueChange={(v) => onChange({ ...config, branch: v, commit: "" })}
+          onValueChange={(v) => onChange({ ...config, branch: v, commit: "", commitMessage: "" })}
         >
           <SelectTrigger id="analyze-branch" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
@@ -249,7 +260,7 @@ export function AnalyzeConfigForm({
           </p>
         ) : listErrors.branches ? (
           <p className="text-[0.6875rem] text-warning">
-            Branch list couldn&apos;t be loaded — only {branch} is offered. Other branches may exist.
+            Branch list couldn&apos;t be loaded, so only {branch} is offered. Other branches may exist.
           </p>
         ) : null}
       </div>
@@ -258,7 +269,13 @@ export function AnalyzeConfigForm({
         <Label htmlFor="analyze-commit" className="text-xs">Commit</Label>
         <Select
           value={config.commit || "head"}
-          onValueChange={(v) => onChange({ ...config, commit: v === "head" ? "" : v })}
+          onValueChange={(v) =>
+            onChange({
+              ...config,
+              commit: v === "head" ? "" : v,
+              commitMessage: v === "head" ? "" : commits.find((c) => c.sha === v)?.message ?? "",
+            })
+          }
         >
           <SelectTrigger id="analyze-commit" className="h-8 w-full min-w-0 text-[0.8125rem]">
             <SelectValue />
@@ -269,26 +286,26 @@ export function AnalyzeConfigForm({
             </SelectItem>
             {commits.map((c) => (
               <SelectItem key={c.sha} value={c.sha}>
-                <span className="font-mono">{c.shortSha}</span> — {c.message.slice(0, 48)}
+                <span className="font-mono">{c.shortSha}</span> · {c.message.slice(0, 48)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {listErrors.commits === "empty" ? (
           <p className="text-[0.6875rem] text-warning">
-            This repository has no commits yet — push code before analyzing.
+            This repository has no commits yet. Push code before analyzing.
           </p>
         ) : listErrors.commits === "reconnect" ? (
           <p className="text-[0.6875rem] text-warning">
             Your GitHub connection needs to be re-authorized, so recent commits can&apos;t be
-            listed — this will analyze the branch head.{" "}
+            listed. This will analyze the branch head.{" "}
             <Link to="/settings" className={RECONNECT_LINK_CLASS}>
               Reconnect GitHub in Account settings
             </Link>
           </p>
         ) : listErrors.commits ? (
           <p className="text-[0.6875rem] text-warning">
-            Commit history couldn&apos;t be loaded — this will analyze the branch head.
+            Commit history couldn&apos;t be loaded, so this will analyze the branch head.
           </p>
         ) : null}
       </div>
@@ -312,7 +329,7 @@ export function AnalyzeConfigForm({
         </Select>
         {listErrors.scopes && (
           <p className="text-[0.6875rem] text-warning">
-            Detected scopes couldn&apos;t be loaded — this is a failed request, not a repository
+            Detected scopes couldn&apos;t be loaded. This is a failed request, not a repository
             without sub-packages. Use a custom path if you meant to narrow the run.
           </p>
         )}
@@ -358,7 +375,7 @@ export function AnalyzeConfigForm({
         >
           <SelectTrigger id="analyze-role" className="h-8 w-full min-w-0 text-[0.8125rem]"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="default">{roleTitle(projectRole || FALLBACK_ROLE)}</SelectItem>
+            <SelectItem value="default">{roleLabel(projectRole || FALLBACK_ROLE)}</SelectItem>
             {/* Same dedupe as depth: generating for the project's own role is
                 the "default" entry above. */}
             {ROLE_OPTIONS.filter((r) => r.value !== (projectRole || FALLBACK_ROLE)).map((r) => (

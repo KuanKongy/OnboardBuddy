@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import {
   ageLabelFrom,
+  claimCounts,
   claimForReceipt,
   confidenceReasonFor,
   inlineMarkersToText,
@@ -151,6 +152,34 @@ describe("receiptPresentation.receiptVerification", () => {
   });
 });
 
+/**
+ * The reader draws the cited fraction as a dial and prints `confidenceReason`
+ * beside it. Both read the same stored claims, so a divergence here shows up
+ * as a picture contradicting the sentence under it — which is why the counts
+ * live in one function and the reason is now rendered from it.
+ */
+describe("receiptPresentation.claimCounts", () => {
+  it("tallies tracked, cited and downgraded claims", () => {
+    expect(
+      claimCounts({
+        claims: [
+          { claim: "a", receiptIds: ["r1"], confidence: "high" },
+          { claim: "b", receiptIds: ["r1", "r2"], confidence: "medium" },
+          { claim: "c", receiptIds: [], confidence: "low" },
+          { claim: "d", confidence: "low" },
+        ],
+      }),
+    ).to.deep.equal({ total: 4, cited: 2, low: 2 });
+  });
+
+  it("is null when the generation tracked no claims — 0/0 is not the same as untracked", () => {
+    expect(claimCounts(null)).to.equal(null);
+    expect(claimCounts({})).to.equal(null);
+    expect(claimCounts({ claims: [] })).to.equal(null);
+    expect(claimCounts({ claims: "bogus" })).to.equal(null);
+  });
+});
+
 describe("receiptPresentation.confidenceReasonFor", () => {
   it("counts cited claims and downgrades from the stored validation", () => {
     const ctx = {
@@ -176,6 +205,11 @@ describe("receiptPresentation.confidenceReasonFor", () => {
     );
     expect(confidenceReasonFor({}, 0)).to.equal(
       "no receipts — content is not independently verifiable",
+    );
+    // An empty claim array reads as untracked, not as "0 of 0 cited" — the one
+    // boundary the shared-counts refactor could have moved.
+    expect(confidenceReasonFor({ claims: [] }, 4)).to.equal(
+      "4 receipts · per-claim tracking not available for this generation",
     );
   });
 });

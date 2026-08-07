@@ -97,6 +97,37 @@ export function receiptVerification(input: {
   };
 }
 
+export interface ClaimCounts {
+  /** Claims the generator tracked for this section. */
+  total: number;
+  /** How many of them cite at least one receipt. */
+  cited: number;
+  /** How many the validator downgraded to low confidence. */
+  low: number;
+}
+
+/**
+ * The per-claim tally behind a section's confidence grade, as numbers rather
+ * than a sentence. `confidenceReasonFor` renders these for prose; the reader
+ * draws the same fraction as a dial, so both surfaces must count identically
+ * or the picture and the sentence beside it disagree.
+ *
+ * Null (not zeros) when the generation stored no claim array: "0 of 0 cited"
+ * would render as a hard-empty dial for a section that was simply written
+ * before per-claim tracking existed. An empty array counts as the same
+ * absence — that is what `confidenceReasonFor` has always treated it as.
+ */
+export function claimCounts(generationContext: unknown): ClaimCounts | null {
+  const ctx = generationContext as { claims?: Array<{ receiptIds?: unknown; confidence?: unknown }> } | null;
+  const claims = Array.isArray(ctx?.claims) ? ctx!.claims! : null;
+  if (!claims || claims.length === 0) return null;
+  return {
+    total: claims.length,
+    cited: claims.filter((c) => Array.isArray(c.receiptIds) && (c.receiptIds as unknown[]).length > 0).length,
+    low: claims.filter((c) => c.confidence === "low").length,
+  };
+}
+
 /**
  * A confidence label without its reason is theater (audit §3.6): "high" on a
  * one-receipt section and "high" on a fifteen-receipt section must read
@@ -105,18 +136,15 @@ export function receiptVerification(input: {
  * sections too (generation_context.claims has been stored since v1).
  */
 export function confidenceReasonFor(generationContext: unknown, receiptCount: number): string {
-  const ctx = generationContext as { claims?: Array<{ receiptIds?: unknown; confidence?: unknown }> } | null;
-  const claims = Array.isArray(ctx?.claims) ? ctx!.claims! : null;
+  const counts = claimCounts(generationContext);
   const receipts = `${receiptCount} receipt${receiptCount === 1 ? "" : "s"}`;
-  if (!claims || claims.length === 0) {
+  if (!counts) {
     return receiptCount > 0
       ? `${receipts} · per-claim tracking not available for this generation`
       : "no receipts — content is not independently verifiable";
   }
-  const cited = claims.filter((c) => Array.isArray(c.receiptIds) && (c.receiptIds as unknown[]).length > 0).length;
-  const low = claims.filter((c) => c.confidence === "low").length;
-  const parts = [`${cited}/${claims.length} tracked claims cite receipts`];
-  if (low > 0) parts.push(`${low} downgraded to low`);
+  const parts = [`${counts.cited}/${counts.total} tracked claims cite receipts`];
+  if (counts.low > 0) parts.push(`${counts.low} downgraded to low`);
   parts.push(receipts);
   return parts.join(" · ");
 }

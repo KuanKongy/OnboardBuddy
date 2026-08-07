@@ -20,6 +20,7 @@ const PKG_A = {
   role: "backend",
   status: "approved",
   analyzed_commit: "abc1234def5678",
+  commit_message: "Add refresh-token rotation" as string | null,
   branch: "main",
   created_at: "2026-07-01T10:00:00Z",
   updated_at: "2026-07-01T10:00:00Z",
@@ -35,13 +36,22 @@ const PKG_A = {
   tutorial_count: 3, stale_tutorials: 0,
   is_latest_commit: true,
 };
-const PKG_B = { ...PKG_A, id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", branch: "dev", role: "frontend", is_latest_commit: false };
+const PKG_B = {
+  ...PKG_A,
+  id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+  branch: "dev",
+  role: "frontend",
+  commit_message: "Split the session store out of the auth middleware",
+  is_latest_commit: false,
+};
+/** Analyzed before the run recorded its commit subject. */
+const PKG_LEGACY = { ...PKG_B, commit_message: null };
 
 function mockCtx(overrides: Partial<ReturnType<typeof baseCtx>> = {}) {
   const ctx = { ...baseCtx(), ...overrides };
   vi.mocked(usePackages).mockReturnValue(ctx as never);
   vi.mocked(useProject).mockReturnValue({
-    project: { repo_name: "auth-demo" },
+    project: { repo_owner: "acme", repo_name: "auth-demo" },
     loading: false,
     error: "",
     refetch: vi.fn(),
@@ -56,6 +66,7 @@ function baseCtx() {
     selectedPackageId: PKG_A.id as string | null,
     selectedPackage: PKG_A as typeof PKG_A | null,
     selectPackage: vi.fn(),
+    resolvedPackage: null as typeof PKG_A | null,
     pinnedPackageId: null as string | null,
     pinPackage: vi.fn(),
     defaultPackageId: null as string | null,
@@ -89,7 +100,7 @@ describe("PackageSelector", () => {
     // The separator lives inside the repo span so the two truncate together.
     expect(screen.getByText("auth-demo /")).toBeInTheDocument();
     expect(screen.getByText("main")).toBeInTheDocument();
-    expect(screen.getByText(/backend\/ · Backend Developer/)).toBeInTheDocument();
+    expect(screen.getByText(/backend\/ · Backend/)).toBeInTheDocument();
     // The commit moved into the dropdown rows: the closed button is one line
     // of chrome the sidebar's height contract depends on.
     expect(screen.queryByText(/main@abc1234/)).not.toBeInTheDocument();
@@ -107,8 +118,10 @@ describe("PackageSelector", () => {
     const user = userEvent.setup();
 
     await openMenu(user);
+    // owner/repo, not a bare repo name: two imports can share the name.
+    expect(screen.getByText("acme/auth-demo")).toBeInTheDocument();
     expect(screen.getByText("dev@abc1234")).toBeInTheDocument();
-    expect(screen.getByText(/backend\/ · Frontend Developer/)).toBeInTheDocument();
+    expect(screen.getByText(/backend\/ · Frontend/)).toBeInTheDocument();
     expect(screen.getByText(/behind latest on dev/)).toBeInTheDocument();
 
     await user.click(screen.getByText("dev@abc1234"));
@@ -125,7 +138,7 @@ describe("PackageSelector", () => {
     expect(screen.getAllByText("status: approved").length).toBe(2);
   });
 
-  it("shows the full commit and the depth on row hover", async () => {
+  it("names the commit and the run's settings on row hover", async () => {
     mockCtx();
     renderSelector();
     const user = userEvent.setup();
@@ -135,8 +148,48 @@ describe("PackageSelector", () => {
 
     // Radix renders tooltip content twice (visible + a visually-hidden copy
     // for aria-describedby), hence getAllByText.
-    await waitFor(() => expect(screen.getAllByText("abc1234def5678").length).toBeGreaterThan(0));
-    expect(screen.getAllByText(/analyzed .+ · standard depth/).length).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(screen.getAllByText("Split the session store out of the auth middleware").length).toBeGreaterThan(0),
+    );
+    expect(screen.getAllByText("standard depth · Full AI").length).toBeGreaterThan(0);
+    // The analyzed date was the old second line and told nobody anything.
+    expect(screen.queryByText(/analyzed /)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the short sha when the package predates commit subjects", async () => {
+    mockCtx({ packages: [PKG_LEGACY], selectedPackage: null, selectedPackageId: null });
+    renderSelector();
+    const user = userEvent.setup();
+
+    await openMenu(user);
+    await user.hover(screen.getByText("dev@abc1234"));
+
+    await waitFor(() => expect(screen.getAllByText("abc1234").length).toBeGreaterThan(0));
+  });
+
+  it("names the package the server resolves to when this tab has no selection", () => {
+    mockCtx({ selectedPackage: null, selectedPackageId: null, resolvedPackage: PKG_B });
+    renderSelector();
+
+    // No "(auto)" suffix: the tabs really are showing this package, and the
+    // menu is where the auto state is marked.
+    expect(screen.getByText("dev")).toBeInTheDocument();
+    expect(screen.queryByText("Latest analysis")).not.toBeInTheDocument();
+  });
+
+  it("marks the selected row with aria-current, not a check", async () => {
+    mockCtx();
+    renderSelector();
+    const user = userEvent.setup();
+
+    await openMenu(user);
+
+    const selected = screen.getByText("main@abc1234").closest('[role="menuitem"]')!;
+    expect(selected).toHaveAttribute("aria-current", "true");
+    expect(selected.className).toContain("bg-primary/5");
+
+    const other = screen.getByText("dev@abc1234").closest('[role="menuitem"]')!;
+    expect(other).not.toHaveAttribute("aria-current");
   });
 
   it("pins from the star without selecting the row or closing the menu", async () => {

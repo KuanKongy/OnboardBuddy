@@ -1184,7 +1184,7 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
-    const { scope_id, scope_path, branch, commit, depth, role, force } = (req.body ?? {}) as {
+    const { scope_id, scope_path, branch, commit, depth, role, force, commit_message } = (req.body ?? {}) as {
       scope_id?: string;
       scope_path?: string;
       branch?: string;
@@ -1193,6 +1193,8 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       role?: string;
       /** Re-analyze even if this (scope, commit) already has a complete snapshot. */
       force?: boolean;
+      /** Subject line of `commit`, so a package card can show it later. */
+      commit_message?: string;
     };
     if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
       res.status(400).json({ error: "commit must be a git SHA (7-40 hex characters)" });
@@ -1212,6 +1214,10 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
     }
     if (role !== undefined && !VALID_ROLES.includes(role as typeof VALID_ROLES[number])) {
       res.status(400).json({ error: "role must be one of: backend, frontend, devops, qa, general" });
+      return;
+    }
+    if (commit_message !== undefined && typeof commit_message !== "string") {
+      res.status(400).json({ error: "commit_message must be a string" });
       return;
     }
 
@@ -1258,6 +1264,8 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       commit: commit ?? null,
       depth: depth ?? null,
       role: role ?? null,
+      // Display-only; prepareAnalysisRun keeps the subject line and caps it.
+      commitMessage: commit_message ?? null,
     });
     if (!prepared.ok) {
       await client.query("ROLLBACK");
