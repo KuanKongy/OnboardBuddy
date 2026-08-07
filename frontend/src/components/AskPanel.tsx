@@ -1,7 +1,8 @@
 import { CornerDownLeft, HelpCircle, Loader2, MessageSquare } from "lucide-react";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { ReceiptChip, InlineReceiptRef } from "@/components/ReceiptChips";
+import { receiptAnchor } from "@/components/reader/receiptAnchor";
+import { ReceiptChip } from "@/components/ReceiptChips";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +14,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { apiFetch, ApiError } from "@/lib/api";
 import { MARKDOWN_DISALLOWED_ELEMENTS, safeUrlTransform } from "@/lib/markdownSafety";
-import { receiptForHref, receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
+import { renderReceiptMarkers } from "@/lib/receiptMarkers";
 import type { AskAnswer, SourceReceipt } from "@/types/onboarding";
 import { cn } from "@/lib/utils";
 
@@ -151,20 +152,7 @@ export function AskPanel({
                 <ReactMarkdown
                   disallowedElements={MARKDOWN_DISALLOWED_ELEMENTS}
                   urlTransform={safeUrlTransform}
-                  components={{
-                    a: ({ href, children }) => {
-                      const cited = receiptForHref(href, receipts);
-                      if (cited) {
-                        const n = receiptNumberById(receipts).get(cited.bundleReceiptId ?? "") ?? 0;
-                        return <InlineReceiptRef receipt={cited} index={n} onClick={onReceiptClick} />;
-                      }
-                      return (
-                        <a href={href} target="_blank" rel="noopener noreferrer">
-                          {children}
-                        </a>
-                      );
-                    },
-                  }}
+                  components={{ a: receiptAnchor(receipts, onReceiptClick) }}
                 >
                   {renderReceiptMarkers(answer.answerMarkdown, receipts)}
                 </ReactMarkdown>

@@ -27,7 +27,7 @@ const FULL: ScoreProvenanceData = {
   reasons: ["Participates in 4 workflows", "Handles a route", "Entry point"],
   lever: "Biggest lever: fan-in / fan-out centrality is at 44% of the snapshot's highest file; closing that gap is worth up to 8.4 points.",
   scaleNote:
-    "Every signal is divided by the highest value any file reaches in THIS snapshot, so 100 would mean leading every signal at once. The scale is relative to this repository — it is not comparable across projects.",
+    "Each signal is divided by the highest value any file reaches in this snapshot, so 100 would mean leading every signal at once. Not comparable across repositories.",
   caveat: null,
 };
 
@@ -61,7 +61,7 @@ const ZERO: ScoreProvenanceData = {
   reasons: [],
   lever:
     "Biggest lever: workflow participation is at 0% of the snapshot's highest file; closing that gap is worth up to 20 points.",
-  scaleNote: "Every signal is divided by the highest value any file reaches in THIS snapshot.",
+  scaleNote: "Each signal is divided by the highest value any file reaches in this snapshot.",
   caveat: null,
 };
 
@@ -77,8 +77,8 @@ const MEAN: ScoreProvenanceData = {
     { key: "src/api/routes/health.ts", label: "health.ts", weight: null, value: 0.15, contribution: 0.05, measured: "src/api/routes/health.ts" },
   ],
   reasons: ["Averages 3 member files", "Top member auth.ts scores 71"],
-  lever: "It is a mean, not a maximum: one critical file cannot lift a large component.",
-  scaleNote: "Each member's own score comes from the 9-signal candidate ranking.",
+  lever: "A mean, not a maximum: one critical file cannot lift a large component.",
+  scaleNote: "Member scores come from the 9-signal candidate ranking.",
   caveat: "3 of 12 members carry a score; the rest are not ranked and were not part of the average.",
 };
 
@@ -94,7 +94,7 @@ describe("ScoreProvenance", () => {
       expect(screen.getByText("100% × 20% → 20 pts")).toBeInTheDocument();
       expect(screen.getByText("44% × 15% → 6.6 pts")).toBeInTheDocument();
       expect(screen.getByText(/Biggest lever/)).toBeInTheDocument();
-      expect(screen.getByText(/relative to this repository/)).toBeInTheDocument();
+      expect(screen.getByText(/Not comparable across repositories/)).toBeInTheDocument();
     });
 
     it("lists all nine signals in the panel and says how many contributed nothing", () => {

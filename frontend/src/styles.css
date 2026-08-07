@@ -373,7 +373,7 @@
     @apply mt-0.5 text-[0.8125rem] text-muted-foreground;
   }
   .section-label {
-    @apply text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+    @apply text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-foreground;
   }
   /* Graph canvases own the viewport instead of a fixed 300px strip. */
   .graph-canvas {

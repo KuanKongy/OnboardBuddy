@@ -677,7 +677,7 @@ export function WorkflowsPage() {
                 if (inTier.length === 0) return null;
                 return (
                   <div key={key} className="pt-1.5 first:pt-0">
-                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <p className="section-label px-2 pb-0.5">
                       {label} ({inTier.length})
                     </p>
                     {note && (
