@@ -270,6 +270,8 @@ describe("TeamPage", () => {
     expect(within(row).getByText("Invited")).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: /Resend/ })).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: /Revoke/ })).toBeInTheDocument();
+    // Deleting a live invitation is the route's 409: revoking is what ends one.
+    expect(within(row).queryByRole("button", { name: "Delete" })).toBeNull();
 
     // The accepted invitation is the same person as the u-dev member row, which
     // renders the local part — a full address on screen means an invitation row.
@@ -283,8 +285,36 @@ describe("TeamPage", () => {
     const row = (await screen.findByText("nope@acme.test")).closest("tr")!;
     expect(within(row).getByText("declined")).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: /Re-invite/ })).toBeInTheDocument();
-    // Nothing to revoke: the invitation is already over.
+    // Nothing to revoke: the invitation is already over. Clearing the row off
+    // the table is what takes Revoke's place once it is.
     expect(within(row).queryByRole("button", { name: /Revoke/ })).toBeNull();
+    expect(within(row).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  // Nothing is patched locally, so a missing refetch leaves the deleted row on
+  // the table looking live — and the next click on it 404s.
+  it("deletes a dead invitation and re-reads the list", async () => {
+    const user = userEvent.setup();
+    let listCalls = 0;
+    mockApi.mockImplementation((path: string) => {
+      if (path === "/projects/p1/members") return Promise.resolve({ members: MEMBERS });
+      if (path === "/projects/p1/members/invitations") {
+        listCalls++;
+        return Promise.resolve({ invitations: listCalls === 1 ? [DECLINED_INVITE] : [] });
+      }
+      return Promise.resolve({ success: true });
+    });
+    renderTeam("owner");
+
+    await screen.findByText("nope@acme.test");
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(mockApi).toHaveBeenCalledWith(
+      "/projects/p1/members/invitations/inv-2",
+      { method: "DELETE" },
+    );
+    await waitFor(() => expect(screen.queryByText("nope@acme.test")).toBeNull());
+    expect(listCalls).toBe(2);
   });
 
   it("resends through the resend route and re-keys the row from the refetch", async () => {

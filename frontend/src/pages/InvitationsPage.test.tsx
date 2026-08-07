@@ -187,6 +187,41 @@ describe("InvitationsPage invitation lifecycle (#72)", () => {
     expect(screen.getByText(/This invitation was revoked/i)).toBeInTheDocument();
   });
 
+  // Deleting is the only thing that drops a row from the list, and it has to
+  // move the selection with it: the pane is keyed on an id, so a selection left
+  // pointing at the deleted row renders nothing and says nothing about why.
+  it("deletes a closed invitation and re-points the pane at a live one", async () => {
+    const user = userEvent.setup();
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: [REVOKED, INVITATIONS[1]] })
+        : Promise.resolve({ success: true }),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Join beta" });
+    await user.click(screen.getByText("gamma"));
+    await user.click(await screen.findByRole("button", { name: /Delete invitation/ }));
+
+    expect(mockApi).toHaveBeenCalledWith("/invitations/inv-0", { method: "DELETE" });
+    await waitFor(() => expect(screen.queryByText("gamma")).toBeNull());
+    expect(screen.getByRole("heading", { name: "Join beta" })).toBeInTheDocument();
+  });
+
+  // The route refuses this row (409, "decline it instead"), so offering the
+  // button would only ever produce an error banner.
+  it("offers no delete on an invitation that can still be accepted", async () => {
+    mockApi.mockImplementation((path: string) =>
+      path === "/invitations"
+        ? Promise.resolve({ invitations: INVITATIONS })
+        : Promise.resolve({}),
+    );
+    renderPage();
+
+    await screen.findByRole("heading", { name: "Join alpha" });
+    expect(screen.queryByRole("button", { name: /Delete invitation/ })).toBeNull();
+  });
+
   it("reports a failed decline and clears it when another invitation is selected", async () => {
     const user = userEvent.setup();
     mockApi.mockImplementation((path: string) =>
