@@ -10,7 +10,6 @@ import { PageSpinner } from "@/components/ui/page-spinner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -49,7 +48,7 @@ interface Member {
   sections_read: number;
 }
 
-interface PendingInvitation {
+interface InvitationRow {
   id: string;
   email: string;
   permission_tier: string;
@@ -58,6 +57,15 @@ interface PendingInvitation {
   created_at: string;
   /** Null on invitations created before the TTL existed — those never expire. */
   expires_at: string | null;
+  /** 'pending' | 'accepted' | 'revoked' | 'expired' | 'declined'. */
+  status: string;
+  /**
+   * Server-computed "still redeemable": pending AND not past its TTL. Expiry is
+   * not derivable here — a row can be `pending` and long dead — and the accept
+   * path uses this same predicate, so it is the only honest basis for offering
+   * Revoke.
+   */
+  live: boolean;
 }
 
 /**
@@ -120,7 +128,7 @@ export function TeamPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [members, setMembers] = useState<Member[]>([]);
-  const [invitations, setInvitations] = useState<PendingInvitation[]>([]);
+  const [invitations, setInvitations] = useState<InvitationRow[]>([]);
   const [invitationsError, setInvitationsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -138,6 +146,7 @@ export function TeamPage() {
   const [removeConfirm, setRemoveConfirm] = useState<Member | null>(null);
   const [removing, setRemoving] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [transferTarget, setTransferTarget] = useState<Member | null>(null);
@@ -156,7 +165,8 @@ export function TeamPage() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Pending invitations are only actionable by owner/admin.
+  // The invitation history is an owner/admin view: they are the only ones who
+  // can act on a row.
   //
   // Bug #68: this used to swallow its rejection and "leave invitations empty",
   // which hides the whole section — so a failed fetch looks exactly like
@@ -165,7 +175,7 @@ export function TeamPage() {
   const loadInvitations = useCallback(() => {
     if (!id || !canManage) return;
     apiFetch(`/projects/${id}/members/invitations`)
-      .then((data: { invitations?: PendingInvitation[] }) => {
+      .then((data: { invitations?: InvitationRow[] }) => {
         // A malformed success is a failure for Bug #68 purposes: rendering it
         // as an empty list would again look like "nobody is waiting".
         if (Array.isArray(data.invitations)) {
@@ -192,8 +202,12 @@ export function TeamPage() {
           permission_tier: inviteTier,
           developer_role: inviteRole,
         }),
-      }) as { invitation: PendingInvitation };
-      setInvitations((prev) => [data.invitation, ...prev]);
+      }) as { invitation: InvitationRow };
+      // `live` is computed by the LIST query, not returned by the INSERT, and a
+      // row without it renders as "Expired" — the state a just-created
+      // invitation is furthest from. A fresh row is live by construction:
+      // status 'pending', TTL starting now.
+      setInvitations((prev) => [{ ...data.invitation, live: true }, ...prev]);
       setInviteEmail("");
       setInviteOpen(false);
     } catch (err: unknown) {
@@ -203,17 +217,43 @@ export function TeamPage() {
     }
   }
 
+  // The row stays on the table after a revoke. Dropping it made the invitation
+  // vanish with no trace, which is the question this page now answers ("what
+  // happened to the invite I sent?") — and Re-invite has to have a row to sit on.
   async function handleRevoke(invitationId: string) {
     setRevokingId(invitationId);
+    setError("");
     try {
       await apiFetch(`/projects/${id}/members/invitations/${invitationId}`, {
         method: "PATCH",
       });
-      setInvitations((prev) => prev.filter((inv) => inv.id !== invitationId));
+      setInvitations((prev) =>
+        prev.map((inv) =>
+          inv.id === invitationId ? { ...inv, status: "revoked", live: false } : inv,
+        ),
+      );
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to revoke invitation");
     } finally {
       setRevokingId(null);
+    }
+  }
+
+  // Resend never revives the row it is given: the route retires it and INSERTs a
+  // fresh invitation with a NEW id. Patching state in place would leave the table
+  // keyed on an id that is no longer redeemable, so the list is re-read instead.
+  async function handleResend(invitationId: string) {
+    setResendingId(invitationId);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/members/invitations/${invitationId}/resend`, {
+        method: "POST",
+      });
+      loadInvitations();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to resend invitation");
+    } finally {
+      setResendingId(null);
     }
   }
 
@@ -401,7 +441,7 @@ export function TeamPage() {
               {/* No mail provider is provisioned: the invitation only surfaces once
                   the invitee signs in, so say so rather than imply an email. */}
               <p className="text-[0.6875rem] text-muted-foreground">
-                No email is sent — the invitation appears on their Invitations page when they sign
+                No email is sent. The invitation appears on their Invitations page when they sign
                 in with this address.
               </p>
               {error && <ErrorBanner>{error}</ErrorBanner>}
@@ -551,7 +591,7 @@ export function TeamPage() {
                               </span>
                             </TooltipTrigger>
                             <TooltipContent side="top">
-                              Transfer ownership first — a project cannot be ownerless
+                              Transfer ownership first: a project cannot be ownerless
                             </TooltipContent>
                           </Tooltip>
                         ) : (
@@ -617,6 +657,105 @@ export function TeamPage() {
                   </td>
                 </tr>
               )}
+              {/* Invitations continue the roster instead of sitting in a card
+                  list below it: an invited person is a name this team is waiting
+                  on, and the two lists were being read against each other by
+                  hand. Accepted ones are skipped — that person is a member row
+                  now, and showing both spells the same name twice.
+
+                  These rows are deliberately inert: no cursor, no hover, no
+                  onClick. There is no profile behind an invitation (no user
+                  exists yet), so a row that highlighted would open nothing. */}
+              {canManage && !invitationsError &&
+                invitations
+                  .filter((inv) => inv.status !== "accepted")
+                  .map((inv) => (
+                    <tr key={`inv:${inv.id}`} className="border-b border-border/60 last:border-b-0">
+                      <td className="px-2 py-1.5">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Avatar className="size-7 shrink-0">
+                            <AvatarFallback className={`${getAvatarColor(inv.email)} text-[0.625rem] font-medium`}>
+                              {getInitials(inv.email)}
+                            </AvatarFallback>
+                          </Avatar>
+                          {/* The full address, not the local part: nobody has a
+                              display name yet, and the address is the only thing
+                              that identifies who was invited. */}
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span
+                              className="select-text truncate text-[0.8125rem] text-muted-foreground"
+                              title={inv.email}
+                            >
+                              {inv.email}
+                            </span>
+                            <Badge
+                              variant={tierBadgeVariant[inv.permission_tier] ?? "outline"}
+                              className="shrink-0 text-[0.625rem]"
+                            >
+                              {TIER_LABELS[inv.permission_tier] ?? inv.permission_tier}
+                            </Badge>
+                            {/* A 'pending' row past its TTL is not pending to
+                                anyone who matters: accept refuses it. `live` is
+                                the server's own accept predicate, so it decides
+                                the word. */}
+                            <Badge
+                              variant={inv.live ? "secondary" : "outline"}
+                              className="shrink-0 capitalize text-[0.625rem]"
+                              // The TTL is no longer a line of its own, but "how
+                              // long has this one got?" is still what an admin
+                              // asks before nudging someone. Pre-TTL rows say
+                              // nothing rather than guess.
+                              title={inv.live && inv.expires_at ? `Expires ${fmtDate(inv.expires_at)}` : undefined}
+                            >
+                              {inv.live ? "Invited" : inv.status === "pending" ? "Expired" : inv.status}
+                            </Badge>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="select-text px-2 py-1.5 text-muted-foreground">
+                        {roleLabel(inv.developer_role) || "—"}
+                      </td>
+                      <td className="hidden select-text px-2 py-1.5 tabular-nums text-muted-foreground sm:table-cell">
+                        Invited {fmtDate(inv.created_at)}
+                      </td>
+                      {/* Approvals and read marks are member facts. Nobody has
+                          read anything on an invitation. */}
+                      <td className="px-2 py-1.5 text-right text-muted-foreground">—</td>
+                      <td className="px-2 py-1.5 text-right text-muted-foreground">—</td>
+                      <td className="px-2 py-1.5">
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => handleResend(inv.id)}
+                            disabled={resendingId === inv.id}
+                          >
+                            {resendingId === inv.id
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : <RefreshCw className="h-3 w-3" />}
+                            {/* Same route either way; the word tracks what the
+                                admin thinks they are doing to a live invitation
+                                versus a dead one. */}
+                            {inv.live ? "Resend" : "Re-invite"}
+                          </Button>
+                          {inv.live && (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="text-muted-foreground hover:text-destructive"
+                              onClick={() => handleRevoke(inv.id)}
+                              disabled={revokingId === inv.id}
+                            >
+                              {revokingId === inv.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <X className="h-3 w-3" />}
+                              Revoke
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
             </tbody>
           </table>
         </div>
@@ -629,8 +768,8 @@ export function TeamPage() {
         >
           <p className="text-xs text-danger">
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-            Couldn&apos;t load pending invitations. Don&apos;t re-invite anyone until this loads —
-            there may already be an invitation waiting.
+            Couldn&apos;t load this project&apos;s invitations. Don&apos;t re-invite anyone until
+            this loads. There may already be an invitation waiting.
           </p>
           <Button variant="outline" size="xs" className="shrink-0 gap-1.5" onClick={loadInvitations}>
             <RefreshCw className="h-3 w-3" /> Retry
@@ -638,62 +777,6 @@ export function TeamPage() {
         </div>
       )}
 
-      {/* Pending invitations (owner/admin) */}
-      {canManage && !invitationsError && invitations.length > 0 && (
-        <div className="mt-5">
-          <h2 className="mb-2 text-xs font-medium text-muted-foreground">
-            Pending invitations · {invitations.length}
-          </h2>
-          <div className="space-y-1.5">
-            {invitations.map((inv) => (
-              <Card key={inv.id}>
-                <CardContent className="flex items-center justify-between gap-2 p-2.5">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <div className="min-w-0">
-                      <p className="truncate text-xs text-foreground" title={inv.email}>{inv.email}</p>
-                      {/* `capitalize` used to sit on the whole line, so it also
-                          title-cased the inviter's email address and re-cased
-                          role labels that the label table had already spelled.
-                          Only the tier, which is a stored lowercase value with
-                          no label table, is cased by CSS now. */}
-                      <p
-                        className="truncate text-xs text-muted-foreground"
-                        title={`${inv.permission_tier}${
-                          inv.developer_role ? ` · ${roleLabel(inv.developer_role)}` : ""
-                        }${inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}`}
-                      >
-                        <span className="capitalize">{inv.permission_tier}</span>
-                        {inv.developer_role ? ` · ${roleLabel(inv.developer_role)}` : ""}
-                        {inv.invited_by_email ? ` · invited by ${inv.invited_by_email}` : ""}
-                      </p>
-                      {/* Without the date a pending row nobody can redeem looks like
-                          a fresh one. Pre-TTL rows say nothing rather than guess. */}
-                      {inv.expires_at && (
-                        <p className="truncate text-xs text-muted-foreground">
-                          Expires {fmtDate(inv.expires_at)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() => handleRevoke(inv.id)}
-                    disabled={revokingId === inv.id}
-                  >
-                    {revokingId === inv.id
-                      ? <Loader2 className="h-3 w-3 animate-spin" />
-                      : <X className="h-3 w-3" />}
-                    Revoke
-                  </Button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
       </div>
 
       {/* Read-only profile: everyone can open everyone. Nothing here is a
@@ -704,7 +787,11 @@ export function TeamPage() {
           if (!open) { setProfileMember(null); setError(""); }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        {/* `gap-2`: the content is a list of one-line facts, and the grid's
+            default gap-4 opened a gap under the title wider than the rows it
+            separates. `aria-describedby={undefined}` tells Radix there is
+            deliberately no description element, instead of it warning about one. */}
+        <DialogContent className="gap-2 sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-sm">
               <Avatar className="h-7 w-7">
@@ -774,15 +861,21 @@ export function TeamPage() {
           if (!open) { setManageMember(null); setError(""); }
         }}
       >
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="gap-2 sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
             <DialogTitle className="text-sm">Manage member</DialogTitle>
           </DialogHeader>
           {manageMember && (
             <div className="space-y-3 pt-1">
-              <p className="truncate text-xs text-muted-foreground" title={manageMember.email}>
-                {manageMember.email}
-              </p>
+              {/* The same icon row the profile dialog uses for an address: a bare
+                  grey line here read as a caption on the title rather than as
+                  the member this dialog is about. */}
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate text-foreground" title={manageMember.email}>
+                  {manageMember.email}
+                </span>
+              </div>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
                   <Label htmlFor="member-tier" className="text-xs">Permission tier</Label>

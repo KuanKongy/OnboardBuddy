@@ -9,17 +9,22 @@ invitationsRouter.get("/", async (req, res) => {
   try {
     const email = req.user!.email;
 
-    // Same expiry predicate as the accept path, so the inbox never lists an
-    // invitation Accept would refuse. The IS NULL arm keeps pre-TTL rows valid.
+    // The inbox is history, not a work queue: declined and expired invitations
+    // stay listed so "what happened to that invite?" has an answer on screen.
+    // `live` carries what the filter used to decide — it is the accept path's
+    // own predicate (the IS NULL arm keeps pre-TTL rows valid), so the client
+    // can offer Accept exactly where Accept would succeed. Accept itself still
+    // re-checks; this column is presentation, not authorization.
     const result = await query(
       `SELECT pi.*, p.repo_owner, p.repo_name, p.branch,
-              u.email AS invited_by_email
+              u.email AS invited_by_email,
+              (pi.status = 'pending' AND (pi.expires_at IS NULL OR pi.expires_at > NOW())) AS live
        FROM project_invitations pi
        INNER JOIN projects p ON p.id = pi.project_id
        LEFT JOIN users u ON u.id = pi.invited_by
-       WHERE LOWER(pi.email) = LOWER($1) AND pi.status = 'pending'
-         AND (pi.expires_at IS NULL OR pi.expires_at > NOW())
-       ORDER BY pi.created_at DESC`,
+       WHERE LOWER(pi.email) = LOWER($1)
+       ORDER BY pi.created_at DESC
+       LIMIT 100`,
       [email],
     );
 
@@ -61,8 +66,12 @@ invitationsRouter.get("/:invitationId", requireUuidParam("invitationId"), async 
   }
 });
 
-// #72: the status CHECK has no 'declined'; 'revoked' is the terminal stand-in.
-// No expiry guard, unlike accept — a stale invitation is still discardable.
+// #72: migration 004 added the 'declined' arm to the status CHECK, so a refusal
+// is no longer recorded as if an admin had revoked it. Declines written before
+// that migration are still sitting in the table as 'revoked' and read as
+// revocations — they are indistinguishable from real ones, so nothing backfills
+// them.
+// No expiry guard, unlike accept: a stale invitation is still discardable.
 invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"), async (req, res) => {
   try {
     const { invitationId } = req.params;
@@ -95,7 +104,7 @@ invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"
     // be overwritten with a decline.
     const result = await query(
       `UPDATE project_invitations
-       SET status = 'revoked'
+       SET status = 'declined'
        WHERE id = $1 AND status = 'pending'
        RETURNING *`,
       [invitationId],

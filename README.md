@@ -180,7 +180,11 @@ The Docker instructions above are all a reviewer needs — the `.env` files on C
 cloud services. To stand the app up on your own accounts instead, you need a Supabase project, an
 Upstash Redis endpoint, a GitHub OAuth App plus a GitHub App, and an OpenRouter key. Copy
 `backend/.env.example` and `frontend/.env.example`, fill them in, and apply the schema once from
-`backend/supabase/migrations/001_initial_schema.sql` (idempotent; `000_drop_all.sql` resets it).
+`backend/supabase/migrations/001_initial_schema.sql` (idempotent; `000_drop_all.sql` resets it),
+then the numbered follow-ups in order. Two M5 migrations exist under the database change policy
+(doc/DEVOPS.md), both additive and M4-compatible: `003_auto_regenerate_stale.sql` (a
+`project_settings` boolean, default false) and `004_invitation_declined.sql` (the invitation status
+CHECK gains `declined`; M4 filters to `pending`, so the new value is invisible to it).
 
 Full setup, deployment and operations notes — including worker scaling, connection pooling, the push
 webhook, and cost/latency tuning — are in [doc/DEVOPS.md](doc/DEVOPS.md).

@@ -65,15 +65,20 @@ membersRouter.get("/invitations", requireProjectAccess(), async (req, res) => {
   try {
     const projectId = req.params.id;
 
-    // Same expiry predicate as the accept path, so this list and that route agree
-    // on what is still redeemable. The IS NULL arm keeps pre-TTL rows valid.
+    // The team page shows invitation history alongside the roster, so this lists
+    // every invitation this project ever sent — declined and expired included.
+    // `live` carries what the filter used to decide: the accept path's own
+    // predicate (the IS NULL arm keeps pre-TTL rows valid), so the page can tell
+    // "still open" from "over" without re-deriving expiry in the client. Revoke
+    // and accept both re-check on the write; this column is presentation only.
     const result = await query(
-      `SELECT pi.*, u.email AS invited_by_email
+      `SELECT pi.*, u.email AS invited_by_email,
+              (pi.status = 'pending' AND (pi.expires_at IS NULL OR pi.expires_at > NOW())) AS live
        FROM project_invitations pi
        LEFT JOIN users u ON u.id = pi.invited_by
-       WHERE pi.project_id = $1 AND pi.status = 'pending'
-         AND (pi.expires_at IS NULL OR pi.expires_at > NOW())
-       ORDER BY pi.created_at DESC`,
+       WHERE pi.project_id = $1
+       ORDER BY pi.created_at DESC
+       LIMIT 200`,
       [projectId],
     );
 
@@ -199,6 +204,108 @@ membersRouter.patch("/invitations/:invitationId", requireProjectAccess("owner", 
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// Re-send an invitation that went nowhere: expired, revoked, or declined. The
+// row is never revived — a new row with a new id and a fresh TTL is written from
+// the old one's email/tier/role, so the dead invitation stays in the history
+// where the team page shows it, and its id stops being redeemable.
+membersRouter.post(
+  "/invitations/:invitationId/resend",
+  requireProjectAccess("owner", "admin"),
+  requireUuidParam("invitationId"),
+  async (req, res) => {
+    try {
+      const { invitationId } = req.params;
+      const projectId = req.params.id;
+      const invitedBy = req.user!.id;
+
+      const existing = await query(
+        `SELECT id, email, permission_tier, developer_role, status
+         FROM project_invitations
+         WHERE id = $1 AND project_id = $2`,
+        [invitationId, projectId],
+      );
+
+      if (existing.rows.length === 0) {
+        res.status(404).json({ error: "Invitation not found" });
+        return;
+      }
+
+      const invitation = existing.rows[0] as {
+        id: string;
+        email: string;
+        permission_tier: string;
+        developer_role: string | null;
+        status: string;
+      };
+
+      // Nothing to re-send: the invitee is already in. Re-sending would write a
+      // second invitation that accept can only answer with a members-PK 409.
+      if (invitation.status === "accepted") {
+        res.status(409).json({ error: "That invitation has already been accepted" });
+        return;
+      }
+
+      // Same out-of-the-table tier check as accept (#66): a row written before
+      // the POST route whitelisted its input must not get a second life here.
+      if (!isInvitableTier(invitation.permission_tier)) {
+        res.status(400).json({
+          error: `That invitation grants an unsupported permission tier (${invitation.permission_tier}). Send a new invitation as one of: ${INVITABLE_TIERS.join(", ")}.`,
+        });
+        return;
+      }
+
+      // Membership is by user and the invitation is by address, so the check has
+      // to go through `users` — they may have joined by some other route since.
+      const alreadyMember = await query(
+        `SELECT 1 FROM project_members pm
+         INNER JOIN users u ON u.id = pm.user_id
+         WHERE pm.project_id = $1 AND LOWER(u.email) = LOWER($2)`,
+        [projectId, invitation.email],
+      );
+
+      if (alreadyMember.rows.length > 0) {
+        res.status(409).json({ error: "That person is already a member of this project" });
+        return;
+      }
+
+      // idx_project_invitations_pending_unique_email is partial on 'pending', so
+      // a still-pending original (live or merely past its TTL) blocks the
+      // replacement. Retire it first, exactly as the POST route does.
+      if (invitation.status === "pending") {
+        await query(
+          `UPDATE project_invitations SET status = 'expired' WHERE id = $1 AND status = 'pending'`,
+          [invitation.id],
+        );
+      }
+
+      const result = await query(
+        `INSERT INTO project_invitations (project_id, email, permission_tier, developer_role, invited_by, expires_at)
+         VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(days => $6::int))
+         RETURNING *, true AS live`,
+        [
+          projectId,
+          invitation.email,
+          invitation.permission_tier,
+          invitation.developer_role,
+          invitedBy,
+          INVITATION_TTL_DAYS,
+        ],
+      );
+
+      res.status(201).json({ invitation: result.rows[0] });
+    } catch (err) {
+      // Two admins hitting Resend at once: the partial unique index arbitrates,
+      // and the loser is told an invitation is already out rather than 500'd.
+      if (err instanceof Error && err.message.includes("duplicate key")) {
+        res.status(409).json({ error: "A pending invitation already exists for this email" });
+        return;
+      }
+      console.error("Resend invitation error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
 
 membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), requireUuidParam("userId"), async (req, res) => {
   try {
