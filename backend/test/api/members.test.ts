@@ -370,6 +370,93 @@ describe("POST /api/projects/:id/members/invitations/:invitationId/resend", () =
   });
 });
 
+describe("DELETE /api/projects/:id/members/invitations/:invitationId", () => {
+  afterEach(resetTestHarness);
+
+  const INVITATION_ID = "66666666-6666-6666-6666-666666666666";
+
+  /**
+   * Serves one invitation row to the delete route and records every statement.
+   * `row` is null for an id that belongs to no invitation of this project.
+   * Postgres evaluates `live`, so the mock decides it the way the database would.
+   */
+  function installInvitation(row: { live: boolean } | null, { tier = "owner" } = {}) {
+    const statements: Array<{ text: string; params: unknown[] }> = [];
+    installTestAuth();
+    mockQuery((text, params = []) => {
+      statements.push({ text, params: params as unknown[] });
+      // Checked first: the DELETE names project_invitations too.
+      if (text.includes("DELETE FROM project_invitations")) {
+        return { rows: [], rowCount: row && !row.live ? 1 : 0 };
+      }
+      if (text.includes("FROM project_members")) return { rows: [ownerRow(tier)] };
+      if (text.includes("FROM project_invitations")) {
+        return { rows: row ? [{ id: INVITATION_ID, ...row }] : [] };
+      }
+      return { rows: [] };
+    });
+    return statements;
+  }
+
+  const remove = () =>
+    request(app)
+      .delete(`/api/projects/${PROJECT_ID}/members/invitations/${INVITATION_ID}`)
+      .set(authHeader());
+
+  it("returns 401 when unauthenticated", async () => {
+    const res = await request(app).delete(
+      `/api/projects/${PROJECT_ID}/members/invitations/${INVITATION_ID}`,
+    );
+
+    expect(res.status).to.equal(401);
+  });
+
+  it("clears a declined invitation off the team page", async () => {
+    const statements = installInvitation({ live: false });
+
+    const res = await remove();
+
+    expect(res.status).to.equal(200);
+    expect(res.body).to.deep.equal({ success: true });
+    const del = statements.find((s) => s.text.includes("DELETE FROM project_invitations"))!;
+    // project_id in the WHERE clause, so an id from another project deletes nothing.
+    expect(del.params).to.deep.equal([INVITATION_ID, PROJECT_ID]);
+    expect(del.text).to.include(
+      "NOT (status = 'pending' AND (expires_at IS NULL OR expires_at > NOW()))",
+    );
+  });
+
+  // Deleting a live invitation would take it out of the invitee's inbox with no
+  // trace of a withdrawal; revoking says what happened.
+  it("refuses a live invitation and points at Revoke, deleting nothing", async () => {
+    const statements = installInvitation({ live: true });
+
+    const res = await remove();
+
+    expect(res.status).to.equal(409);
+    expect(res.body.error).to.include("Revoke it instead");
+    expect(statements.filter((s) => s.text.includes("DELETE FROM project_invitations"))).to.deep.equal([]);
+  });
+
+  it("answers 404 for an id that belongs to no invitation of this project", async () => {
+    const statements = installInvitation(null);
+
+    const res = await remove();
+
+    expect(res.status).to.equal(404);
+    expect(statements.filter((s) => s.text.includes("DELETE FROM project_invitations"))).to.deep.equal([]);
+  });
+
+  it("refuses a developer, who cannot revoke either", async () => {
+    const statements = installInvitation({ live: false }, { tier: "developer" });
+
+    const res = await remove();
+
+    expect(res.status).to.equal(403);
+    expect(statements.filter((s) => s.text.includes("project_invitations"))).to.deep.equal([]);
+  });
+});
+
 describe("PATCH /api/projects/:id/members/:userId", () => {
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app)
@@ -588,7 +675,7 @@ describe("DELETE /api/projects/:id/members/me", () => {
 
   // A 404 here means `/me` fell through to `delete("/:userId")`, whose
   // requireUuidParam rejects the literal segment.
-  it("removes a developer's own membership", async () => {
+  it("removes a developer's own membership, and their invitation history with it", async () => {
     const executed = installMemberOfTier("developer");
 
     const res = await leave();
@@ -597,6 +684,12 @@ describe("DELETE /api/projects/:id/members/me", () => {
     const deletes = executed.filter((q) => q.text.includes("DELETE FROM project_members"));
     expect(deletes).to.have.lengthOf(1);
     expect(deletes[0]!.params).to.deep.equal([PROJECT_ID, TEST_USER.id]);
+    // Left behind, the old invitation says they accepted and joined, which the
+    // team page shows beside a roster they are no longer on — and a re-invite
+    // then lands next to it. Keyed on the address, since invitations have no user.
+    const cleanup = executed.find((q) => q.text.includes("DELETE FROM project_invitations"))!;
+    expect(cleanup, "leaving must clear the member's invitation rows").to.not.equal(undefined);
+    expect(cleanup.params).to.deep.equal([PROJECT_ID, TEST_USER.email]);
   });
 
   // An ownerless project is not a state the rest of the system answers for.
@@ -608,6 +701,9 @@ describe("DELETE /api/projects/:id/members/me", () => {
     expect(res.status).to.equal(403);
     expect(res.body.error).to.include("Transfer ownership");
     expect(executed.filter((q) => q.text.includes("DELETE FROM project_members"))).to.deep.equal([]);
+    // The cleanup sits after the guard: a refused leave must not quietly wipe the
+    // owner's invitation history on the way out.
+    expect(executed.filter((q) => q.text.includes("project_invitations"))).to.deep.equal([]);
   });
 });
 
@@ -639,5 +735,37 @@ describe("DELETE /api/projects/:id/members/:userId", () => {
     expect(res.body).to.deep.equal({ error: "Not found" });
     // The membership lookup is the access gate; nothing keyed on the bad id ran.
     expect(queries.filter((q) => q.includes("DELETE FROM project_members"))).to.deep.equal([]);
+  });
+
+  // The cleanup is keyed on an address, and two are in scope here: the caller's
+  // and the removed member's. Passing the caller's would wipe the wrong person's
+  // invitation history and still answer 200 — which is why the target read now
+  // joins `users` for the email rather than reusing `req.user`.
+  it("removes a member and clears the removed member's invitations, not the caller's", async () => {
+    installTestAuth();
+    const TARGET_ID = "44444444-4444-4444-4444-444444444444";
+    const executed: Array<{ text: string; params: unknown[] }> = [];
+    mockQuery((text, params = []) => {
+      executed.push({ text, params: params as unknown[] });
+      if (text.startsWith("DELETE")) return { rows: [], rowCount: 1 };
+      // The target read joins users for the address; the generic branch below is
+      // the access gate, whose text also names project_members.
+      if (text.includes("FROM project_members pm")) {
+        return { rows: [{ permission_tier: "developer", email: "Bob@Acme.test" }] };
+      }
+      if (text.includes("FROM project_members")) return { rows: [ownerRow()] };
+      return { rows: [] };
+    });
+
+    const res = await request(app)
+      .delete(`/api/projects/${PROJECT_ID}/members/${TARGET_ID}`)
+      .set(authHeader());
+
+    expect(res.status).to.equal(200);
+    const memberDelete = executed.find((q) => q.text.includes("DELETE FROM project_members"))!;
+    expect(memberDelete.params).to.deep.equal([PROJECT_ID, TARGET_ID]);
+    const cleanup = executed.find((q) => q.text.includes("DELETE FROM project_invitations"))!;
+    expect(cleanup, "removal must clear the member's invitation rows").to.not.equal(undefined);
+    expect(cleanup.params).to.deep.equal([PROJECT_ID, "Bob@Acme.test"]);
   });
 });

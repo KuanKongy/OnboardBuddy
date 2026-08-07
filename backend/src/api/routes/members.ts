@@ -307,6 +307,64 @@ membersRouter.post(
   },
 );
 
+// Clear a dead invitation off the team page: revoked, declined, or expired. The
+// history is worth keeping until somebody says otherwise, and this is how they
+// say it. One row backs both views, so the entry leaves the invitee's inbox too.
+// A live invitation is not deletable here — revoke it first, so the invitee sees
+// that it was withdrawn rather than watching it vanish.
+// Deleting an expired-but-still-'pending' row releases the slot held by
+// idx_project_invitations_pending_unique_email, which is harmless: the POST route
+// already retires such a row itself before inserting a replacement.
+membersRouter.delete(
+  "/invitations/:invitationId",
+  requireProjectAccess("owner", "admin"),
+  requireUuidParam("invitationId"),
+  async (req, res) => {
+    try {
+      const { invitationId } = req.params;
+      const projectId = req.params.id;
+
+      // Same liveness predicate as the list above, evaluated by Postgres.
+      const existing = await query(
+        `SELECT id,
+                (status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())) AS live
+         FROM project_invitations
+         WHERE id = $1 AND project_id = $2`,
+        [invitationId, projectId],
+      );
+
+      if (existing.rows.length === 0) {
+        res.status(404).json({ error: "Invitation not found" });
+        return;
+      }
+
+      if ((existing.rows[0] as { live: boolean }).live) {
+        res.status(409).json({ error: "This invitation is still pending. Revoke it instead." });
+        return;
+      }
+
+      // The write is the arbiter: a resend landing since the read above must not
+      // have its replacement deleted out from under it.
+      const result = await query(
+        `DELETE FROM project_invitations
+         WHERE id = $1 AND project_id = $2
+           AND NOT (status = 'pending' AND (expires_at IS NULL OR expires_at > NOW()))`,
+        [invitationId, projectId],
+      );
+
+      if (result.rowCount === 0) {
+        res.status(409).json({ error: "This invitation is still pending. Revoke it instead." });
+        return;
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error("Delete invitation error:", err);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
 membersRouter.patch("/:userId", requireProjectAccess("owner", "admin"), requireUuidParam("userId"), async (req, res) => {
   try {
     const projectId = req.params.id;
@@ -508,6 +566,16 @@ membersRouter.delete("/me", requireProjectAccess(), async (req, res) => {
       [projectId, userId],
     );
 
+    // A member who leaves takes their invitation history with them, so a
+    // re-invite starts clean instead of arriving under a row that says they
+    // already accepted. Not one transaction with the delete above: both
+    // statements are idempotent and no invariant ties them, so a crash between
+    // them strands a stale invitation row that is harmless and deletable by hand.
+    await query(
+      `DELETE FROM project_invitations WHERE project_id = $1 AND LOWER(email) = LOWER($2)`,
+      [projectId, req.user!.email],
+    );
+
     res.json({ success: true });
   } catch (err) {
     console.error("Leave project error:", err);
@@ -526,8 +594,13 @@ membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), require
       return;
     }
 
+    // The address comes along for the invitation cleanup below: membership is by
+    // user and invitations are by address, so `users` is the only bridge.
     const targetResult = await query(
-      `SELECT permission_tier FROM project_members WHERE project_id = $1 AND user_id = $2`,
+      `SELECT pm.permission_tier, u.email
+       FROM project_members pm
+       INNER JOIN users u ON u.id = pm.user_id
+       WHERE pm.project_id = $1 AND pm.user_id = $2`,
       [projectId, targetUserId],
     );
 
@@ -536,7 +609,8 @@ membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), require
       return;
     }
 
-    const targetTier = (targetResult.rows[0] as { permission_tier: string }).permission_tier;
+    const target = targetResult.rows[0] as { permission_tier: string; email: string };
+    const targetTier = target.permission_tier;
 
     if (targetTier === "owner") {
       res.status(403).json({ error: "Cannot remove the project owner" });
@@ -551,6 +625,14 @@ membersRouter.delete("/:userId", requireProjectAccess("owner", "admin"), require
     await query(
       `DELETE FROM project_members WHERE project_id = $1 AND user_id = $2`,
       [projectId, targetUserId],
+    );
+
+    // A removed member's invitation history goes with them, so re-inviting them
+    // starts clean. Two statements rather than a transaction, as on `/me` above:
+    // both are idempotent and a crash between them strands one harmless row.
+    await query(
+      `DELETE FROM project_invitations WHERE project_id = $1 AND LOWER(email) = LOWER($2)`,
+      [projectId, target.email],
     );
 
     res.json({ success: true });
