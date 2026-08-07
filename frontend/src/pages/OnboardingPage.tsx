@@ -118,12 +118,89 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function confidenceStyle(c: ConfidenceLevel) {
-  return c === "high"
-    ? "border-success/40 bg-success-soft text-success"
-    : c === "medium"
-      ? "border-warning/40 bg-warning-soft text-warning"
-      : "border-danger/40 bg-danger-soft text-danger";
+const CONFIDENCE_TONE: Record<ConfidenceLevel, string> = {
+  high: "text-success",
+  medium: "text-warning",
+  low: "text-danger",
+};
+
+/**
+ * One option row in the regenerate dialog. Every option stays on screen even
+ * when it is unusable, so the disabled state has to drop the hover affordance
+ * too: `hover:` rules still fire on a disabled button, which lit up a row that
+ * cannot be clicked.
+ */
+const OPTION_CLASS =
+  "w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60 disabled:hover:border-border disabled:hover:bg-transparent";
+
+/** The grade as a sentence opener, so "low confidence" is not shouted in caps. */
+const CONFIDENCE_WORD: Record<ConfidenceLevel, string> = { high: "High", medium: "Medium", low: "Low" };
+
+/** One line on where the grade comes from, wherever the pie is explained. */
+const GRADING_EXPLANATION =
+  "Graded from per-claim validation: claims that cite receipts raise it, claims downgraded during validation lower it.";
+
+/**
+ * Grades with no claim ledger behind them still have to draw something. These
+ * are the fractions the three words stand for, not measurements: a full circle
+ * for high, a little over half for medium, a quarter for low.
+ */
+const LEVEL_FRACTION: Record<ConfidenceLevel, number> = { high: 1, medium: 0.55, low: 0.25 };
+
+/**
+ * The grade as a filled circle: how much of this section's tracked claims cite
+ * a receipt. The word alone ("medium confidence") never said what it was
+ * measured from, and the reason string next to it is the one thing readers
+ * skip. `claims` null means the generation predates the ledger, so the pie
+ * shows the grade's own fraction rather than a made-up ratio.
+ */
+function ConfidencePie({
+  level,
+  claims,
+}: {
+  level: ConfidenceLevel;
+  claims?: { total: number; cited: number; low: number } | null;
+}) {
+  const measured = claims && claims.total > 0;
+  const fraction = measured ? claims.cited / claims.total : LEVEL_FRACTION[level];
+  const label = measured
+    ? `${CONFIDENCE_WORD[level]} confidence: ${claims.cited} of ${claims.total} claims cite receipts`
+    : `${CONFIDENCE_WORD[level]} confidence`;
+
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className={cn("h-4 w-4 shrink-0", CONFIDENCE_TONE[level])}
+      role="img"
+      aria-label={label}
+    >
+      <circle
+        cx="8"
+        cy="8"
+        r="6.25"
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity={0.25}
+        strokeWidth={3.5}
+      />
+      {/* `pathLength` normalises the circumference to 100 so the dash array is
+          the percentage itself; the rotation puts 0% at twelve o'clock. A full
+          ring is drawn WITHOUT a dash array: the two ends of a 100-unit dash
+          meet at twelve o'clock and antialias into a visible pale seam (seen
+          at 96px, a hairline at the real 16px). */}
+      <circle
+        cx="8"
+        cy="8"
+        r="6.25"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={3.5}
+        pathLength={100}
+        strokeDasharray={fraction >= 1 ? undefined : `${fraction * 100} 100`}
+        transform="rotate(-90 8 8)"
+      />
+    </svg>
+  );
 }
 
 const UNKNOWN_LABELS: Record<string, string> = {
@@ -132,22 +209,22 @@ const UNKNOWN_LABELS: Record<string, string> = {
   facts_only_privacy: "Code snippets were withheld under this project's privacy mode",
   no_workflows_found: "No workflows could be traced in this codebase",
   unsupported_languages: "Some files are in languages the analyzer doesn't parse yet",
-  docs_conflict_with_code: "Documentation disagrees with the code — the code was trusted",
+  docs_conflict_with_code: "Documentation disagrees with the code, and the code was trusted",
   unexplained_step: "A step in a flow couldn't be explained from the available evidence",
-  ai_disabled: "Generated without AI (privacy mode: AI disabled) — deterministic facts only",
+  ai_disabled: "Generated without AI (privacy mode: AI disabled): deterministic facts only",
   noReceipt: "No citable evidence was available for this topic",
   docs_only_support: "This claim rests on documentation alone (docs may lag the code)",
   // Retrieval internals, translated: raw "no embeddings matched views […]"
   // used to render verbatim to onboarding readers.
   no_semantic_matches:
-    "The semantic index had nothing relevant for this section — it is based on structural facts only",
+    "The semantic index had nothing relevant for this section, so it is based on structural facts only",
   workflow: "A referenced workflow couldn't be fully resolved from the trace evidence",
   data: "Supporting data for part of this section wasn't available in the evidence",
   // Kinds that used to render as raw pipeline telemetry (READER_REDESIGN.md
   // N8): the reader speaks to a newcomer, not to the validator.
   unsupported_language: "Part of this repository is in a language the analyzer doesn't parse",
-  prompt_injection_attempt: "Repo content tried to steer the AI (prompt injection) — it was fenced and ignored",
-  incomplete_coverage: "This section doesn't yet cover every file it maps — regenerate to fill it in",
+  prompt_injection_attempt: "Repo content tried to steer the AI (prompt injection); it was fenced and ignored",
+  incomplete_coverage: "This section doesn't yet cover every file it maps. Regenerate to fill it in",
   critique_contradiction: "An internal consistency check flagged one of this section's statements",
   env_var_documentation_missing: "Some environment variables have no documented purpose in .env.example",
   missing_test_for_area: "No existing test could be found covering this change area",
@@ -347,38 +424,40 @@ function CoverageFiles({
         Everything in this package is derived from the {files.parsed} files the parser read
         {files.supported !== null ? `, of ${files.supported} counted as source in a supported language` : ""}.
         The rest of the {files.inScope} files in scope are assets, docs, lockfiles, and languages
-        OnboardBuddy does not parse — nothing here describes them.
+        OnboardBuddy does not parse. Nothing here describes them.
       </TooltipContent>
     </Tooltip>
   );
 }
 
 /**
- * "How packages work" tour: the transparency contract for package lifecycle —
- * when a package is updated in place, when a new one appears, when nothing is
- * ever silently discarded, when stale badges (the diff signal) show up, and
- * what the AI & privacy setting changes.
+ * "How packages work" tour: the transparency contract for package lifecycle.
+ * What identifies a package, when regenerating updates one in place, what a
+ * new commit does on its own (re-check, never rewrite), and what the AI &
+ * privacy setting changes. Bodies are split into paragraphs with a blank
+ * line: AppTour renders each as its own <p>, and these are the longest
+ * bodies in the app.
  */
 const LIFECYCLE_TOUR_STEPS: TourStep[] = [
   {
     target: "onboarding-header",
-    title: "One package per scope, role & commit",
-    body: "Every package is pinned to the exact commit it was analyzed at. Generating the same role at the same commit UPDATES that package in place — packages are never silently discarded.",
+    title: "What makes a package a package",
+    body: "A package is one generated reading path, and its identity is the whole of branch, scope, role, and analysis depth. Change any one of those and you get a different package, not an edited version of this one.\n\nEach package is also pinned to the exact commit it was analyzed at, so a card always tells you which code it describes.",
   },
   {
     target: "onboarding-cards",
-    title: "When a package updates vs. multiplies",
-    body: "Regenerate rebuilds sections in place for the same commit. Analyzing a NEW commit re-checks existing packages and stale-flags only what changed; a new card appears once you generate or regenerate a package at that commit. Older cards stay, marked 'behind latest'.",
+    title: "Regenerating updates a card in place",
+    body: "Generating the same package again at the same commit rewrites its sections in place and keeps the same card. Nothing is discarded and no second card appears.\n\nUnchanged content comes from cache, so a regeneration pays for the parts that actually changed.",
   },
   {
     target: "onboarding-cards",
-    title: "Stale badges are your diff signal",
-    body: "Push commits, then re-analyze: only sections whose underlying code evidence actually changed get a stale badge (whitespace-only edits flag nothing). A stale section shows a banner in the reader — Regenerate rebuilds it against the newest analysis while review history is kept. Staleness is branch-scoped: re-analyzing a branch only re-checks packages built from that branch, so a feature branch never stale-flags your main package. Rebuilding stays your call — a card with stale sections offers 'Regenerate only the stale sections', which touches nothing else — or turn on 'Auto-regenerate stale sections' in project settings to have every re-analysis rebuild them immediately.",
+    title: "A new commit re-checks, then you generate",
+    body: "Analyzing a new commit re-checks the packages you already have: only sections whose underlying code evidence changed get a stale badge, and whitespace-only edits flag nothing. Staleness is branch-scoped, so re-analyzing a feature branch never stale-flags your main package.\n\nThe card for the new commit appears once you generate at that commit. Older cards stay, marked 'behind latest', so what your team already read is still there. Rebuilding is your call: a card with stale content offers 'Regenerate only the stale sections', or you can turn on 'Auto-regenerate stale sections' in project settings.",
   },
   {
     target: "onboarding-filters",
     title: "Privacy decides HOW, not WHETHER",
-    body: "The AI & privacy setting applies to the very next generation — no re-analysis needed. Full AI narrates with code snippets, facts-only sends no code to the model, and AI-disabled builds deterministic fact sheets with zero LLM calls.",
+    body: "The AI & privacy setting applies to the very next generation, with no re-analysis needed.\n\nFull AI narrates with code snippets, facts-only sends no code to the model, and AI-disabled builds deterministic fact sheets with zero LLM calls.",
   },
 ];
 
@@ -387,12 +466,12 @@ const READER_TOUR_STEPS: TourStep[] = [
   {
     target: "reader-sections",
     title: "Your reading path",
-    body: "Sections are ordered for onboarding — work top-down (or use ← / →). A warning icon means a section went stale after a newer analysis; a red dot means low confidence.",
+    body: "Sections are ordered for onboarding, so work top-down (or use ← / →). A warning icon means a section went stale after a newer analysis.",
   },
   {
     target: "reader-review",
     title: "Track what you've read",
-    body: "Mark each section as you finish it — your personal progress shows in the section list. For owners and admins the same button is an editorial 'Reviewed' signal to the whole team; if a regeneration changes a section it drops back to draft so everyone knows to re-read it.",
+    body: "Mark each section as you finish it; your personal progress shows in the section list.\n\nFor owners and admins the same button is an editorial 'Reviewed' signal to the whole team. If a regeneration changes a section it drops back to draft, so everyone knows to re-read it.",
   },
   {
     target: "reader-actions",
@@ -578,7 +657,7 @@ export function SectionView({
   const totalReceipts = section.blocks.reduce((n, b) => n + b.receipts.length, 0);
   const referenceProvenance = REFERENCE_SECTION_IDS.has(section.id) && totalReceipts === 0;
   const displayReason = referenceProvenance
-    ? "built from code facts — the tables are the source"
+    ? "built from code facts, the tables are the source"
     : section.confidenceReason;
 
   // One `a` override shared by the TL;DR callout and every block body:
@@ -600,7 +679,7 @@ export function SectionView({
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" className="max-w-72">
-              Unverified — this statement cites no receipt. It was downgraded
+              Unverified: this statement cites no receipt. It was downgraded
               during validation and is listed under Known gaps.
             </TooltipContent>
           </Tooltip>
@@ -622,28 +701,45 @@ export function SectionView({
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Badge
-          variant="outline"
-          className={cn(
-            "text-[0.6875rem] capitalize",
-            referenceProvenance
-              ? "border-border bg-secondary text-secondary-foreground"
-              : confidenceStyle(section.confidence),
-          )}
-        >
-          {referenceProvenance ? "Reference" : `${section.confidence} confidence`}
-        </Badge>
-        {displayReason && (
-          // The grade's mechanical basis, inline (audit §3.6) — a label
-          // without its reason reads as theater.
+        {referenceProvenance ? (
+          <>
+            <Badge
+              variant="outline"
+              className="border-border bg-secondary text-[0.6875rem] capitalize text-secondary-foreground"
+            >
+              Reference
+            </Badge>
+            {displayReason && (
+              // The grade's mechanical basis, inline (audit §3.6) — a label
+              // without its reason reads as theater.
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Deterministic reference facts, generated from the analyzed code, not narrated by the model
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </>
+        ) : (
+          // The pie IS the grade: the word "medium" told nobody what was
+          // measured, while the ratio it stands for (claims that cite a
+          // receipt) was sitting unread in the reason string beside it. One
+          // tooltip for both, so the picture always arrives with its sentence.
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
+              <span tabIndex={0} className="inline-flex cursor-help items-center gap-1.5 rounded-sm">
+                <ConfidencePie level={section.confidence} claims={section.claims} />
+                {displayReason && (
+                  <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
+                )}
+              </span>
             </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {referenceProvenance
-                ? "Deterministic reference facts — generated from the analyzed code, not narrated by the model"
-                : "How this grade was computed"}
+            <TooltipContent side="bottom" className="max-w-72 text-left">
+              <p className="font-medium">{CONFIDENCE_WORD[section.confidence]} confidence</p>
+              {displayReason && <p className="mt-0.5">{displayReason}</p>}
+              <p className="mt-0.5">{GRADING_EXPLANATION}</p>
             </TooltipContent>
           </Tooltip>
         )}
@@ -773,7 +869,7 @@ export function SectionView({
                         </div>
                       ) : (
                         <p id={`citations-${section.id}-${bi}`} className="mt-1.5 text-[0.71875rem] text-muted-foreground">
-                          These references point at internal analysis records with no file location — nothing to open here.
+                          These references point at internal analysis records with no file location, so there is nothing to open here.
                         </p>
                       ))}
                   </div>
@@ -880,27 +976,52 @@ export function SectionView({
 
 // ── package cards ─────────────────────────────────────────────────────────────
 
-export function PackageCardView({ card, onOpen, onRegenerate }: { card: PackageCard; onOpen: () => void; onRegenerate?: () => void }) {
+export function PackageCardView({
+  card,
+  to,
+  onOpen,
+  onSelect,
+  onRegenerate,
+}: {
+  card: PackageCard;
+  /** Absolute reader URL for this package. The scope name is a real link, so
+   *  middle-click, Cmd-click and "open in new tab" work here like on any other
+   *  row, and the keyboard reaches the card through it rather than through a
+   *  div wearing role="button" (ProjectCard's precedent). */
+  to: string;
+  onOpen: () => void;
+  /** Pin the sidebar selection to this package. The link owns navigation, so
+   *  this runs the part of `onOpen` a plain href cannot do. */
+  onSelect: () => void;
+  onRegenerate?: () => void;
+}) {
   return (
-    // A div-with-role instead of <button> so the nested Regenerate button
-    // stays valid HTML.
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
+      onClick={(e) => {
+        // The card body stays clickable, but it is a surface, not a control:
+        // the scope link and the Regenerate button handle their own clicks,
+        // and selecting text inside the card (a commit sha, a scope name)
+        // must not navigate out from under the selection.
+        if ((e.target as Element).closest("a,button")) return;
+        if (window.getSelection()?.toString()) return;
+        onOpen();
       }}
-      className="group flex cursor-pointer flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
+      className="group flex cursor-pointer select-text flex-col rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:border-primary/40 hover:shadow-md"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 text-[0.8125rem] font-semibold text-foreground">
             <Layers className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{card.scope_name}</span>
+            <Link
+              to={to}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect();
+              }}
+              className="truncate rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {card.scope_name}
+            </Link>
           </p>
           <p className="mt-0.5 text-[0.71875rem] text-muted-foreground">
             {roleTitle(card.role)}
@@ -1376,7 +1497,7 @@ export function OnboardingPage() {
               setParams({ package: polled!.id });
             }
           } else if (timedOut) {
-            setActionError("Generation is taking longer than expected — check the Overview page for job status, or try again.");
+            setActionError("Generation is taking longer than expected. Check the Overview page for job status, or try again.");
           }
           loadCards();
         }
@@ -1418,7 +1539,7 @@ export function OnboardingPage() {
         } else if (Date.now() - started > 120_000) {
           stop();
           setRegenerating(false);
-          setActionError("Regeneration is taking longer than expected — the section will replace itself when the worker finishes. Check the Overview page for job status.");
+          setActionError("Regeneration is taking longer than expected. The section will replace itself when the worker finishes. Check the Overview page for job status.");
         }
       }, 4000);
     } catch (err: unknown) {
@@ -1490,12 +1611,15 @@ export function OnboardingPage() {
     );
 
     const analyzeBusy = generating || project?.status === "analyzing";
+    // Tutorials can be the only stale content on a card, so the stale option's
+    // gate counts both populations — same arithmetic as the API's 409 guard.
+    const staleCount = regenCard ? regenCard.stale_sections + regenCard.stale_tutorials : 0;
     return (
       <div>
         <div data-tour="onboarding-header">
           <PageHeader
             title="Your onboarding"
-            subtitle="Generated onboarding packages — one per scope, role, and analyzed commit."
+            subtitle="Generated onboarding packages, one per scope, role, and analyzed commit."
             actions={
               <>
                 <Tooltip>
@@ -1536,7 +1660,7 @@ export function OnboardingPage() {
               <SelectTrigger aria-label="Filter by role" className="h-8 w-[150px] text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All roles</SelectItem>
-                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
+                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -1601,7 +1725,7 @@ export function OnboardingPage() {
               <h2 className="text-sm font-semibold text-foreground">No onboarding packages yet</h2>
               <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
                 Run an analysis to generate role-based onboarding: entry points, critical files,
-                workflows, tutorials, and safety notes — every claim backed by code receipts.
+                workflows, tutorials, and safety notes, every claim backed by code receipts.
               </p>
               {/* E10: the empty state offered only the admin-only re-analysis,
                   so a developer saw a dead end — yet POST /onboarding/generate
@@ -1631,7 +1755,7 @@ export function OnboardingPage() {
                   {generating || project?.status === "analyzing" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                   {generating || project?.status === "analyzing"
                     ? "Generating…"
-                    : `Generate for ${roleTitle(selectedRole)}`}
+                    : `Generate for ${roleLabel(selectedRole)}`}
                 </Button>
               )}
             </div>
@@ -1642,6 +1766,8 @@ export function OnboardingPage() {
               <PackageCardView
                 key={card.id}
                 card={card}
+                to={`/projects/${id}/onboarding?view=reader&package=${card.id}&role=${card.role}`}
+                onSelect={() => selectPackage(card.id)}
                 onOpen={() => {
                   // Opening a card pins the reader to that exact package and
                   // makes it the sidebar selection so every tab follows.
@@ -1665,7 +1791,7 @@ export function OnboardingPage() {
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle className="text-sm">
-                Regenerate {roleTitle(regenCard?.role)} package
+                Regenerate {roleLabel(regenCard?.role)} package
               </DialogTitle>
             </DialogHeader>
 
@@ -1673,79 +1799,84 @@ export function OnboardingPage() {
               <ErrorBanner>{regenError}</ErrorBanner>
             )}
 
+            {/* All three options are always on screen, including the ones this
+                package or this member cannot use. Hiding them made the dialog
+                change shape per card, so nobody learned that the cheap option
+                exists until a package happened to be stale. */}
             <div className="space-y-2">
               <button
                 type="button"
                 onClick={handleRegeneratePackage}
                 disabled={regenBusy}
-                className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60"
+                className={OPTION_CLASS}
               >
                 <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
                   {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                  Regenerate from the current analysis
+                  Regenerate all sections (same commit)
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  Rebuilds every section and tutorial of this package against the latest analyzed
-                  commit — no repo re-analysis; unchanged content comes from cache.
+                  Rebuilds every section and tutorial of this package from the analysis you already
+                  have. No repo re-analysis, and unchanged content comes from cache.
                   {regenCard && !regenCard.is_latest_commit &&
                     " This package is behind the latest analysis, so this also brings it up to date."}
                 </p>
               </button>
 
-              {/* Tutorials can be the only stale content, so the gate counts
-                  both — the API's 409 guard does the same arithmetic. */}
-              {regenCard && (regenCard.stale_sections > 0 || regenCard.stale_tutorials > 0) && (
-                <button
-                  type="button"
-                  onClick={handleRegenerateStale}
-                  disabled={regenBusy}
-                  className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40 disabled:opacity-60"
-                >
-                  <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
-                    {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                    Regenerate only the stale sections
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Rebuilds just the stale content (
-                    {[
-                      regenCard.stale_sections > 0 &&
-                        `${regenCard.stale_sections} section${regenCard.stale_sections === 1 ? "" : "s"}`,
-                      regenCard.stale_tutorials > 0 &&
-                        `${regenCard.stale_tutorials} tutorial${regenCard.stale_tutorials === 1 ? "" : "s"}`,
-                    ]
-                      .filter(Boolean)
-                      .join(", ")}
-                    ) against the newest analysis — everything else keeps its current text and
-                    costs nothing.
-                  </p>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handleRegenerateStale}
+                disabled={regenBusy || staleCount === 0}
+                className={OPTION_CLASS}
+              >
+                <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
+                  {regenBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
+                  Regenerate only the stale sections
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {staleCount === 0 || !regenCard ? (
+                    "Nothing is stale right now. Sections go stale when a newer analysis shows their underlying code changed."
+                  ) : (
+                    <>
+                      Rebuilds just the content a newer analysis flagged (
+                      {[
+                        regenCard.stale_sections > 0 &&
+                          `${regenCard.stale_sections} section${regenCard.stale_sections === 1 ? "" : "s"}`,
+                        regenCard.stale_tutorials > 0 &&
+                          `${regenCard.stale_tutorials} tutorial${regenCard.stale_tutorials === 1 ? "" : "s"}`,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                      ). Everything else keeps its current text and costs nothing.
+                    </>
+                  )}
+                </p>
+              </button>
 
-              {canManage && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAnalyzeInitialRole(regenCard?.role);
-                    setRegenCard(null);
-                    setAnalyzeOpen(true);
-                  }}
-                  className="w-full rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent/40"
-                >
-                  <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Re-analyze at a new commit first…
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    Pick branch, commit, and scope with a cost preview; a fresh analysis runs and
-                    this role's package is generated from it.
-                  </p>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setAnalyzeInitialRole(regenCard?.role);
+                  setRegenCard(null);
+                  setAnalyzeOpen(true);
+                }}
+                disabled={!canManage}
+                className={OPTION_CLASS}
+              >
+                <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-foreground">
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Regenerate all sections (new commit)
+                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {canManage
+                    ? "Pick branch, commit, and scope with a cost preview; a fresh analysis runs and this role's package is generated from it."
+                    : "Owners and admins only. Re-analyzing the repository is a billed run."}
+                </p>
+              </button>
             </div>
 
             <p className="text-[0.6875rem] text-muted-foreground">
               Need just one section? Open the package and use "Regenerate section" inside the
-              reader — it rebuilds only that section against the newest analysis.
+              reader. It rebuilds only that section against the newest analysis.
             </p>
           </DialogContent>
         </Dialog>
@@ -1830,7 +1961,7 @@ export function OnboardingPage() {
           {selectedPackageParam ? (
             // Pinned to one exact package — role is part of its identity.
             <Badge variant="outline" className="h-7 px-2 text-xs">
-              {roleTitle(pkg?.role ?? selectedRole)}
+              {roleLabel(pkg?.role ?? selectedRole)}
             </Badge>
           ) : (
             <Select value={selectedRole} onValueChange={(r) => setParams({ role: r })}>
@@ -1841,7 +1972,7 @@ export function OnboardingPage() {
                   keeps it the same size as the badge it replaces. */}
               <SelectTrigger aria-label="Select role" className="h-7 w-[150px] text-xs data-[size=default]:h-7"><SelectValue /></SelectTrigger>
               <SelectContent>
-                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.title}</SelectItem>)}
+                {ROLE_OPTIONS.map((r) => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
               </SelectContent>
             </Select>
           )}
@@ -1911,7 +2042,7 @@ export function OnboardingPage() {
                   {progressLoadError && (
                     <TooltipContent side="bottom" className="max-w-xs text-left">
                       Your reading progress couldn&apos;t be loaded, so marks are paused for this
-                      visit — saving now would overwrite the sections you have already read.
+                      visit: saving now would overwrite the sections you have already read.
                       Reload the page to try again.
                     </TooltipContent>
                   )}
@@ -1930,7 +2061,7 @@ export function OnboardingPage() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-left">
-                  Ask a question about this codebase — answered from the analyzed evidence with receipts
+                  Ask a question about this codebase, answered from the analyzed evidence with receipts
                 </TooltipContent>
               </Tooltip>
               <Tooltip>
@@ -1946,7 +2077,7 @@ export function OnboardingPage() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs text-left">
-                  How this package was made — models, calls, cost, validation
+                  How this package was made: models, calls, cost, validation
                 </TooltipContent>
               </Tooltip>
               <DropdownMenu>
@@ -2093,7 +2224,7 @@ export function OnboardingPage() {
         >
           <span>
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-            Live updates stopped — the last three checks couldn&apos;t reach the server. Generation
+            Live updates stopped: the last three checks couldn&apos;t reach the server. Generation
             is still running; this page just stopped following it.
           </span>
           <Button
@@ -2109,14 +2240,14 @@ export function OnboardingPage() {
       {!isMissing && pkg.status === "generating" && !livePollStalled && (
         <div className="flex items-center gap-2 border-b bg-info-soft px-3 py-2 text-xs text-info sm:px-4 lg:px-5">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Generating — sections appear here as each one finishes ({sections.length}/{SECTION_NAV_ORDER.length} so far).
+          Generating: sections appear here as each one finishes ({sections.length}/{SECTION_NAV_ORDER.length} so far).
         </div>
       )}
       {!isMissing && pkg.status === "failed" && (
         <div className="flex items-center justify-between gap-3 border-b border-danger/30 bg-danger-soft px-3 py-2 text-xs text-danger sm:px-4 lg:px-5">
           <span>
             <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-            Generation failed — some sections may be missing or incomplete.
+            Generation failed, so some sections may be missing or incomplete.
           </span>
           <Button
             size="xs"
@@ -2249,20 +2380,6 @@ export function OnboardingPage() {
                                 the restating tooltip. */}
                             <span className="min-w-0 flex-1 leading-5">{label}</span>
                             {section?.status === "stale" && <AlertTriangle className="mt-1 h-3 w-3 shrink-0 text-warning" />}
-                            {/* Kept under H1: the dot shows no label, so the
-                                tooltip is the only legend for what red means
-                                (§8.3 — "red dots with no legend"). */}
-                            {section?.confidence === "low" && section.status !== "stale" && (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <span
-                                    aria-label="Low confidence"
-                                    className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
-                                  />
-                                </TooltipTrigger>
-                                <TooltipContent side="right">Low confidence</TooltipContent>
-                              </Tooltip>
-                            )}
                             {readSections?.includes(navId) && (
                               <CheckCircle2 className="mt-1 h-3 w-3 shrink-0 text-success/70" aria-label="Read" />
                             )}
@@ -2306,8 +2423,8 @@ export function OnboardingPage() {
                   </h2>
                   <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
                     {pkgError.gone
-                      ? "The package this link points to has been deleted or replaced. Pick another one from the package list — nothing has been generated or charged."
-                      : "This is a failure to load it, not a sign that it is missing. Your existing package is untouched — retry before generating anything, so you are not charged for a package you already have."}
+                      ? "The package this link points to has been deleted or replaced. Pick another one from the package list. Nothing has been generated or charged."
+                      : "This is a failure to load it, not a sign that it is missing. Your existing package is untouched. Retry before generating anything, so you are not charged for a package you already have."}
                   </p>
                   <p className="mt-2 max-w-sm break-words text-[0.6875rem] text-muted-foreground/80">
                     {pkgError.message}
@@ -2334,15 +2451,15 @@ export function OnboardingPage() {
                     <FileText className="h-6 w-6 text-muted-foreground" />
                   </div>
                   <h2 className="text-sm font-semibold text-foreground">
-                    No package for {roleTitle(selectedRole)}
+                    No package for {roleLabel(selectedRole)}
                   </h2>
                   <p className="mt-1.5 max-w-sm text-xs text-muted-foreground">
-                    Generate this role's package from the latest analysis — role-specific entry
+                    Generate this role's package from the latest analysis: role-specific entry
                     points, critical files, workflows, and safety notes. Other roles are unaffected.
                   </p>
                   <Button size="sm" className="mt-4 gap-1.5" onClick={handleGenerateRole} disabled={generating}>
                     {generating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                    {generating ? "Generating…" : `Generate for ${roleTitle(selectedRole)}`}
+                    {generating ? "Generating…" : `Generate for ${roleLabel(selectedRole)}`}
                   </Button>
                 </div>
               )
@@ -2358,7 +2475,7 @@ export function OnboardingPage() {
                   <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning-soft px-3 py-2">
                     <p className="text-xs text-warning">
                       <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5" />
-                      Stale — source files changed since this was written.{" "}
+                      Stale: source files changed since this was written.{" "}
                       {canManage
                         ? "Regenerating rebuilds it against the newest analysis."
                         : "An owner or admin can regenerate it against the newest analysis."}

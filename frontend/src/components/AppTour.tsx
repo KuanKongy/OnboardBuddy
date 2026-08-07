@@ -6,6 +6,7 @@ export interface TourStep {
   /** Matches a `data-tour="<target>"` attribute somewhere in the dashboard. */
   target: string;
   title: string;
+  /** Blank lines split it into paragraphs; no other markup is interpreted. */
   body: string;
 }
 
@@ -207,7 +208,7 @@ export function AppTour({ steps, onDone }: AppTourProps) {
         ref={cardRef}
         role="dialog"
         aria-modal="true"
-        aria-label={`${step.title} — step ${index + 1} of ${available.length}`}
+        aria-label={`${step.title}, step ${index + 1} of ${available.length}`}
         tabIndex={-1}
         className="fixed w-72 max-w-[85vw] rounded-lg border border-border bg-card p-3 text-xs shadow-xl outline-none transition-all duration-200"
         style={{ top: cardTop, left: cardLeft }}
@@ -216,7 +217,14 @@ export function AppTour({ steps, onDone }: AppTourProps) {
           {index + 1} of {available.length}
         </p>
         <p className="font-semibold text-foreground">{step.title}</p>
-        <p className="mt-1 text-muted-foreground">{step.body}</p>
+        {/* A blank line in `body` is a paragraph break. The lifecycle tour's
+            steps run to several sentences each, and as one block they were a
+            wall nobody read to the end of. */}
+        <div className="mt-1 space-y-1.5 text-muted-foreground">
+          {step.body.split("\n\n").map((para, i) => (
+            <p key={i}>{para}</p>
+          ))}
+        </div>
         <div className="mt-3 flex items-center justify-between">
           <Button variant="ghost" size="xs" onClick={onDone}>
             Skip tour

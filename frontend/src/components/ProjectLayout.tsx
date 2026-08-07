@@ -63,7 +63,7 @@ const projectNavItems = [
     label: "Dependencies",
     icon: Network,
     end: false,
-    description: "Which files and modules depend on which — a map for orienting yourself.",
+    description: "Which files and modules depend on which: a map for orienting yourself.",
   },
   {
     to: "capabilities",
@@ -117,22 +117,22 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-overview",
     title: "Start at the overview",
-    body: "Active runs, your packages across branches and commits, and the full run history with costs. The Analyze… button lets you pick a branch, commit, and scope — and preview cost before anything runs.",
+    body: "Active runs, your packages across branches and commits, and the full run history with costs. The Analyze… button lets you pick a branch, commit, and scope, and preview cost before anything runs.",
   },
   {
     target: "package-selector",
     title: "Pick which package you're viewing",
-    body: "Every tab follows this selection — branch, commit, scope, and role. A generation you start selects its new package automatically when it finishes.",
+    body: "Every tab follows this selection: branch, commit, scope, and role. A generation you start selects its new package automatically when it finishes.",
   },
   {
     target: "nav-onboarding",
     title: "Your onboarding",
-    body: "Generated reading paths, one package per scope, role, and commit. Every claim carries receipts — click one to see the code it's based on.",
+    body: "Generated reading paths, one package per scope, role, and commit. Every claim carries receipts; click one to see the code it's based on.",
   },
   {
     target: "nav-onboarding",
     title: "When packages change",
-    body: "Regenerating replaces a package's content in place; analyzing a new commit adds a new package and keeps the old one — nothing is silently discarded. Stale badges appear only on sections whose code actually changed, and staleness is branch-scoped: re-analyzing a branch only re-checks packages built from it. The 'How packages work' tour inside Your Onboarding has the full rules.",
+    body: "Regenerating rewrites a package in place and keeps the same card. Analyzing a new commit re-checks what you already have and stale-flags only the sections whose code actually changed; the card for that commit appears once you generate, and the old one stays.\n\nStaleness is branch-scoped, so re-analyzing a branch only re-checks packages built from it. The 'How packages work' tour inside Your Onboarding has the full rules.",
   },
   {
     target: "nav-architecture",
@@ -147,12 +147,12 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-capabilities",
     title: "Capability map",
-    body: "What the product does in business terms — each capability links to the workflows, tutorials, and code that deliver it, with a 'start here' pointer.",
+    body: "What the product does in business terms. Each capability links to the workflows, tutorials, and code that deliver it, with a 'start here' pointer.",
   },
   {
     target: "nav-workflows",
     title: "Traced workflows",
-    body: "Real request flows traced from entry points to side effects — the fastest way to see how a feature actually executes.",
+    body: "Real request flows traced from entry points to side effects: the fastest way to see how a feature actually executes.",
   },
   {
     target: "nav-tutorials",
@@ -167,7 +167,7 @@ const PROJECT_TOUR_STEPS: TourStep[] = [
   {
     target: "nav-settings",
     title: "Settings",
-    body: "Privacy mode (what, if anything, is sent to AI), analysis depth, budgets, your own API key, and per-role ranking weights. AI & privacy changes apply to the next generation immediately — no re-analysis needed; AI-disabled still produces deterministic packages.",
+    body: "Privacy mode (what, if anything, is sent to AI), analysis depth, budgets, your own API key, and per-role ranking weights. AI & privacy changes apply to the next generation immediately, with no re-analysis needed, and AI-disabled still produces deterministic packages.",
   },
 ];
 

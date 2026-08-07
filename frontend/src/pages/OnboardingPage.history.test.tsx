@@ -11,6 +11,7 @@ const CARD: PackageCard = {
   role: "backend",
   status: "approved",
   analyzed_commit: "abcdef1234567",
+  commit_message: null,
   branch: "main",
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z",
@@ -103,27 +104,65 @@ function HistoryProbe() {
 
 const currentSearch = () => screen.getByTestId("search").textContent ?? "";
 
+function renderPage() {
+  return render(
+    <TooltipProvider>
+      <MemoryRouter initialEntries={["/projects/p1/onboarding"]}>
+        <HistoryProbe />
+        <Routes>
+          <Route path="/projects/:id/onboarding" element={<OnboardingPage />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
+  );
+}
+
 describe("onboarding reader history (J3)", () => {
   it("pushes the reader so Back returns to the package grid", async () => {
     fetchOnboardingPackage.mockResolvedValue({ status: "missing", role: "backend" });
-    render(
-      <TooltipProvider>
-        <MemoryRouter initialEntries={["/projects/p1/onboarding"]}>
-          <HistoryProbe />
-          <Routes>
-            <Route path="/projects/:id/onboarding" element={<OnboardingPage />} />
-          </Routes>
-        </MemoryRouter>
-      </TooltipProvider>,
-    );
+    renderPage();
 
-    fireEvent.click(await screen.findByRole("button", { name: /Whole repository/ }));
+    // The scope name is a real <Link> now (middle-click, Cmd-click, new tab),
+    // so this is the same journey the old div-with-role served, taken through
+    // the anchor the browser also honours.
+    fireEvent.click(await screen.findByRole("link", { name: /Whole repository/ }));
     await waitFor(() => expect(currentSearch()).toContain("view=reader"));
 
     fireEvent.click(screen.getByRole("button", { name: "probe-back" }));
 
     // With `replace: true` the grid entry is overwritten, so Back has nowhere to go.
     await waitFor(() => expect(currentSearch()).not.toContain("view=reader"));
-    expect(await screen.findByRole("button", { name: /Whole repository/ })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: /Whole repository/ })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The regenerate dialog lives on the card grid, which this file already mounts
+ * with one card and a `developer` tier — the two states that must stay visible
+ * rather than disappear. Hiding an option was the old behaviour: the dialog
+ * changed shape per card, so nobody learned the cheap "only the stale
+ * sections" option existed until a package happened to be stale, and a
+ * developer never saw that re-analysis was a thing owners do.
+ */
+describe("regenerate dialog options", () => {
+  it("keeps all three options on screen and states why the unusable ones are off", async () => {
+    fetchOnboardingPackage.mockResolvedValue({ status: "missing", role: "backend" });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Regenerate…/ }));
+
+    expect(
+      await screen.findByRole("button", { name: /Regenerate all sections \(same commit\)/ }),
+    ).toBeEnabled();
+
+    // CARD has no stale sections and no stale tutorials.
+    const stale = screen.getByRole("button", { name: /Regenerate only the stale sections/ });
+    expect(stale).toBeDisabled();
+    expect(stale).toHaveTextContent(/Nothing is stale right now/);
+
+    // Tier is `developer`: re-analysis is a billed owner/admin run.
+    const newCommit = screen.getByRole("button", { name: /Regenerate all sections \(new commit\)/ });
+    expect(newCommit).toBeDisabled();
+    expect(newCommit).toHaveTextContent(/Owners and admins only/);
   });
 });
