@@ -1,4 +1,4 @@
-import { CheckCircle, Loader2, Users, XCircle } from "lucide-react";
+import { CheckCircle, Loader2, Trash2, Users, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ErrorBanner } from "@/components/ui/error-banner";
@@ -58,6 +58,7 @@ export function InvitationsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [accepting, setAccepting] = useState(false);
   const [declining, setDeclining] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     apiFetch("/invitations")
@@ -86,9 +87,10 @@ export function InvitationsPage() {
     setSelectedId(inv.id);
   }
 
-  // The declined row stays listed and stays selected. Dropping it deleted the
-  // only record that the invitation ever existed — a user who declined by
-  // mistake had nothing left on screen to explain where it went.
+  // The declined row stays listed and stays selected. Declining it away deleted
+  // the only record that the invitation ever existed — a user who declined by
+  // mistake had nothing left on screen to explain where it went. That still
+  // holds; clearing the row is now a separate, deliberate act (handleDelete).
   async function handleDecline(invitation: Invitation) {
     setDeclining(true);
     setError("");
@@ -103,6 +105,29 @@ export function InvitationsPage() {
       setError(err instanceof Error ? err.message : "Failed to decline invitation");
     } finally {
       setDeclining(false);
+    }
+  }
+
+  // Only offered on a row nothing can be done about any more: the route refuses
+  // a live invitation (409, "decline it instead") so that a misfired click here
+  // cannot silently throw away an invitation the user could still accept.
+  async function handleDelete(invitation: Invitation) {
+    setDeleting(true);
+    setError("");
+    try {
+      await apiFetch(`/invitations/${invitation.id}`, { method: "DELETE" });
+      const remaining = invitations.filter((inv) => inv.id !== invitation.id);
+      setInvitations(remaining);
+      // Same rule the initial load uses: re-open on the row there is a decision
+      // to make about, and only fall back to the newest one when there is none.
+      // Without this the pane keeps pointing at the id that was just deleted and
+      // goes blank with nothing to say why.
+      const next = remaining.find((i) => i.live) ?? remaining[0];
+      setSelectedId(next?.id ?? null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to delete invitation");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -152,7 +177,10 @@ export function InvitationsPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-[280px_1fr]">
+        // `items-start`: the details pane is a short card, and stretching it to
+        // the height of a long history left a tall box of empty space under the
+        // buttons. It takes its own height now and the list scrolls beside it.
+        <div className="grid grid-cols-1 items-start gap-3 lg:grid-cols-[280px_1fr]">
           {/* Left panel */}
           <div className="space-y-2">
             <p className="text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground">
@@ -160,54 +188,61 @@ export function InvitationsPage() {
             </p>
             {/* Every row opens, including the ones nothing can be done about:
                 the pane is where "what happened to that invitation?" is
-                answered, so a closed row has to be inspectable. */}
-            {invitations.map((inv) => (
-              <Card
-                key={inv.id}
-                role="button"
-                tabIndex={0}
-                aria-pressed={selectedId === inv.id}
-                className={`cursor-pointer transition-colors ${
-                  selectedId === inv.id
-                    ? "border-primary bg-primary/5"
-                    : "hover:border-border/80"
-                }`}
-                onClick={() => selectInvitation(inv)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    selectInvitation(inv);
-                  }
-                }}
-              >
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-[0.8125rem] font-medium text-foreground">{inv.repo_name}</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">
-                        Invited by {inv.invited_by_email || "a teammate"}
-                      </p>
+                answered, so a closed row has to be inspectable.
+
+                Bounded and scrolled from `lg` up, where the pane sits beside the
+                list and a long history pushed it off screen. Below `lg` the pane
+                is under the list, so a scroller here would be a second scrollbar
+                inside the page's own. */}
+            <div className="space-y-2 overflow-y-auto pr-0.5 lg:max-h-[calc(100vh-14rem)]">
+              {invitations.map((inv) => (
+                <Card
+                  key={inv.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={selectedId === inv.id}
+                  className={`cursor-pointer transition-colors ${
+                    selectedId === inv.id
+                      ? "border-primary bg-primary/5"
+                      : "hover:border-border/80"
+                  }`}
+                  onClick={() => selectInvitation(inv)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      selectInvitation(inv);
+                    }
+                  }}
+                >
+                  <CardContent className="p-3">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-[0.8125rem] font-medium text-foreground">{inv.repo_name}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Invited by {inv.invited_by_email || "a teammate"}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="text-[0.6875rem] capitalize">
+                        {inv.permission_tier}
+                      </Badge>
                     </div>
-                    <Badge variant="secondary" className="text-[0.6875rem] capitalize">
-                      {inv.permission_tier}
-                    </Badge>
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5">
-                    <Badge
-                      variant={inv.live ? "secondary" : "outline"}
-                      className="text-[0.6875rem] capitalize"
-                    >
-                      {statusWord(inv)}
-                    </Badge>
-                    {/* The role the accept will send, fallback included, so this
-                        chip and the pane never name two different roles. */}
-                    <Badge variant="outline" className="text-[0.6875rem]">
-                      {roleLabel(inv.developer_role || FALLBACK_ROLE)} role
-                    </Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                    <div className="mt-1.5 flex items-center gap-1.5">
+                      <Badge
+                        variant={inv.live ? "secondary" : "outline"}
+                        className="text-[0.6875rem] capitalize"
+                      >
+                        {statusWord(inv)}
+                      </Badge>
+                      {/* The role the accept will send, fallback included, so this
+                          chip and the pane never name two different roles. */}
+                      <Badge variant="outline" className="text-[0.6875rem]">
+                        {roleLabel(inv.developer_role || FALLBACK_ROLE)} role
+                      </Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           </div>
 
           {/* Right panel */}
@@ -224,31 +259,37 @@ export function InvitationsPage() {
                 <div className="mt-2.5 flex gap-3">
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
                     <p className="text-[0.6875rem] text-muted-foreground">Permission</p>
-                    <p className="text-xs font-medium capitalize text-foreground">
+                    <p className="text-sm font-medium capitalize text-foreground">
                       {selected.permission_tier}
                     </p>
                   </div>
                   <div className="flex-1 rounded-md border border-border bg-card p-2">
                     <p className="text-[0.6875rem] text-muted-foreground">Organization</p>
-                    <p className="text-xs font-medium text-foreground">{selected.repo_owner}</p>
+                    <p className="text-sm font-medium text-foreground">{selected.repo_owner}</p>
                   </div>
                 </div>
 
                 {/* Read-only, always: the inviter chose the role, and offering a
                     chooser here let an invitee overwrite that choice on the way
-                    in. TITLE register — this line names the person joining. */}
+                    in. TITLE register — this line names the person joining.
+
+                    Labelled like Permission and Organization above it, and full
+                    width because the description is a sentence. Without the
+                    label the two lines read as a stray caption: nothing on the
+                    card said this was the role you would be joining under. */}
                 {(() => {
                   const role = ROLE_OPTIONS.find(
                     (r) => r.value === (selected.developer_role || FALLBACK_ROLE),
                   );
                   return (
-                    <div className="mt-2 flex w-full items-center justify-between rounded-md border border-border bg-muted/30 px-2.5 py-1.5">
-                      <span className="text-xs font-medium capitalize text-foreground">
+                    <div className="mt-2 w-full rounded-md border border-border bg-card p-2">
+                      <p className="text-[0.6875rem] text-muted-foreground">Joining as</p>
+                      <p className="text-sm font-medium capitalize text-foreground">
                         {role?.title ?? selected.developer_role}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
                         {role?.description ?? "Assigned by the inviter"}
-                      </span>
+                      </p>
                     </div>
                   );
                 })()}
@@ -278,9 +319,28 @@ export function InvitationsPage() {
                     </Button>
                   </div>
                 ) : (
-                  // No buttons rather than disabled ones: accept would be refused
-                  // by the route, and the reason is worth more than a dead control.
-                  <p className="mt-3 text-xs text-muted-foreground">{closedStateLine(selected)}</p>
+                  // No accept or decline rather than disabled ones: both would be
+                  // refused by the route, and the reason is worth more than a dead
+                  // control. Delete is the one thing still on offer, because the
+                  // row is now nothing but the user's own record of what happened.
+                  <div className="mt-3">
+                    <p className="text-xs text-muted-foreground">{closedStateLine(selected)}</p>
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={deleting}
+                        onClick={() => handleDelete(selected)}
+                      >
+                        {deleting ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                        Delete invitation
+                      </Button>
+                    </div>
+                  </div>
                 )}
               </CardContent>
             </Card>

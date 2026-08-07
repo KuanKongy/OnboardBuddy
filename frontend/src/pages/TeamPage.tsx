@@ -147,6 +147,7 @@ export function TeamPage() {
   const [removing, setRemoving] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [transferTarget, setTransferTarget] = useState<Member | null>(null);
@@ -254,6 +255,26 @@ export function TeamPage() {
       setError(err instanceof Error ? err.message : "Failed to resend invitation");
     } finally {
       setResendingId(null);
+    }
+  }
+
+  // Dead rows only: the route refuses a live invitation (409, "revoke it
+  // instead") so a stray click here cannot cancel someone's pending invitation
+  // without them ever knowing it existed. Re-read rather than patched in place,
+  // for the same reason resend does it — the row is gone server-side, and the
+  // list is the only thing that knows what is left.
+  async function handleDeleteInvitation(invitationId: string) {
+    setDeletingId(invitationId);
+    setError("");
+    try {
+      await apiFetch(`/projects/${id}/members/invitations/${invitationId}`, {
+        method: "DELETE",
+      });
+      loadInvitations();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to delete invitation");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -492,20 +513,36 @@ export function TeamPage() {
                 <th scope="col" className="px-2 py-1.5 font-medium">Role</th>
                 <th scope="col" className="hidden px-2 py-1.5 font-medium sm:table-cell">Joined</th>
                 {/* Two columns because they are two different facts: an approval is
-                    editorial, a read mark is the member's own progress. */}
-                <th
-                  scope="col"
-                  className="px-2 py-1.5 text-right font-medium"
-                  title="Sections this member approved (owner/admin review)"
-                >
-                  Approvals
+                    editorial, a read mark is the member's own progress. #74/F16
+                    kept reading one as the other, so each header explains where
+                    its number comes from.
+
+                    Radix rather than a native `title`: the browser tooltip takes
+                    about a second to appear and is unreachable from the keyboard,
+                    so the explanation was effectively invisible. The trigger is a
+                    span inside the th, not the th itself, so the column header's
+                    accessible name stays the single word the reader scans for. */}
+                <th scope="col" className="px-2 py-1.5 text-right font-medium">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="cursor-help">Approvals</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64">
+                      Sections this member approved as a reviewer. It goes up when an owner or
+                      admin approves a section in the reader.
+                    </TooltipContent>
+                  </Tooltip>
                 </th>
-                <th
-                  scope="col"
-                  className="px-2 py-1.5 text-right font-medium"
-                  title="Sections this member marked as read in the reader"
-                >
-                  Read
+                <th scope="col" className="px-2 py-1.5 text-right font-medium">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0} className="cursor-help">Read</span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-64">
+                      Sections this member marked as read in the reader. It goes up as they check
+                      sections off their own reading paths.
+                    </TooltipContent>
+                  </Tooltip>
                 </th>
                 <th scope="col" className="px-2 py-1.5"><span className="sr-only">Actions</span></th>
               </tr>
@@ -738,7 +775,7 @@ export function TeamPage() {
                                 versus a dead one. */}
                             {inv.live ? "Resend" : "Re-invite"}
                           </Button>
-                          {inv.live && (
+                          {inv.live ? (
                             <Button
                               variant="ghost"
                               size="xs"
@@ -750,6 +787,22 @@ export function TeamPage() {
                                 ? <Loader2 className="h-3 w-3 animate-spin" />
                                 : <X className="h-3 w-3" />}
                               Revoke
+                            </Button>
+                          ) : (
+                            // No confirmation, matching Revoke's immediacy next to
+                            // it: the invitation is already dead, and Re-invite on
+                            // the same row rebuilds it if this was a mistake.
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="text-muted-foreground hover:text-destructive"
+                              onClick={() => handleDeleteInvitation(inv.id)}
+                              disabled={deletingId === inv.id}
+                            >
+                              {deletingId === inv.id
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <Trash2 className="h-3 w-3" />}
+                              Delete
                             </Button>
                           )}
                         </div>
