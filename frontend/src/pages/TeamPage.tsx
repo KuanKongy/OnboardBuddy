@@ -196,19 +196,18 @@ export function TeamPage() {
     setInviting(true);
     setError("");
     try {
-      const data = await apiFetch(`/projects/${id}/members/invitations`, {
+      await apiFetch(`/projects/${id}/members/invitations`, {
         method: "POST",
         body: JSON.stringify({
           email: inviteEmail,
           permission_tier: inviteTier,
           developer_role: inviteRole,
         }),
-      }) as { invitation: InvitationRow };
-      // `live` is computed by the LIST query, not returned by the INSERT, and a
-      // row without it renders as "Expired" — the state a just-created
-      // invitation is furthest from. A fresh row is live by construction:
-      // status 'pending', TTL starting now.
-      setInvitations((prev) => [{ ...data.invitation, live: true }, ...prev]);
+      });
+      // The POST may have replaced a dead row for the same address, so only the
+      // list knows what is left. Prepending the new invitation would show the
+      // replaced row and its replacement side by side until the next reload.
+      loadInvitations();
       setInviteEmail("");
       setInviteOpen(false);
     } catch (err: unknown) {
