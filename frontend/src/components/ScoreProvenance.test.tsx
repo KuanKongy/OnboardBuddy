@@ -89,7 +89,7 @@ describe("ScoreProvenance", () => {
 
       expect(screen.getByText(FULL.available ? FULL.formula : "")).toBeInTheDocument();
       expect(screen.getByText("Workflow participation")).toBeInTheDocument();
-      expect(screen.getByText("— in 4 traced workflows")).toBeInTheDocument();
+      expect(screen.getByText("(in 4 traced workflows)")).toBeInTheDocument();
       // The arithmetic, not just the result: value × weight → points.
       expect(screen.getByText("100% × 20% → 20 pts")).toBeInTheDocument();
       expect(screen.getByText("44% × 15% → 6.6 pts")).toBeInTheDocument();
@@ -153,8 +153,8 @@ describe("ScoreProvenance", () => {
 
       expect(screen.queryByText("How this number was derived is unavailable")).not.toBeInTheDocument();
       expect(screen.getByText("9 of 9 signals contributed nothing.")).toBeInTheDocument();
-      expect(screen.getByText("— in no traced workflow")).toBeInTheDocument();
-      expect(screen.getByText("— nothing imports or calls it")).toBeInTheDocument();
+      expect(screen.getByText("(in no traced workflow)")).toBeInTheDocument();
+      expect(screen.getByText("(nothing imports or calls it)")).toBeInTheDocument();
     });
 
     it("still names what would raise it, weighted by the heaviest empty signal", () => {

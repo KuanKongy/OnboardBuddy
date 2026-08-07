@@ -183,8 +183,12 @@ export function ProjectListPage() {
           </div>
         ) : (
           <>
-            {/* Fluid track count — see DashboardPage's projects grid. */}
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-3">
+            {/* Fixed breakpoints rather than an auto-fill track: this page is
+                full width, so auto-fill went to four and five columns on a wide
+                screen and the cards stopped being readable. Three is the ceiling.
+                The dashed import tile is the last cell, so a full PAGE_SIZE page
+                lays out as 13. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {pagedProjects.map((project) => (
                 <ProjectCard
                   key={project.id}

@@ -72,7 +72,7 @@ function leadReason(data: Extract<ScoreProvenanceData, { available: true }>): st
   return [
     `${lead} ${top.label}`,
     top.measured ? ` (${top.measured})` : "",
-    ` — ${points(top.contribution ?? 0)} of ${points(data.score ?? 0)} points`,
+    `: ${points(top.contribution ?? 0)} of ${points(data.score ?? 0)} points`,
     share > 0 ? `, ${Math.round(share * 100)}% of the score` : "",
     ".",
   ].join("");
@@ -182,12 +182,12 @@ export function ScoreProvenance({
                 <span className={compact ? "" : "text-foreground"}>{input.label}</span>
                 {input.measured && (
                   <span className={cn("ml-1", compact ? "opacity-70" : "text-muted-foreground")}>
-                    — {input.measured}
+                    ({input.measured})
                   </span>
                 )}
               </span>
               {!compact && (
-                <span className="h-1 w-10 shrink-0 self-center overflow-hidden rounded-full bg-muted">
+                <span className="h-1.5 w-10 shrink-0 self-center overflow-hidden rounded-full border border-input bg-muted">
                   <span
                     className="block h-full rounded-full bg-primary"
                     style={{ width: `${Math.round((share / maxContribution) * 100)}%` }}

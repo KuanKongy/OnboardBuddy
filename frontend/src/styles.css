@@ -103,6 +103,11 @@
 
 /* Dark theme (default reference). Surfaces step 0.21 → 0.27 → 0.30 so cards read as
    raised panels rather than blending into the page; borders sit a step up at 0.42.
+   `--accent` — every hover and selected fill in the app — is a rung of that same
+   ladder at 0.37, above the top surface and below the border. At its old 0.30 it
+   WAS the popover's lightness, so hovering a dropdown row or a dialog button lit
+   nothing at all; 0.37 is visible on background, card and popover alike, and
+   staying under --border keeps a hovered row from outshining its own frame.
    WCAG 1.4.11's 3.0 bar applies to boundaries that IDENTIFY a control, so `--input`
    is the one that has to clear it and does at 3.10:1 against the card. The surface
    and decorative-border steps are perceptual lifts, not 1.4.11 passes. */
@@ -119,7 +124,7 @@
   --secondary-foreground: oklch(0.93 0.008 264);
   --muted: oklch(0.265 0.024 265);
   --muted-foreground: oklch(0.71 0.018 264);
-  --accent: oklch(0.3 0.028 264);
+  --accent: oklch(0.37 0.03 264);
   --accent-foreground: oklch(0.95 0.007 264);
   --destructive: oklch(0.64 0.21 27);
   --border: oklch(0.42 0.03 264);
@@ -159,7 +164,7 @@
   --sidebar-foreground: oklch(0.95 0.007 264);
   --sidebar-primary: var(--primary);
   --sidebar-primary-foreground: var(--primary-foreground);
-  --sidebar-accent: oklch(0.3 0.028 264);
+  --sidebar-accent: oklch(0.37 0.03 264);
   --sidebar-accent-foreground: oklch(0.95 0.007 264);
   --sidebar-border: oklch(0.40 0.026 264);
   --sidebar-ring: var(--ring);

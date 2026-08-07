@@ -45,7 +45,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "projects-grid",
     title: "Your projects",
-    body: "Each card is a repository OnboardBuddy has analyzed. Click one to open its onboarding package — README, dependency graph, and walkthrough.",
+    body: "Each card is a repository OnboardBuddy has analyzed. Click one to open its onboarding package: README, dependency graph, and walkthrough.",
   },
   {
     target: "import-repo",
@@ -55,7 +55,7 @@ const TOUR_STEPS: TourStep[] = [
   {
     target: "recent-activity",
     title: "What's changed recently",
-    body: "A live feed of every analysis run and generated package across your projects — what ran, on which branch, and when.",
+    body: "A live feed of every analysis run and generated package across your projects: what ran, on which branch, and when.",
   },
 ];
 
@@ -97,7 +97,7 @@ function presentActivity(item: ActivityItem): { text: string; icon: typeof Activ
     if (item.status === "failed")
       return { text: `${what} generation failed${where}`, icon: XCircle, tone: "text-destructive", spin: false };
     if (item.status === "stale")
-      return { text: `${what} generated${where} — now stale`, icon: AlertTriangle, tone: "text-warning", spin: false };
+      return { text: `${what} generated${where} (now stale)`, icon: AlertTriangle, tone: "text-warning", spin: false };
     return { text: `${what} generated${where}`, icon: Package, tone: "text-success", spin: false };
   }
 
@@ -154,10 +154,15 @@ export function DashboardPage() {
   const [tourOpen, setTourOpen] = useState(false);
   const [pendingTour, setPendingTour] = useState(false);
 
+  // GET /invitations now returns the whole history — accepted, declined, revoked
+  // and expired rows included, so the invitations page can show what happened to
+  // each one. Only the rows the API marks `live` are still actionable, and this
+  // badge counts actions waiting on the user: counting the response length would
+  // put a permanent, unclearable number next to "Pending invitations".
   useEffect(() => {
     apiFetch("/invitations")
-      .then((data: { invitations: unknown[] }) => {
-        setInviteCount(data.invitations.length);
+      .then((data: { invitations: { live?: boolean }[] }) => {
+        setInviteCount(data.invitations.filter((invitation) => invitation.live === true).length);
         setInviteCountError(false);
       })
       .catch(() => setInviteCountError(true));
@@ -355,9 +360,11 @@ export function DashboardPage() {
                 </div>
               ) : (
                 <div
-                  // Track count follows the available width, so cards keep an 18rem
-                  // measure at every window size rather than only at sm/xl.
-                  className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-3"
+                  // Two up, never three: this column is 2/3 of the dashboard, and
+                  // an auto-fill track let a wide window squeeze three cards into
+                  // it at a measure the repo name no longer fit. RECENT_LIMIT caps
+                  // the grid at three rows; the rest is behind "View all".
+                  className="grid grid-cols-1 gap-3 sm:grid-cols-2"
                 >
                   {recentProjects.map((project) => (
                     <ProjectCard
@@ -394,7 +401,7 @@ export function DashboardPage() {
                   )}
                   {activity.length === 0 && !activityError && activityLoaded && (
                     <p className="px-2 py-8 text-center text-xs text-muted-foreground">
-                      No activity yet — it appears once your first repository is imported and analyzed.
+                      No activity yet. It appears once your first repository is imported and analyzed.
                     </p>
                   )}
                   {activity.length === 0 && !activityError && !activityLoaded && (
