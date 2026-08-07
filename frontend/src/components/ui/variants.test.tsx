@@ -11,6 +11,24 @@ describe("Badge success variant (#74/V12)", () => {
     expect(badge.className).toContain("border-success/40");
     expect(badge.className).toContain("text-success");
   });
+
+  it("extends the same family to warning", () => {
+    render(<Badge variant="warning">revoked</Badge>);
+    const badge = screen.getByText("revoked");
+    expect(badge).toHaveAttribute("data-variant", "warning");
+    expect(badge.className).toContain("bg-warning-soft");
+    expect(badge.className).toContain("border-warning/40");
+    expect(badge.className).toContain("text-warning");
+  });
+
+  it("extends the same family to danger", () => {
+    render(<Badge variant="danger">declined</Badge>);
+    const badge = screen.getByText("declined");
+    expect(badge).toHaveAttribute("data-variant", "danger");
+    expect(badge.className).toContain("bg-danger-soft");
+    expect(badge.className).toContain("border-danger/40");
+    expect(badge.className).toContain("text-danger");
+  });
 });
 
 describe("Button disabled treatment (#74/V9)", () => {
