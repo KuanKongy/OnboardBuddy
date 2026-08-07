@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronRight, CornerLeftUp, Maximize2, Minimize2, RefreshCw, Search, Sparkles, Unlink, X } from "lucide-react";
+import { AlertTriangle, ChevronRight, CornerLeftUp, Maximize2, Minimize2, RefreshCw, Search, Unlink, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -34,6 +34,7 @@ import { layoutGraph } from "@/lib/graphLayout";
 import { autoDrillEnabled } from "@/lib/graphPrefs";
 import { prefersReducedMotion } from "@/lib/motion";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { cn } from "@/lib/utils";
 
 const nodeTypes = { cluster: ClusterNode, member: ClusterMemberNode };
@@ -706,23 +707,29 @@ export function ArchitecturePage() {
                         </ul>
                       </div>
                     )}
-                    <p className="text-[0.65625rem] text-muted-foreground">
-                      Derived from the traced structure, with no AI involved.
-                    </p>
+                    {/* One mark for the three answers above: they are one
+                        block from one derivation, and three identical pills
+                        would be the noise the mark exists to remove. */}
+                    <SourceMark
+                      source="code"
+                      tip="Responsibility, boundary and separation are derived from the traced structure of this component, with no AI involved."
+                    />
                   </div>
                 ) : (
                   asideCluster.summary && (
                     <div className="mb-3">
                       <p className="text-[0.8125rem] leading-relaxed text-muted-foreground">{asideCluster.summary}</p>
-                      <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
+                      <div className="mt-1">
                         {asideCluster.summarySource === "semantic" ? (
-                          <>
-                            <Sparkles className="h-2.5 w-2.5" /> AI summary ({asideCluster.confidence} confidence)
-                          </>
+                          <SourceMark
+                            source="ai"
+                            detail={asideCluster.confidence}
+                            tip={`AI summary (${asideCluster.confidence ?? "unstated"} confidence).`}
+                          />
                         ) : (
-                          "Derived from code structure, with no AI involved"
+                          <SourceMark source="code" tip="Derived from code structure, with no AI involved." />
                         )}
-                      </p>
+                      </div>
                     </div>
                   )
                 )}
@@ -789,8 +796,25 @@ export function ArchitecturePage() {
                         >
                           {m.filePath ?? m.key}
                         </Link>
+                        {/* Icon, not a pill, on a list that can run to 158
+                            rows: the same mark repeated down a scroller reads
+                            as decoration long before the reader reaches the
+                            bottom. The pill and its confidence are one click
+                            away, on the member's own panel. */}
                         {m.summary && (
-                          <p className="text-[0.6875rem] leading-snug text-foreground/80">{m.summary}</p>
+                          <p className="text-[0.6875rem] leading-snug text-foreground/80">
+                            <SourceMark
+                              variant="icon"
+                              source={m.factsOnly ? "code" : "ai"}
+                              tip={
+                                m.factsOnly
+                                  ? "Derived from the traced structure of this file, with no AI involved."
+                                  : `Written by the model from this file's code (${m.summaryConfidence ?? "unstated"} confidence).`
+                              }
+                              className="mr-1 align-[-1px]"
+                            />
+                            {m.summary}
+                          </p>
                         )}
                       </div>
                     </li>
@@ -827,7 +851,18 @@ export function ArchitecturePage() {
                     what the file was for. */}
                 {selectedMember.summary && (
                   <div className="mb-3">
-                    <p className="section-label mb-1">What this file does</p>
+                    <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                      <p className="section-label">What this file does</p>
+                      {selectedMember.factsOnly ? (
+                        <SourceMark source="code" tip="Deterministic facts only, no AI summary here." />
+                      ) : (
+                        <SourceMark
+                          source="ai"
+                          detail={selectedMember.summaryConfidence}
+                          tip={`AI summary (${selectedMember.summaryConfidence ?? "unstated"} confidence), written from this file's code.`}
+                        />
+                      )}
+                    </div>
                     <p className="text-[0.8125rem] leading-relaxed text-foreground">{selectedMember.summary}</p>
                     {selectedMember.role && (
                       <p className="mt-1 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">

@@ -1,5 +1,6 @@
 import { Unlink } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { CLUSTER_KIND_LABELS, CLUSTER_KIND_PALETTE } from "@/lib/architectureData";
 import { cn } from "@/lib/utils";
 
@@ -165,8 +166,20 @@ export function ClusterMemberNode({ data }: NodeProps<ClusterMemberNodeData>) {
       <p className="truncate font-mono text-[0.65625rem] text-muted-foreground">
         {data.filePath ?? " "}
       </p>
+      {/* Marked, not decorated: this is the only sentence on the card a model
+          wrote, and the path and counts around it are traced. A member with no
+          record has no sentence here at all, so there is nothing to attribute
+          rather than an unmarked line. */}
       {data.summary && (
-        <p className="mt-1 line-clamp-2 text-[0.6875rem] leading-snug text-foreground/80">{data.summary}</p>
+        <p className="mt-1 line-clamp-2 text-[0.6875rem] leading-snug text-foreground/80">
+          <SourceMark
+            variant="icon"
+            source="ai"
+            tip="Written by the model from this file's code."
+            className="mr-1 align-[-1px]"
+          />
+          {data.summary}
+        </p>
       )}
 
       <div className="mt-1.5 flex items-center gap-2">

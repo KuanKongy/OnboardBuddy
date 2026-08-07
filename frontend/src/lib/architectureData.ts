@@ -55,6 +55,10 @@ export interface ArchitectureCluster {
     filePath: string | null;
     summary?: string | null;
     role?: string | null;
+    /** Confidence of `summary`; null when there is no summary to qualify. */
+    summaryConfidence?: string | null;
+    /** The record holds deterministic facts only. Null when it has no record. */
+    factsOnly?: boolean | null;
   }>;
   /**
    * Architecture edges touching this component. 0 means it is drawn as an
@@ -150,6 +154,10 @@ export interface ArchitectureMember {
   summary?: string | null;
   /** The record's own classification: "route file", "service", "config glue". */
   role?: string | null;
+  /** Confidence of `summary`; null when there is no summary to qualify. */
+  summaryConfidence?: string | null;
+  /** The record holds deterministic facts only. Null when it has no record. */
+  factsOnly?: boolean | null;
   /** Null when this member carries no stored criticality score. */
   criticalScore: number | null;
   provenance?: ScoreProvenanceData;

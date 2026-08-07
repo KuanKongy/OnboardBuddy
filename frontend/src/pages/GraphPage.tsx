@@ -27,6 +27,7 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { useDrillStack } from "@/hooks/useDrillStack";
 import { useGraphDrill } from "@/hooks/useGraphDrill";
 import { capEdgesPerNode, layoutDependencyGraph } from "@/lib/graphLayout";
+import { inferNodeType } from "@/lib/graphNodeType";
 import { autoDrillEnabled } from "@/lib/graphPrefs";
 import { cn } from "@/lib/utils";
 import type { GraphNode, GraphEdge } from "@/types/graph";
@@ -345,27 +346,6 @@ export function GraphPage() {
     stack.push({ kind: "cluster", id: target, label: target.split("/").filter(Boolean).pop() ?? target });
   }, [data]);
 
-  // ← / → cycle the selectable (non-cluster) nodes; Esc deselects — paired
-  // with ViewportFocus, cycling glides the camera node to node.
-  const cycleIds = useMemo(
-    () => (data?.graph.nodes ?? []).map((n) => n.id).filter((nid) => !nid.startsWith("cluster:")),
-    [data],
-  );
-  const cycleNode = (delta: number) => {
-    if (cycleIds.length === 0) return;
-    const idx = selectedNodeId ? cycleIds.indexOf(selectedNodeId) : -1;
-    const next = cycleIds[(idx + delta + cycleIds.length) % cycleIds.length];
-    setSelectedNodeId(next ?? null);
-  };
-  useHotkeys(
-    {
-      ArrowRight: () => cycleNode(1),
-      ArrowLeft: () => cycleNode(-1),
-      Escape: () => setSelectedNodeId(null),
-    },
-    view === "files" && !!data && !loading,
-  );
-
   function toggleKind(kind: string) {
     setHiddenKinds((prev) => {
       const next = new Set(prev);
@@ -418,6 +398,8 @@ export function GraphPage() {
         exported: (n.metadata?.exported as boolean) ?? undefined,
         summary: (n.metadata?.summary as string | null) ?? null,
         role: (n.metadata?.role as string | null) ?? null,
+        summaryConfidence: (n.metadata?.summaryConfidence as string | null) ?? null,
+        factsOnly: (n.metadata?.factsOnly as boolean | null) ?? null,
         fileCount: (n.metadata?.fileCount as number) ?? undefined,
         internalImportCount: (n.metadata?.internalImportCount as number) ?? undefined,
       },
@@ -466,6 +448,42 @@ export function GraphPage() {
   const positionedNodes = useMemo(
     () => layoutDependencyGraph(visibleNodes, visibleEdges, data?.graph.entryPoints ?? [], direction),
     [visibleNodes, visibleEdges, data, direction],
+  );
+
+  /**
+   * ← / → cycle what is ON THE CANVAS; Esc deselects — paired with
+   * ViewportFocus, cycling glides the camera node to node.
+   *
+   * Groups are in the list. They were filtered out here while the rest of the
+   * page treats a group box as fully selectable (see `showPanel` below), so at
+   * the Dependencies root — where a repo past MAX_GRAPH_NODES shows nothing
+   * BUT directory groups — this list came out empty and the shortcut the help
+   * dialog advertises did nothing at all, with or without a selection.
+   *
+   * Built from the laid-out nodes, not the raw level, so a search showing 2 of
+   * 60 files cannot cycle into the 58 that are not drawn; legend-hidden kinds
+   * drop out for the same reason, their boxes take no clicks either.
+   */
+  const cycleIds = useMemo(
+    () =>
+      positionedNodes
+        .filter((n) => !hiddenKinds.has(inferNodeType(n.filePath ?? n.id, n.metadata.exportedSymbols).type))
+        .map((n) => n.id),
+    [positionedNodes, hiddenKinds],
+  );
+  const cycleNode = (delta: number) => {
+    if (cycleIds.length === 0) return;
+    const idx = selectedNodeId ? cycleIds.indexOf(selectedNodeId) : -1;
+    const next = cycleIds[(idx + delta + cycleIds.length) % cycleIds.length];
+    setSelectedNodeId(next ?? null);
+  };
+  useHotkeys(
+    {
+      ArrowRight: () => cycleNode(1),
+      ArrowLeft: () => cycleNode(-1),
+      Escape: () => setSelectedNodeId(null),
+    },
+    view === "files" && !!data && !loading,
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);

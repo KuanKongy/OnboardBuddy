@@ -2,6 +2,7 @@ import { CornerDownLeft, HelpCircle, Loader2, MessageSquare } from "lucide-react
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { receiptAnchor } from "@/components/reader/receiptAnchor";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { ReceiptChip } from "@/components/ReceiptChips";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -143,6 +144,13 @@ export function AskPanel({
                 <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={asked}>
                   {asked}
                 </span>
+                {/* Every answer here is model-written — the receipts under it
+                    are evidence it was asked to cite, not a second author. The
+                    badge grades the answer; the chip says who wrote it. */}
+                <SourceMark
+                  source="ai"
+                  tip="Written by the model from the retrieved evidence; the numbered receipts below are what it was allowed to cite."
+                />
                 <Badge variant="outline" className={cn("text-[0.6875rem] capitalize", confidenceStyle(answer.confidence))}>
                   {answer.confidence} confidence
                 </Badge>

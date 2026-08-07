@@ -138,7 +138,37 @@ export function PackageSelector() {
   // describing the screen and the sidebar describing a policy.
   const displayPackage = selectedPackage ?? resolvedPackage;
 
-  if (!packages || packages.length === 0) return null;
+  /**
+   * A project with no packages yet (never analyzed, or every run failed) used
+   * to render NOTHING here, and this pill is the only place any project page
+   * names the project — so the whole app sat on an unnamed project until the
+   * first package landed. The name does not depend on a package: it is the
+   * repo and the branch the project was imported on. Only the chooser does,
+   * so only the chooser is withheld.
+   */
+  if (!packages || packages.length === 0) {
+    if (!repoName) return null;
+    return (
+      // Same box, same two-line stack, same load-bearing height as the button
+      // below — see the arithmetic comment there before touching the leading.
+      <div data-tour="package-selector" className="-mx-1 mt-2">
+        <div className="flex w-full items-center gap-2 rounded-md border border-border bg-card px-2 py-1.5 text-left">
+          <PackageIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-mono text-[0.6875rem] leading-[0.875rem] text-foreground">
+              {repoName} / {project?.branch}
+            </span>
+            <span className="block truncate text-[0.625rem] leading-3 text-muted-foreground">
+              {/* `null` is "the list has not arrived", not "there are none" —
+                  saying "No package yet" during that round trip flashed the
+                  wrong answer on every project that has one. */}
+              {packages === null ? "Loading packages…" : "No package yet"}
+            </span>
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     // -mx-1 buys the card 8px of width back out of the sidebar header's px-3

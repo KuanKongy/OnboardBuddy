@@ -121,6 +121,13 @@ export interface OnboardingSection {
    * denominator.
    */
   claims?: { total: number; cited: number; low: number } | null;
+  /**
+   * Who wrote this section, read back from its stored generation context.
+   * Absent on payloads served before the field existed — callers must fall
+   * back rather than assume "ai", because guessing is exactly what the field
+   * replaced.
+   */
+  generationMode?: "ai" | "deterministic";
   reviewedBy?: string;
   reviewedAt?: string;
   blocks: ContentBlock[];

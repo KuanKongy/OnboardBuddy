@@ -64,6 +64,12 @@ export interface GraphNodeMetadata {
   /** The record's own classification: "route file", "service", "config glue". */
   role?: string | null;
   summaryConfidence?: string | null;
+  /**
+   * True when the stored record holds deterministic facts and no model prose —
+   * which is why `summary` is null on most class nodes. Null means no record
+   * exists at all: the card marks both as "from code" and says which it is.
+   */
+  factsOnly?: boolean | null;
   /** Group nodes only: files folded into this group. */
   fileCount?: number;
   /** Group nodes only: what `fileCount` counts, when it is not files. */

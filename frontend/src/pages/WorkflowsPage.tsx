@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowRight, ChevronDown, Circle, Info, Maximize2, Minimize2, RefreshCw, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, ArrowRight, ChevronDown, Circle, Info, Maximize2, Minimize2, RefreshCw, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/PageHeader";
@@ -14,6 +14,7 @@ import "reactflow/dist/style.css";
 import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { PageSpinner } from "@/components/ui/page-spinner";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { prefersReducedMotion } from "@/lib/motion";
@@ -189,6 +190,10 @@ interface StepNodeData {
  * — on the label, and on the file path — repeated text already on the node,
  * and their hover layer sat over the node and made it harder to click. What
  * they showed in full is in the panel a click opens.
+ *
+ * The source mark's native title is the one hover left, and it survives that
+ * rule: it says who wrote the sentence, which is on no other part of the node,
+ * and a 10px glyph adds no hover layer over the click target.
  */
 function StepNode({ data }: NodeProps<StepNodeData>) {
   const palette = STEP_KIND_PALETTE[data.stepKind] ?? "shared";
@@ -251,9 +256,20 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
       </div>
       {/* What the step does. The marker is the audit's ask: a reader can see
           which steps were understood by the narration pass and which carry a
-          formatter's sentence, without opening anything. */}
+          formatter's sentence, without opening anything. Both sides carry a
+          glyph now — a sparkle on 5% of steps and nothing on the other 95%
+          left the unmarked majority looking unclassified rather than traced. */}
       <p className="mt-1 line-clamp-3 text-[0.65625rem] leading-snug text-muted-foreground">
-        {data.narrated && <Sparkles className="mr-1 inline h-2.5 w-2.5 align-[-1px] text-primary" />}
+        <SourceMark
+          variant="icon"
+          source={data.narrated ? "ai" : "code"}
+          tip={
+            data.narrated
+              ? "Written by the narration pass for this step."
+              : "Derived from the step's kind and target, not written about this code."
+          }
+          className="mr-1 align-[-1px]"
+        />
         {data.explanation}
       </p>
     </div>
@@ -737,8 +753,18 @@ export function WorkflowsPage() {
                 to read past to reach the diagram. */}
             {selectedSummary && (
               <div className="mb-2 shrink-0 rounded-md border border-border bg-card px-3 py-2 text-[0.75rem]">
+                {/* The purpose sentence is assembled by the extractor from the
+                    trigger, what the flow's own evidence names and its
+                    outcomes (`classifyPurpose`), so it reads like prose and is
+                    not. Marked for exactly that reason. */}
                 {selectedSummary.purpose && (
-                  <p className="text-foreground">{selectedSummary.purpose}</p>
+                  <p className="flex flex-wrap items-baseline gap-1.5 text-foreground">
+                    <SourceMark
+                      source="code"
+                      tip="Assembled from this flow's trigger, the names its own steps carry and the effects traced from it. No AI involved."
+                    />
+                    <span className="min-w-0 flex-1">{selectedSummary.purpose}</span>
+                  </p>
                 )}
                 <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
                   <span className="font-medium text-foreground">Criticality</span>
@@ -880,16 +906,16 @@ export function WorkflowsPage() {
                     wrong — it is that 95% of steps carry it with nothing
                     distinguishing them from the 5% a model actually read. */}
                 <p className="mt-3 text-[0.8125rem] leading-relaxed text-foreground">{selectedStep.explanation}</p>
-                <p className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/80">
+                <div className="mt-1">
                   {selectedStep.narrated ? (
-                    <>
-                      <Sparkles className="h-2.5 w-2.5 text-primary" />
-                      Written by the narration pass for this step
-                    </>
+                    <SourceMark source="ai" tip="Written by the narration pass for this step." />
                   ) : (
-                    "Deterministic description, derived from the step's kind and target, not written about this code"
+                    <SourceMark
+                      source="code"
+                      tip="Deterministic description, derived from the step's kind and target, not written about this code."
+                    />
                   )}
-                </p>
+                </div>
 
                 {stepDetail?.doc?.summary && (
                   <div className="mt-3 border-t border-border pt-3">

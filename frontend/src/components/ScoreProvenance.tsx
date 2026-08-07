@@ -1,5 +1,6 @@
 import { AlertTriangle, ChevronDown, HelpCircle } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { cn } from "@/lib/utils";
 
 /**
@@ -344,6 +345,13 @@ export function ScoreProvenanceDisclosure({
       {headline}
       {open && (
         <div id={panelId} className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2">
+          {/* Outside `ScoreProvenance` on purpose: the panel is the only place
+              this needs saying, and the component is also rendered inside
+              tooltips where a hover target cannot be reached. Sits above the
+              formula rather than beside it so it never lands mid-equation. */}
+          <div className="mb-1.5">
+            <SourceMark source="code" tip="Arithmetic over traced signals. No model involved." />
+          </div>
           <ScoreProvenance
             data={data}
             detail={showAll ? "full" : "headline"}

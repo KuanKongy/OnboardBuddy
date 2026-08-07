@@ -77,3 +77,20 @@ export function middleTruncate(label: string, max: number): string {
   const head = Math.max(0, max - 1 - tail);
   return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
 }
+
+/**
+ * A server-supplied plural noun at the right number.
+ *
+ * Group counts arrive already plural ("files", "classes") because that is what
+ * the label they came from says, so every group holding exactly one member
+ * rendered "1 files in this folder". Only the -es/-s endings the graph route
+ * actually emits are handled; anything else is returned untouched rather than
+ * guessed at.
+ */
+export function countNoun(count: number, plural: string): string {
+  if (count === 1) {
+    if (plural.endsWith("ses")) return plural.slice(0, -2);
+    if (plural.endsWith("s")) return plural.slice(0, -1);
+  }
+  return plural;
+}

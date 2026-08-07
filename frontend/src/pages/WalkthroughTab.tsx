@@ -28,6 +28,7 @@ import {
   scrollToWalkthroughStep,
   type WalkthroughStepData,
 } from "@/components/WalkthroughDocument";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { useProject } from "@/contexts/ProjectContext";
 import { usePackages } from "@/contexts/PackagesContext";
@@ -279,6 +280,10 @@ function StepPager({
  * indistinguishable from a section.
  */
 function ProcedureStepCard({ step, repo }: { step: TutorialStep; repo?: GithubRepoRef }) {
+  // `narration_source` rides on the payload and was never read here. Absent
+  // means the model wrote the note (it predates the field, or the AI path
+  // stored nothing); "deterministic" is the generator saying it fell back.
+  const narratedByAi = step.explanation ? step.narration_source !== "deterministic" : false;
   return (
     <div className="space-y-3">
       <div className="rounded-lg border border-primary/30 bg-primary/[0.04] px-4 py-3">
@@ -287,6 +292,14 @@ function ProcedureStepCard({ step, repo }: { step: TutorialStep; repo?: GithubRe
           {step.kind && STEP_KIND_LABEL[step.kind] && (
             <Badge variant="outline" className="ml-1 text-[0.625rem] uppercase">{STEP_KIND_LABEL[step.kind]}</Badge>
           )}
+          {/* One mark for the whole card: the action, the command, the
+              expected result and the check all come off the traced flow, and a
+              chip per block would put four identical pills on one step. */}
+          <SourceMark
+            source="code"
+            className="ml-auto"
+            tip="The action, command, expected result and check on this card are read off the traced flow, not written by the model."
+          />
         </p>
         <p className="text-[0.8125rem] leading-relaxed text-foreground">{step.action}</p>
         {step.command && (
@@ -322,12 +335,82 @@ function ProcedureStepCard({ step, repo }: { step: TutorialStep; repo?: GithubRe
 
       <StepLocation step={{ ...step, step_kind: null }} repo={repo} />
       {step.explanation && (
+        // The one part of a procedure step a model may have written — and it
+        // is not always: when narration fails or AI is off, the generator
+        // falls back to a description built from the step's kind and target,
+        // and `narration_source` is how it says which happened. The tone
+        // follows that field instead of assuming the sparkle.
         <p className="border-l-2 border-border pl-3 text-[0.78125rem] leading-relaxed text-muted-foreground">
+          <SourceMark
+            source={narratedByAi ? "ai" : "code"}
+            className="mr-1.5 align-[0.1em]"
+            tip={
+              narratedByAi
+                ? "This note was written by the model from the step's evidence."
+                : "Deterministic fallback note, built from the step's kind and target — no model wrote it."
+            }
+          />
           <span className="font-medium text-foreground">Why: </span>{step.explanation}
         </p>
       )}
     </div>
   );
+}
+
+/**
+ * The left-out list, keyed by the reason instead of repeated under every name.
+ *
+ * One line per entry meant a binding cap printed the SAME sentence 22 times
+ * ("a real walkthrough, dropped by the cap.") with the only varying part — the
+ * name — buried at the head of each. Names that share a reason now sit under
+ * one heading as a wrapped run; a reason with a single name keeps its original
+ * one-line form, where a heading would cost more space than it saved.
+ */
+interface LeftOutGroup {
+  key: string;
+  /** The shared reason over several names; takes the count so it can say it. */
+  heading: (count: number) => string;
+  /** The same reason as the tail of a one-name line. */
+  inline: string;
+  names: string[];
+}
+
+function groupLeftOut(coverage: Coverage): LeftOutGroup[] {
+  const groups = new Map<string, LeftOutGroup>();
+  const add = (key: string, group: Omit<LeftOutGroup, "key" | "names">, name: string) => {
+    const existing = groups.get(key);
+    if (existing) existing.names.push(name);
+    else groups.set(key, { key, ...group, names: [name] });
+  };
+  for (const o of coverage.overflow) {
+    // The kind stays singular in the heading: it is a server enum ("run_tests",
+    // "trace_flow") that does not survive an appended "s".
+    const kind = o.kind.replace(/_/g, " ");
+    add(`o:${o.kind}`, {
+      heading: (n) => `Dropped by the cap (${n}) — each a real ${kind} there was no room for:`,
+      inline: `a real ${kind}, dropped by the cap.`,
+    }, o.title);
+  }
+  // Grouped on the sentence the reader sees, not the machine reason behind it:
+  // several skip codes build per-entry detail (a step count, the title itself),
+  // and folding those under one heading would drop exactly those specifics.
+  for (const s of coverage.skipped) {
+    add(`s:${s.detail}`, {
+      heading: (n) => `${s.detail.charAt(0).toUpperCase()}${s.detail.slice(1)} (${n}):`,
+      inline: s.detail,
+    }, s.title);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * How many cap-dropped tutorials the overflow list does not name. `eligible`
+ * counts everything that could have been built and `emitted` what was, so the
+ * difference is the true drop; the API sends at most 12 of them.
+ */
+function unlistedOverflow(coverage: Coverage): number {
+  if (coverage.eligible == null) return 0;
+  return Math.max(0, coverage.eligible - coverage.emitted - coverage.overflow.length);
 }
 
 /** The cap, the skips and the overflow — what this tab is NOT showing, and why. */
@@ -363,17 +446,29 @@ function CoverageNote({ coverage }: { coverage: Coverage }) {
         )}
       </div>
       {open && (
-        <div className="mt-2 space-y-1 border-t border-border pt-2">
-          {coverage.overflow.map((o, i) => (
-            <p key={`o-${i}`} className="text-[0.6875rem] text-muted-foreground">
-              <span className="text-foreground">{o.title}</span>: a real {o.kind.replace(/_/g, " ")}, dropped by the cap.
+        <div className="mt-2 space-y-1.5 border-t border-border pt-2">
+          {groupLeftOut(coverage).map((g) =>
+            g.names.length === 1 ? (
+              <p key={g.key} className="text-[0.6875rem] text-muted-foreground">
+                <span className="text-foreground">{g.names[0]}</span>: {g.inline}
+              </p>
+            ) : (
+              <div key={g.key} className="text-[0.6875rem] text-muted-foreground">
+                <p>{g.heading(g.names.length)}</p>
+                {/* Comma-separated rather than one line each: these are names,
+                    and the reason they share is already said above them. */}
+                <p className="text-foreground">{g.names.join(", ")}</p>
+              </div>
+            ),
+          )}
+          {/* The API caps each list at 12, so a heading count is the number
+              NAMED, not the number dropped. Say the difference rather than let
+              "(12)" stand in for 40. */}
+          {unlistedOverflow(coverage) > 0 && (
+            <p className="text-[0.6875rem] text-muted-foreground">
+              …and {unlistedOverflow(coverage)} more the cap dropped, not named here.
             </p>
-          ))}
-          {coverage.skipped.map((s, i) => (
-            <p key={`s-${i}`} className="text-[0.6875rem] text-muted-foreground">
-              <span className="text-foreground">{s.title}</span>: {s.detail}
-            </p>
-          ))}
+          )}
         </div>
       )}
     </div>
@@ -754,14 +849,42 @@ export function WalkthroughTab() {
                       {detail.tutorial.status === "stale" && (
                         <Badge variant="outline" className="border-warning/40 bg-warning-soft text-[0.625rem] text-warning">stale</Badge>
                       )}
-                      <span className="ml-auto inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
-                        {detail.tutorial.annotation === "deterministic"
-                          ? "Built from repo evidence · no prose written (AI generation is off for this project)"
-                          : isWalkthrough
-                            ? "Code and line ranges from repo evidence · narration written by AI"
-                            : isProcedural
-                              ? "Steps built from repo evidence · notes written by AI"
-                              : "AI explanations"} · {detail.tutorial.confidence} confidence
+                      {/* Both halves of a tutorial's provenance, as chips
+                          rather than a four-way sentence that had to name the
+                          mode, the authorship and the grade in one breath. The
+                          skeleton — steps, files, line ranges — is always
+                          traced; only the narration may have a model behind
+                          it, and when AI is off for the project there is no ai
+                          chip to show. */}
+                      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                        <SourceMark
+                          source="code"
+                          detail={
+                            detail.tutorial.annotation === "deterministic"
+                              ? `${detail.tutorial.confidence} confidence`
+                              : null
+                          }
+                          tip={
+                            detail.tutorial.annotation === "deterministic"
+                              ? "Built from repo evidence · no prose written (AI generation is off for this project)"
+                              : isWalkthrough
+                                ? "Steps, code and line ranges come from repo evidence."
+                                : "Steps, commands and file locations come from repo evidence."
+                          }
+                        />
+                        {detail.tutorial.annotation !== "deterministic" && (
+                          <SourceMark
+                            source="ai"
+                            detail={`${detail.tutorial.confidence} confidence`}
+                            tip={
+                              isWalkthrough
+                                ? "Code and line ranges from repo evidence · narration written by AI"
+                                : isProcedural
+                                  ? "Steps built from repo evidence · notes written by AI"
+                                  : "The explanations on these steps were written by the model."
+                            }
+                          />
+                        )}
                       </span>
                     </div>
                     {detail.tutorial.goal && (

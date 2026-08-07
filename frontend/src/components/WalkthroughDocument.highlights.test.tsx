@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { WalkthroughDocument, type WalkthroughStepData } from "./WalkthroughDocument";
 
 /**
@@ -34,6 +35,19 @@ const STEP: WalkthroughStepData = {
 
 const REPO = { owner: "ldnkoff", repo: "team15", branch: "Milestone5" };
 
+/**
+ * The provider is not scenery: a step card carries a `SourceMark` chip whose
+ * explanation lives in a Radix tooltip, and Radix throws rather than degrade
+ * when one is missing. The app mounts a single provider at the root
+ * (`App.tsx`), so this mirrors production rather than working around it.
+ */
+const renderDocument = () =>
+  render(
+    <TooltipProvider>
+      <WalkthroughDocument steps={[STEP]} repo={REPO} />
+    </TooltipProvider>,
+  );
+
 const shownLines = () =>
   [...document.querySelectorAll("[data-line]")].map((n) => Number(n.getAttribute("data-line")));
 
@@ -50,7 +64,7 @@ beforeAll(() => {
 
 describe("walkthrough highlight chips", () => {
   it("stretches the window past the stored end so an in-snippet highlight is on screen", () => {
-    render(<WalkthroughDocument steps={[STEP]} repo={REPO} />);
+    renderDocument();
 
     expect(shownLines()).toContain(412);
     // …without giving up the window: the out-of-snippet highlight at 508 must
@@ -59,7 +73,7 @@ describe("walkthrough highlight chips", () => {
   });
 
   it("sends a highlight past the end of the captured snippet to GitHub instead of nowhere", () => {
-    render(<WalkthroughDocument steps={[STEP]} repo={REPO} />);
+    renderDocument();
 
     const link = screen.getByText("flushes progress").closest("a");
     expect(link).toHaveAttribute(
