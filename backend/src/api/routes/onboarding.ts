@@ -14,6 +14,7 @@ import {
   packageGenerationMode,
   receiptStaleness,
   receiptVerification,
+  sectionPrivacyMode,
 } from "../lib/receiptPresentation.js";
 import { groupGaps, summarizeGaps, type RawGap } from "../lib/gapSummary.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
@@ -851,6 +852,15 @@ onboardingRouter.get("/", requireProjectAccess(), async (req, res) => {
             type: sec.type,
             status: sec.review_status === "stale" ? "stale" : "complete",
             confidence: sec.confidence,
+            // Who wrote THIS section, from the same stored field the package
+            // banner is derived from. The reader used to guess it from a
+            // hardcoded list of section ids plus "has no receipts", which
+            // mislabelled every deterministic section outside that list — and
+            // a whole AI-off package as AI prose whenever a section id was
+            // absent from the list. `ai_disabled` is the only mode with no
+            // model in it; `facts_only_ai` still narrates.
+            generationMode:
+              sectionPrivacyMode(sec.generation_context) === "ai_disabled" ? "deterministic" : "ai",
             // Human-readable reviewer (email) — raw UUIDs are meaningless in the UI.
             reviewedBy: sec.reviewed_by_email ?? sec.reviewed_by,
             reviewedAt: sec.reviewed_at,

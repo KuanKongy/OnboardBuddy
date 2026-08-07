@@ -888,6 +888,9 @@ export function ProjectOverviewPage() {
 
   const snap = analysisStatus?.latestSnapshot;
   const canManage = project.permission_tier === "owner" || project.permission_tier === "admin";
+  // Captured past the `if (!project) return null` guard above: a hoisted
+  // function declaration cannot see that narrowing, only a value taken here.
+  const defaultBranch = project.branch;
 
   /**
    * Paused / failed runs that are still the newest word on their kind of work.
@@ -915,10 +918,86 @@ export function ProjectOverviewPage() {
     );
   })();
 
+  /**
+   * ...and of those, the ones a later run has already answered.
+   *
+   * Newest of its TYPE is not the same as the newest word on the project. A
+   * `generate_package` that failed at 14:09 stayed the newest generation, so
+   * after a fresh analysis completed at 14:16 the page still led with a red
+   * alert — above a status panel reading "complete" for the run that had
+   * superseded it. The failure is real history and keeps its resume button,
+   * but it stops being the headline the moment something finished after it.
+   */
+  const [currentAlerts, supersededAlerts] = (() => {
+    const jobs = analysisStatus?.jobs ?? [];
+    // `finished_at` is null on a job that never started; created_at is then
+    // the only time it has, and it still orders correctly against a success.
+    const endedAt = (j: AnalysisJob) => new Date(j.finished_at ?? j.created_at).getTime();
+    const newestSuccess = jobs
+      .filter((j) => j.status === "complete" && j.finished_at)
+      .reduce((max, j) => Math.max(max, new Date(j.finished_at!).getTime()), 0);
+    const current: AnalysisJob[] = [];
+    const superseded: AnalysisJob[] = [];
+    for (const job of pausedOrFailed) {
+      (newestSuccess > endedAt(job) ? superseded : current).push(job);
+    }
+    return [current, superseded] as const;
+  })();
+
   /** The newest run as a GROUP: raw `runs[0]` is often the package generation
    *  half of a chained pair, which would report that half's status, spend and
    *  duration as if they were the whole run's. */
   const latestRunRow = runs && runs.length > 0 ? groupChainedRuns(runs)[0]! : null;
+
+  /** One card, two placements: the prominent alert above and the collapsed
+   *  "an earlier run failed" disclosure below the status panel. */
+  function runAlertCard(job: AnalysisJob) {
+    // A budget pause is only actionable if the banner says how much of the
+    // per-run cap was actually spent — the run-history row for this same job
+    // already carries those numbers.
+    const jobRun = runs?.find((r) => r.id === job.id) ?? null;
+    const jobBudget = jobRun?.budget ?? null;
+    const jobCost = jobRun?.cost ?? null;
+    return (
+      <Card key={job.id}>
+        <CardContent className="flex flex-wrap items-center gap-2 p-3">
+          {job.status === "paused"
+            ? <PauseCircle className="h-4 w-4 shrink-0 text-warning" />
+            : <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />}
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-foreground">
+              {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")} {job.status}
+              <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">
+                {runConfigParts(job, defaultBranch).join(" · ")}
+              </span>
+            </p>
+            {job.error_message && <p className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">{job.error_message}</p>}
+            {jobBudget && jobBudget.usedThisRun !== null && (
+              <p className="mt-0.5 text-[0.6875rem] tabular-nums text-muted-foreground">
+                {jobBudget.usedThisRun.toLocaleString()} of {jobBudget.capLlmCalls.toLocaleString()} calls used this run
+                {jobBudget.remaining !== null && ` · ${jobBudget.remaining.toLocaleString()} left`}
+                {jobCost && (jobCost.input_tokens > 0 || jobCost.output_tokens > 0)
+                  ? ` · ${jobCost.input_tokens.toLocaleString()} in / ${jobCost.output_tokens.toLocaleString()} out tok`
+                  : ""}
+              </p>
+            )}
+          </div>
+          {canManage && ["analyze_scope", "incremental_update", "generate_package"].includes(job.job_type) && (
+            <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job; checkpointed phases and cached AI work are skipped">
+              <RotateCcw className="mr-1 h-3 w-3" />
+              Resume run
+            </Button>
+          )}
+          {canManage && job.status === "failed" && (
+            <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
+              <RefreshCw className="mr-1 h-3 w-3" />
+              New run…
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
 
   async function jobControl(jobId: string, action: "pause" | "stop" | "resume") {
     if (!id) return;
@@ -1114,62 +1193,27 @@ export function ProjectOverviewPage() {
       )}
 
       {/* Paused / just-failed runs surface here for resume without digging into history. */}
-      {activeJobs.length === 0 && pausedOrFailed.length > 0 && (
-        <div className="mb-4 space-y-2">
-          {pausedOrFailed.map((job) => {
-            // A budget pause is only actionable if the banner says how much
-            // of the per-run cap was actually spent — the run-history row for
-            // this same job already carries those numbers.
-            const jobRun = runs?.find((r) => r.id === job.id) ?? null;
-            const jobBudget = jobRun?.budget ?? null;
-            const jobCost = jobRun?.cost ?? null;
-            return (
-            <Card key={job.id}>
-              <CardContent className="flex flex-wrap items-center gap-2 p-3">
-                {job.status === "paused"
-                  ? <PauseCircle className="h-4 w-4 shrink-0 text-warning" />
-                  : <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />}
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-foreground">
-                    {JOB_TYPE_LABEL[job.job_type] ?? job.job_type.replace(/_/g, " ")} {job.status}
-                    <span className="ml-2 font-mono text-[0.6875rem] text-muted-foreground">
-                      {runConfigParts(job, project.branch).join(" · ")}
-                    </span>
-                  </p>
-                  {job.error_message && <p className="mt-0.5 truncate text-[0.6875rem] text-muted-foreground">{job.error_message}</p>}
-                  {jobBudget && jobBudget.usedThisRun !== null && (
-                    <p className="mt-0.5 text-[0.6875rem] tabular-nums text-muted-foreground">
-                      {jobBudget.usedThisRun.toLocaleString()} of {jobBudget.capLlmCalls.toLocaleString()} calls used this run
-                      {jobBudget.remaining !== null && ` · ${jobBudget.remaining.toLocaleString()} left`}
-                      {jobCost && (jobCost.input_tokens > 0 || jobCost.output_tokens > 0)
-                        ? ` · ${jobCost.input_tokens.toLocaleString()} in / ${jobCost.output_tokens.toLocaleString()} out tok`
-                        : ""}
-                    </p>
-                  )}
-                </div>
-                {canManage && ["analyze_scope", "incremental_update", "generate_package"].includes(job.job_type) && (
-                  <Button variant="outline" size="xs" onClick={() => jobControl(job.id, "resume")} disabled={controlBusy} title="Re-runs this job; checkpointed phases and cached AI work are skipped">
-                    <RotateCcw className="mr-1 h-3 w-3" />
-                    Resume run
-                  </Button>
-                )}
-                {canManage && job.status === "failed" && (
-                  <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
-                    <RefreshCw className="mr-1 h-3 w-3" />
-                    New run…
-                  </Button>
-                )}
-              </CardContent>
-            </Card>
-            );
-          })}
-        </div>
+      {activeJobs.length === 0 && currentAlerts.length > 0 && (
+        <div className="mb-4 space-y-2">{currentAlerts.map(runAlertCard)}</div>
       )}
 
       {/* Nothing is running: the newest run IS the current state, so say it
           here instead of leaving it folded into the history below. */}
       {activeJobs.length === 0 && latestRunRow && (
         <IdleRunStatus run={latestRunRow.run} partner={latestRunRow.partner} projectId={id!} />
+      )}
+
+      {/* Superseded failures: one quiet line UNDER the status panel, because a
+          later run already answered them. Still expandable to the same card
+          with the same resume/re-run buttons — demoted, not dropped. */}
+      {activeJobs.length === 0 && supersededAlerts.length > 0 && (
+        <details className="mb-4 rounded-md border border-border bg-muted/25 px-3 py-1.5">
+          <summary className="cursor-pointer text-[0.6875rem] text-muted-foreground hover:text-foreground">
+            {supersededAlerts.length === 1 ? "An earlier run" : `${supersededAlerts.length} earlier runs`}{" "}
+            {supersededAlerts.every((j) => j.status === "failed") ? "failed" : "did not finish"} · details
+          </summary>
+          <div className="mt-2 space-y-2">{supersededAlerts.map(runAlertCard)}</div>
+        </details>
       )}
 
       {/* Outside the neverAnalyzed branch: an analyzed project whose packages fetch

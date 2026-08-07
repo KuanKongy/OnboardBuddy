@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Route as RouteIcon,
   SearchX,
-  Sparkles,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +20,7 @@ import { Link, useParams } from "react-router-dom";
 import { Handle, MarkerType, Position, type Edge, type Node, type NodeProps } from "reactflow";
 import "reactflow/dist/style.css";
 import { CodeRef } from "@/components/CodeRef";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { GraphCanvas, MINIMAP_MIN_NODES } from "@/components/graph/GraphCanvas";
 import { PageHeader } from "@/components/PageHeader";
 import { Badge } from "@/components/ui/badge";
@@ -411,7 +411,19 @@ function StepNode({ data }: NodeProps<StepNodeData>) {
         </span>
       </div>
       <p className="mt-1 line-clamp-3 text-[0.625rem] leading-snug text-muted-foreground">
-        {data.narrated && <Sparkles className="mr-1 inline h-2.5 w-2.5 align-[-1px] text-primary" />}
+        {/* Both sides marked, same as the Workflows node: the sparkle on the
+            narrated minority left the deterministic majority looking
+            unclassified rather than traced. */}
+        <SourceMark
+          variant="icon"
+          source={data.narrated ? "ai" : "code"}
+          tip={
+            data.narrated
+              ? "Written by the narration pass for this step."
+              : "Derived from the step's kind and target, not written about this code."
+          }
+          className="mr-1 align-[-1px]"
+        />
         {data.explanation}
       </p>
     </div>
@@ -926,6 +938,12 @@ export function CapabilitiesPage() {
           <div className="graph-canvas overflow-y-auto !bg-card p-2">
             <div className="flex items-center gap-1.5 px-2 pb-1.5 pt-1">
               <p className="section-label">Capabilities ({capabilities.length})</p>
+              {/* The rail's order is an ORDER BY, not a judgement about
+                  importance. The info button beside this prints its steps. */}
+              <SourceMark
+                source="code"
+                tip="This list's order is the query that built it, step by step, not a judgement about importance. No AI involved."
+              />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex cursor-help text-muted-foreground/60 hover:text-muted-foreground">
@@ -1119,16 +1137,16 @@ export function CapabilitiesPage() {
                     {selectedStep.stepKind.replace(/_/g, " ")}
                   </Badge>
                   <p className="mt-3 text-[0.8125rem] leading-relaxed text-foreground">{selectedStep.explanation}</p>
-                  <p className="mt-1 flex items-center gap-1 text-[0.625rem] text-muted-foreground/80">
+                  <div className="mt-1">
                     {selectedStep.narrated ? (
-                      <>
-                        <Sparkles className="h-2.5 w-2.5 text-primary" />
-                        Written by the narration pass for this step
-                      </>
+                      <SourceMark source="ai" tip="Written by the narration pass for this step." />
                     ) : (
-                      "Deterministic description, derived from the step's kind and target, not written about this code"
+                      <SourceMark
+                        source="code"
+                        tip="Deterministic description, derived from the step's kind and target, not written about this code."
+                      />
                     )}
-                  </p>
+                  </div>
                   <Link
                     to={`/projects/${id}/dependencies?focus=${encodeURIComponent(selectedStep.filePath)}`}
                     className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -1164,7 +1182,10 @@ export function CapabilitiesPage() {
 
             {activeFlow && level === "code" && (
               <div className="mt-2 flex shrink-0 flex-wrap items-center gap-3 rounded-md border border-border bg-card px-3 py-2 text-[0.71875rem]">
-                <span className="text-muted-foreground">{activeFlow.purpose || "No purpose recorded for this flow."}</span>
+                <span className="flex min-w-0 items-baseline gap-1.5 text-muted-foreground">
+                  {activeFlow.purpose && <SourceMark source="code" tip={FLOW_PURPOSE_TIP} />}
+                  <span className="min-w-0">{activeFlow.purpose || "No purpose recorded for this flow."}</span>
+                </span>
                 <Link
                   to={`/projects/${id}/workflows?workflow=${activeFlow.id}`}
                   className="ml-auto inline-flex items-center gap-1 font-medium text-primary hover:underline"
@@ -1178,6 +1199,65 @@ export function CapabilitiesPage() {
       )}
     </div>
   );
+}
+
+// ── Source marks ─────────────────────────────────────────────────────────────
+
+/**
+ * Why a flow's purpose sentence reads like prose and is not: the extractor
+ * assembles it from the trigger, the names the flow's own steps carry and the
+ * effects traced from them (`classifyPurpose` in workflowExtractor.ts).
+ */
+const FLOW_PURPOSE_TIP =
+  "Assembled from this flow's trigger, the names its own steps carry and the effects traced from it. No AI involved.";
+
+/** Why the bullets under "Why this is a capability" are not prose. */
+const DERIVATION_TIP =
+  "Each line is a step of the binding rule as it was applied to this group: the flows, the tables and services they reach, and the evidence the grouping key came from. No AI involved.";
+
+/**
+ * Who wrote a capability's name and its two sentences.
+ *
+ * `named_by` records whether the naming step returned anything usable for the
+ * group (worker/semantic/capabilityPass.ts). When it did, the name, the
+ * description and "when you'll touch it" all come from that one reply; when it
+ * did not, the name is the domain noun the grouping was formed on and the
+ * description is assembled from the flow, table and service counts.
+ *
+ * It is one flag standing for three strings, and there is exactly one case it
+ * gets wrong: a reply that named the group but left the description empty
+ * falls back to the assembled sentence and is still marked AI here. That
+ * sentence says so itself ("Named from its evidence, not described"), which is
+ * the only signal the payload carries — the API sends no per-field source.
+ * Null `namedBy` is a snapshot analysed before the flag was recorded: it gets
+ * no mark, because the honest answer is that this response does not say.
+ */
+function CapabilitySourceMark({ cap, subject }: { cap: Capability; subject: "name" | "prose" }) {
+  if (cap.namedBy === "model") {
+    return (
+      <SourceMark
+        source="ai"
+        tip={
+          subject === "name"
+            ? "This name came back from the naming step, which was shown the flows, tables and services below."
+            : "Written by the naming step from the flows, tables and services this capability binds to."
+        }
+      />
+    );
+  }
+  if (cap.namedBy === "deterministic") {
+    return (
+      <SourceMark
+        source="code"
+        tip={
+          subject === "name"
+            ? "No usable name came back from the naming step, so this label is the domain noun the grouping was formed on."
+            : "No usable name came back from the naming step, so this sentence is assembled from the flows and tables the grouping was formed on."
+        }
+      />
+    );
+  }
+  return null;
 }
 
 // ── Inspect panels ───────────────────────────────────────────────────────────
@@ -1195,12 +1275,17 @@ function CapabilityAside({ cap, busy, onDrill }: { cap: Capability; busy: boolea
   return (
     <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
       <p className="section-label mb-2">Capability</p>
-      <p className="text-[0.8125rem] font-medium text-foreground">{cap.name}</p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <p className="text-[0.8125rem] font-medium text-foreground">{cap.name}</p>
+        <CapabilitySourceMark cap={cap} subject="name" />
+      </div>
       {(cap.description || cap.summary) && (
-        <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
-          {cap.description || cap.summary}
+        <p className="mt-2 flex flex-wrap items-baseline gap-1.5 text-[0.75rem] leading-relaxed text-muted-foreground">
+          <CapabilitySourceMark cap={cap} subject="prose" />
+          <span className="min-w-0 flex-1">{cap.description || cap.summary}</span>
         </p>
       )}
+      {/* Unmarked on purpose: same reply as the description above, one mark. */}
       {cap.userValue && (
         <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">When you'll touch it:</span> {cap.userValue}
@@ -1209,7 +1294,10 @@ function CapabilityAside({ cap, busy, onDrill }: { cap: Capability; busy: boolea
 
       {cap.derivation.length > 0 && (
         <div className="mt-3">
-          <p className="section-label mb-1">Why this is a capability</p>
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <p className="section-label">Why this is a capability</p>
+            <SourceMark source="code" tip={DERIVATION_TIP} />
+          </div>
           <ul className="space-y-0.5 text-[0.71875rem] text-muted-foreground">
             {cap.derivation.map((d) => <li key={d}>· {d}</li>)}
           </ul>
@@ -1250,7 +1338,10 @@ function FlowAside({ flow, busy, onDrill }: { flow: CapabilityFlow; busy: boolea
       <p className="section-label mb-2">Flow</p>
       <p className="break-all text-[0.8125rem] font-medium text-foreground">{flow.title}</p>
       {flow.purpose && (
-        <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">{flow.purpose}</p>
+        <p className="mt-2 flex flex-wrap items-baseline gap-1.5 text-[0.75rem] leading-relaxed text-muted-foreground">
+          <SourceMark source="code" tip={FLOW_PURPOSE_TIP} />
+          <span className="min-w-0 flex-1">{flow.purpose}</span>
+        </p>
       )}
       <p className="mt-3 text-[0.71875rem] text-muted-foreground">
         {flow.tier === "core"
@@ -1285,25 +1376,21 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-[0.875rem] font-semibold text-foreground">{cap.name}</h2>
         <ConfidenceBadge confidence={cap.confidence} />
-        {cap.namedBy === "deterministic" && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              {/* Focusable: "named from evidence" only means something once you
-                  can read why, and that reason lives only in the tooltip. */}
-              <Badge variant="outline" tabIndex={0} className="text-[0.625rem]">
-                named from evidence
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-xs text-left">
-              No usable name came back from the naming step, so this label is the domain noun the
-              grouping was formed on.
-            </TooltipContent>
-          </Tooltip>
-        )}
+        {/* This replaces the "named from evidence" badge, which said the same
+            thing in a vocabulary only this tab used. Both sides are marked
+            now; a snapshot analysed before `named_by` was recorded carries
+            neither answer, and gets no mark rather than a guessed one. */}
+        <CapabilitySourceMark cap={cap} subject="name" />
       </div>
       {(cap.description || cap.summary) && (
-        <p className="mt-1 leading-relaxed text-muted-foreground">{cap.description || cap.summary}</p>
+        <p className="mt-1 flex flex-wrap items-baseline gap-1.5 leading-relaxed text-muted-foreground">
+          <CapabilitySourceMark cap={cap} subject="prose" />
+          <span className="min-w-0 flex-1">{cap.description || cap.summary}</span>
+        </p>
       )}
+      {/* No second mark: "When you'll touch it" comes back in the same reply as
+          the description, so one mark covers the pair and two identical pills
+          three lines apart would be the noise the mark exists to remove. */}
       {cap.userValue && (
         <p className="mt-1 leading-relaxed text-muted-foreground">
           <span className="font-medium text-foreground">When you'll touch it:</span> {cap.userValue}
@@ -1312,7 +1399,12 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
 
       {cap.derivation.length > 0 && (
         <div className="mt-2 border-t border-border pt-2">
-          <p className="section-label mb-1">Why this is a capability</p>
+          <div className="mb-1 flex flex-wrap items-center gap-1.5">
+            <p className="section-label">Why this is a capability</p>
+            {/* Panel level, not per bullet: every line of this list is one
+                step of the same derivation. */}
+            <SourceMark source="code" tip={DERIVATION_TIP} />
+          </div>
           <ul className="space-y-0.5 text-[0.71875rem] text-muted-foreground">
             {cap.derivation.map((d) => <li key={d}>· {d}</li>)}
           </ul>
@@ -1343,7 +1435,15 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
             space shoved "Where the code lives" to the far edge of the row. */}
         {cap.whereToStart.length > 0 && (
           <div className="min-w-[14rem] max-w-[34rem]">
-            <p className="section-label mb-1">Start here</p>
+            <div className="mb-1 flex flex-wrap items-center gap-1.5">
+              <p className="section-label">Start here</p>
+              {/* One mark for the list, not one per row: the files and the
+                  reasons beside them come from the same ranking pass. */}
+              <SourceMark
+                source="code"
+                tip="The entry point of this capability's top flow, the seam where that flow writes or hands work off, and the next flow's entry point. Picked from the trace, with no AI involved."
+              />
+            </div>
             <ul className="space-y-1">
               {cap.whereToStart.map((s) => (
                 <li key={s.stable_key} className="text-[0.6875rem]">
@@ -1446,7 +1546,16 @@ function EmptyFinding({
 
           {bindingRule && (
             <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2">
-              <p className="section-label mb-1">The rule that was applied</p>
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <p className="section-label">The rule that was applied</p>
+                {/* One mark for the rule and its legs: this whole block is the
+                    binding rule as code applies it, which is exactly why the
+                    empty result it explains is a finding and not a failure. */}
+                <SourceMark
+                  source="code"
+                  tip="The binding rule as the derivation applies it, and the legs it tests. No AI involved."
+                />
+              </div>
               <p className="text-[0.75rem] leading-relaxed text-muted-foreground">{bindingRule.summary}</p>
               <ul className="mt-1 space-y-0.5 text-[0.71875rem] text-muted-foreground">
                 {bindingRule.legs.map((leg) => <li key={leg}>· {leg}</li>)}

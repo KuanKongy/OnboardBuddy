@@ -1,5 +1,7 @@
 import { Star } from "lucide-react";
 import { Handle, Position, type NodeProps } from "reactflow";
+import { SourceMark } from "@/components/reader/SourceMark";
+import { countNoun } from "@/lib/format";
 import { inferNodeType } from "@/lib/graphNodeType";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +24,12 @@ export interface ModuleNodeData {
   summary?: string | null;
   /** The record's own classification: "route file", "service", "config glue". */
   role?: string | null;
+  /**
+   * True when the record behind this node holds deterministic facts only,
+   * which is why `summary` is null. Null when there is no record at all — the
+   * mark is the same, the tooltip is not.
+   */
+  factsOnly?: boolean | null;
   /** Group nodes only — the files folded into this box. */
   fileCount?: number;
   /** What `fileCount` counts when the box does not stand for files ("classes"). */
@@ -42,6 +50,12 @@ export interface ModuleNodeData {
  * they broke: a tooltip must carry information the screen does not already
  * show, and these restated the label, the type description and the counts
  * printed two lines below them. Anything worth saying is now printed.
+ *
+ * The one exception is the source mark's native title, which passes that rule
+ * rather than breaking it: who wrote the line under the label appears nowhere
+ * else on the card, and at 240px there is no room to print it. The glyph is
+ * the icon variant for the same reason — a pill would take the width the
+ * sentence needs.
  */
 export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
   const typeInfo = inferNodeType(data.filePath, data.exportedSymbols);
@@ -87,6 +101,12 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
       {!isGroup && data.summary ? (
         <>
           <p className="mb-1 line-clamp-3 text-[0.71875rem] leading-snug text-foreground/90">
+            <SourceMark
+              variant="icon"
+              source="ai"
+              tip="Written by the model from this file's code. Open the node for the receipts behind it."
+              className="mr-1 align-[-1px]"
+            />
             {data.summary}
           </p>
           {data.role && (
@@ -97,8 +117,26 @@ export function ModuleNode({ data }: NodeProps<ModuleNodeData>) {
         </>
       ) : (
         <p className="mb-2 line-clamp-2 text-xs text-muted-foreground">
+          <SourceMark
+            variant="icon"
+            source="code"
+            // Three different absences behind one fallback line, and telling
+            // them apart is the point of marking it. Measured on the
+            // OnboardBuddy snapshot, one drilled class level of 27 splits
+            // 15 facts-only / 2 dropped-as-restatement / 10 described.
+            tip={
+              isGroup
+                ? "Counted from the files traced into this folder."
+                : data.factsOnly === true
+                  ? "The stored record for this holds deterministic facts only, so no summary was written. This line is traced from the code."
+                  : data.factsOnly === false
+                    ? "The stored summary for this only restated its own name, so it is not shown. This line is traced from the code."
+                    : "No summary was recorded for this. This line is traced from the code."
+            }
+            className="mr-1 align-[-1px]"
+          />
           {isGroup
-            ? `${data.fileCount} ${data.groupNoun ?? "files"} in this folder`
+            ? `${data.fileCount} ${countNoun(data.fileCount ?? 0, data.groupNoun ?? "files")} in this folder`
             : isSymbol
               // No record worth showing: the type badge above already says
               // "class", so restating that would be the tooltip mistake in

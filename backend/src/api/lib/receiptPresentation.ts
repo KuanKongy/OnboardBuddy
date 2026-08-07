@@ -164,6 +164,25 @@ export interface PackageGenerationMode {
 }
 
 /**
+ * The privacy mode ONE section was generated under, or null when nothing was
+ * recorded. This is the atom `packageGenerationMode` counts; it is exported so
+ * the reader can mark a single section's provenance without a second copy of
+ * the rule that will eventually disagree with the package banner sitting above
+ * it on the same screen.
+ *
+ * `ai_disabled` is the only value that means "no model wrote this" —
+ * `facts_only_ai` still ships model-written prose, it just withheld the code.
+ */
+export function sectionPrivacyMode(
+  generationContext: unknown,
+): "full_ai" | "facts_only_ai" | "ai_disabled" | null {
+  const ctx = generationContext as { privacy_mode?: unknown; mode?: unknown } | null;
+  const recorded = ctx?.privacy_mode;
+  if (recorded === "full_ai" || recorded === "facts_only_ai" || recorded === "ai_disabled") return recorded;
+  return ctx?.mode === "deterministic" ? ("ai_disabled" as const) : null;
+}
+
+/**
  * How a package was ACTUALLY made, read back from the sections themselves.
  *
  * This exists because `analysis_snapshots.privacy_mode` — what the provenance
@@ -178,12 +197,7 @@ export interface PackageGenerationMode {
  * deterministic path has always stamped `mode: 'deterministic'`.
  */
 export function packageGenerationMode(generationContexts: unknown[]): PackageGenerationMode {
-  const modes = generationContexts.map((raw) => {
-    const ctx = raw as { privacy_mode?: unknown; mode?: unknown } | null;
-    const recorded = ctx?.privacy_mode;
-    if (recorded === "full_ai" || recorded === "facts_only_ai" || recorded === "ai_disabled") return recorded;
-    return ctx?.mode === "deterministic" ? ("ai_disabled" as const) : null;
-  });
+  const modes = generationContexts.map(sectionPrivacyMode);
   const total = modes.length;
   const deterministic = modes.filter((m) => m === "ai_disabled").length;
   if (total === 0) {

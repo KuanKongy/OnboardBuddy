@@ -89,6 +89,16 @@ function pathSegments(p: string): string[] {
 }
 
 /**
+ * A group label's member count and noun. A directory holding exactly one file
+ * used to be labelled "(1 files)", and the label is what the canvas card and
+ * the breadcrumb both print. Only the two nouns this route emits are handled.
+ */
+function memberCount(count: number, plural: "files" | "classes"): string {
+  if (count !== 1) return `${count} ${plural}`;
+  return `1 ${plural === "classes" ? "class" : "file"}`;
+}
+
+/**
  * A facts-only record's `purpose` is built deterministically as
  * `interface 'GitHubUser' (github_integration)` (symbolPass.buildFactsOnlyBody)
  * — the kind and the name, both of which the node label and the type badge
@@ -154,11 +164,18 @@ function symbolNameFromKey(stableKey: string): string {
 
 /** What one file does, in the analyzer's own words. */
 interface FileBrief {
-  /** One line, with the redundant `<path>: ` prefix stripped. */
-  summary: string;
+  /**
+   * One line, with the redundant `<path>: ` prefix stripped. Null when the
+   * record explains nothing — see `fileBriefs`, which keeps such a record for
+   * `factsOnly` alone.
+   */
+  summary: string | null;
   /** "route file", "service", "config glue" — the analyzer's file_role. */
   role: string | null;
-  confidence: string;
+  /** Null beside a null summary: there is no summary to be confident about. */
+  confidence: string | null;
+  /** The record's own flag: deterministic facts, no model prose. */
+  factsOnly: boolean;
   /** The symbols the record considers this file's headline names. */
   keySymbols: string[];
 }
@@ -196,12 +213,18 @@ async function fileBriefs(snapshotId: string, filePaths: string[]): Promise<Map<
       factsOnly: r.facts_only,
       strip: [r.stable_key],
     });
-    if (!summary) continue;
+    // A record with no usable line is still kept, for `factsOnly` alone: the
+    // reader-facing source mark has to tell "the analyzer wrote deterministic
+    // facts about this file" apart from "nothing was ever written", and
+    // dropping the row here collapsed both into the same absence. Everything
+    // that hangs off the summary stays behind it, so a brief with no summary
+    // shows exactly what it showed before this: nothing.
     briefs.set(r.stable_key, {
       summary,
-      role: r.file_role,
-      confidence: r.confidence ?? "medium",
-      keySymbols: Array.isArray(r.key_symbols) ? r.key_symbols.slice(0, 8) : [],
+      role: summary ? r.file_role : null,
+      confidence: summary ? (r.confidence ?? "medium") : null,
+      factsOnly: r.facts_only === true,
+      keySymbols: summary && Array.isArray(r.key_symbols) ? r.key_symbols.slice(0, 8) : [],
     });
   }
   return briefs;
@@ -209,8 +232,11 @@ async function fileBriefs(snapshotId: string, filePaths: string[]): Promise<Map<
 
 /** What one class or interface does, in the analyzer's own words. */
 interface SymbolBrief {
-  summary: string;
-  confidence: string;
+  /** Null when the record restates the name instead of explaining it. */
+  summary: string | null;
+  confidence: string | null;
+  /** The record's own flag: deterministic facts, no model prose. */
+  factsOnly: boolean;
 }
 
 /**
@@ -238,8 +264,16 @@ async function symbolBriefs(snapshotId: string, stableKeys: string[]): Promise<M
       factsOnly: r.facts_only,
       strip: [r.stable_key, symbolNameFromKey(r.stable_key)],
     });
-    if (!summary) continue;
-    briefs.set(r.stable_key, { summary, confidence: r.confidence ?? "medium" });
+    // Kept even with no usable line, same reason as `fileBriefs` — and this is
+    // where it bites: 803 of the 1337 symbol records on the snapshot this was
+    // measured against are facts-only, so the class card's "Declared in <path>"
+    // fallback is the common case, and it needs to be able to say which of the
+    // two absences it is standing in for.
+    briefs.set(r.stable_key, {
+      summary,
+      confidence: summary ? (r.confidence ?? "medium") : null,
+      factsOnly: r.facts_only === true,
+    });
   }
   return briefs;
 }
@@ -465,7 +499,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
         .slice(0, MAX_GRAPH_NODES)
         .map(([dir, info]) => ({
           id: `cluster:${dir}`,
-          label: `${dir}/ (${info.count} files)`,
+          label: `${dir}/ (${memberCount(info.count, "files")})`,
           kind: "cluster" as const,
           metadata: {
             exportedSymbols: [] as string[],
@@ -626,7 +660,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
           .sort((a, b) => b[1].importCount - a[1].importCount || a[0].localeCompare(b[0]))
           .map(([dir, info]) => ({
             id: `cluster:${dir}`,
-            label: `${dir.split("/").pop()}/ (${info.count} files)`,
+            label: `${dir.split("/").pop()}/ (${memberCount(info.count, "files")})`,
             kind: "cluster" as const,
             metadata: {
               exportedSymbols: [] as string[],
@@ -659,6 +693,9 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
               summary: brief?.summary ?? null,
               role: brief?.role ?? null,
               summaryConfidence: brief?.confidence ?? null,
+              // Who wrote the line above: null means no record exists at all,
+              // which the card marks the same way but explains differently.
+              factsOnly: brief?.factsOnly ?? null,
             },
           };
         });
@@ -755,6 +792,7 @@ graphRouter.get("/dependencies", requireProjectAccess(), async (req, res) => {
           summary: brief?.summary ?? null,
           role: brief?.role ?? null,
           summaryConfidence: brief?.confidence ?? null,
+          factsOnly: brief?.factsOnly ?? null,
         },
       };
     });
@@ -895,6 +933,7 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
 
     const membersByCluster = new Map<string, Array<{
       key: string; name: string; filePath: string | null; summary: string | null; role: string | null;
+      summaryConfidence: string | null; factsOnly: boolean | null;
     }>>();
     for (const m of memberRows) {
       if (!membersByCluster.has(m.cluster_key)) membersByCluster.set(m.cluster_key, []);
@@ -905,6 +944,11 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
         filePath: m.file_path,
         summary: brief?.summary ?? null,
         role: brief?.role ?? null,
+        // The list shows the summary; these say who wrote it. Both were loaded
+        // and then dropped here, so the aside could print a generated sentence
+        // with nothing marking it as one.
+        summaryConfidence: brief?.confidence ?? null,
+        factsOnly: brief?.factsOnly ?? null,
       });
     }
     const recordByCluster = new Map(
@@ -1032,6 +1076,8 @@ graphRouter.get("/architecture", requireProjectAccess(), async (req, res) => {
           // it does whether it is read in the list or opened on the canvas.
           summary: brief?.summary ?? null,
           role: brief?.role ?? null,
+          summaryConfidence: brief?.confidence ?? null,
+          factsOnly: brief?.factsOnly ?? null,
           criticalScore: row ? Number(row.score) : null,
           // Per-file derivation, not the component's mean: inside a component
           // the question stops being "how critical is this box" and becomes
@@ -1210,7 +1256,7 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
           .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
           .map(([groupDir, members]) => ({
             id: `cluster:${groupDir}`,
-            label: `${dir ? groupDir.split("/").pop() : groupDir}/ (${members.length} classes)`,
+            label: `${dir ? groupDir.split("/").pop() : groupDir}/ (${memberCount(members.length, "classes")})`,
             kind: "cluster" as const,
             filePath: groupDir,
             metadata: {
@@ -1242,6 +1288,7 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
               dependentCount: (n.metadata?.dependentCount as number) ?? 0,
               summary: looseBriefs.get(n.stable_key)?.summary ?? null,
               summaryConfidence: looseBriefs.get(n.stable_key)?.confidence ?? null,
+              factsOnly: looseBriefs.get(n.stable_key)?.factsOnly ?? null,
             },
           }));
 
@@ -1304,6 +1351,9 @@ graphRouter.get("/classes", requireProjectAccess(), async (req, res) => {
         // name — the card then shows the name alone rather than a filler line.
         summary: briefs.get(n.stable_key)?.summary ?? null,
         summaryConfidence: briefs.get(n.stable_key)?.confidence ?? null,
+        // True where the record itself is deterministic facts, which is why the
+        // line above is null; null where no record was written at all.
+        factsOnly: briefs.get(n.stable_key)?.factsOnly ?? null,
       },
     }));
 

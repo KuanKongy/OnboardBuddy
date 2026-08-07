@@ -1,13 +1,15 @@
-import { AlertCircle, Check, ChevronRight, Copy, ExternalLink, Network, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, ChevronRight, Copy, ExternalLink, Network, X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { countNoun } from "@/lib/format";
 import type { NodeDetail, SymbolDoc } from "@/lib/graphData";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
 import { CodeRef } from "@/components/CodeRef";
 import { ScoreProvenanceDisclosure } from "@/components/ScoreProvenance";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { useOptionalProject } from "@/contexts/ProjectContext";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { GraphNode } from "@/types/graph";
@@ -176,6 +178,10 @@ export function NodeInfoPanel({
   const isGroup = node.id.startsWith("cluster:");
   const displayPath = isGroup ? node.id.slice("cluster:".length) : node.id;
   const groupNoun = node.metadata.groupNoun ?? "files";
+  const groupCount = node.metadata.fileCount ?? 0;
+  /** The noun where it is counted; `groupNoun` stays plural where the sentence
+   *  is about the members in general ("between its own files"). */
+  const countedNoun = countNoun(groupCount, groupNoun);
   // `cluster:src/lib` is not a blob on GitHub, and a link that 404s is worse
   // than no link.
   const githubUrl =
@@ -286,7 +292,7 @@ export function NodeInfoPanel({
           <div>
             <p className="section-label mb-1">Directory group</p>
             <p className="text-[0.8125rem] leading-relaxed text-foreground">
-              This box stands for the {node.metadata.fileCount ?? 0} {groupNoun} in{" "}
+              This box stands for the {groupCount} {countedNoun} in{" "}
               <span className="font-mono text-[0.75rem]">{displayPath}</span>, drawn as one node because
               the level holds too many to read at once. Open it to see them individually.
             </p>
@@ -306,7 +312,7 @@ export function NodeInfoPanel({
             </ul>
             {onOpenGroup && (
               <Button size="xs" className="mt-3 w-full justify-center" onClick={onOpenGroup}>
-                Open {node.metadata.fileCount ?? 0} {groupNoun}
+                Open {groupCount} {countedNoun}
                 <ChevronRight className="ml-1 h-3 w-3" />
               </Button>
             )}
@@ -318,9 +324,22 @@ export function NodeInfoPanel({
             should also have explanation of what file does." */}
         {doc?.summary ? (
           <div>
-            <p className="section-label mb-1">
-              {isFileRelation ? "What this file does" : "What this does"}
-            </p>
+            <div className="mb-1 flex flex-wrap items-center gap-1.5">
+              <p className="section-label">
+                {isFileRelation ? "What this file does" : "What this does"}
+              </p>
+              {/* Beside the heading, not under the paragraph: the reader should
+                  know who wrote the sentence before reading it, not after. */}
+              {doc.factsOnly ? (
+                <SourceMark source="code" tip="Deterministic facts only, no AI summary here." />
+              ) : (
+                <SourceMark
+                  source="ai"
+                  detail={doc.summaryConfidence}
+                  tip={`AI summary (${doc.summaryConfidence ?? "unstated"} confidence), backed by the receipts below.`}
+                />
+              )}
+            </div>
             <p className="text-[0.8125rem] leading-relaxed text-foreground">{doc.summary}</p>
             {doc.role && (
               <p className="mt-1 text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
@@ -333,15 +352,6 @@ export function NodeInfoPanel({
                 <span className="font-mono text-[0.6875rem]">{doc.keySymbols!.join(", ")}</span>
               </p>
             )}
-            <p className="mt-1 inline-flex items-center gap-1 text-[0.65625rem] text-muted-foreground">
-              {doc.factsOnly ? (
-                "Deterministic facts only, no AI summary here"
-              ) : (
-                <>
-                  <Sparkles className="h-2.5 w-2.5" /> AI summary ({doc.summaryConfidence} confidence), backed by the receipts below
-                </>
-              )}
-            </p>
           </div>
         ) : (
           detail && (

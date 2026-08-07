@@ -174,6 +174,9 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
         // What this class does, from its stored symbol record.
         summary: (n.metadata?.summary as string | null) ?? null,
         summaryConfidence: (n.metadata?.summaryConfidence as string | null) ?? null,
+        // Most class records are facts-only restatements, so the card's
+        // fallback line is the common case here — see ModuleNode.
+        factsOnly: (n.metadata?.factsOnly as boolean | null) ?? null,
         fileCount: (n.metadata?.fileCount as number) ?? undefined,
         groupNoun: (n.metadata?.groupNoun as string) ?? undefined,
         internalImportCount: (n.metadata?.internalImportCount as number) ?? undefined,
@@ -186,8 +189,6 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
     return data.graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, kind: e.kind }));
   }, [data]);
 
-  // ← / → cycle the selectable (non-group) nodes, Esc deselects.
-  const cycleIds = useMemo(() => nodes.map((n) => n.id).filter((nid) => !nid.startsWith("cluster:")), [nodes]);
   /**
    * What the panel's Called by / Calls rows can actually reach. This canvas
    * draws classes and interfaces only, so most of a class's callees are plain
@@ -197,14 +198,6 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
    * Files ladder, which drills to reach anything it is asked for.
    */
   const drawnNodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
-  useHotkeys(
-    {
-      ArrowRight: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") + 1 + cycleIds.length) % cycleIds.length] ?? null),
-      ArrowLeft: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") - 1 + cycleIds.length) % cycleIds.length] ?? null),
-      Escape: () => setSelectedNodeId(null),
-    },
-    !!data && !loading,
-  );
 
   // The panel's own content: the class's summary, score, receipts and the
   // symbols that call it. This view never fetched it, which is why selecting a
@@ -248,6 +241,23 @@ export function ClassGraphSection({ projectId, focusNodeId = null }: ClassGraphS
   const positionedNodes = useMemo(
     () => layoutDependencyGraph(visibleNodes, visibleEdges, []),
     [visibleNodes, visibleEdges],
+  );
+
+  /**
+   * ← / → cycle what is drawn, Esc deselects. Folder boxes included: this
+   * canvas selects them like the Files tab does, and excluding them left the
+   * shortcut dead on any grouped level — which is every level of a repo with
+   * more classes than fit. Drawn nodes, not all of them, so a search cannot
+   * cycle into a box that is not on screen.
+   */
+  const cycleIds = useMemo(() => positionedNodes.map((n) => n.id), [positionedNodes]);
+  useHotkeys(
+    {
+      ArrowRight: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") + 1 + cycleIds.length) % cycleIds.length] ?? null),
+      ArrowLeft: () => cycleIds.length > 0 && setSelectedNodeId((prev) => cycleIds[(cycleIds.indexOf(prev ?? "") - 1 + cycleIds.length) % cycleIds.length] ?? null),
+      Escape: () => setSelectedNodeId(null),
+    },
+    !!data && !loading,
   );
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);

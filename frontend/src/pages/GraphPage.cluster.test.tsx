@@ -295,6 +295,31 @@ describe("GraphPage drill-down", () => {
     expect(screen.getByRole("button", { name: "Open 40 files" })).toBeInTheDocument();
   });
 
+  /**
+   * The shortcuts dialog promises ←/→ "Cycle node selection" on this tab, and
+   * the root of any repo past the node cap holds nothing but directory groups.
+   * The cycle list filtered `cluster:` ids out, so at that level the key did
+   * nothing at all — with or without a selection. Nothing in a passing render
+   * shows a dead shortcut, so it is pinned here.
+   */
+  it("cycles directory groups with the arrow keys at the root level", async () => {
+    renderGraphPage();
+    await waitFor(() => expect(screen.getByText("src/lib/ (40 files)")).toBeInTheDocument());
+
+    // On document.body, not document: the shortcut listener is on document
+    // either way, and React Flow's own keydown handler reads `hasAttribute`
+    // off the target, which the document node does not have.
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+
+    // Selection reaches a group, which is exactly what a click on one does.
+    expect(await screen.findByText("Directory group")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Open \d+ files$/ })).toBeInTheDocument();
+
+    // Esc still clears it.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByText("Directory group")).not.toBeInTheDocument());
+  });
+
   it("restores click-to-open when this project's preference is on", async () => {
     // Keyed by project as well as surface: the toggle lives in this project's
     // settings, so another project's canvas must keep the default gesture.

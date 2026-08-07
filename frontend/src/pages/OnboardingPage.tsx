@@ -52,6 +52,7 @@ import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel, roleTitle } from "@/lib/roles";
 import { receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
 import { AskPanel } from "@/components/AskPanel";
 import { DiagramFrame } from "@/components/reader/DiagramFrame";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { SectionMarkdown, type MarkdownComponents } from "@/components/reader/SectionMarkdown";
 import { receiptAnchor } from "@/components/reader/receiptAnchor";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
@@ -387,6 +388,11 @@ export function PackageGapsPanel({
  * CORRECT state — "the table is the evidence" (audit §8.1/A13) — so they get
  * a provenance sentence instead of the self-indicting "no receipts; content
  * is not independently verifiable" framing.
+ *
+ * Superseded by the served `generationMode`, which reads the generator's own
+ * stamp instead of guessing from an id list: this set named four sections and
+ * an AI-disabled package makes ALL twelve deterministic. Kept only as the
+ * fallback for packages fetched from an API build that predates the field.
  */
 const REFERENCE_SECTION_IDS = new Set<string>(["routes-jobs", "data-model", "guardrails-ops", "data-schema"]);
 
@@ -671,11 +677,20 @@ export function SectionView({
   // A13: deterministic reference sections aren't "unverifiable AI prose" —
   // zero receipts is their CORRECT state (the table is the evidence), and the
   // old pill said the opposite on the three most mechanically verifiable
-  // sections in the package.
+  // sections in the package. The API now says which generator wrote each
+  // section; the id-list heuristic only runs for payloads served before it.
   const totalReceipts = section.blocks.reduce((n, b) => n + b.receipts.length, 0);
-  const referenceProvenance = REFERENCE_SECTION_IDS.has(section.id) && totalReceipts === 0;
+  const referenceProvenance = section.generationMode
+    ? section.generationMode === "deterministic"
+    : REFERENCE_SECTION_IDS.has(section.id) && totalReceipts === 0;
   const displayReason = referenceProvenance
-    ? "built from code facts, the tables are the source"
+    ? // "The tables are the source" is true of the CONSULT sections and of
+      // nothing else. Now that any section can come back deterministic — an
+      // AI-off package makes all twelve — the other nine get the sentence
+      // that is actually true of them, in the package banner's own words.
+      REFERENCE_SECTION_IDS.has(section.id)
+      ? "built from code facts, the tables are the source"
+      : "built from code facts, extracted directly by static analysis"
     : section.confidenceReason;
 
   // One `a` override shared by the TL;DR callout and every block body.
@@ -688,46 +703,47 @@ export function SectionView({
       <div className="flex flex-wrap items-center gap-2">
         {referenceProvenance ? (
           <>
-            <Badge
-              variant="outline"
-              className="border-border bg-secondary text-[0.6875rem] capitalize text-secondary-foreground"
-            >
-              Reference
-            </Badge>
+            {/* The "Reference" badge said what KIND of section this was and
+                buried who made it in a tooltip on the sentence beside it. The
+                chip says who made it, in the same two tones every other
+                surface uses, and carries that sentence itself. */}
+            <SourceMark
+              source="code"
+              tip="Deterministic reference facts, generated from the analyzed code, not narrated by the model"
+            />
             {displayReason && (
               // The grade's mechanical basis, inline (audit §3.6) — a label
               // without its reason reads as theater.
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Deterministic reference facts, generated from the analyzed code, not narrated by the model
-                </TooltipContent>
-              </Tooltip>
+              <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
             )}
           </>
         ) : (
-          // The pie IS the grade: the word "medium" told nobody what was
-          // measured, while the ratio it stands for (claims that cite a
-          // receipt) was sitting unread in the reason string beside it. One
-          // tooltip for both, so the picture always arrives with its sentence.
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span tabIndex={0} className="inline-flex cursor-help items-center gap-1.5 rounded-sm">
-                <ConfidencePie level={section.confidence} claims={section.claims} />
-                {displayReason && (
-                  <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
-                )}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-72 text-left">
-              <p className="font-medium">{CONFIDENCE_WORD[section.confidence]} confidence</p>
-              {/* The reason string is already visible in the trigger beside the
-                  pie, so the tooltip carries what the grade means instead. */}
-              <p className="mt-0.5">{CONFIDENCE_MEANING[section.confidence]}</p>
-            </TooltipContent>
-          </Tooltip>
+          <>
+            {/* Two different facts, so two marks: the pie says how well cited
+                the prose is, the chip says a model wrote it. Collapsing them
+                loses one of the two questions a reader actually asks. */}
+            <SourceMark source="ai" />
+            {/* The pie IS the grade: the word "medium" told nobody what was
+                measured, while the ratio it stands for (claims that cite a
+                receipt) was sitting unread in the reason string beside it. One
+                tooltip for both, so the picture always arrives with its sentence. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span tabIndex={0} className="inline-flex cursor-help items-center gap-1.5 rounded-sm">
+                  <ConfidencePie level={section.confidence} claims={section.claims} />
+                  {displayReason && (
+                    <span className="text-[0.6875rem] text-muted-foreground">{displayReason}</span>
+                  )}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="max-w-72 text-left">
+                <p className="font-medium">{CONFIDENCE_WORD[section.confidence]} confidence</p>
+                {/* The reason string is already visible in the trigger beside the
+                    pie, so the tooltip carries what the grade means instead. */}
+                <p className="mt-0.5">{CONFIDENCE_MEANING[section.confidence]}</p>
+              </TooltipContent>
+            </Tooltip>
+          </>
         )}
         {section.status === "stale" && (
           <Badge variant="outline" className={cn("text-[0.6875rem]", STATUS_STYLE.stale)}>
@@ -1368,6 +1384,25 @@ export function OnboardingPage() {
     const next = presentSectionIds[Math.min(Math.max((idx === -1 ? 0 : idx) + delta, 0), presentSectionIds.length - 1)];
     if (next && next !== activeSectionId) setActiveSectionId(next);
   };
+  /**
+   * The reader's place, written back to the URL it was read from.
+   *
+   * `?section=` was honoured on load but never updated, so every sidebar click
+   * and every ←/→ moved the reader without moving the address bar: a refresh
+   * or a copied link reopened at the package's first section, and the reader
+   * lost the page they were on. Written from the active id itself rather than
+   * from each of the six call sites that can change it.
+   *
+   * REPLACE, like every other param this page writes: pushing would put one
+   * history entry per arrow key between the reader and wherever they came
+   * from. Only a view boundary (Packages / opening a card) pushes.
+   */
+  useEffect(() => {
+    if (view !== "reader") return;
+    if (searchParams.get("section") === activeSectionId) return;
+    setParams({ section: activeSectionId });
+  }, [view, activeSectionId, searchParams]);
+
   // Opening a section always starts at its top. The content pane is one
   // scroll container shared by every section, and switching sections used to
   // inherit the previous offset — click a section in the rail from the bottom
@@ -1938,7 +1973,7 @@ export function OnboardingPage() {
         <Button
           variant="ghost"
           size="xs"
-          onClick={() => setParams({ view: null, package: null }, { replace: false })}
+          onClick={() => setParams({ view: null, package: null, section: null }, { replace: false })}
           className="gap-1"
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Packages
@@ -2153,7 +2188,12 @@ export function OnboardingPage() {
           className="flex items-start gap-2 border-b bg-muted/30 px-3 py-2 text-[0.6875rem] leading-relaxed text-muted-foreground sm:px-4 lg:px-5"
           role="status"
         >
-          <Sparkles className="mt-0.5 h-3 w-3 shrink-0 opacity-60" aria-hidden />
+          {/* This banner exists to say "no model wrote this", and it opened
+              with the sparkle — the app's own icon for AI — which read as the
+              exact opposite of the sentence beside it. The code chip carries
+              the same tone as every deterministic mark in the reader, and the
+              full disclosure sentence rides in its tooltip as well as inline. */}
+          <SourceMark source="code" tip={pkg.generation.label} className="mt-0.5" />
           <p className="flex-1">
             <span className="font-medium text-foreground">
               {pkg.generation.kind === "deterministic" ? "Built without AI" : "Partly built without AI"}
@@ -2473,7 +2513,7 @@ export function OnboardingPage() {
                       size="sm"
                       variant={pkgError.gone ? "default" : "ghost"}
                       className="gap-1.5"
-                      onClick={() => setParams({ view: null, package: null }, { replace: false })}
+                      onClick={() => setParams({ view: null, package: null, section: null }, { replace: false })}
                     >
                       <BookOpen className="h-3.5 w-3.5" /> Back to packages
                     </Button>

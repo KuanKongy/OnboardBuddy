@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OnboardingPage, SectionView } from "./OnboardingPage";
 import type { OnboardingPackage, OnboardingSection } from "@/types/onboarding";
@@ -313,5 +313,63 @@ describe("reader read mark (every tier)", () => {
         expect.objectContaining({ readSections: expect.arrayContaining(["big-picture"]) }),
       ),
     );
+  });
+});
+
+/**
+ * `?section=` was read on load and never written, so every sidebar click and
+ * every ←/→ moved the reader without moving the address bar: refreshing or
+ * sharing the link reopened at the package's first section. A URL that has
+ * stopped tracking looks identical to one that is tracking, which is why this
+ * is pinned rather than left to the eye.
+ */
+const TWO_SECTIONS: OnboardingPackage = {
+  ...PACKAGE,
+  sections: [
+    PACKAGE.sections[0]!,
+    {
+      id: "concepts",
+      sectionId: "sec-2",
+      label: "Concepts",
+      status: "complete",
+      confidence: "high",
+      blocks: [{ title: "Concepts", body: "A job is one unit of work.", receipts: [] }],
+    },
+  ],
+};
+
+/** The query string as the router currently holds it. */
+function LocationProbe() {
+  return <span data-testid="search">{useLocation().search}</span>;
+}
+
+describe("reader place in the URL", () => {
+  beforeEach(() => {
+    fetchOnboardingPackage.mockReset();
+    fetchOnboardingPackage.mockResolvedValue(TWO_SECTIONS);
+    progress.loaded = true;
+    progress.loadError = false;
+    progress.save.mockReset();
+    tier.current = "developer";
+  });
+
+  it("writes the section it is showing, and follows the arrow keys", async () => {
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/projects/p1/onboarding?view=reader&package=pkg-1&role=backend"]}>
+          <LocationProbe />
+          <Routes>
+            <Route path="/projects/:id/onboarding" element={<OnboardingPage />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    // Arrived without one: the reader still has to say where it is.
+    await waitFor(() => expect(screen.getByTestId("search").textContent).toContain("section=big-picture"));
+
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+
+    await waitFor(() => expect(screen.getByTestId("search").textContent).toContain("section=concepts"));
   });
 });

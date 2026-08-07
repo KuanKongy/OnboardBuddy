@@ -51,7 +51,9 @@ function mockCtx(overrides: Partial<ReturnType<typeof baseCtx>> = {}) {
   const ctx = { ...baseCtx(), ...overrides };
   vi.mocked(usePackages).mockReturnValue(ctx as never);
   vi.mocked(useProject).mockReturnValue({
-    project: { repo_owner: "acme", repo_name: "auth-demo" },
+    // branch: the no-package pill names the project from the repo and branch,
+    // with no package to take them from.
+    project: { repo_owner: "acme", repo_name: "auth-demo", branch: "main" },
     loading: false,
     error: "",
     refetch: vi.fn(),
@@ -106,10 +108,16 @@ describe("PackageSelector", () => {
     expect(screen.queryByText(/main@abc1234/)).not.toBeInTheDocument();
   });
 
-  it("renders nothing when the project has no packages", () => {
+  it("still names the project when it has no packages", () => {
     mockCtx({ packages: [], selectedPackage: null, selectedPackageId: null });
-    const { container } = renderSelector();
-    expect(container.firstChild).toBeNull();
+    renderSelector();
+
+    // This pill is the only place any project page names the project, so an
+    // unanalyzed project used to sit under no name at all.
+    expect(screen.getByText(/auth-demo \/ main/)).toBeInTheDocument();
+    expect(screen.getByText("No package yet")).toBeInTheDocument();
+    // Nothing to choose between: the label is not a menu.
+    expect(screen.queryByTitle(/which package every tab shows/i)).not.toBeInTheDocument();
   });
 
   it("lists every package plus 'Latest analysis' and selects on click", async () => {

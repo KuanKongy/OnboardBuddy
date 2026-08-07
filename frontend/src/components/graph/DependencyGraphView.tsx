@@ -150,6 +150,7 @@ export function DependencyGraphView({
             symbolCount: node.metadata.symbolCount ?? node.metadata.exportedSymbols.length,
             summary: node.metadata.summary ?? null,
             role: node.metadata.role ?? null,
+            factsOnly: node.metadata.factsOnly ?? null,
             fileCount: node.metadata.fileCount,
             groupNoun: node.metadata.groupNoun,
             internalImportCount: node.metadata.internalImportCount,

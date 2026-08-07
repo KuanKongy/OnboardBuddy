@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CodeSnippet, type HighlightRange } from "@/components/CodeSnippet";
+import { SourceMark } from "@/components/reader/SourceMark";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { buildGithubBlobUrl, type GithubRepoRef } from "@/lib/githubUrl";
@@ -359,9 +360,21 @@ function WalkthroughStepCard({
         {step.symbol_name && (
           <span className="font-mono text-[0.78125rem] font-medium text-foreground">{step.symbol_name}</span>
         )}
-        {step.narration_source === "deterministic" && (
-          <Badge variant="secondary" className="text-[0.625rem]">deterministic</Badge>
-        )}
+        {/* Both sides marked. The old badge appeared only on deterministic
+            steps, so an unmarked step meant "written by a model" — which
+            nothing on screen said out loud, and which is the fact a reader
+            most needs when deciding how far to trust the narration. */}
+        {step.narration_source === "deterministic" ? (
+          <SourceMark
+            source="code"
+            tip="Deterministic description derived from the step's kind and target"
+          />
+        ) : step.explanation ? (
+          // No chip when there is no prose: the paragraph below says the
+          // narration could not be grounded, and marking that "AI" would
+          // attribute an absence to the model.
+          <SourceMark source="ai" tip="Narration written by the model from this step's evidence." />
+        ) : null}
       </div>
 
       {step.entry && <EntryBlock entry={step.entry} repo={repo} />}
