@@ -47,9 +47,9 @@ export const CAPABILITY_BINDING_RULE = {
   summary:
     'A capability is derived from evidence and then named. It is emitted only when a group of flows binds to all three legs below; nothing else is emitted.',
   legs: [
-    'At least one addressable entry point — an HTTP route, page, UI action, named protocol or queue message, schedule or command that a caller outside the code can invoke on purpose. A raw input event (a mouse, key, scroll or context-loss listener) does not count on its own: it is a component\'s interaction surface, not something the product does.',
+    'At least one addressable entry point: an HTTP route, page, UI action, named protocol or queue message, schedule or command that a caller outside the code can invoke on purpose. A raw input event (a mouse, key, scroll or context-loss listener) does not count on its own: it is a component\'s interaction surface, not something the product does.',
     'At least one traced flow that reaches past its own trigger, so there is a path to follow.',
-    'At least one persistence or external surface those flows actually reach — a schema table, a named data resource or service, the filesystem, a queue, or the network.',
+    'At least one persistence or external surface those flows actually reach: a schema table, a named data resource or service, the filesystem, a queue, or the network.',
   ],
 } as const;
 
@@ -165,7 +165,7 @@ function isStorageSurface(target: string): boolean {
  * (`journeyComposer`), and a capability's `whereToStart` reason quotes a title
  * inside a sentence. Quoting the whole thing shipped `Entry point of "POST
  * /api/projects/:id/analysis-jobs/:jobId/resume → what it reads from
- * onboarding_packages" — the HTTP request that starts this capability.`: a
+ * onboarding_packages": the HTTP request that starts this capability.`: a
  * sentence carrying another sentence's tail. The arrow half belongs to the
  * journey, not to the entry point being pointed at.
  */
@@ -545,7 +545,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
         unbound.push({
           stableKey: m.workflow.stableKey,
           title: m.workflow.title,
-          missing: `only raw input events reach it (${events.slice(0, 3).join(', ')}) — an input event is a component's interaction surface, not something the product does`,
+          missing: `only raw input events reach it (${events.slice(0, 3).join(', ')}). An input event is a component's interaction surface, not something the product does`,
         });
       }
       continue;
@@ -571,13 +571,13 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
     };
     pushStart(
       top.workflow.entrypoint.symbolStableKey ?? top.workflow.entrypoint.nodeStableKey,
-      `Entry point of "${quotableTitle(top.workflow.title)}" — the ${describeTrigger(top.workflow.entrypoint.kind)} that starts this capability.`,
+      `Entry point of "${quotableTitle(top.workflow.title)}": the ${describeTrigger(top.workflow.entrypoint.kind)} that starts this capability.`,
     );
     const seam = ordered.find((m) => m.effectStep)?.effectStep;
     if (seam) {
       pushStart(
         seam.nodeStableKey,
-        `Where the flow ${seam.stepKind === 'data_write' ? 'writes its data' : seam.stepKind === 'async_work' ? 'hands work off' : 'reaches outside the process'} — the seam to change when extending this capability.`,
+        `Where the flow ${seam.stepKind === 'data_write' ? 'writes its data' : seam.stepKind === 'async_work' ? 'hands work off' : 'reaches outside the process'}: the seam to change when extending this capability.`,
       );
     }
     if (ordered[1]) {
@@ -622,7 +622,7 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
         : top.keySource === 'route'
           ? `Grouped on the \`${key}\` segment of ${members.length === 1 ? 'its route' : 'their routes'}.`
           : top.keySource === 'symbol'
-            ? `Grouped on the entry point \`${top.workflow.entrypoint.symbolName ?? key}\` — no route pattern or schema table was resolved.`
+            ? `Grouped on the entry point \`${top.workflow.entrypoint.symbolName ?? key}\`. No route pattern or schema table was resolved.`
             : `Grouped on the \`${key}\` service these flows call.`,
       `${members.length} traced flow${members.length === 1 ? '' : 's'} from ${new Set(ordered.map((m) => m.workflow.entrypoint.nodeStableKey)).size} entry point${new Set(ordered.map((m) => m.workflow.entrypoint.nodeStableKey)).size === 1 ? '' : 's'}.`,
       schemas.length > 0
@@ -633,10 +633,10 @@ export function deriveCapabilities(input: DeriveCapabilitiesInput): CapabilityDe
           ? `Touches ${touched[0]}: ${named(tables.length > 0 ? tables : storage)}.`
           : `Touches ${touched[0]} (${named(tables)}) and ${touched[1]} (${named(storage)}).`
         : services.length > 0
-          ? `Reaches ${services.length === 1 ? 'the service' : 'services'} ${services.slice(0, 4).join(', ')} — no schema table was traced.`
+          ? `Reaches ${services.length === 1 ? 'the service' : 'services'} ${services.slice(0, 4).join(', ')}. No schema table was traced.`
           : effects.length > 0
-            ? `Reaches ${effects.map((e) => e.replace(/_/g, ' ')).join(', ')}${surfaces.length > 0 ? ` via the ${surfaces.join(', ')}` : ''} — no schema table or named service was traced.`
-            : `Reaches the ${surfaces.join(', ')} — no schema table, named service or detected effect was traced, so this binds on the persistence surface its own steps carry.`,
+            ? `Reaches ${effects.map((e) => e.replace(/_/g, ' ')).join(', ')}${surfaces.length > 0 ? ` via the ${surfaces.join(', ')}` : ''}. No schema table or named service was traced.`
+            : `Reaches the ${surfaces.join(', ')}. No schema table, named service or detected effect was traced, so this binds on the persistence surface its own steps carry.`,
     ];
 
     capabilities.push({
@@ -800,7 +800,7 @@ async function nameCapabilities(
       '- description: ONE sentence in plain product language saying what a user gets from it. No file names, no jargon.',
       '- user_value: ONE sentence naming the kind of task or bug that leads a developer to this capability.',
     ].join('\n'),
-    'If the evidence for a group does not support a user-facing name, return an empty string for name — a deterministic label is used instead. That is a correct answer, not a failure.',
+    'If the evidence for a group does not support a user-facing name, return an empty string for name. A deterministic label is used instead. That is a correct answer, not a failure.',
     UNTRUSTED_DATA_RULE,
     OUTPUT_RULES,
   ].join('\n\n');
@@ -917,7 +917,7 @@ async function persistCapabilities(
     const named = names.get(cap.key);
     const name = named?.name ?? cap.fallbackName;
     const description = named?.description
-      || `${cap.flows.length} traced flow${cap.flows.length === 1 ? '' : 's'} reaching ${cap.schemas.length > 0 ? cap.schemas.slice(0, 3).join(', ') : cap.services.slice(0, 3).join(', ') || cap.surfaces.slice(0, 3).join(', ') || 'external effects'}. Named from its evidence, not described — the naming step produced nothing usable for this group.`;
+      || `${cap.flows.length} traced flow${cap.flows.length === 1 ? '' : 's'} reaching ${cap.schemas.length > 0 ? cap.schemas.slice(0, 3).join(', ') : cap.services.slice(0, 3).join(', ') || cap.surfaces.slice(0, 3).join(', ') || 'external effects'}. Named from its evidence, not described (the naming step produced nothing usable for this group).`;
     const capResult = await query(
       `INSERT INTO capabilities (snapshot_id, stable_key, name, description, record_id, confidence, metadata)
        VALUES ($1, $2, $3, $4, $5, $6, $7)

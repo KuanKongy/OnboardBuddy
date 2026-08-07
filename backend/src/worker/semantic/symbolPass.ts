@@ -746,7 +746,7 @@ function renderSymbolFacts(
   } else if (ctx.privacyMode === 'full_ai' && node.snippet) {
     lines.push('```', node.snippet.slice(0, MAX_SNIPPET_CHARS), '```');
   } else {
-    lines.push('(code snippet withheld by privacy settings — reason from the facts above only)');
+    lines.push('(code snippet withheld by privacy settings: reason from the facts above only)');
   }
   return lines.join('\n');
 }

@@ -329,7 +329,7 @@ describe("GET /api/projects/:id/workflows — flow score derivation", () => {
     id: "wf-1", title: "POST /api/auth/login", trigger_type: "http_route",
     purpose: "Signs a user in.", importance_score: 0.82, confidence: "high",
     tier: "core", composite_score: 0.61, step_count: 6,
-    reasons: ["Core user flow — http_route"],
+    reasons: ["Core user flow (http_route)"],
     score_breakdown: STORED_BREAKDOWN, has_candidate_score: true,
     realizes_capability: true,
     ...over,

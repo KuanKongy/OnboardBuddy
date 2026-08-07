@@ -210,8 +210,8 @@ function leverFor(inputs: ScoreProvenanceInput[], targetType: ProvenanceTargetTy
   }
   if (!best || best.headroom < 0.005) {
     return targetType === 'workflow'
-      ? "Every signal a flow can earn is already at this snapshot's maximum — nothing in the ranking can raise it further."
-      : "Every signal is already at this snapshot's maximum — nothing in the ranking can raise it further.";
+      ? "Every signal a flow can earn is already at this snapshot's maximum. Nothing in the ranking can raise it further."
+      : "Every signal is already at this snapshot's maximum. Nothing in the ranking can raise it further.";
   }
   const noun = targetType === 'workflow' ? 'flow' : targetType;
   return `Biggest lever: ${best.input.label.toLowerCase()} is at ${Math.round((best.input.value ?? 0) * 100)}% of the snapshot's highest ${noun}; closing that gap is worth up to ${points(best.headroom)}.`;
@@ -313,7 +313,7 @@ export function buildCandidateProvenance(opts: CandidateProvenanceOptions): Scor
         // The clause about excluding them from the total rather than scoring
         // them zero lives in `scaleNoteFor`, which ships in the same payload —
         // saying it twice on one panel is what made this read as a wall.
-        ? `${WORKFLOW_INAPPLICABLE.size} of the 9 signals describe a file's position in the import graph, which a path through it does not have. Flows and files both span 0–100, but they are scored over different signal sets — compare flows with flows.`
+        ? `${WORKFLOW_INAPPLICABLE.size} of the 9 signals describe a file's position in the import graph, which a path through it does not have. Flows and files both span 0–100, but they are scored over different signal sets. Compare flows with flows.`
         : null),
   };
 }
@@ -358,7 +358,7 @@ export function buildMeanProvenance(opts: MeanProvenanceOptions): ScoreProvenanc
       reason:
         `None of this component's ${opts.totalMemberCount} members has a stored criticality score, so the number ` +
         'has no derivation. Test and fixture files are excluded from ranking by design, and only the ' +
-        'top 500 scores per snapshot are kept — a component built from either has nothing to average.',
+        'top 500 scores per snapshot are kept. A component built from either has nothing to average.',
     };
   }
 
@@ -435,7 +435,7 @@ export function buildWeightTableProvenance(): ScoreProvenanceAvailable {
       measured: null,
     })),
     reasons: [],
-    lever: `The three heaviest signals — ${topThree.map(([s]) => SIGNAL_LABELS[s].toLowerCase()).join(', ')} — are worth ${points(topThreeShare)} of 100 between them.`,
+    lever: `The three heaviest signals (${topThree.map(([s]) => SIGNAL_LABELS[s].toLowerCase()).join(', ')}) are worth ${points(topThreeShare)} of 100 between them.`,
     scaleNote:
       'This is the deterministic Phase A ranking: no model is involved, and it decides which symbols are worth a full AI record. Reading order inside a package is re-ranked afterwards against the per-role weights in Project Settings.',
     caveat: null,

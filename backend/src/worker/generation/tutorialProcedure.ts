@@ -238,8 +238,8 @@ export function buildRunEnvironment(facts: ConfigFacts, packageManager: PackageM
       cwd: dirOf(topology.composePath),
       source: topology.composePath,
       expected:
-        `Docker builds and starts ${names.length} service${names.length === 1 ? '' : 's'} — ` +
-        `${names.join(', ')} — and the command stays in the foreground streaming their logs.`,
+        `Docker builds and starts ${names.length} service${names.length === 1 ? '' : 's'} ` +
+        `(${names.join(', ')}), and the command stays in the foreground streaming their logs.`,
       verify: `In a second terminal, every service declared in ${topology.composePath} is listed as running. A service missing from that list failed to start; its logs are in the first terminal.`,
       verifyCommand: `docker compose -f ${topology.composePath} ps`,
     });
@@ -290,7 +290,7 @@ export function buildRunEnvironment(facts: ConfigFacts, packageManager: PackageM
           command: runScript(packageManager, name),
           cwd,
           source: manifest.path,
-          expected: `The \`${name}\` script runs \`${manifest.scripts[name]}\`${where} and stays in the foreground. Note the URL or port it prints — later steps need it.`,
+          expected: `The \`${name}\` script runs \`${manifest.scripts[name]}\`${where} and stays in the foreground. Note the URL or port it prints: later steps need it.`,
           verify: 'The process does not exit. If it exits immediately, the message it printed is the reason.',
         });
       }
@@ -347,7 +347,7 @@ function envSetupStep(template: { path: string; varNames: string[] }): Unordered
     expected:
       `\`${target}\` exists and lists ${template.varNames.length} variable name${template.varNames.length === 1 ? '' : 's'}` +
       (shown.length > 0 ? `: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}.` : '.') +
-      ` The template carries names only — every value is still blank and you must fill them in before the next step.`,
+      ` The template carries names only. Every value is still blank and you must fill them in before the next step.`,
     verify: `The copy exists and its variable names match the template. Any name you leave without a value will surface as a startup error in the next step, not here.`,
     verifyCommand: `grep -c '=' ${target}`,
     evidence: template.path,
@@ -399,7 +399,7 @@ export function attemptRunItProcedure(env: RunEnvironment, facts: ConfigFacts): 
     push(envSetupStep(template));
     gaps.push({
       kind: 'env_values_not_in_repo',
-      detail: `${template.path} carries variable names only — the values are not in the repository and cannot be derived from it.`,
+      detail: `${template.path} carries variable names only. The values are not in the repository and cannot be derived from it.`,
     });
   }
 
@@ -422,14 +422,14 @@ export function attemptRunItProcedure(env: RunEnvironment, facts: ConfigFacts): 
     const service = topology.services.find((s) => s.name === p.service);
     push({
       kind: 'observe',
-      action: `Open http://localhost:${p.port} — this is the \`${p.service}\` service.`,
+      action: `Open http://localhost:${p.port}. This is the \`${p.service}\` service.`,
       filePath: p.source,
       lineStart: p.line,
       expected:
         `Something answers on port ${p.port}. ${p.source}:${p.line} publishes it from \`${p.service}\`` +
         (service?.image ? ` (image \`${service.image}\`)` : service?.buildContext ? ` (built from \`${service.buildContext}\`)` : '') +
         '. What it serves depends on the service; that it answers at all is what this step checks.',
-      verify: `Any HTTP status back means the container is listening. Connection refused means \`${p.service}\` is not up — check its logs in the terminal from the previous step.`,
+      verify: `Any HTTP status back means the container is listening. Connection refused means \`${p.service}\` is not up: check its logs in the terminal from the previous step.`,
       verifyCommand: `curl -sS -o /dev/null -w '%{http_code}\\n' http://localhost:${p.port}`,
       evidence: `${p.source}:${p.line}`,
     });
@@ -438,13 +438,13 @@ export function attemptRunItProcedure(env: RunEnvironment, facts: ConfigFacts): 
   if (datastorePorts.length > 0) {
     gaps.push({
       kind: 'datastore_ports_not_opened',
-      detail: `${datastorePorts.map((p) => `\`${p.service}\` on ${p.port}`).join(', ')} ${datastorePorts.length === 1 ? 'is a datastore port' : 'are datastore ports'} — reachable, but not something to open in a browser. Use its own client.`,
+      detail: `${datastorePorts.map((p) => `\`${p.service}\` on ${p.port}`).join(', ')} ${datastorePorts.length === 1 ? 'is a datastore port' : 'are datastore ports'}, reachable but not something to open in a browser. Use its own client.`,
     });
   }
   if (env.ports.length === 0) {
     gaps.push({
       kind: 'no_published_ports',
-      detail: `${topology.composePath} publishes no host ports, so there is no URL to open — the services talk to each other only.`,
+      detail: `${topology.composePath} publishes no host ports, so there is no URL to open. The services talk to each other only.`,
     });
   }
 
@@ -537,7 +537,7 @@ export function attemptRunTestsProcedure(
       kind: 'inspect',
       action: `Open \`${guard.testFile}\`.`,
       filePath: guard.testFile,
-      expected: `This is the file the dependency graph records as testing \`${guard.covers}\` — so a change to \`${guard.covers}\` is the change this file is meant to catch.`,
+      expected: `This is the file the dependency graph records as testing \`${guard.covers}\`, so a change to \`${guard.covers}\` is the change this file is meant to catch.`,
       verify: `\`${guard.covers}\` is named in the file. If it is not, the link came from an import rather than a direct assertion, and the coverage is weaker than it looks.`,
       verifyCommand: `grep -n '${guard.covers.replace(/'/g, "'\\''")}' ${guard.testFile}`,
       evidence: guard.testFile,
@@ -556,7 +556,7 @@ export function attemptRunTestsProcedure(
       kind: 'inspect',
       action: `Open \`${pipeline.path}\` and compare it with what you just ran.`,
       filePath: pipeline.path,
-      expected: `${pipeline.jobs.length} job${pipeline.jobs.length === 1 ? '' : 's'} — ${pipeline.jobs.map((j) => j.name).join(', ')} — triggered by ${pipeline.triggers.length > 0 ? pipeline.triggers.join(', ') : 'push'}. These are the checks a pull request has to pass.`,
+      expected: `${pipeline.jobs.length} job${pipeline.jobs.length === 1 ? '' : 's'} (${pipeline.jobs.map((j) => j.name).join(', ')}) triggered by ${pipeline.triggers.length > 0 ? pipeline.triggers.join(', ') : 'push'}. These are the checks a pull request has to pass.`,
       verify: `You get the commands CI executes, with their line numbers. Anything there that step 1 did not run is a check that can only fail after you push.`,
       verifyCommand: `grep -n 'run:' ${pipeline.path}`,
       evidence: pipeline.path,
@@ -767,7 +767,7 @@ function buildTrigger(
     if (!port) {
       gaps.push({
         kind: 'port_unknown',
-        detail: 'no compose file publishes a host port, so the port is whatever the start command printed — substitute it below.',
+        detail: 'no compose file publishes a host port, so the port is whatever the start command printed. Substitute it below.',
       });
     }
     if (input.routePath && /[:{*]/.test(input.routePath)) {
@@ -784,7 +784,7 @@ function buildTrigger(
           action: `Set the flow off: send ${method} ${input.routePath} to the app you started.`,
           command: `curl -i -X ${method} ${host}${input.routePath}`,
           expected: `curl prints a status line, and the \`[trace]\` marker from the previous step appears in the output of the process from step 1.`,
-          verify: `The marker printed. If it did not, the request never reached \`${identifier(probe)}\` — check the port and that the path matches ${input.routePath}.`,
+          verify: `The marker printed. If it did not, the request never reached \`${identifier(probe)}\`: check the port and that the path matches ${input.routePath}.`,
         },
       };
     }
@@ -792,7 +792,7 @@ function buildTrigger(
       gaps,
       trigger: {
         action: `Set the flow off: open ${host}${input.routePath} in a browser.`,
-        expected: `The page renders, and the \`[trace]\` marker from the previous step appears — in the browser console for client code, in the terminal from step 1 for server code.`,
+        expected: `The page renders, and the \`[trace]\` marker from the previous step appears: in the browser console for client code, in the terminal from step 1 for server code.`,
         verify: `The marker printed. If it did not, this page does not reach \`${identifier(probe)}\` on load; it may need an interaction first.`,
       },
     };
@@ -834,7 +834,7 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
       ok: false,
       skip: {
         reason: 'surface_tier_no_traced_effects',
-        detail: `"${input.title}" is a real entry point but no side effect was traced from it — there is no line to mark and no result to confirm.`,
+        detail: `"${input.title}" is a real entry point but no side effect was traced from it. There is no line to mark and no result to confirm.`,
       },
     };
   }
@@ -846,7 +846,7 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
       ok: false,
       skip: {
         reason: 'no_runnable_command',
-        detail: 'nothing in this repository says how to run it — no compose file and no start or test script — so no step can be executed.',
+        detail: 'nothing in this repository says how to run it (no compose file and no start or test script), so no step can be executed.',
       },
     };
   }
@@ -960,14 +960,14 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     const continues = CONTINUES_FROM_ONE_TRIGGER.has(hop.metadata?.journeyBoundary ?? '');
     push({
       kind: 'inspect',
-      action: `Open \`${hop.filePath}\`${hop.lineStart ? ` at line ${hop.lineStart}` : ''}${hop.symbolName ? ` (\`${hop.symbolName}\`)` : ''} — the next leg of this journey.`,
+      action: `Open \`${hop.filePath}\`${hop.lineStart ? ` at line ${hop.lineStart}` : ''}${hop.symbolName ? ` (\`${hop.symbolName}\`)` : ''}. This is the next leg of this journey.`,
       filePath: hop.filePath,
       symbolName: hop.symbolName,
       lineStart: hop.lineStart,
       lineEnd: hop.lineEnd,
       expected: `Where this flow crosses from one part of the system into the next. The trace records the hop as: ${hop.description}`,
       verify: continues
-        ? `The lines you print are the far side of the hand-off. Nothing calls them directly — the job does, which is why the next steps watch for a marker instead of a return value.`
+        ? `The lines you print are the far side of the hand-off. Nothing calls them directly. The job does, which is why the next steps watch for a marker instead of a return value.`
         : `The lines you print are a separate entry point on the same surface. The request in the trigger step below does not reach them; set this one off on its own to watch it run.`,
       verifyCommand: hop.lineStart
         ? `sed -n '${hop.lineStart},${hop.lineEnd ?? hop.lineStart + 15}p' ${hop.filePath}`
@@ -982,13 +982,13 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
   if (journey && hops.length < journey.boundaries.length) {
     gaps.push({
       kind: 'journey_hops_not_walked',
-      detail: `This journey crosses ${journey.boundaries.length} boundaries and the procedure has room for ${hops.length} — the first and the last. The middle hops are on the Workflows tab.`,
+      detail: `This journey crosses ${journey.boundaries.length} boundaries and the procedure has room for ${hops.length}: the first and the last. The middle hops are on the Workflows tab.`,
     });
   }
   if (journey && journey.separateEntryPoints > 0) {
     gaps.push({
       kind: 'journey_members_triggered_separately',
-      detail: `${journey.separateEntryPoints} later leg${journey.separateEntryPoints === 1 ? ' is a' : 's are'} separate entry point${journey.separateEntryPoints === 1 ? '' : 's'} on the same surface — one request does not reach ${journey.separateEntryPoints === 1 ? 'it' : 'them'}, so the marker is planted in the leg this trigger really runs.`,
+      detail: `${journey.separateEntryPoints} later leg${journey.separateEntryPoints === 1 ? ' is a' : 's are'} separate entry point${journey.separateEntryPoints === 1 ? '' : 's'} on the same surface. One request does not reach ${journey.separateEntryPoints === 1 ? 'it' : 'them'}, so the marker is planted in the leg this trigger really runs.`,
     });
   }
 
@@ -1000,7 +1000,7 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     symbolName: probe.symbolName,
     lineStart: probe.lineStart,
     lineEnd: probe.lineEnd,
-    expected: `Nothing changes yet — the marker only prints when the flow runs. This is the line the trace claims does the work: ${probe.description}`,
+    expected: `Nothing changes yet. The marker only prints when the flow runs. This is the line the trace claims does the work: ${probe.description}`,
     verify: 'Exactly one file, one insertion. If the diff is larger, you edited more than the marker.',
     verifyCommand: `git diff --stat -- ${probe.filePath}`,
     evidence: `${probe.filePath}:${probe.lineStart}`,
@@ -1067,7 +1067,7 @@ export function attemptTraceProcedure(input: TraceInput, env: RunEnvironment): P
     gaps.push({
       kind: 'steps_not_walked',
       detail: journey
-        ? `This journey is stitched from ${ordered.length} traced steps; the procedure walks its spine — where it starts, the boundaries it crosses, and the line that proves it ran. The full chain is on the Workflows tab.`
+        ? `This journey is stitched from ${ordered.length} traced steps; the procedure walks its spine: where it starts, the boundaries it crosses, and the line that proves it ran. The full chain is on the Workflows tab.`
         : `The trace has ${ordered.length} steps; this procedure stops at the ${effects.length} that change something. The full trace is on the Workflows tab.`,
     });
   }
@@ -1243,6 +1243,12 @@ export interface WalkthroughInput extends TraceInput {
 export const MIN_WALKTHROUGH_STEPS = 1;
 /** ~32 lines centred on the first highlight; the UI expands to the whole capture. */
 export const WALKTHROUGH_WINDOW_LINES = 32;
+/**
+ * Ceiling on a window widened to reach distant highlights. Past this the card
+ * would render most of a large symbol by default, so the primary window stays
+ * and the reader opens the file instead.
+ */
+export const WALKTHROUGH_WINDOW_MAX_LINES = 120;
 /** Visible cards per phase before the rest fold (§3.2, soft). */
 export const PHASE_STEP_BUDGET = 3;
 /**
@@ -1266,7 +1272,7 @@ const BOUNDARY_CLAUSE: Record<string, string> = {
   async_token: 'asynchronous: the request has already returned, and the next step runs when the job is consumed',
   redirect: 'control leaves this process and comes back on a different route',
   external_roundtrip: 'control leaves this process and comes back on a different route',
-  group: 'the next step is a separate entry point on the same surface — one request does not reach it',
+  group: 'the next step is a separate entry point on the same surface, so one request does not reach it',
   capability_unlock: 'the credential issued here is what the next step checks',
   resource_lifecycle: 'the identity created here is what the next step operates on',
 };
@@ -1316,7 +1322,7 @@ function effectLabel(effect: StepEffect): string {
   if (effect.target) return `${verb} ${effect.target}`;
   const call = effect.evidence.trim().replace(/\s+/g, ' ').slice(0, 40);
   const base = verb.replace(DANGLING_PREPOSITION, '');
-  return call ? `${base} — \`${call}\`` : base;
+  return call ? `${base} (\`${call}\`)` : base;
 }
 
 /** Absolute line number of `index` in a snippet whose first line is `startLine`. */
@@ -1422,7 +1428,18 @@ function deriveHighlights(step: TraceStep, next: TraceStep | undefined, boundary
   return out.sort((a, b) => a.start - b.start);
 }
 
-/** ~32 lines centred on the first highlight; the whole snippet when shorter. */
+/**
+ * The lines the card shows by default: ~32 centred on the first highlight, then
+ * widened to reach every other highlight that fits inside
+ * `WALKTHROUGH_WINDOW_MAX_LINES`. The whole snippet when it is shorter.
+ *
+ * Measured on a live walkthrough: a step whose capture ran past line 600 was
+ * highlighted at 423, 508 and 609 while the window showed 399-421, so the card
+ * labelled three lines the reader could not see. Widening is capped because the
+ * alternative on a long symbol is rendering the whole body by default; when the
+ * highlights are too far apart the primary window stays and the reader uses the
+ * UI's expand-to-whole-capture instead.
+ */
 function windowFor(step: TraceStep, highlights: WalkthroughHighlight[]): { start: number; end: number } | null {
   if (!step.snippet || step.lineStart == null) return null;
   const total = step.snippet.replace(/\n$/, '').split('\n').length;
@@ -1433,7 +1450,31 @@ function windowFor(step: TraceStep, highlights: WalkthroughHighlight[]): { start
   let start = Math.max(first, focus - Math.floor(WALKTHROUGH_WINDOW_LINES / 2));
   const end = Math.min(last, start + WALKTHROUGH_WINDOW_LINES - 1);
   start = Math.max(first, end - WALKTHROUGH_WINDOW_LINES + 1);
-  return { start, end };
+
+  // Only a highlight inside the capture can be reached by widening; one beyond
+  // it is a capture-size limit, which the expand link already covers.
+  const inside = highlights.filter((h) => h.end >= first && h.start <= last);
+  let lo = start;
+  let hi = end;
+  // Absorb the cheapest still-uncovered highlight until the cap blocks it.
+  // Widening all-or-nothing instead would drop back to the primary window
+  // whenever ONE highlight sits far off, hiding the near ones it could afford:
+  // on the 399-620 capture highlighted at 423/508/609 that is 1 of 3 shown
+  // rather than 2.
+  for (;;) {
+    let best: { lo: number; hi: number; cost: number } | null = null;
+    for (const h of inside) {
+      if (h.start >= lo && h.end <= hi) continue;
+      const nlo = Math.max(first, Math.min(lo, h.start));
+      const nhi = Math.min(last, Math.max(hi, h.end));
+      const cost = (nhi - nlo) - (hi - lo);
+      if (!best || cost < best.cost) best = { lo: nlo, hi: nhi, cost };
+    }
+    if (!best || best.hi - best.lo + 1 > WALKTHROUGH_WINDOW_MAX_LINES) break;
+    lo = best.lo;
+    hi = best.hi;
+  }
+  return { start: lo, end: hi };
 }
 
 /**
@@ -1483,7 +1524,7 @@ function landingStatement(step: TraceStep, phaseTitle: string | null): string {
   if (unique.length > 0) {
     return `When this path finishes: ${unique.join('; ')}.`;
   }
-  return `This is where the path ends${phaseTitle ? ` — in ${phaseTitle}` : ''}: ${step.description}`;
+  return `This is where the path ends${phaseTitle ? ` in ${phaseTitle}` : ''}: ${step.description}`;
 }
 
 /** A test-shaped path: a real emitter, but not the one a product reader means. */
@@ -1551,7 +1592,7 @@ function deriveEntry(input: WalkthroughInput, entryStep: TraceStep, env?: RunEnv
     return {
       kind: 'http',
       text: `This path runs when a client sends \`${method} ${route}\` to the running app.`
-        + (parameterised ? ` \`${route}\` carries path parameters — substitute real values from your own instance.` : '')
+        + (parameterised ? ` \`${route}\` carries path parameters: substitute real values from your own instance.` : '')
         + (port ? '' : ' No compose file publishes a host port, so use whichever port the start command printed.'),
       ...(port ? { command: `curl -i -X ${method} http://localhost:${port}${route}` } : {}),
     };
@@ -1576,7 +1617,7 @@ function deriveEntry(input: WalkthroughInput, entryStep: TraceStep, env?: RunEnv
     if (surface === 'dom') {
       return {
         kind: 'ui_event',
-        text: `This path runs when the browser fires \`${token}\` on the element this handler is bound to. No request reaches it — the event comes from the page itself.`,
+        text: `This path runs when the browser fires \`${token}\` on the element this handler is bound to. No request reaches it. The event comes from the page itself.`,
         ...(token ? { token } : {}),
       };
     }
@@ -1597,7 +1638,7 @@ function deriveEntry(input: WalkthroughInput, entryStep: TraceStep, env?: RunEnv
   if (trigger === 'cli_command') {
     return {
       kind: 'cli',
-      text: `This path runs when the command in ${baseOf(entryStep.filePath)} is executed from a shell — not from the running app.`,
+      text: `This path runs when the command in ${baseOf(entryStep.filePath)} is executed from a shell, not from the running app.`,
     };
   }
   if (trigger === 'export') {
@@ -1606,7 +1647,7 @@ function deriveEntry(input: WalkthroughInput, entryStep: TraceStep, env?: RunEnv
   }
   return {
     kind: 'unknown',
-    text: `The graph recorded no trigger for this path — open ${baseOf(entryStep.filePath)} to see how it is registered.`,
+    text: `The graph recorded no trigger for this path. Open ${baseOf(entryStep.filePath)} to see how it is registered.`,
   };
 }
 
@@ -1662,12 +1703,12 @@ function coalesceByLocation(steps: TraceStep[]): TraceStep[] {
   return out;
 }
 
-/** `Next: \`sym\` in file — clause`. Always available, never shipped broken. */
+/** `Next: \`sym\` in file (clause)`. Always available, never shipped broken. */
 function handoffTemplate(next: TraceStep, boundary: { kind: string; detail?: string } | null): string {
   const where = next.symbolName ? `\`${next.symbolName}\` in ${baseOf(next.filePath)}` : baseOf(next.filePath);
   if (!boundary) return `Execution continues in ${where}.`;
   const clause = BOUNDARY_CLAUSE[boundary.kind] ?? boundary.detail ?? `a ${boundary.kind.replace(/_/g, ' ')} hand-off`;
-  return `Control crosses into ${where} — ${clause}.`;
+  return `Control crosses into ${where} (${clause}).`;
 }
 
 /**
@@ -1736,7 +1777,7 @@ export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment
   if (visibleTotal > MAX_VISIBLE_WALKTHROUGH_STEPS) {
     gaps.push({
       kind: 'walkthrough_longer_than_budget',
-      detail: `This path has ${phases.length} legs and renders ${visibleTotal} cards — past the ${MAX_VISIBLE_WALKTHROUGH_STEPS} a reader normally scrolls. Nothing was dropped: every leg and every crossing is still below.`,
+      detail: `This path has ${phases.length} legs and renders ${visibleTotal} cards. That is past the ${MAX_VISIBLE_WALKTHROUGH_STEPS} a reader normally scrolls. Nothing was dropped: every leg and every crossing is still below.`,
     });
   }
 
@@ -1764,7 +1805,7 @@ export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment
   if (slots.length === 1) {
     gaps.push({
       kind: 'trace_is_one_step',
-      detail: `Only one step was traced from "${input.title}", so this reading is a single card — the flow reaches no further symbol the graph could follow.`,
+      detail: `Only one step was traced from "${input.title}", so this reading is a single card. The flow reaches no further symbol the graph could follow.`,
     });
   }
 
@@ -1808,7 +1849,7 @@ export function attemptWalkthrough(input: WalkthroughInput, env?: RunEnvironment
       lineEnd: t.lineEnd,
       snippet: t.snippet,
       window: win,
-      narration: t.symbolName ? `\`${t.symbolName}\` — ${t.description}` : t.description,
+      narration: t.symbolName ? `\`${t.symbolName}\`: ${t.description}` : t.description,
       narrationSource: 'deterministic',
       highlights,
       handoff: nextSlot
@@ -1896,7 +1937,7 @@ export interface WalkthroughFinding {
     | 'handoff_missing' | 'handoff_does_not_name_next' | 'landing_missing'
     | 'highlight_out_of_range' | 'narration_cites_absent_highlight'
     | 'member_not_covered' | 'boundary_not_covered' | 'narration_invents_a_request'
-    | 'narration_filler';
+    | 'narration_filler' | 'narration_em_dash' | 'handoff_em_dash';
   detail: string;
 }
 
@@ -2028,7 +2069,7 @@ export function lintProcedure(draft: ProcedureDraft): ProcedureFinding[] {
       findings.push({
         stepOrder: step.order,
         code: 'not_imperative',
-        detail: `"${action.slice(0, 80)}" describes rather than instructs — a step starts with the verb the reader performs`,
+        detail: `"${action.slice(0, 80)}" describes rather than instructs: a step starts with the verb the reader performs`,
       });
     }
     if (step.expected.trim().length < MIN_EXPECTED_CHARS) {

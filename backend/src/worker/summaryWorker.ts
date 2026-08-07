@@ -461,7 +461,7 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       // regenerating them individually is impossible; the whole package
       // regenerates into the new 12-section layout instead.
       if (!(regenerateSectionType in SECTION_SPECS)) {
-        await updateJob('failed', `Section type "${regenerateSectionType}" is from a previous layout — regenerate the whole package instead`, 100);
+        await updateJob('failed', `Section type "${regenerateSectionType}" is from a previous layout. Regenerate the whole package instead.`, 100);
         return;
       }
       await updateJob('running', `Regenerating: ${regenerateSectionType}`, 40);

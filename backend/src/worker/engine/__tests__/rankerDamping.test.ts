@@ -56,7 +56,7 @@ describe('candidateRanker damping & exclusion', () => {
     const route = rankings.find((r) => r.stableKey === 'backend/src/api/routes/r.ts#GET /x')!;
     expect(route.breakdown.entrypointParticipation).to.equal(1);
     expect(page.breakdown.entrypointParticipation).to.equal(0.5);
-    expect(page.reasons).to.include('Entry point (UI page — reduced weight)');
+    expect(page.reasons).to.include('Entry point (UI page, reduced weight)');
     expect(route.reasons).to.include('Entry point');
   });
 });

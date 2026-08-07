@@ -28,17 +28,17 @@ export async function validateSectionCitations(packageId: string): Promise<Valid
     const receiptCount = receiptsResult.rows.length;
 
     if (receiptCount === 0) {
-      issues.push('No source receipts — section has no evidence backing');
+      issues.push('No source receipts: section has no evidence backing');
     }
 
     if (sec.content.length > 500 && receiptCount < 2) {
-      issues.push('Long section with fewer than 2 receipts — may contain uncited claims');
+      issues.push('Long section with fewer than 2 receipts (may contain uncited claims)');
     }
 
     const orphanedReceipts = (receiptsResult.rows as Array<{ node_stable_key: string | null }>)
       .filter((r) => !r.node_stable_key);
     if (orphanedReceipts.length > 0) {
-      issues.push(`${orphanedReceipts.length} receipt(s) with no stable_key — cannot track staleness`);
+      issues.push(`${orphanedReceipts.length} receipt(s) with no stable_key: cannot track staleness`);
     }
 
     results.push({

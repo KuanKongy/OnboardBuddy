@@ -39,7 +39,11 @@ import { sanitizeGeneratedMarkdown, type MarkdownSanitizeCounts } from './markdo
 // deliberately excluded from the key), so without this bump a cache hit would
 // keep serving prose written against the unlabelled receipt list — the exact
 // citation desert this version fixes.
-export const SECTION_PROMPT_VERSION = 'section-v7';
+//
+// v8: the voice contract bans the em dash and `voiceLint` now fails a section
+// that carries one. Without the bump, cached v7 sections keep serving the
+// dashes the rule exists to remove.
+export const SECTION_PROMPT_VERSION = 'section-v8';
 
 /**
  * Repairs the two contract breaches that do not need a model to fix.
@@ -81,7 +85,7 @@ export function repairExplanation(
   );
   if (undisclosed.length > 0) {
     const list = undisclosed.join(', ');
-    out += `\n\n> **Not covered here.** Part of this repository is written in ${list}, which OnboardBuddy does not parse. No section in this package describes that code — it exists, and nothing here tells you what it does.\n`;
+    out += `\n\n> **Not covered here.** Part of this repository is written in ${list}, which OnboardBuddy does not parse. No section in this package describes that code. It exists, and nothing here tells you what it does.\n`;
     repairs.push('undisclosed_gap');
   }
 
@@ -400,7 +404,7 @@ export async function generateSection(params: GenerateSectionParams): Promise<Ge
     retried = true;
     const issues = critique.verdicts
       .filter((v) => v.verdict !== 'supported')
-      .map((v) => `CRITIQUE ${v.verdict}: "${v.claim.slice(0, 140)}" — ${v.reason}`);
+      .map((v) => `CRITIQUE ${v.verdict}: "${v.claim.slice(0, 140)}". Reason: ${v.reason}`);
     const rewritten = await callModel(params, bundle, issues, aliasToId, receiptLabels);
     output = rewritten.output;
     runId = rewritten.runId;
@@ -660,9 +664,12 @@ async function callModel(
 
 /** Static rules + voice contract — byte-identical per mode (prompt caching). */
 const SECTION_BASE_PROMPT = [
-  'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds — but ONLY ids that literally appear in the receipt list; a claim grounded in the deterministic facts (counts, steps, tables, journeys) carries an EMPTY receiptIds array rather than an invented id. When citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping — never print them; use the human name or path they refer to.',
+  'Output rules: use ONLY the provided evidence; cite receipt ids (the exact short ids below, e.g. "r3") in claims and usedReceiptIds, but ONLY ids that literally appear in the receipt list; a claim grounded in the deterministic facts (counts, steps, tables, journeys) carries an EMPTY receiptIds array rather than an invented id. When citing inside contentMarkdown use the same short ids in parentheses, e.g. "(r3)"; code receipts win over docs; state unknowns explicitly instead of guessing; contentMarkdown uses headers/bullets/`code` formatting. Internal identifiers (wf:…, cluster:…, docnode:…) are pipeline bookkeeping. Never print them; use the human name or path they refer to.',
   'Open contentMarkdown with a TL;DR block: "**TL;DR:** " + 2-3 sentences on what this section covers, ending with one sentence of the form "After reading you can …". Then the body.',
-  'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts — never derive or estimate your own.',
+  'Voice: flat, declarative engineering prose for a skeptical senior engineer. FORBIDDEN: marketing adjectives (crucial, essential, seamless, vital, powerful, robust, comprehensive), "enhances user …", "user satisfaction/engagement/retention", invented consequences ("could lead to user frustration", "poor first impression"), and restating a name as its own purpose ("DELETE /x enables deletion of x"). Every sentence must state a fact from the evidence, a number from the deterministic facts, or an explicit unknown. Numbers (counts, totals) must come verbatim from the deterministic facts. Never derive or estimate your own. ' +
+    // Prints the character in order to ban it; `voiceLint` fails the section
+    // and spends its one stricter retry when the model uses one anyway.
+    'Never use the em dash character (—). Use a comma, colon, parentheses, or a new sentence.',
 ].join('\n\n');
 
 /**
@@ -671,23 +678,23 @@ const SECTION_BASE_PROMPT = [
  */
 const MODE_VOICES: Record<string, string> = {
   explanation: [
-    'MODE: explanation — understanding-oriented, read away from the keyboard.',
+    'MODE: explanation. Understanding-oriented, read away from the keyboard.',
     'Write discursive prose that says WHY: design decisions, constraints, trade-offs, connections between parts. Weighing alternatives is proper here when the evidence shows them; inventing them is not.',
-    'Never give step-by-step instructions and never dump reference tables — link the reader to the Do/Consult sections instead. Each header should survive the prefix "About …".',
+    'Never give step-by-step instructions and never dump reference tables. Link the reader to the Do/Consult sections instead. Each header should survive the prefix "About …".',
   ].join(' '),
   tutorial: [
-    'MODE: tutorial — a lesson where the reader learns by doing and MUST succeed.',
+    'MODE: tutorial. A lesson where the reader learns by doing and MUST succeed.',
     'Write in first-person plural ("we") with unambiguous imperatives. Numbered steps, ONE action per step, a verify checkpoint after every step ("You should see …") grounded in evidence. A single unbranching path: no options, no alternatives, no "you could also".',
-    'Explanation is capped at one sentence per step — link out for theory. Close by naming what the reader just accomplished.',
+    'Explanation is capped at one sentence per step. Link out for theory. Close by naming what the reader just accomplished.',
   ].join(' '),
   howto: [
-    'MODE: how-to — recipes for a competent practitioner already at work.',
-    'Goal-first titles ("How to add an API route"). Assume competence: never explain basics, never teach, never motivate. Conditional imperatives where reality branches ("If the route needs auth, …"). Practical usability over completeness — link to the Consult tables for full option lists.',
+    'MODE: how-to. Recipes for a competent practitioner already at work.',
+    'Goal-first titles ("How to add an API route"). Assume competence: never explain basics, never teach, never motivate. Conditional imperatives where reality branches ("If the route needs auth, …"). Practical usability over completeness. Link to the Consult tables for full option lists.',
   ].join(' '),
   reference: [
-    'MODE: reference — austere and uncompromising. Describe; never instruct, never opine, never market.',
+    'MODE: reference. Austere and uncompromising. Describe; never instruct, never opine, never market.',
     'Neutral one-liners and tables only. Structure mirrors the product (group by how the code itself is organized). Consistency over elegance: same fields, same order, every entry. Warnings in directive language only where the evidence shows a real hazard.',
-    'Citation rule for this mode: statements that restate the deterministic facts or the spliced tables are already grounded — leave them UNCITED (no claims entry) rather than inventing receipt ids. Cite a receipt ONLY when you used one from the receipt list, with its exact short id.',
+    'Citation rule for this mode: statements that restate the deterministic facts or the spliced tables are already grounded, so leave them UNCITED (no claims entry) rather than inventing receipt ids. Cite a receipt ONLY when you used one from the receipt list, with its exact short id.',
   ].join(' '),
 };
 
@@ -732,11 +739,11 @@ export function renderPrompt(
   const receipts = bundle.receipts.map((r) => {
     const where = [r.filePath ?? r.nodeStableKey, r.lineStart ? `L${r.lineStart}-${r.lineEnd}` : null].filter(Boolean).join(' ');
     const snippet = r.snippet ? `\n  ${r.snippet.slice(0, 1_500).replace(/\n/g, '\n  ')}` : '';
-    // "— evidence for: Member of the "Backend · Workers" cluster". Without it
+    // "(evidence for: Member of the "Backend · Workers" cluster)". Without it
     // a component subsection has no way to tell which of forty file paths
     // belongs to it, which is why cluster-level claims went uncited.
     const label = receiptLabels?.get(r.receiptId);
-    const evidenceFor = label ? ` — evidence for: ${label.replace(/\s+/g, ' ').slice(0, 200)}` : '';
+    const evidenceFor = label ? ` (evidence for: ${label.replace(/\s+/g, ' ').slice(0, 200)})` : '';
     return `- receipt ${idToAlias.get(r.receiptId) ?? r.receiptId} [${r.receiptKind}, trust=${r.trustLevel}] ${where}${evidenceFor}${snippet}`;
   });
   // Everything below this line is repo-derived and therefore attacker-chosen

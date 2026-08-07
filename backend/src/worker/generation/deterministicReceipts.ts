@@ -202,7 +202,7 @@ export async function collectSectionReceipts(
         // Two per cluster across the six narrated components, with headroom for
         // the next few — the generator caps the merge at 28 either way.
         ...rows.slice(0, 16).map((r) =>
-          fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` — ${r.membership_reason}` : ''}`)),
+          fromNode(r, `Member of the "${r.cluster_label}" cluster${r.membership_reason ? ` (${r.membership_reason})` : ''}`)),
         ...decisions.map((d) => ({
           receiptKind: kindForTrust(d.trustLevel),
           trustLevel: d.trustLevel,
@@ -303,7 +303,7 @@ export async function collectSectionReceipts(
         lineStart: r.step_line_start,
         lineEnd: r.step_line_end,
         snippet: r.snippet,
-        claim: `"${r.title}"${r.step_kind ? ` ${r.step_kind} step` : ' step'}${r.deterministic_description ? ` — ${r.deterministic_description}` : ''}`,
+        claim: `"${r.title}"${r.step_kind ? ` ${r.step_kind} step` : ' step'}${r.deterministic_description ? `: ${r.deterministic_description}` : ''}`,
       }));
     }
 

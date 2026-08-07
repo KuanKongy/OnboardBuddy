@@ -41,7 +41,7 @@ export function defaultTierModels(): Record<ModelTier, string[]> {
  * structured-output pipeline (strict JSON, omission handling, price row).
  */
 export const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'auto', label: 'Auto — fastest private provider right now (gemini/deepseek/scout)' },
+  { id: 'auto', label: 'Auto: fastest private provider right now (gemini/deepseek/scout)' },
   { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (fast, 1M context)' },
   { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash (1M context)' },
   { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout (fastest bursts, smaller context)' },

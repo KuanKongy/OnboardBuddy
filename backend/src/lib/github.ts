@@ -105,7 +105,7 @@ export function loadAppPrivateKey(): string {
     const code = (err as NodeJS.ErrnoException).code;
     const detail =
       code === "ENOENT" ? "no such file"
-      : code === "EISDIR" ? "that path is a directory — a docker bind mount creates one when the host file is missing"
+      : code === "EISDIR" ? "that path is a directory (a docker bind mount creates one when the host file is missing)"
       : code === "EACCES" ? "permission denied"
       : (err as Error).message;
     throw new GitHubAppConfigError(

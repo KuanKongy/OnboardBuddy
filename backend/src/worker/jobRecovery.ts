@@ -69,7 +69,7 @@ export const STRANDED_QUEUED_AFTER_SECONDS = 300;
 
 const STRANDED_MESSAGE =
   'This run never reached the job queue, so no worker could pick it up. Nothing was '
-  + 'started — press Analyze… again.';
+  + 'started. Press Analyze… again.';
 
 /**
  * How many times one job row may be handed back to the queue. 2 = a job runs
@@ -89,7 +89,7 @@ export const RECOVERABLE_JOB_TYPES: ReadonlySet<string> = new Set([
 const ANALYSIS_JOB_TYPES: ReadonlySet<string> = new Set(['analyze_scope', 'incremental_update']);
 
 const LOST_MESSAGE =
-  'Worker lost this run (restart or crash). Completed phases are checkpointed — '
+  'Worker lost this run (restart or crash). Completed phases are checkpointed: '
   + 'run Analyze… again to resume from cache.';
 
 export interface OrphanedJob {
@@ -138,11 +138,11 @@ export function isRecoverable(jobType: string, attempts: number, maxAttempts = M
 export function terminalMessage(job: Pick<OrphanedJob, 'job_type' | 'recovery_attempts'>, requeueError?: string): string {
   if (requeueError) {
     return `Worker lost this run and it could not be re-queued (${requeueError.slice(0, 120)}). `
-      + 'Completed phases are checkpointed — run Analyze… again to resume from cache.';
+      + 'Completed phases are checkpointed: run Analyze… again to resume from cache.';
   }
   if (!RECOVERABLE_JOB_TYPES.has(job.job_type)) return LOST_MESSAGE;
   return `Worker lost this run ${job.recovery_attempts} times (restart or crash); automatic recovery gave up. `
-    + 'Completed phases are checkpointed — run Analyze… again to resume from cache.';
+    + 'Completed phases are checkpointed: run Analyze… again to resume from cache.';
 }
 
 /**
@@ -168,7 +168,7 @@ async function claimOrphans(staleAfterSeconds: number): Promise<OrphanedJob[]> {
              'lastAt', to_jsonb(NOW())
            ), true),
          step_log = step_log || jsonb_build_array(jsonb_build_object(
-           'step', 'Worker restart detected — re-queued', 'pct', progress_pct, 'ts', NOW()))
+           'step', 'Worker restart detected, re-queued', 'pct', progress_pct, 'ts', NOW()))
      WHERE status = 'running'
        AND COALESCE(last_heartbeat_at, started_at, created_at) < NOW() - make_interval(secs => $1::int)
      RETURNING id, project_id, snapshot_id, job_type, scope_id, branch, commit_hash,

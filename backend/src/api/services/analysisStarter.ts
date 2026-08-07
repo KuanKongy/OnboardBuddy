@@ -147,7 +147,7 @@ export async function prepareAnalysisRun(client: TxClient, opts: PrepareRunOpts)
  */
 export async function failUnsubmittedJob(jobId: string, projectId: string, err: unknown): Promise<void> {
   const reason = err instanceof Error ? err.message : String(err);
-  const message = `Could not submit this run to the job queue (${reason.slice(0, 160)}). Nothing was started — press Analyze again.`;
+  const message = `Could not submit this run to the job queue (${reason.slice(0, 160)}). Nothing was started. Press Analyze again.`;
   try {
     await query(
       `UPDATE analysis_jobs

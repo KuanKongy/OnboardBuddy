@@ -141,7 +141,7 @@ async function runWorkflowRecords(
       .map((s) => symbolRecords.get(s.nodeStableKey))
       .filter((r): r is StoredRecord => r !== undefined);
     const steps = workflow.steps.map(
-      (s) => `${s.stepOrder}. [${s.stepKind}] ${s.filePath}${s.symbolName ? `::${s.symbolName}` : ''} — ${s.deterministicDescription}`,
+      (s) => `${s.stepOrder}. [${s.stepKind}] ${s.filePath}${s.symbolName ? `::${s.symbolName}` : ''}: ${s.deterministicDescription}`,
     );
     const record = await synthesizeOne(ctx, result, {
       level: 'workflow',
@@ -199,10 +199,10 @@ export function groupClustersIntoServices(ctx: Pick<SemanticContext, 'inventory'
 const FILE_BATCH_SYSTEM = [
   'You are synthesizing FILE records for a codebase onboarding tool. For EACH file below, produce one semantic record from its symbol records. Include key_symbols (most important symbols) and file_role (e.g. route file / service / util / config glue).',
   [
-    'purpose: what this file is FOR in the running system — what it produces, who consumes what it produces, or what sets it off. It must carry at least one concrete anchor from the evidence: an output, a caller, a table, a queue, a route or a trigger.',
+    'purpose: what this file is FOR in the running system (what it produces, who consumes what it produces, or what sets it off). It must carry at least one concrete anchor from the evidence: an output, a caller, a table, a queue, a route or a trigger.',
     'Restating the file name is a failure. For a file named summaryWorker.ts, "Process summary jobs from a queue" adds nothing a reader did not have from the path. Name what exists after this file runs, and which part of the system picks it up.',
     'A title-cased echo of the path ("API Routes for Capabilities", "Parser Interface and Registration") is the same failure with capital letters.',
-    'Never describe this task. You are not writing about records, synthesis, semantics, summaries or documentation — those are what YOU are doing, never what the file does.',
+    'Never describe this task. You are not writing about records, synthesis, semantics, summaries or documentation. Those are what YOU are doing, never what the file does.',
     'When the evidence does not name a consumer, say what the file produces and leave the consumer out. An invented reader is worse than a missing one.',
   ].join('\n'),
   OUTPUT_RULES,

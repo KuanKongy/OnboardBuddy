@@ -303,12 +303,12 @@ describe('layer 3 — every prompt site and the output choke point are wired up'
     // Without a version bump, records extracted under the old prompt would be
     // reused (and re-fed into later prompts) indefinitely.
     const versions = read('../../semantic/recordTypes.ts');
-    expect(versions).to.include("symbol: 'symbol-record-v3'");
-    // v5 (capability derivation rework) also supersedes the unfenced v3 —
-    // the assertion pins the CURRENT version, so a rollback to an
-    // at-or-below-v4 string fails here rather than silently re-serving
-    // records extracted under the old prompt.
-    expect(versions).to.include("capability: 'capability-naming-v5'");
-    expect(read('../sectionGenerator.ts')).to.include("SECTION_PROMPT_VERSION = 'section-v7'");
+    expect(versions).to.include("symbol: 'symbol-record-v4'");
+    // v6 (capability derivation rework, then the em-dash ban in OUTPUT_RULES)
+    // also supersedes the unfenced v3 — the assertion pins the CURRENT
+    // version, so a rollback to an at-or-below-v5 string fails here rather
+    // than silently re-serving records extracted under the old prompt.
+    expect(versions).to.include("capability: 'capability-naming-v6'");
+    expect(read('../sectionGenerator.ts')).to.include("SECTION_PROMPT_VERSION = 'section-v8'");
   });
 });

@@ -84,7 +84,7 @@ export class BudgetExceededError extends Error {
   ) {
     super(
       detail
-        ? `budget exceeded (${limit}) — ${detail}; stop behavior: ${behavior}`
+        ? `budget exceeded (${limit}), ${detail}; stop behavior: ${behavior}`
         : `budget exceeded (${limit}); stop behavior: ${behavior}`,
     );
     this.name = 'BudgetExceededError';
@@ -94,7 +94,7 @@ export class BudgetExceededError extends Error {
 /** Job status was set to paused/failed from the API while we were working. */
 export class KillSwitchError extends Error {
   constructor(public readonly jobStatus: 'paused' | 'failed') {
-    super(`job was set to '${jobStatus}' — stopping at batch boundary`);
+    super(`job was set to '${jobStatus}', stopping at batch boundary`);
     this.name = 'KillSwitchError';
   }
 }

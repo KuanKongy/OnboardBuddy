@@ -301,7 +301,7 @@ async function callQaModel(
   const prompt = [
     `Answer this question from a ${roleDescriptor(role)} developer about the ${bundle.repo.owner}/${bundle.repo.name} codebase (scope: ${bundle.scope.displayName}):`,
     `QUESTION: ${question}`,
-    'Ground every substantive statement in the evidence below and cite receipt ids (the exact UUIDs) in claims and usedReceiptIds. If the evidence does not answer the question, say so plainly and record it in unknowns — never guess. Code receipts win over docs.',
+    'Ground every substantive statement in the evidence below and cite receipt ids (the exact UUIDs) in claims and usedReceiptIds. If the evidence does not answer the question, say so plainly and record it in unknowns. Never guess. Code receipts win over docs.',
     // Nested/unbalanced fences flip the rest of the answer into a code block
     // in the reader — seen live the first day the Q&A UI shipped.
     'answerMarkdown is standard CommonMark: never nest ``` fences, close every fence you open, and cite receipts in prose (never inside a code block).',

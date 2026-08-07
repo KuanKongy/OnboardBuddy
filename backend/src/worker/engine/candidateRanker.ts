@@ -303,13 +303,13 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
     if (fi >= 3) reasons.push(isFile ? `Imported by ${fi} files` : `Called by ${fi} symbols`);
     if (isSymbol && node.exported) {
       reasons.push(declarationOnly
-        ? `Exported ${node.type} declaration — no calls, effects or flow participation, so it ranks below code that runs`
+        ? `Exported ${node.type} declaration: no calls, effects or flow participation, so it ranks below code that runs`
         : 'Exported public surface');
     }
     if (isFile && exported >= 3) reasons.push(`Exports ${exported} symbols`);
     if (effects > 0) reasons.push(`Has ${effects} detected side effect${effects > 1 ? 's' : ''}`);
     if (isEntry === 1) reasons.push('Entry point');
-    else if (isEntry > 0) reasons.push('Entry point (UI page — reduced weight)');
+    else if (isEntry > 0) reasons.push('Entry point (UI page, reduced weight)');
     if (schemaOwners.has(key)) reasons.push('Touches database schema');
     if (routeHandlers.has(key) || routeEntrypointKeys.has(key)) reasons.push('Handles a route');
     if (tested) reasons.push('Covered by tests');
@@ -363,7 +363,7 @@ export function rankCandidates(input: RankCandidatesInput): CandidateRanking[] {
       // The extractor already explained its own ranking in plain language;
       // repeating the step count here contradicted it.
       reasons: [
-        `${wf.tier === 'core' ? 'Core user flow' : wf.tier === 'surface' ? 'Entry point, no traced effects' : 'Supporting flow'} — ${wf.triggerType}`,
+        `${wf.tier === 'core' ? 'Core user flow' : wf.tier === 'surface' ? 'Entry point, no traced effects' : 'Supporting flow'} (${wf.triggerType})`,
         ...wf.rankingReasons.slice(0, 2),
       ],
       // A flow is behaviour by definition.

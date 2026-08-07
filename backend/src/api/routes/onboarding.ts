@@ -191,7 +191,7 @@ onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
       )).rows[0] as typeof snapshot;
     }
     if (!snapshot) {
-      res.status(404).json({ error: "No completed analysis — run an analysis first" });
+      res.status(404).json({ error: "No completed analysis. Run an analysis first." });
       return;
     }
     branch = branch ?? snapshot.branch;

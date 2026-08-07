@@ -518,7 +518,7 @@ membersRouter.post(
 
       if (demoted.rows.length === 0) {
         await client.query("ROLLBACK");
-        res.status(409).json({ error: "Ownership changed concurrently — reload and retry" });
+        res.status(409).json({ error: "Ownership changed concurrently: reload and retry" });
         return;
       }
 

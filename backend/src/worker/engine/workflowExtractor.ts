@@ -808,7 +808,7 @@ export function rankWorkflow(
   const overLength = Math.max(0, steps.length - 8);
   if (overLength > 0) {
     score -= Math.min(0.2, overLength * 0.02);
-    reasons.push(`${steps.length} steps — long traces drift into shared code`);
+    reasons.push(`${steps.length} steps: long traces drift into shared code`);
   }
   if (unknownOnly) {
     score *= 0.6;
@@ -935,7 +935,7 @@ function humanizeAction(symbolName: string): string {
 /**
  * What a UI action DOES, in the repo's own words.
  *
- * `Page: FlashcardsView` names a place; `Create set — CreateFlashcardSet`
+ * `Page: FlashcardsView` names a place; `Create set (CreateFlashcardSet)`
  * names an action, and an action is what a newcomer is looking for. The verb
  * comes from the handler symbol the author wrote and the object from the
  * component it lives in, so nothing is invented and no vocabulary is assumed.
@@ -952,7 +952,7 @@ function uiActionTitle(seed: EvidenceNode, ep: DetectedEntrypoint): string {
   if (action.replace(/\s+/g, '').toLowerCase() === container.replace(/[^A-Za-z0-9]/g, '').toLowerCase()) {
     return action;
   }
-  return `${action} — ${container}`;
+  return `${action} (${container})`;
 }
 
 function workflowTitle(ep: DetectedEntrypoint, seed: EvidenceNode): string {

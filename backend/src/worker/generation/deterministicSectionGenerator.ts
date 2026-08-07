@@ -47,7 +47,7 @@ export async function generateDeterministicSection(params: {
     .filter((s) => s.trim().length > 0).join('\n\n');
   const preamble = SECTION_PREAMBLES[params.sectionType];
   const content = [
-    '> **AI explanations are off** for this project (privacy mode: `ai_disabled`). Everything below was extracted directly from the code by static analysis — file paths, line numbers, and the receipts behind each item are exact; there is simply no AI narration on top. Turn AI on in Settings → AI & privacy and regenerate to add explanations.',
+    '> **AI explanations are off** for this project (privacy mode: `ai_disabled`). Everything below was extracted directly from the code by static analysis. File paths, line numbers, and the receipts behind each item are exact; there is simply no AI narration on top. Turn AI on in Settings → AI & privacy and regenerate to add explanations.',
     preamble,
     hasFacts ? body : '_No deterministic evidence was extracted for this section._',
   ].filter(Boolean).join('\n\n');
@@ -107,17 +107,17 @@ export async function generateDeterministicSection(params: {
 
 const SECTION_PREAMBLES: Partial<Record<SectionType, string>> = {
   big_picture: 'The topology diagram and counts below describe what the analyzer found: runtime services parsed from compose files, external services from env names (never values), and the product journeys traced through the code.',
-  concepts: 'The recurring nouns of this codebase — schema tables, capabilities, clusters, journeys, and env configuration. With AI off, definitions cannot be written; the receipts open the code where each concept lives.',
-  architecture_deep: 'Clusters are directory/dependency groupings computed from the import graph; "relationships" are real typed edges between them. The diagram is authoritative — it is drawn from the same data as this list.',
-  traced_flows: 'Each journey below was traced through real call edges and queue boundaries — every step is an actual file/symbol on the path, in execution order. Nothing here is inferred.',
-  code_map: 'The files that matter, grouped by subsystem. The reasons column says why each item was selected (fan-in, workflow participation, churn) — read those, not scores.',
-  capabilities: 'What the product does, grouped by the code that delivers it. With AI off, capability names cannot be inferred — the groupings below are derived from traced workflows and architecture clusters.',
-  setup_run: 'Run facts parsed from compose files, package scripts, and env templates. With AI off, the tutorial narration is absent — the commands and services listed are exact.',
+  concepts: 'The recurring nouns of this codebase: schema tables, capabilities, clusters, journeys, and env configuration. With AI off, definitions cannot be written; the receipts open the code where each concept lives.',
+  architecture_deep: 'Clusters are directory/dependency groupings computed from the import graph; "relationships" are real typed edges between them. The diagram is authoritative. It is drawn from the same data as this list.',
+  traced_flows: 'Each journey below was traced through real call edges and queue boundaries. Every step is an actual file/symbol on the path, in execution order. Nothing here is inferred.',
+  code_map: 'The files that matter, grouped by subsystem. The reasons column says why each item was selected (fan-in, workflow participation, churn). Read those, not scores.',
+  capabilities: 'What the product does, grouped by the code that delivers it. With AI off, capability names cannot be inferred. The groupings below are derived from traced workflows and architecture clusters.',
+  setup_run: 'Run facts parsed from compose files, package scripts, and env templates. With AI off, the tutorial narration is absent. The commands and services listed are exact.',
   first_change: 'Candidate areas for a safe first change (moderate rank, visible tests) with the tests that guard them. With AI off, the exercise itself cannot be authored; the receipts point at the code.',
   common_tasks: 'Task patterns detected in this repo with real exemplar files to copy from. With AI off, the step-by-step recipes are absent; the exemplars are exact.',
-  routes_jobs: 'Every HTTP route (full mounted paths), queue, job type, and webhook detected — grouped for lookup. The workflow column links a route to its traced flow.',
+  routes_jobs: 'Every HTTP route (full mounted paths), queue, job type, and webhook detected, grouped for lookup. The workflow column links a route to its traced flow.',
   data_model: 'Schema objects detected in migrations/models with their parsed foreign-key references, plus the code observed reading or writing each table.',
-  guardrails_ops: 'Environment variables (names and documented purposes only — values are never analyzed), guardrail code found by name, and external integrations detected in the code.',
+  guardrails_ops: 'Environment variables (names and documented purposes only, values are never analyzed), guardrail code found by name, and external integrations detected in the code.',
 };
 
 /** Extra deterministic context only for ai_disabled rendering. */
@@ -132,7 +132,7 @@ const DETERMINISTIC_EXTRAS: Partial<Record<SectionType, (deps: SectionDeps, cont
     )).rows;
     return {
       derivedGroups: groups,
-      note: 'Capability names are normally inferred by AI. With AI off, the groups above are derived from traced workflows by trigger type — the underlying flows and receipts are exact.',
+      note: 'Capability names are normally inferred by AI. With AI off, the groups above are derived from traced workflows by trigger type. The underlying flows and receipts are exact.',
     };
   },
 };
@@ -223,7 +223,7 @@ function renderItem(item: unknown): string {
       .map((s) => `${s.symbol ?? s.file ?? ''}`)
       .filter(Boolean)
       .join(' → ');
-    return `**${obj.title}**${obj.confidence ? ` _(confidence: ${inline(obj.confidence)})_` : ''}${steps ? ` — ${steps}` : ''}`;
+    return `**${obj.title}**${obj.confidence ? ` _(confidence: ${inline(obj.confidence)})_` : ''}${steps ? `: ${steps}` : ''}`;
   }
 
   const fields = Object.entries(obj)

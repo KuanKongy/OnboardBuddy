@@ -385,7 +385,7 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     code: 'document_self_reference',
     re: new RegExp(String.raw`\b(?:this|the|our)\s+${DOC_NOUN}\s+(?:\w+\s+){0,2}?${DESCRIBING_VERB}`, 'i'),
     detail:
-      'the sentence describes the write-up instead of the system — delete the frame and state the fact directly ' +
+      'the sentence describes the write-up instead of the system. Delete the frame and state the fact directly ' +
       '("This section details the routes" → "Every HTTP route is mounted under /api/v1")',
     severity: 'error',
     softInReference: true,
@@ -393,7 +393,7 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
   {
     code: 'document_self_reference',
     re: /\bin\s+this\s+(?:section|document|chapter|guide|write-?up)\b/i,
-    detail: 'the sentence positions itself inside the document — the reader already knows where they are',
+    detail: 'the sentence positions itself inside the document. The reader already knows where they are',
     severity: 'error',
     softInReference: true,
   },
@@ -401,27 +401,27 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     code: 'artifact_self_reference',
     re: new RegExp(String.raw`\b(?:this|the)\s+${CONTAINER_NOUN}\s+(?:\w+\s+){0,2}?${DESCRIBING_VERB}`, 'i'),
     detail:
-      'the sentence narrates the container ("this journey outlines…") instead of saying what happens — ' +
-      'name the thing and state what it does',
+      'the sentence narrates the container ("this journey outlines…") instead of saying what happens. ' +
+      'Name the thing and state what it does',
     severity: 'error',
   },
   // ── addressing the reader about the reading ───────────────────────────────
   {
     code: 'reader_address',
     re: /\bafter\s+reading[,\s]+you\s+(?:can|will|should)\b/i,
-    detail: 'a promise about the act of reading, not a fact about the system — cut it',
+    detail: 'a promise about the act of reading, not a fact about the system: cut it',
     severity: 'error',
   },
   {
     code: 'reader_address',
     re: /\bas\s+(?:you|we)\s+(?:can\s+see|will\s+see|might\s+expect|can\s+observe|noted\s+above)\b/i,
-    detail: 'points at what the reader is already looking at — state the fact instead',
+    detail: 'points at what the reader is already looking at: state the fact instead',
     severity: 'error',
   },
   {
     code: 'reader_address',
     re: /\blet(?:'s|\s+us)\s+(?:take\s+a\s+look|look\s+at|dive|explore|walk\s+through)\b|\bwe\s+will\s+now\b|\byou\s+will\s+notice\b/i,
-    detail: 'tour-guide framing — engineering prose states, it does not escort',
+    detail: 'tour-guide framing: engineering prose states, it does not escort',
     severity: 'error',
   },
   // ── narrating a visual the reader can see ─────────────────────────────────
@@ -429,7 +429,7 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     code: 'visual_narration',
     re: /\b(?:the|this)\s+(?:diagram|figure|chart|graph|table|screenshot|image|mermaid\s+\w+)\s+(?:above\s+|below\s+)?(?:shows?|illustrates?|depicts?|displays?|lists?|presents?|visuali[sz]es?|contains?|has)\b/i,
     detail:
-      'describes the diagram/table rather than the system it draws — the reader can see it. ' +
+      'describes the diagram/table rather than the system it draws. The reader can see it. ' +
       'Explain what the shape MEANS, or cut the sentence',
     severity: 'error',
     softInReference: true,
@@ -445,7 +445,7 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     code: 'evidence_narration',
     re: /\bthe\s+(?:evidence|receipts?|facts?|evidence\s+bundle)\s+(?:shows?|indicates?|suggests?|provides?|contains?|says?|reveals?|does\s+not)\b/i,
     detail:
-      'the reader has no evidence bundle — they have the codebase. Attribute the fact to the code ' +
+      'the reader has no evidence bundle. They have the codebase. Attribute the fact to the code ' +
       '("server/src/validate.js:8 rejects empty usernames"), not to the pipeline that read it',
     severity: 'error',
   },
@@ -453,8 +453,8 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     code: 'evidence_narration',
     re: /\bin\s+the\s+provided\s+`?\w+`?|\bfrom\s+the\s+(?:provided|given)\s+(?:evidence|facts?|context|data)\b|\bbased\s+on\s+the\s+provided\b/i,
     detail:
-      'leaks the prompt\'s own variable names to the reader (observed: "not visible in the provided `testGuards`") — ' +
-      'name the repo artifact instead ("no test file covers this handler")',
+      'leaks the prompt\'s own variable names to the reader (observed: "not visible in the provided `testGuards`"). ' +
+      'Name the repo artifact instead ("no test file covers this handler")',
     severity: 'error',
   },
   {
@@ -492,15 +492,15 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     ),
     detail:
       'an instruction to the writer reached the reader ("You MUST say so plainly…"). This is prompt text, not a fact ' +
-      'about the system — state the fact itself and drop the directive',
+      'about the system. State the fact itself and drop the directive',
     severity: 'error',
   },
   {
     code: 'prompt_voice',
     re: /\bin\s+your\s+own\s+words\b|\b(?:say\s+so|state\s+(?:it|this|that))\s+plainly\b|\bdo\s+not\s+(?:invent|guess|fabricate|speculate)\b|\bnever\s+(?:write|say|claim|invent|describe\s+the\s+codebase)\b/i,
     detail:
-      'phrasing that only makes sense as an instruction to the model ("in your own words", "do not invent") — ' +
-      'the reader is being handed the prompt',
+      'phrasing that only makes sense as an instruction to the model ("in your own words", "do not invent"). ' +
+      'The reader is being handed the prompt',
     severity: 'error',
   },
   {
@@ -510,7 +510,7 @@ const NARRATION_PATTERNS: NarrationPattern[] = [
     // was the leaked directive itself.
     re: /\b(?:a|the|any)\s+readers?\s+(?:who|that)\b|\b(?:tell|telling|inform)\s+the\s+reader\b|\bthe\s+readers?\s+(?:must|should|needs?\s+to|will\s+assume|would\s+assume)\b/i,
     detail:
-      'talks ABOUT the reader instead of to them — that framing belongs in the spec, not in the section. ' +
+      'talks ABOUT the reader instead of to them. That framing belongs in the spec, not in the section. ' +
       'Say the thing the reader is supposed to learn',
     severity: 'error',
   },
@@ -552,7 +552,7 @@ function checkNarration(blocks: Block[], mode: ExplanationEvidence['mode']): Exp
           code: 'internal_key_leak',
           sentence,
           detail:
-            'an internal stable key (cluster:…, wf:…) reached the reader — these are pipeline identifiers, ' +
+            'an internal stable key (cluster:…, wf:…) reached the reader. These are pipeline identifiers, ' +
             'not names. Use the human-readable label the evidence also carries',
           severity: 'error',
         });
@@ -609,7 +609,7 @@ function inventoryNarration(sentence: string): ExplanationFinding | null {
     code: 'inventory_narration',
     sentence,
     detail:
-      'the sentence is an inventory the reader can already count — a file/symbol total is not a responsibility. ' +
+      'the sentence is an inventory the reader can already count, and a file/symbol total is not a responsibility. ' +
       'Say what the thing is FOR; the count may then ride along',
     severity: 'error',
   };
@@ -697,8 +697,8 @@ function checkLevel(
         code: 'subject_unnamed',
         sentence: firstSentence,
         detail:
-          `this text is filed under "${scope.subject}" and never names it — ` +
-          'a summary that could be pasted under any heading is not a summary of this one',
+          `this text is filed under "${scope.subject}" and never names it. ` +
+          'A summary that could be pasted under any heading is not a summary of this one',
         severity: 'error',
       });
     }
@@ -713,8 +713,8 @@ function checkLevel(
             code: 'scope_inflation',
             sentence,
             detail:
-              `a ${scope.kind}-level explanation is making a whole-repo claim — ` +
-              'hold the altitude: explain this piece, and leave repo-level claims to the repo-level section',
+              `a ${scope.kind}-level explanation is making a whole-repo claim. ` +
+              'Hold the altitude: explain this piece, and leave repo-level claims to the repo-level section',
             severity: 'error',
           });
         }
@@ -730,8 +730,8 @@ function checkLevel(
       code: 'domain_nouns_absent',
       sentence: firstSentence,
       detail:
-        `${words} words about this system and not one of its own nouns (${domainNouns.slice(0, 8).join(', ')}) — ` +
-        'this prose would read the same for any repo. Name the things this codebase actually manipulates',
+        `${words} words about this system and not one of its own nouns (${domainNouns.slice(0, 8).join(', ')}). ` +
+        'This prose would read the same for any repo. Name the things this codebase actually manipulates',
       severity: 'error',
     });
   }
@@ -802,7 +802,7 @@ function checkGaps(
       code: 'no_gap_disclosure',
       sentence: firstSentence,
       detail:
-        `${words} words, and nothing the analysis could not determine — a complete-looking explanation of a ` +
+        `${words} words, and nothing the analysis could not determine. A complete-looking explanation of a ` +
         'partially-read repo is the most expensive kind of wrong. Name at least one thing you could not see',
       severity: 'error',
     });
@@ -837,8 +837,8 @@ function checkGaps(
       code: 'gap_padding',
       sentence: blocks.flatMap((b) => b.sentences).find((s) => disclosesGap(s)) ?? firstSentence,
       detail:
-        `${absences} sentences (${Math.round((absenceWords * 100) / words)}% of this text) say only what could not be determined — ` +
-        'a section built out of apologies is padding, and the Known Gaps panel already records them. ' +
+        `${absences} sentences (${Math.round((absenceWords * 100) / words)}% of this text) say only what could not be determined. ` +
+        'A section built out of apologies is padding, and the Known Gaps panel already records them. ' +
         'Drop the headings you cannot fill and keep the ones you can; a short section that is all substance beats a complete-looking one',
       severity: 'error',
     });
@@ -852,8 +852,8 @@ function checkGaps(
         code: 'undisclosed_gap',
         sentence: firstSentence,
         detail:
-          `the coverage facts say "${required}" was not read, and the text never mentions it — ` +
-          'silence about an unread subsystem reads as "this repo does not have one"',
+          `the coverage facts say "${required}" was not read, and the text never mentions it. ` +
+          'Silence about an unread subsystem reads as "this repo does not have one"',
         severity: 'error',
       });
     }
@@ -945,7 +945,7 @@ function checkRepetition(blocks: Block[]): ExplanationFinding[] {
       sentence: c.first,
       detail:
         `this sentence appears ${c.members.length} times with only the identifiers changed ` +
-        `(e.g. "${(c.members[1] ?? '').slice(0, 110)}") — one finding restated N times is padding, not thoroughness. ` +
+        `(e.g. "${(c.members[1] ?? '').slice(0, 110)}"). One finding restated N times is padding, not thoroughness. ` +
         'Write it ONCE and name every item it applies to in that one sentence',
       severity: c.members.length >= REPETITION_ERROR_AT ? 'error' : 'warn',
     });
@@ -1006,7 +1006,7 @@ function checkGrounding(
       rule: 'grounding',
       code: 'uncited_claim',
       sentence: block.sentences.find((s) => isClaimSentence(s, evidence.mode)) ?? block.text,
-      detail: 'this claim carries no receipt and no file:line locator — cite the evidence it came from, or drop it',
+      detail: 'this claim carries no receipt and no file:line locator: cite the evidence it came from, or drop it',
       severity: 'warn',
     });
   }
@@ -1017,8 +1017,8 @@ function checkGrounding(
       code: 'mostly_uncited',
       sentence: findings[0]?.sentence ?? claimful[0]?.text ?? '',
       detail:
-        `${uncited.length} of ${claimBlocks} claim paragraphs cite nothing — ` +
-        'a majority of this text is assertion. Every claim needs a receipt; where you have none, say so instead',
+        `${uncited.length} of ${claimBlocks} claim paragraphs cite nothing. ` +
+        'A majority of this text is assertion. Every claim needs a receipt; where you have none, say so instead',
       severity: 'error',
     });
   }
@@ -1069,7 +1069,7 @@ export function lintExplanation(markdown: string, evidence: ExplanationEvidence 
     const codes = [...new Set(errors.map((f) => f.code))].join(', ');
     const examples = errors
       .slice(0, 3)
-      .map((f) => `  • "${f.sentence.slice(0, 160)}" — ${f.detail}`)
+      .map((f) => `  • "${f.sentence.slice(0, 160)}": ${f.detail}`)
       .join('\n');
     issues.push(`${RULE_HEADLINE[rule]} (${errors.length} finding(s): ${codes})\n${examples}`);
   }

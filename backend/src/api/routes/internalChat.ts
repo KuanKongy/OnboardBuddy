@@ -13,7 +13,7 @@ export function internalChatEnabled(): boolean {
 }
 
 const PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><title>OnboardBuddy — internal Q&A eval</title>
+<html><head><meta charset="utf-8"><title>OnboardBuddy internal Q&A eval</title>
 <style>
   body { font-family: ui-monospace, monospace; max-width: 860px; margin: 2rem auto; padding: 0 1rem; background:#111; color:#ddd; }
   input, textarea, select { width: 100%; box-sizing: border-box; background:#1c1c1c; color:#ddd; border:1px solid #444; padding:.5rem; margin:.25rem 0 .75rem; font: inherit; }
@@ -24,7 +24,7 @@ const PAGE = `<!doctype html>
   .meta { color:#777; font-size:.8em; }
   .low { color:#e66; } .medium { color:#ea3; } .high { color:#2d5; }
 </style></head><body>
-<h2>Q&amp;A eval <span class="meta">(internal dev tool — answers are audited, never stored)</span></h2>
+<h2>Q&amp;A eval <span class="meta">(internal dev tool: answers are audited, never stored)</span></h2>
 <label>Bearer token</label><input id="token" type="password" placeholder="supabase access token">
 <label>Project id</label><input id="project" placeholder="uuid">
 <div style="display:flex;gap:1rem">

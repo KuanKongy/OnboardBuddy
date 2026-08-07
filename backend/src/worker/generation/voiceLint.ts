@@ -25,6 +25,11 @@ const BANNED_PHRASES: Array<{ re: RegExp; label: string }> = [
   { re: /\bboost(?:s|ing)?\b/gi, label: 'boost' },
   { re: /\bensur(?:e|es|ing)\s+(?:high performance|scalability|reliability|efficiency)\b/gi, label: 'ensuring-quality claim' },
   { re: /\bplays? (?:an?|the) (?:integral|key|critical|vital) role\b/gi, label: 'plays-a-role filler' },
+  // Em dash: the product owner's rule is that it is never the most efficient
+  // way to say a thing; a comma, colon, or full stop always is. It rides this
+  // gate rather than explanationLint's so the section still earns its one
+  // stricter retry, and fenced code is already exempt via `withoutCodeFences`.
+  { re: /—/g, label: 'em dash (write a comma, colon, or a new sentence)' },
 ];
 
 export interface VoiceLintResult {
@@ -62,8 +67,8 @@ export function lintVoice(markdown: string): VoiceLintResult {
   const issues =
     hits.length > 0
       ? [
-          `marketing/filler voice: ${total} hit(s) of banned phrasing (${hits.join(', ')}) — ` +
-            `rewrite in flat engineering prose; state facts from evidence, no invented product consequences`,
+          `marketing/filler voice: ${total} hit(s) of banned phrasing (${hits.join(', ')}). ` +
+            `Rewrite in flat engineering prose; state facts from evidence, no invented product consequences`,
         ]
       : [];
   return { issues, hits };

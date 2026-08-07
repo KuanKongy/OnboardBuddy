@@ -77,7 +77,7 @@ askRouter.post("/", requireProjectAccess(), async (req, res) => {
       return;
     }
     if (err instanceof BudgetExceededError) {
-      res.status(429).json({ error: `Analysis budget exhausted (${err.limit}) — raise the budget to keep asking` });
+      res.status(429).json({ error: `Analysis budget exhausted (${err.limit}): raise the budget to keep asking` });
       return;
     }
     console.error("Ask error:", err);
