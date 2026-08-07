@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AnalyzeDialog } from "@/components/AnalyzeDialog";
 import { ConfirmDangerDialog } from "@/components/ConfirmDangerDialog";
 import { useFullBleedMain } from "@/components/MainRegion";
@@ -72,11 +73,48 @@ const WEIGHT_LABELS: Record<string, string> = {
   critical_for_workflow: "Workflows",
 };
 
+// A label plus a slider says nothing about what the signal measures, so the
+// numbers were being set blind. Each line names the signals that view is
+// actually scored from (deterministicViewScores/deterministicRoleScores in
+// worker/semantic/semanticReranker.ts); the LLM half of the blend rates the
+// same question, so "raises it" holds for both.
+const WEIGHT_TOOLTIPS: Record<string, string> = {
+  critical_for_runtime:
+    "How much the running app depends on this file. Side effects, entry point participation, and how many files depend on it raise it.",
+  critical_for_business:
+    "How close the file sits to the product's domain. Named business concepts and membership in a capability raise it.",
+  critical_for_onboarding:
+    "What a newcomer must understand first. Overall ranking score, entry points, and workflow participation raise it.",
+  critical_for_role:
+    "Fit for the selected developer role. Backend leans on API and database ownership, frontend on UI files, DevOps on config and churn, QA on test proximity.",
+  critical_for_change_risk:
+    "How risky a careless change here would be. Churn history, dependents, and flagged invariants raise it.",
+  critical_for_architecture:
+    "How structurally load-bearing the file is. Centrality in the dependency graph and ownership of routes or schemas raise it.",
+  critical_for_workflow:
+    "Participation in traced end-to-end workflows. Files that several workflows pass through score higher.",
+};
+
 interface RoleWeights {
   role: string;
   weights: Record<string, number>;
   defaults: Record<string, number>;
   customized: boolean;
+}
+
+/** Slider-set comparison over the views that exist, so a missing key reads as
+ *  0 rather than as a difference. Both weight buttons gate on this. */
+function weightsEqual(a: Record<string, number>, b: Record<string, number>) {
+  return WEIGHT_VIEWS.every((v) => (a[v] ?? 0) === (b[v] ?? 0));
+}
+
+/** Key metadata dates arrive as ISO strings from Postgres; an absent or
+ *  unparseable one must not print "Invalid Date" mid-sentence. */
+function fmtKeyDate(iso?: string): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  return new Date(t).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** One row of GET /projects/:id/llm-key's `usage_by_key_source`. Postgres
@@ -188,7 +226,13 @@ export function ProjectSettingsPage() {
   const [deleteError, setDeleteError] = useState("");
 
   // BYO LLM key
-  const [keyInfo, setKeyInfo] = useState<{ exists: boolean; created_by?: string | null; updated_at?: string } | null>(null);
+  const [keyInfo, setKeyInfo] = useState<{
+    exists: boolean;
+    provider?: string;
+    created_by?: string | null;
+    created_at?: string;
+    updated_at?: string;
+  } | null>(null);
   // Project-wide AI spend, split by which key paid for it. Run history shows
   // one run at a time, so this is the only place the whole bill is visible.
   const [keyUsage, setKeyUsage] = useState<KeyUsageRow[]>([]);
@@ -196,6 +240,12 @@ export function ProjectSettingsPage() {
   const [keyInput, setKeyInput] = useState("");
   const [keySaving, setKeySaving] = useState(false);
   const [keySaved, setKeySaved] = useState("");
+  // A configured key hid the input entirely, so replacing one meant removing it
+  // first and running the project on the server key in between.
+  const [replacingKey, setReplacingKey] = useState(false);
+  // Removing a key is a team-wide switch of who pays for AI, and it sat one
+  // unguarded click away.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
 
   // Ranking weights
   const [weightRoles, setWeightRoles] = useState<RoleWeights[] | null>(null);
@@ -206,6 +256,10 @@ export function ProjectSettingsPage() {
   // return with nothing changing on screen, so success and failure looked
   // identical (audit §20.3 SILENT-MUTATION).
   const [weightsSaved, setWeightsSaved] = useState("");
+  // What the server last returned, per role. `weightRoles` doubles as the slider
+  // edit buffer, so on its own it cannot answer "would saving write anything?" —
+  // which is exactly what gates the Save button.
+  const savedWeights = useRef<Record<string, Record<string, number>>>({});
   const errorRef = useRef<HTMLDivElement>(null);
   const radioRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
@@ -263,6 +317,14 @@ export function ProjectSettingsPage() {
     if (error) errorRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
   }, [error]);
 
+  // Every path that receives weights from the server goes through here, so the
+  // sliders and the saved-state baseline can never drift apart.
+  const applyWeights = useCallback((data: { roles?: RoleWeights[] }) => {
+    const roles = data.roles ?? [];
+    setWeightRoles(roles);
+    savedWeights.current = Object.fromEntries(roles.map((r) => [r.role, { ...r.weights }]));
+  }, []);
+
   // Slider state lives here, not in `project.settings`, so the footer Cancel
   // (which only refetched settings) left moved sliders moved — the user could
   // neither confirm a save nor undo one (audit §20.3). Cancel now reloads this
@@ -275,9 +337,9 @@ export function ProjectSettingsPage() {
   const loadWeights = useCallback(() => {
     if (!id) return;
     apiFetch(`/projects/${id}/ranking-weights`)
-      .then((data) => { setWeightRoles(data.roles); setWeightsError(false); })
+      .then((data) => { applyWeights(data); setWeightsError(false); })
       .catch(() => setWeightsError(true));
-  }, [id]);
+  }, [id, applyWeights]);
 
   const loadKeyInfo = useCallback(() => {
     if (!id) return;
@@ -346,6 +408,9 @@ export function ProjectSettingsPage() {
         body: JSON.stringify({ api_key: keyInput.trim() }),
       });
       setKeyInput("");
+      setReplacingKey(false);
+      // Refetched rather than assumed: the strip names who configured the key
+      // and when, and a replace changes both.
       const data = await apiFetch(`/projects/${id}/llm-key`);
       setKeyInfo(data.key);
       setKeySaved("Key saved.");
@@ -363,9 +428,12 @@ export function ProjectSettingsPage() {
     try {
       await apiFetch(`/projects/${id}/llm-key`, { method: "DELETE" });
       setKeyInfo({ exists: false });
+      setConfirmingRemove(false);
+      setReplacingKey(false);
       setKeySaved("Key removed. The server key is used again.");
       setTimeout(() => setKeySaved(""), 3000);
     } catch (err: unknown) {
+      // The confirm step stays up on a failure so retrying is one click.
       setError(err instanceof Error ? err.message : "Failed to remove key");
     } finally {
       setKeySaving(false);
@@ -391,7 +459,7 @@ export function ProjectSettingsPage() {
         body: JSON.stringify({ weights: activeWeights.weights }),
       });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
-      setWeightRoles(data.roles);
+      applyWeights(data);
       setWeightsSaved(`Saved. ${roleLabel(weightRole)} scores re-projected.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
@@ -402,13 +470,25 @@ export function ProjectSettingsPage() {
   }
 
   async function handleRevertWeights() {
+    if (!activeWeights) return;
+    // Nothing was ever persisted for this role, so there is no override row for
+    // DELETE to remove: the sliders are moved locally and putting them back is
+    // a state reset, not a request.
+    if (!activeWeights.customized) {
+      setWeightRoles((prev) =>
+        prev?.map((r) => (r.role === weightRole ? { ...r, weights: { ...r.defaults } } : r)) ?? null,
+      );
+      setWeightsSaved(`Reverted. ${roleLabel(weightRole)} is back on the built-in weights.`);
+      setTimeout(() => setWeightsSaved(""), 3000);
+      return;
+    }
     setWeightsSaving(true);
     setWeightsSaved("");
     setError("");
     try {
       await apiFetch(`/projects/${id}/ranking-weights/${weightRole}`, { method: "DELETE" });
       const data = await apiFetch(`/projects/${id}/ranking-weights`);
-      setWeightRoles(data.roles);
+      applyWeights(data);
       setWeightsSaved(`Reverted. ${roleLabel(weightRole)} is back on the built-in weights.`);
       setTimeout(() => setWeightsSaved(""), 3000);
     } catch (err: unknown) {
@@ -451,6 +531,14 @@ export function ProjectSettingsPage() {
     autoRegenStale !== baseline.autoRegenStale;
 
   const spend = totalKeyUsage(keyUsage);
+
+  // The key value is never returned, so this line is the only provenance a
+  // teammate gets: who to ask about it and when it landed. Either half can be
+  // missing (a deleted user leaves created_by null), so both are conditional.
+  const keyConfiguredOn = fmtKeyDate(keyInfo?.created_at);
+  const keyConfiguredLine =
+    `Key configured${keyInfo?.created_by ? ` by ${keyInfo.created_by}` : ""}` +
+    `${keyConfiguredOn ? ` on ${keyConfiguredOn}` : ""}. All AI calls for this project use it.`;
 
   const sections: SettingsSection[] = [
     {
@@ -753,9 +841,19 @@ export function ProjectSettingsPage() {
                 <div className="space-y-2">
                   {WEIGHT_VIEWS.map((view) => (
                     <div key={view} className="flex items-center gap-3">
-                      <span className="w-28 shrink-0 text-[0.71875rem] text-muted-foreground">
-                        {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            tabIndex={0}
+                            className="w-28 shrink-0 cursor-help text-[0.71875rem] text-muted-foreground"
+                          >
+                            {WEIGHT_LABELS[view] ?? view.replace(/_/g, " ")}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-64">
+                          {WEIGHT_TOOLTIPS[view]}
+                        </TooltipContent>
+                      </Tooltip>
                       <input
                         type="range"
                         min={0}
@@ -787,10 +885,26 @@ export function ProjectSettingsPage() {
                       <p role="status" aria-live="polite" className="mr-auto text-[0.6875rem] text-success">
                         {weightsSaved}
                       </p>
-                      <Button variant="outline" size="xs" onClick={handleRevertWeights} disabled={weightsSaving || !activeWeights.customized}>
+                      {/* Compared against the defaults, which is what revert restores;
+                          `customized` is a persistence flag and left moved sliders stuck. */}
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        onClick={handleRevertWeights}
+                        disabled={weightsSaving || weightsEqual(activeWeights.weights, activeWeights.defaults)}
+                      >
                         Revert to built-in weights
                       </Button>
-                      <Button size="xs" onClick={handleSaveWeights} disabled={weightsSaving}>
+                      {/* Compared against the last server state, which is what a save
+                          would write: equal means an override row for no change. */}
+                      <Button
+                        size="xs"
+                        onClick={handleSaveWeights}
+                        disabled={
+                          weightsSaving ||
+                          weightsEqual(activeWeights.weights, savedWeights.current[weightRole] ?? {})
+                        }
+                      >
                         {weightsSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save weights"}
                       </Button>
                     </div>
@@ -921,35 +1035,95 @@ export function ProjectSettingsPage() {
                     <RefreshCw className="h-3 w-3" /> Retry
                   </Button>
                 </div>
-              ) : keyInfo?.exists ? (
-                <div className="flex items-center justify-between gap-2 rounded-md border border-success/40 bg-success-soft px-3 py-2">
-                  <p className="text-xs text-success">
-                    Key configured{keyInfo.created_by ? ` by ${keyInfo.created_by}` : ""}. All AI calls use it.
-                  </p>
-                  {canEdit && (
-                    <Button variant="outline" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
-                      Remove
-                    </Button>
-                  )}
-                </div>
-              ) : canEdit ? (
-                <div className="flex gap-2">
-                  <Label htmlFor="llm-api-key" className="sr-only">Project LLM API key</Label>
-                  <Input
-                    id="llm-api-key"
-                    type="password"
-                    value={keyInput}
-                    onChange={(e) => setKeyInput(e.target.value)}
-                    placeholder="sk-or-…"
-                    className="h-8 flex-1 text-[0.8125rem]"
-                    autoComplete="off"
-                  />
-                  <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
-                    {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save key"}
-                  </Button>
-                </div>
               ) : (
-                <p className="text-xs text-muted-foreground">No project key: the server key is used.</p>
+                <>
+                  {keyInfo?.exists && (
+                    <div className="rounded-md border border-success/40 bg-success-soft px-3 py-2">
+                      {confirmingRemove ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-success">
+                            Remove the key? AI calls revert to OnboardBuddy&apos;s server key.
+                          </p>
+                          <div className="flex shrink-0 gap-2">
+                            <Button variant="destructive" size="xs" onClick={handleRemoveKey} disabled={keySaving}>
+                              {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm remove"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="xs"
+                              onClick={() => setConfirmingRemove(false)}
+                              disabled={keySaving}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-xs text-success">{keyConfiguredLine}</p>
+                          {canEdit && (
+                            <div className="flex shrink-0 gap-2">
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => setReplacingKey(true)}
+                                disabled={keySaving || replacingKey}
+                              >
+                                Replace key
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="xs"
+                                onClick={() => setConfirmingRemove(true)}
+                                disabled={keySaving}
+                              >
+                                Remove
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {/* Persistent, not only inside the confirm: what removing costs is
+                      the thing a reader needs before deciding to click Remove. */}
+                  {keyInfo?.exists && (
+                    <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                      Removing it reverts this project to OnboardBuddy&apos;s server key. The stored key is
+                      never shown again, so replacing it means pasting a new one.
+                    </p>
+                  )}
+                  {canEdit && (!keyInfo?.exists || replacingKey) && (
+                    <div className={`flex gap-2 ${keyInfo?.exists ? "mt-2" : ""}`}>
+                      <Label htmlFor="llm-api-key" className="sr-only">Project LLM API key</Label>
+                      <Input
+                        id="llm-api-key"
+                        type="password"
+                        value={keyInput}
+                        onChange={(e) => setKeyInput(e.target.value)}
+                        placeholder="sk-or-…"
+                        className="h-8 flex-1 text-[0.8125rem]"
+                        autoComplete="off"
+                      />
+                      <Button size="sm" onClick={handleSaveKey} disabled={keySaving || !keyInput.trim()}>
+                        {keySaving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save key"}
+                      </Button>
+                      {replacingKey && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { setReplacingKey(false); setKeyInput(""); }}
+                          disabled={keySaving}
+                        >
+                          Cancel
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  {!canEdit && !keyInfo?.exists && (
+                    <p className="text-xs text-muted-foreground">No project key: the server key is used.</p>
+                  )}
+                </>
               )}
               {/* Same silent-mutation class as Save weights: PUT/DELETE fired and
                   the page said nothing either way (audit §20.3). */}
@@ -1103,6 +1277,8 @@ export function ProjectSettingsPage() {
                   refetch();
                   loadWeights();
                   setKeyInput("");
+                  setReplacingKey(false);
+                  setConfirmingRemove(false);
                   setWeightsSaved("");
                   setKeySaved("");
                 }}
