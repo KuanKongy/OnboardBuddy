@@ -49,12 +49,13 @@ import {
   sectionWhy,
 } from "@/lib/onboardingData";
 import { FALLBACK_ROLE, ROLE_OPTIONS, roleLabel, roleTitle } from "@/lib/roles";
-import { receiptForHref, receiptNumberById, renderReceiptMarkers, UNVERIFIED_HREF } from "@/lib/receiptMarkers";
+import { receiptNumberById, renderReceiptMarkers } from "@/lib/receiptMarkers";
 import { AskPanel } from "@/components/AskPanel";
 import { DiagramFrame } from "@/components/reader/DiagramFrame";
 import { SectionMarkdown, type MarkdownComponents } from "@/components/reader/SectionMarkdown";
+import { receiptAnchor } from "@/components/reader/receiptAnchor";
 import { ProvenancePanel } from "@/components/ProvenancePanel";
-import { ReceiptChip, InlineReceiptRef } from "@/components/ReceiptChips";
+import { ReceiptChip } from "@/components/ReceiptChips";
 import { ErrorBanner } from "@/components/ui/error-banner";
 import { PageSpinner } from "@/components/ui/page-spinner";
 import { Badge } from "@/components/ui/badge";
@@ -669,42 +670,9 @@ export function SectionView({
     ? "built from code facts, the tables are the source"
     : section.confidenceReason;
 
-  // One `a` override shared by the TL;DR callout and every block body:
-  // citation markers become inline receipt refs, unverified spans get their
-  // explanation, everything else is a hardened external link.
+  // One `a` override shared by the TL;DR callout and every block body.
   const anchorComponents = (receipts: SourceReceipt[]): MarkdownComponents => ({
-    a: ({ href, children }) => {
-      if (href === UNVERIFIED_HREF) {
-        // A claim the validator downgraded for citing nothing — flagged at
-        // the point of doubt.
-        return (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span
-                tabIndex={0}
-                className="cursor-help underline decoration-warning decoration-dotted underline-offset-4"
-              >
-                {children}
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-72">
-              Unverified: this statement cites no receipt. It was downgraded
-              during validation and is listed under Known gaps.
-            </TooltipContent>
-          </Tooltip>
-        );
-      }
-      const cited = receiptForHref(href, receipts);
-      if (cited) {
-        const n = receiptNumberById(receipts).get(cited.bundleReceiptId ?? "") ?? 0;
-        return <InlineReceiptRef receipt={cited} index={n} onClick={onReceiptClick} />;
-      }
-      return (
-        <a href={href} target="_blank" rel="noopener noreferrer">
-          {children}
-        </a>
-      );
-    },
+    a: receiptAnchor(receipts, onReceiptClick),
   });
 
   return (

@@ -177,8 +177,15 @@ export function ScoreProvenance({
           const share = input.contribution ?? input.weight ?? 0;
           const spent = (input.contribution ?? 0) > 0;
           return (
-            <li key={input.key} className={cn("flex items-baseline gap-2", !spent && !compact && "opacity-55")}>
-              <span className="min-w-0 flex-1">
+            <li key={input.key} className={cn("flex items-center gap-2", !spent && !compact && "opacity-55")}>
+              {/* One line, clipped: a `member_mean` row's `measured` is a full
+                  repo path, and untruncated it painted straight over the bar
+                  and the points on the right. The label comes first, so what
+                  ellipsis eats is the path — `title` keeps it readable. */}
+              <span
+                className="min-w-0 flex-1 truncate"
+                title={input.measured ? `${input.label} (${input.measured})` : input.label}
+              >
                 <span className={compact ? "" : "text-foreground"}>{input.label}</span>
                 {input.measured && (
                   <span className={cn("ml-1", compact ? "opacity-70" : "text-muted-foreground")}>
@@ -187,7 +194,7 @@ export function ScoreProvenance({
                 )}
               </span>
               {!compact && (
-                <span className="h-1.5 w-10 shrink-0 self-center overflow-hidden rounded-full border border-input bg-muted">
+                <span className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full border border-input bg-muted">
                   <span
                     className="block h-full rounded-full bg-primary"
                     style={{ width: `${Math.round((share / maxContribution) * 100)}%` }}

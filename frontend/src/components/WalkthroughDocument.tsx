@@ -328,7 +328,17 @@ function WalkthroughStepCard({
   const shownStart = windowed && win ? win.start : firstLine;
 
   return (
-    <div id={stepAnchorId(step.step_order)} className="scroll-mt-20 space-y-2">
+    // A real card, because "card" used to be a name for a run of stacked
+    // blocks: 8px between a step's own parts against 12px between steps is not
+    // a boundary a reader can see, and a six-step walkthrough read as one long
+    // column of snippets. The border is what says where a step ends.
+    <div
+      id={stepAnchorId(step.step_order)}
+      className={cn(
+        "scroll-mt-20 space-y-2 rounded-lg border border-border bg-card/50",
+        compact ? "p-2.5" : "p-3",
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="outline" className="shrink-0 text-[0.6875rem] tabular-nums">Step {step.step_order}</Badge>
         {step.symbol_name && (
@@ -527,7 +537,7 @@ export function WalkthroughDocument({
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_180px]">
       <div className="min-w-0 space-y-1">
         {groups.map((group) => (
-          <section key={group.key} className="space-y-3">
+          <section key={group.key} className="space-y-4">
             {group.phase && (
               <div className="sticky top-0 z-10 -mx-1 flex items-baseline gap-2 border-b border-border bg-card/95 px-1 py-2 backdrop-blur">
                 <h3 className="text-[0.8125rem] font-semibold text-foreground">{group.phase.title}</h3>
@@ -537,7 +547,11 @@ export function WalkthroughDocument({
               </div>
             )}
             {group.visible.map((step) => (
-              <div key={step.id}>
+              // `space-y-4` inside as well as between wrappers so the connector
+              // sits the same distance from the card it leaves as from the one
+              // it points at; flush against the card above, it read as part of
+              // that card rather than as the gap between two.
+              <div key={step.id} className="space-y-4">
                 <WalkthroughStepCard step={step} repo={repo} />
                 {step.handoff && <HandoffConnector handoff={step.handoff} boundary={step.boundary} />}
               </div>
