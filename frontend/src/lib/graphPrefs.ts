@@ -9,8 +9,10 @@
  * old one-click drill can turn it back on, per surface, because the two maps
  * are used differently: one is browsed, one is read.
  *
- * Two keys rather than one, because the toggles are independent. The Classes
- * tab rides the "dependencies" key — it is the same page and the same gesture.
+ * One key per surface, because the toggles are independent. The Classes tab
+ * rides the "dependencies" key — it is the same page and the same gesture. The
+ * Capabilities map joined as a third surface with the same default: a click
+ * inspects the node in its side panel, and the panel's button drills.
  *
  * The project id is part of the key: the same reader browses a familiar repo
  * one way and a new one another, so the choice belongs to the pair, and the
@@ -19,7 +21,7 @@
  * convenience, and the cost of a stale one is a single click.
  */
 
-export type GraphSurface = "dependencies" | "architecture";
+export type GraphSurface = "dependencies" | "architecture" | "capabilities";
 
 const PREFERENCE_KEY_PREFIX = "onboardbuddy:graph-auto-drill:";
 
