@@ -199,6 +199,44 @@ const RAIL_TITLE_CHARS = 34;
 const FLOW_NODE_TITLE_CHARS = 52;
 
 /**
+ * What a click on a node does.
+ *
+ * `drill` is the tab as shipped: the click opens the level beneath the node.
+ * `inspect` keeps the click on this level and answers "what is this box" in a
+ * side panel instead — a capability's description, value and derivation are
+ * otherwise readable only by navigating INTO it, which is the wrong price for
+ * a reader who is still deciding which one to open. Both routes stay one click
+ * away: the panel carries the drill button, and the rail always drills.
+ *
+ * Persisted because it is a reading habit rather than a per-visit choice; one
+ * key for the tab, not per project, since it describes the reader and not the
+ * repository. Only the exact string "inspect" switches, so a half-written or
+ * blocked value fails back to the behaviour the tab shipped with.
+ */
+type ClickMode = "drill" | "inspect";
+
+const CLICK_MODE_KEY = "onboardbuddy:capabilities-click-mode";
+
+function readClickMode(): ClickMode {
+  try {
+    return localStorage.getItem(CLICK_MODE_KEY) === "inspect" ? "inspect" : "drill";
+  } catch {
+    // Storage blocked (private mode, embedded webview) — the default is the
+    // old behaviour, so nothing is lost but the memory of the choice.
+    return "drill";
+  }
+}
+
+function writeClickMode(mode: ClickMode): void {
+  try {
+    if (mode === "inspect") localStorage.setItem(CLICK_MODE_KEY, "inspect");
+    else localStorage.removeItem(CLICK_MODE_KEY);
+  } catch {
+    // Best-effort only; nothing to fall back to.
+  }
+}
+
+/**
  * One treatment for one fact.
  *
  * Confidence was a `HIGH CONFIDENCE` badge in the drill header and the words
@@ -446,6 +484,16 @@ export function CapabilitiesPage() {
   const [flowGraph, setFlowGraph] = useState<WalkthroughResponse | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
+  const [clickMode, setClickMode] = useState<ClickMode>(readClickMode);
+
+  const chooseClickMode = (mode: ClickMode) => {
+    setClickMode(mode);
+    writeClickMode(mode);
+    // The open panel belongs to the mode that opened it: leaving inspect with
+    // a capability still selected would strand a panel whose node-click exit
+    // now navigates instead of closing it.
+    setSelectedNodeId(null);
+  };
 
   const stack = useDrillStack();
   const capabilityFrame = stack.frames.find((f) => f.kind === "cluster") ?? null;
@@ -744,6 +792,9 @@ export function CapabilitiesPage() {
   );
 
   const drillInto = (nodeId: string): boolean => {
+    // Inspect mode: every node is treated as a leaf, so `GraphCanvas.activate`
+    // falls through to plain selection and the panel below explains it.
+    if (clickMode === "inspect") return false;
     if (nodeId.startsWith("res:")) return false;
     if (nodeId.startsWith("cap:")) {
       const cap = capabilities.find((c) => `cap:${c.stableKey}` === nodeId);
@@ -764,6 +815,15 @@ export function CapabilitiesPage() {
   const selectedResource = selectedNodeId?.startsWith("res:")
     ? { kind: selectedNodeId.split(":")[1] ?? "table", label: selectedNodeId.split(":").slice(2).join(":") }
     : null;
+  // Only reachable in inspect mode — a drill-mode click on either of these
+  // navigates instead of selecting. Both read from data the level already has.
+  const selectedCapability = selectedNodeId?.startsWith("cap:")
+    ? capabilities.find((c) => `cap:${c.stableKey}` === selectedNodeId) ?? null
+    : null;
+  const selectedFlow =
+    level === "flows" && selectedNodeId && !selectedNodeId.startsWith("res:")
+      ? activeCapability?.workflows.find((w) => w.id === selectedNodeId) ?? null
+      : null;
 
   const derivation = data?.derivation ?? null;
   const bindingRule = data?.bindingRule ?? null;
@@ -877,6 +937,40 @@ export function CapabilitiesPage() {
                     {fullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
                   </TooltipContent>
                 </Tooltip>
+                {/* Hidden on the deepest level, where it would decide nothing:
+                    a step has no level beneath it, so a click there already
+                    selects in both modes. */}
+                {level !== "code" && (
+                  <div className="flex items-center gap-1 rounded-lg border border-border bg-card p-0.5 pl-2">
+                    <span className="text-[0.6875rem] text-muted-foreground">On click</span>
+                    {(["drill", "inspect"] as const).map((m) => (
+                      <Tooltip key={m}>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={() => chooseClickMode(m)}
+                            aria-pressed={clickMode === m}
+                            className={cn(
+                              "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                              clickMode === m
+                                ? "bg-accent text-accent-foreground"
+                                : "text-muted-foreground hover:text-foreground",
+                            )}
+                          >
+                            {m === "drill" ? "Drill in" : "Inspect"}
+                          </button>
+                        </TooltipTrigger>
+                        {/* Kept: these say what the mode DOES, which two words
+                            on a button cannot. */}
+                        <TooltipContent side="bottom">
+                          {m === "drill"
+                            ? "A click opens the level beneath the node"
+                            : "A click explains the node beside the graph, staying on this level"}
+                        </TooltipContent>
+                      </Tooltip>
+                    ))}
+                  </div>
+                )}
               </>
             )}
           </>
@@ -934,7 +1028,7 @@ export function CapabilitiesPage() {
                 if (inTier.length === 0) return null;
                 return (
                   <div key={key} className="pt-1.5 first:pt-0">
-                    <p className="px-2 pb-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <p className="section-label px-2 pb-0.5">
                       {label} ({inTier.length})
                     </p>
                     {note && <p className="px-2 pb-1 text-[0.625rem] leading-tight text-muted-foreground">{note}</p>}
@@ -962,18 +1056,11 @@ export function CapabilitiesPage() {
                           <Circle className="mt-0.5 h-3 w-3 shrink-0 opacity-40" />
                         )}
                         <span className="min-w-0">
-                          {/* The rail row is the tab stop; this tooltip is
-                              hover-only overflow relief for a truncated name. */}
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="block truncate text-[0.78125rem] font-medium">
-                                {middleTruncate(cap.name, RAIL_TITLE_CHARS)}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="right" className="max-w-xs text-left">
-                              {cap.name}
-                            </TooltipContent>
-                          </Tooltip>
+                          {/* Native title only: the styled tooltip reprinted the
+                              row's own name, over the row's own click target. */}
+                          <span className="block truncate text-[0.78125rem] font-medium" title={cap.name}>
+                            {middleTruncate(cap.name, RAIL_TITLE_CHARS)}
+                          </span>
                           <span className="block text-[0.6875rem]">
                             {cap.workflows.length} flow{cap.workflows.length === 1 ? "" : "s"}
                             {cap.binding.schemas.length > 0 && ` · ${cap.binding.schemas.length} table${cap.binding.schemas.length === 1 ? "" : "s"}`}
@@ -1126,6 +1213,29 @@ export function CapabilitiesPage() {
                   </Link>
                 </aside>
               )}
+
+              {selectedCapability && (
+                <CapabilityAside
+                  cap={selectedCapability}
+                  busy={drill.busy}
+                  onDrill={() =>
+                    drill.drillInto(
+                      { kind: "cluster", id: selectedCapability.stableKey, label: selectedCapability.name },
+                      `cap:${selectedCapability.stableKey}`,
+                    )
+                  }
+                />
+              )}
+
+              {selectedFlow && (
+                <FlowAside
+                  flow={selectedFlow}
+                  busy={drill.busy}
+                  onDrill={() =>
+                    drill.drillInto({ kind: "workflow", id: selectedFlow.id, label: selectedFlow.title }, selectedFlow.id)
+                  }
+                />
+              )}
             </div>
 
             {activeFlow && level === "code" && (
@@ -1143,6 +1253,98 @@ export function CapabilitiesPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Inspect panels ───────────────────────────────────────────────────────────
+
+/**
+ * What a capability is, read without navigating into it.
+ *
+ * Everything here is already in hand for the rail and the drill header — the
+ * panel adds no request, it just stops the description, the value sentence and
+ * the derivation from being reachable only one level down. The drill button is
+ * the same call the click handler makes, so inspecting costs a click rather
+ * than a detour.
+ */
+function CapabilityAside({ cap, busy, onDrill }: { cap: Capability; busy: boolean; onDrill: () => void }) {
+  return (
+    <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
+      <p className="section-label mb-2">Capability</p>
+      <p className="text-[0.8125rem] font-medium text-foreground">{cap.name}</p>
+      {(cap.description || cap.summary) && (
+        <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
+          {cap.description || cap.summary}
+        </p>
+      )}
+      {cap.userValue && (
+        <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">
+          <span className="font-medium text-foreground">When you'll touch it:</span> {cap.userValue}
+        </p>
+      )}
+
+      {cap.derivation.length > 0 && (
+        <div className="mt-3">
+          <p className="section-label mb-1">Why this is a capability</p>
+          <ul className="space-y-0.5 text-[0.71875rem] text-muted-foreground">
+            {cap.derivation.map((d) => <li key={d}>· {d}</li>)}
+          </ul>
+        </div>
+      )}
+
+      {cap.binding.entrypoints.length > 0 && (
+        <div className="mt-3">
+          {/* Whole list, not a slice: the panel scrolls, so there is no reason
+              to cut it the way a fixed-height header block has to. */}
+          <p className="section-label mb-1">Entry points ({cap.binding.entrypoints.length})</p>
+          <ul className="space-y-0.5">
+            {cap.binding.entrypoints.map((e) => (
+              <li
+                key={`${e.filePath}:${e.route ?? ""}`}
+                className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
+              >
+                <RouteIcon className="h-3 w-3 shrink-0 opacity-60" />
+                <span className="truncate font-mono" title={e.route ?? e.filePath}>{e.route ?? e.filePath}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <Button variant="outline" size="xs" className="mt-4" onClick={onDrill} disabled={busy}>
+        Drill into flows
+        <ArrowRight className="h-3 w-3" />
+      </Button>
+    </aside>
+  );
+}
+
+/** The same panel for a flow: what it is, before you spend a level on it. */
+function FlowAside({ flow, busy, onDrill }: { flow: CapabilityFlow; busy: boolean; onDrill: () => void }) {
+  return (
+    <aside className="graph-canvas !h-auto min-h-0 flex-1 overflow-y-auto !bg-card p-4 xl:flex-none xl:basis-[300px]">
+      <p className="section-label mb-2">Flow</p>
+      <p className="break-all text-[0.8125rem] font-medium text-foreground">{flow.title}</p>
+      {flow.purpose && (
+        <p className="mt-2 text-[0.75rem] leading-relaxed text-muted-foreground">{flow.purpose}</p>
+      )}
+      <p className="mt-3 text-[0.71875rem] text-muted-foreground">
+        {flow.tier === "core"
+          ? "Core user flow"
+          : flow.tier === "supporting"
+            ? "Supporting flow"
+            : "No tier recorded"}
+        {" · "}
+        {flow.stepCount} step{flow.stepCount === 1 ? "" : "s"}
+      </p>
+      {flow.reason && (
+        <p className="mt-2 text-[0.71875rem] leading-relaxed text-muted-foreground">{flow.reason}</p>
+      )}
+      <Button variant="outline" size="xs" className="mt-4" onClick={onDrill} disabled={busy}>
+        Drill into steps
+        <ArrowRight className="h-3 w-3" />
+      </Button>
+    </aside>
   );
 }
 
@@ -1206,16 +1408,8 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
               {cap.binding.entrypoints.map((e) => (
                 <li key={`${e.filePath}:${e.route ?? ""}`} className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
                   <RouteIcon className="h-3 w-3 shrink-0 opacity-60" />
-                  {/* Kept: the row truncates, and this is the only place the
-                      full route or path is readable. */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="truncate font-mono">{e.route ?? e.filePath}</span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs break-all text-left">
-                      {e.route ?? e.filePath}
-                    </TooltipContent>
-                  </Tooltip>
+                  {/* Native title only: a styled tooltip here repeated the row. */}
+                  <span className="truncate font-mono" title={e.route ?? e.filePath}>{e.route ?? e.filePath}</span>
                 </li>
               ))}
             </ul>
@@ -1227,21 +1421,15 @@ function CapabilityHeader({ cap, projectId }: { cap: Capability; projectId: stri
             <ul className="space-y-1">
               {cap.whereToStart.map((s) => (
                 <li key={s.stable_key} className="text-[0.6875rem]">
-                  {/* The link is already the tab stop. */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CodeRef
-                        to={`/projects/${projectId}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
-                        className="flex min-w-0 items-center gap-1.5"
-                      >
-                        <FileCode2 className="h-3 w-3 shrink-0" />
-                        <span className="min-w-0 truncate">{s.stable_key}</span>
-                      </CodeRef>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs break-all text-left">
-                      {s.stable_key}
-                    </TooltipContent>
-                  </Tooltip>
+                  {/* Native title only: the styled tooltip repeated this key,
+                      and the link under it is already the tab stop. */}
+                  <CodeRef
+                    to={`/projects/${projectId}/dependencies?focus=${encodeURIComponent(fileOf(s.stable_key))}`}
+                    className="flex min-w-0 items-center gap-1.5"
+                  >
+                    <FileCode2 className="h-3 w-3 shrink-0" />
+                    <span className="min-w-0 truncate" title={s.stable_key}>{s.stable_key}</span>
+                  </CodeRef>
                   {s.reason && <p className="text-muted-foreground">{s.reason}</p>}
                 </li>
               ))}
