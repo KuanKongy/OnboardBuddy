@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SectionView } from "./OnboardingPage";
-import type { OnboardingSection } from "@/types/onboarding";
+import { OnboardingPage, SectionView } from "./OnboardingPage";
+import type { OnboardingPackage, OnboardingSection } from "@/types/onboarding";
 
 /**
  * Owner feedback K1: known gaps and citations stay in the package but "should
@@ -13,6 +13,75 @@ import type { OnboardingSection } from "@/types/onboarding";
  * detail by default and state how much is behind it.
  */
 const receipt = (filePath: string) => ({ filePath, staleness: "fresh" as const });
+
+// Full-page mounts (bottom of this file) need the reader's whole context
+// graph. `tier` is a box rather than a constant because permission tier is the
+// variable under test and vi.mock factories are hoisted above any per-test let.
+const tier = vi.hoisted(() => ({ current: "developer" as string }));
+const fetchOnboardingPackage = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/onboardingData", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/onboardingData")>("@/lib/onboardingData");
+  return { ...actual, fetchOnboardingPackage };
+});
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, apiFetch: vi.fn().mockResolvedValue({}) };
+});
+
+vi.mock("@/lib/supabase", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: null } }),
+      onAuthStateChange: vi.fn().mockReturnValue({ data: { subscription: { unsubscribe: vi.fn() } } }),
+    },
+  },
+}));
+
+vi.mock("@/contexts/AuthContext", () => ({
+  useAuth: () => ({ user: { id: "u1", email: "dev@example.com" } }),
+}));
+
+vi.mock("@/contexts/ProjectContext", () => ({
+  useProject: () => ({
+    project: {
+      id: "p1",
+      repo_owner: "acme",
+      repo_name: "app",
+      permission_tier: tier.current,
+      developer_role: "backend",
+      status: "complete",
+      settings: null,
+    },
+    loading: false,
+    error: "",
+    refetch: vi.fn(),
+  }),
+}));
+
+vi.mock("@/contexts/PackagesContext", () => ({
+  usePackages: () => ({
+    packages: [],
+    packagesError: false,
+    refreshPackages: vi.fn(),
+    selectPackage: vi.fn(),
+    selectedPackageId: null,
+    registerSessionJob: vi.fn(),
+  }),
+}));
+
+// One frozen object, not a fresh literal per call: `items` is a dependency of
+// the effect that seeds `readSections`, and the real hook holds it in state.
+// A new array per render makes that effect re-run forever once a package with
+// sections is loaded ("Maximum update depth"), which is a harness artifact.
+const progress = vi.hoisted(() => ({ items: [], loaded: true, save: vi.fn() }));
+vi.mock("@/lib/useProgress", () => ({ useProgress: () => progress }));
+
+// jsdom has no `Element.scrollTo`; the reader calls it on section change.
+if (!Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = () => {};
+}
 
 const SECTION: OnboardingSection = {
   id: "guardrails-ops",
@@ -106,5 +175,69 @@ describe("reader gaps & citations (K1)", () => {
     expect(screen.getByRole("columnheader", { name: "Variable" })).toBeInTheDocument();
     expect(screen.getByRole("cell", { name: "queue backend" })).toBeInTheDocument();
     expect(screen.queryByText(/\|\s*---\s*\|/)).toBeNull();
+  });
+});
+
+const PACKAGE: OnboardingPackage = {
+  id: "pkg-1",
+  projectId: "p1",
+  role: "backend",
+  status: "approved",
+  generatedAt: "2026-07-01T00:00:00Z",
+  sections: [
+    {
+      id: "big-picture",
+      sectionId: "sec-1",
+      label: "Big picture",
+      status: "complete",
+      confidence: "high",
+      blocks: [{ title: "Big picture", body: "One queue, one worker.", receipts: [] }],
+    },
+  ],
+};
+
+function renderReader() {
+  return render(
+    <TooltipProvider>
+      {/* ?package= pins the reader to one package, the way a card link opens
+          it; ?role= alone is the legacy "latest for role" entry. */}
+      <MemoryRouter initialEntries={["/projects/p1/onboarding?view=reader&package=pkg-1&role=backend"]}>
+        <Routes>
+          <Route path="/projects/:id/onboarding" element={<OnboardingPage />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
+  );
+}
+
+/**
+ * The read mark was gated `!canManage`, so an owner or admin had no control
+ * that recorded personal progress at all — their rail sat at "0/12 read" for
+ * the life of the package, while the tour promised a tracker. The write path
+ * was already tier-independent, so only the top bar was ever wrong.
+ */
+describe("reader read mark (every tier)", () => {
+  beforeEach(() => {
+    fetchOnboardingPackage.mockReset();
+    fetchOnboardingPackage.mockResolvedValue(PACKAGE);
+  });
+
+  it("gives owners both the editorial mark and their own read mark, with one tour target", async () => {
+    tier.current = "owner";
+    const { container } = renderReader();
+
+    expect(await screen.findByRole("button", { name: /Mark reviewed|Reviewed/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Mark as read|Read/ })).toBeInTheDocument();
+    // Both buttons used to carry data-tour="reader-review", which points the
+    // "track what you've read" step at whichever one the DOM yields first.
+    expect(container.querySelectorAll('[data-tour="reader-review"]')).toHaveLength(1);
+  });
+
+  it("leaves developers with the read mark and no editorial mark", async () => {
+    tier.current = "developer";
+    renderReader();
+
+    expect(await screen.findByRole("button", { name: /Mark as read|Read/ })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Mark reviewed|Reviewed/ })).toBeNull());
   });
 });

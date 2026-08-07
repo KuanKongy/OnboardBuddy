@@ -480,7 +480,7 @@ const READER_TOUR_STEPS: TourStep[] = [
   {
     target: "reader-review",
     title: "Track what you've read",
-    body: "Mark each section as you finish it; your personal progress shows in the section list.\n\nFor owners and admins the same button is an editorial 'Reviewed' signal to the whole team. If a regeneration changes a section it drops back to draft, so everyone knows to re-read it.",
+    body: "Mark each section as you finish it; your personal reading progress shows in the section list, whatever your role.\n\nOwners and admins also get a separate 'Mark reviewed' button, an editorial signal to the whole team. If a regeneration changes a section it drops back to draft, so everyone knows to re-read it.",
   },
   {
     target: "reader-actions",
@@ -2009,7 +2009,6 @@ export function OnboardingPage() {
                 <Button
                   size="xs"
                   variant={markedReviewed ? "secondary" : "outline"}
-                  data-tour="reader-review"
                   className={cn(
                     "gap-1.5",
                     markedReviewed && "border-success/40 bg-success-soft text-success",
@@ -2020,9 +2019,11 @@ export function OnboardingPage() {
                   {markedReviewed ? "Reviewed" : "Mark reviewed"}
                 </Button>
               )}
-              {/* Personal progress for everyone else — the tour's "track what
-                  you've read" was previously only true for owners/admins. */}
-              {!canManage && activeSection && (
+              {/* Personal progress, every tier: this used to be `!canManage`,
+                  so owners and admins had no way to record a read mark at all
+                  and their rail sat at "0/12 read" forever. "Mark reviewed"
+                  above is the separate editorial signal, not this. */}
+              {activeSection && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
