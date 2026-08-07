@@ -1997,27 +1997,43 @@ export function OnboardingPage() {
                       className="gap-1.5"
                       onClick={handleRegenerateSection}
                       disabled={regenerating}
+                      aria-label={regenerating ? "Regenerating…" : "Regenerate section"}
                     >
                       {regenerating ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                      {regenerating ? "Regenerating…" : "Regenerate section"}
+                      {/* Labels drop below xl: this row's content measured
+                          ~985px against a ~760px pane at lg, so the last
+                          buttons clipped. aria-label mirrors the visible text
+                          exactly, so the name is the same at every width. */}
+                      <span className="hidden xl:inline">{regenerating ? "Regenerating…" : "Regenerate section"}</span>
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Rebuild this section against the newest analysis</TooltipContent>
                 </Tooltip>
               )}
               {canManage && activeSection?.sectionId && (
-                <Button
-                  size="xs"
-                  variant={markedReviewed ? "secondary" : "outline"}
-                  className={cn(
-                    "gap-1.5",
-                    markedReviewed && "border-success/40 bg-success-soft text-success",
-                  )}
-                  onClick={handleToggleReview}
-                >
-                  {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                  {markedReviewed ? "Reviewed" : "Mark reviewed"}
-                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="xs"
+                      variant={markedReviewed ? "secondary" : "outline"}
+                      aria-label={markedReviewed ? "Reviewed" : "Mark reviewed"}
+                      className={cn(
+                        "gap-1.5",
+                        markedReviewed && "border-success/40 bg-success-soft text-success",
+                      )}
+                      onClick={handleToggleReview}
+                    >
+                      {markedReviewed ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
+                      <span className="hidden xl:inline">{markedReviewed ? "Reviewed" : "Mark reviewed"}</span>
+                    </Button>
+                  </TooltipTrigger>
+                  {/* xl:hidden because below xl this is a bare circle icon and
+                      needs naming; at xl+ the label is right there and a
+                      tooltip that repeats it is noise. */}
+                  <TooltipContent side="bottom" className="xl:hidden">
+                    {markedReviewed ? "Reviewed" : "Mark reviewed"}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {/* Personal progress, every tier: this used to be `!canManage`,
                   so owners and admins had no way to record a read mark at all
@@ -2026,32 +2042,59 @@ export function OnboardingPage() {
               {activeSection && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span tabIndex={progressLoadError ? 0 : -1} className="inline-flex">
+                    {/* Focusable in BOTH off-states: a disabled button takes no
+                        pointer or keyboard events, so without this wrapper the
+                        tooltip explaining WHY it is disabled is unreachable. */}
+                    <span tabIndex={readSections === null ? 0 : -1} className="inline-flex">
                       <Button
                         size="xs"
                         variant={isSectionRead ? "secondary" : "outline"}
                         data-tour="reader-review"
                         disabled={readSections === null}
+                        aria-label={isSectionRead ? "Read" : "Mark as read"}
                         className={cn(
                           "gap-1.5",
                           isSectionRead && "border-success/40 bg-success-soft text-success",
                         )}
                         onClick={handleToggleRead}
                       >
-                        {isSectionRead ? <CheckCircle2 className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
-                        {isSectionRead ? "Read" : "Mark as read"}
+                        {readSections === null && !progressLoadError ? (
+                          // Spinner only while the GET is in flight. On a failed
+                          // GET the icon stays a static Circle: this state does
+                          // not resolve without a reload, and a spinner would
+                          // promise a recovery that never arrives.
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : isSectionRead ? (
+                          <CheckCircle2 className="h-3 w-3" />
+                        ) : (
+                          <Circle className="h-3 w-3" />
+                        )}
+                        <span className="hidden xl:inline">{isSectionRead ? "Read" : "Mark as read"}</span>
                       </Button>
                     </span>
                   </TooltipTrigger>
-                  {/* Bug #68: the control is disabled because the progress
-                      fetch failed, not because the feature is unavailable —
-                      and it stays disabled on purpose, since writing marks
-                      against a history we could not read would erase it. */}
-                  {progressLoadError && (
+                  {/* Both off-states get copy. An owner reported this control as
+                      broken ("you can only mark as read if you mark as
+                      reviewed") because clicking it during the progress round
+                      trip did nothing and said nothing — the disabled state was
+                      only ever explained when the fetch had already failed.
+                      Bug #68 is the failure branch: it stays disabled on
+                      purpose, since writing marks against a history we could
+                      not read would erase it. */}
+                  {progressLoadError ? (
                     <TooltipContent side="bottom" className="max-w-xs text-left">
                       Your reading progress couldn&apos;t be loaded, so marks are paused for this
                       visit: saving now would overwrite the sections you have already read.
                       Reload the page to try again.
+                    </TooltipContent>
+                  ) : readSections === null ? (
+                    <TooltipContent side="bottom" className="max-w-xs text-left">
+                      Loading your reading progress.
+                    </TooltipContent>
+                  ) : (
+                    // Working state: names the icon-only button below xl only.
+                    <TooltipContent side="bottom" className="max-w-xs text-left xl:hidden">
+                      {isSectionRead ? "Read" : "Mark as read"}
                     </TooltipContent>
                   )}
                 </Tooltip>

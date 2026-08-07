@@ -75,7 +75,7 @@ vi.mock("@/contexts/PackagesContext", () => ({
 // the effect that seeds `readSections`, and the real hook holds it in state.
 // A new array per render makes that effect re-run forever once a package with
 // sections is loaded ("Maximum update depth"), which is a harness artifact.
-const progress = vi.hoisted(() => ({ items: [], loaded: true, save: vi.fn() }));
+const progress = vi.hoisted(() => ({ items: [], loaded: true, loadError: false, save: vi.fn() }));
 vi.mock("@/lib/useProgress", () => ({ useProgress: () => progress }));
 
 // jsdom has no `Element.scrollTo`; the reader calls it on section change.
@@ -220,7 +220,20 @@ describe("reader read mark (every tier)", () => {
   beforeEach(() => {
     fetchOnboardingPackage.mockReset();
     fetchOnboardingPackage.mockResolvedValue(PACKAGE);
+    // The progress mock is one shared mutable object (see its definition), so
+    // the fields have to be put back rather than the object rebuilt.
+    progress.loaded = true;
+    progress.loadError = false;
+    progress.save.mockReset();
   });
+
+  function openTooltip() {
+    return waitFor(() => {
+      const el = document.querySelector('[data-slot="tooltip-content"]');
+      if (!el) throw new Error("tooltip did not open");
+      return el as HTMLElement;
+    });
+  }
 
   it("gives owners both the editorial mark and their own read mark, with one tour target", async () => {
     tier.current = "owner";
@@ -239,5 +252,66 @@ describe("reader read mark (every tier)", () => {
 
     expect(await screen.findByRole("button", { name: /Mark as read|Read/ })).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole("button", { name: /Mark reviewed|Reviewed/ })).toBeNull());
+  });
+
+  /**
+   * What an owner actually reported ("you can only mark as read if you mark as
+   * reviewed") was this: the button is disabled until GET /progress lands, and
+   * until this change the only state that explained itself was the failure.
+   * During the round trip, and forever after a failed GET, clicking did
+   * nothing and said nothing — which reads as a control gated on something
+   * else. Nothing about the disabled state is visible to a passing eye, so it
+   * is pinned here.
+   */
+  it("says it is loading while progress is in flight, instead of going quietly dead", async () => {
+    tier.current = "developer";
+    progress.loaded = false;
+    const user = userEvent.setup();
+    renderReader();
+
+    const button = await screen.findByRole("button", { name: "Mark as read" });
+    expect(button).toBeDisabled();
+    // The wrapper is focusable precisely BECAUSE the button is disabled: a
+    // disabled button takes no pointer or keyboard events, so without it the
+    // explanation below is unreachable by either.
+    expect(button.parentElement).toHaveAttribute("tabindex", "0");
+
+    await user.hover(button.parentElement!);
+    // Radix mirrors the copy into a hidden twin inside the same node, so the
+    // text arrives doubled: match it, do not compare it.
+    expect((await openTooltip()).textContent).toMatch(/Loading your reading progress\./);
+  });
+
+  it("keeps the Bug #68 copy when the progress fetch failed", async () => {
+    tier.current = "developer";
+    progress.loaded = false;
+    progress.loadError = true;
+    const user = userEvent.setup();
+    renderReader();
+
+    const button = await screen.findByRole("button", { name: "Mark as read" });
+    expect(button).toBeDisabled();
+
+    await user.hover(button.parentElement!);
+    expect((await openTooltip()).textContent).toMatch(/marks are paused for this\s+visit/);
+  });
+
+  it("flips the mark on click and saves the section against the package", async () => {
+    tier.current = "developer";
+    const user = userEvent.setup();
+    renderReader();
+
+    await user.click(await screen.findByRole("button", { name: "Mark as read" }));
+    expect(await screen.findByRole("button", { name: "Read" })).toBeInTheDocument();
+
+    // The auto-save effect fires once on init with an empty list, so it is the
+    // LAST call — not any call — that has to carry the section.
+    await waitFor(() =>
+      expect(progress.save).toHaveBeenLastCalledWith(
+        "onboarding",
+        "pkg-1",
+        expect.objectContaining({ readSections: expect.arrayContaining(["big-picture"]) }),
+      ),
+    );
   });
 });
