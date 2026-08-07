@@ -175,7 +175,9 @@ function ZoomStage({ children }: { children: ReactNode }) {
         // track to the 76vh viewport, so an overflowing diagram is centred in
         // the window and overflows it evenly on both sides.
         className={cn(
-          "grid h-[76vh] grid-rows-1 touch-none place-items-center overflow-hidden rounded-lg",
+          // select-none: without it a pan drag doubles as text selection and
+          // paints the diagram's labels blue.
+          "grid h-[76vh] grid-rows-1 touch-none select-none place-items-center overflow-hidden rounded-lg",
           dragging ? "cursor-grabbing" : "cursor-grab",
         )}
         onPointerDown={onPointerDown}
