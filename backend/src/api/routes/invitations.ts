@@ -122,6 +122,66 @@ invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"
   }
 });
 
+// Dismiss: a dead invitation (revoked, declined, or expired) is the invitee's to
+// clear out. Only one row backs both views, so this takes the entry off the
+// project's team page as well as out of the inbox — which is the point, since a
+// refusal nobody can tidy away is what kept both lists growing.
+// A live pending invitation is not dismissible: declining it is the answer, and
+// silently deleting it would leave the inviter waiting on nothing.
+invitationsRouter.delete("/:invitationId", requireUuidParam("invitationId"), async (req, res) => {
+  try {
+    const { invitationId } = req.params;
+    const email = req.user!.email;
+
+    // Same liveness predicate as the inbox and the accept path, evaluated by
+    // Postgres so "expired" means expired by the database's clock.
+    const invResult = await query(
+      `SELECT id, email, status, expires_at,
+              (status = 'pending' AND (expires_at IS NULL OR expires_at > NOW())) AS live
+       FROM project_invitations
+       WHERE id = $1`,
+      [invitationId],
+    );
+
+    if (invResult.rows.length === 0) {
+      res.status(404).json({ error: "Invitation not found" });
+      return;
+    }
+
+    const invitation = invResult.rows[0] as { email: string; live: boolean };
+
+    // An invitation id is not a capability for anyone but its addressee.
+    if (invitation.email.toLowerCase() !== email.toLowerCase()) {
+      res.status(403).json({ error: "This invitation is not for your account" });
+      return;
+    }
+
+    if (invitation.live) {
+      res.status(409).json({ error: "This invitation is still pending. Decline it instead." });
+      return;
+    }
+
+    // The write re-checks liveness: resend writes a new id rather than reviving
+    // this one, so nothing should be able to re-liven the row between the read
+    // and here — but the delete is the arbiter, not the read.
+    const result = await query(
+      `DELETE FROM project_invitations
+       WHERE id = $1 AND NOT (status = 'pending' AND (expires_at IS NULL OR expires_at > NOW()))`,
+      [invitationId],
+    );
+
+    if (result.rowCount === 0) {
+      res.status(409).json({ error: "This invitation is still pending. Decline it instead." });
+      return;
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Dismiss invitation error:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 invitationsRouter.post("/:invitationId/accept", requireUuidParam("invitationId"), async (req, res) => {
   let client: import("pg").PoolClient | undefined;
   try {
@@ -168,6 +228,9 @@ invitationsRouter.post("/:invitationId/accept", requireUuidParam("invitationId")
       return;
     }
 
+    // Accept deletes the row rather than marking it 'accepted', so this arm is
+    // not dead code: revoked, declined and expired rows still reach it, and the
+    // deployed Milestone4 app is still writing 'accepted' into the same table.
     if (invitation.status !== "pending") {
       await client.query("ROLLBACK");
       res.status(409).json({ error: `Invitation has already been ${invitation.status}` });
@@ -201,11 +264,15 @@ invitationsRouter.post("/:invitationId/accept", requireUuidParam("invitationId")
       return;
     }
 
+    // Once the invitation is redeemed the member row IS the record of it, and an
+    // 'accepted' row left behind put the same person on screen twice — once in the
+    // roster, once in the invitation history beside it. So the row goes, and with
+    // it accepted_by/accepted_at (the columns stay: the schema is frozen). The
+    // cost is that re-POSTing this id now answers "not found or expired" rather
+    // than "already accepted".
     await client.query(
-      `UPDATE project_invitations
-       SET status = 'accepted', accepted_by = $1, accepted_at = NOW()
-       WHERE id = $2`,
-      [userId, invitationId],
+      `DELETE FROM project_invitations WHERE id = $1`,
+      [invitationId],
     );
 
     const memberResult = await client.query(
