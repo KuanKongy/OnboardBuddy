@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { pipelineProgress, type PipelineJobLite } from "@/lib/pipelineProgress";
 
@@ -131,6 +131,10 @@ export function ProjectCard({
   // concurrent runs the card tracks the newest active one and counts the rest.
   const [liveJob, setLiveJob] = useState<PipelineJobLite | null>(null);
   const [extraActiveRuns, setExtraActiveRuns] = useState(0);
+  // A failed check must not leave the card saying "Checking run status…"
+  // forever, and a 404/403 (project or access gone) must stop the poll
+  // instead of re-requesting a dead project every 6s until unmount.
+  const [statusUnavailable, setStatusUnavailable] = useState(false);
   useEffect(() => {
     if (project.status !== "analyzing") {
       setLiveJob(null);
@@ -138,6 +142,7 @@ export function ProjectCard({
       return;
     }
     let cancelled = false;
+    let timer: number | undefined;
     const load = () => {
       apiFetch(`/projects/${project.id}/analysis-status`)
         .then((data: { jobs: Array<PipelineJobLite & { status?: string }> }) => {
@@ -145,11 +150,18 @@ export function ProjectCard({
           const active = (data.jobs ?? []).filter((j) => j.status === "queued" || j.status === "running");
           setLiveJob(active[0] ?? data.jobs?.[0] ?? null);
           setExtraActiveRuns(Math.max(0, active.length - 1));
+          setStatusUnavailable(false);
         })
-        .catch(() => {});
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setStatusUnavailable(true);
+          if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+            window.clearInterval(timer);
+          }
+        });
     };
     load();
-    const timer = window.setInterval(load, 6000);
+    timer = window.setInterval(load, 6000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [project.id, project.status]);
 
@@ -182,7 +194,9 @@ export function ProjectCard({
     ? ""
     : liveJob
       ? `${live.pct}%${extraActiveRuns > 0 ? ` · +${extraActiveRuns} more run${extraActiveRuns > 1 ? "s" : ""}` : ""}`
-      : "Checking run status…";
+      : statusUnavailable
+        ? "Couldn't check run status"
+        : "Checking run status…";
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);

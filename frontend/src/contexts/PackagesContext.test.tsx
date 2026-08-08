@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { PackagesProvider, usePackages } from "./PackagesContext";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 /**
  * Two behaviours live here:
@@ -13,7 +13,10 @@ import { apiFetch } from "@/lib/api";
  *     while a tab value outranks both.
  */
 
-vi.mock("@/lib/api", () => ({ apiFetch: vi.fn() }));
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, apiFetch: vi.fn() };
+});
 
 // Stateful ProjectContext stand-in: `refetch` simulates the server having set
 // the member default when the watched generation completed.
@@ -275,5 +278,56 @@ describe("PackagesContext completion watcher", () => {
     expect(screen.getByTestId("selected")).toHaveTextContent(OTHER_PKG.id);
     expect(localStorage.getItem(PIN_KEY)).toBe(OTHER_PKG.id);
     expect(sessionStorage.getItem(TAB_KEY)).toBeNull();
+  });
+});
+
+/**
+ * ui-ux-audit-round3 salvage: `hasActive` reads the LAST GOOD status, so once
+ * a project was deleted (404) or access revoked (403) the 5s poll re-requested
+ * it forever — the failure set `statusError` but nothing ever ended the loop.
+ * Terminal answers must clear the status, which empties activeJobs and
+ * disarms the interval. Transient failures still keep the poll (retrying is
+ * the right response to a blip, so only the fixed call count is pinned here).
+ */
+describe("dead-project status poll", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    sessionStorage.clear();
+    vi.mocked(apiFetch).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops polling once the project answers 404", async () => {
+    vi.useFakeTimers();
+    let statusCalls = 0;
+    vi.mocked(apiFetch).mockImplementation((async (path: string) => {
+      if (path.includes("analysis-status")) {
+        statusCalls += 1;
+        if (statusCalls === 1) {
+          return { jobs: [{ id: "job-live", job_type: "analyze_scope", status: "running" }] };
+        }
+        throw new ApiError("Project not found", 404, {});
+      }
+      return { packages: [] };
+    }) as never);
+
+    const { unmount } = renderProvider();
+
+    // First status lands with an active job, which arms the 5s poll.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(statusCalls).toBe(1);
+
+    // The next tick answers 404: terminal, so the poll must disarm.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(statusCalls).toBe(2);
+
+    // Three more poll windows pass; a frozen count proves the interval is gone.
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(statusCalls).toBe(2);
+
+    unmount();
   });
 });

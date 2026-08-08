@@ -1,13 +1,14 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ProjectCard, type Project } from "./ProjectCard";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
-vi.mock("@/lib/api", () => ({
-  apiFetch: vi.fn().mockResolvedValue({}),
-}));
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual, apiFetch: vi.fn().mockResolvedValue({}) };
+});
 
 const PROJECT: Project = {
   id: "12345678-1234-1234-1234-123456789012",
@@ -132,5 +133,40 @@ describe("ProjectCard", () => {
     renderCard({ ...PROJECT, permission_tier: tier });
 
     expect(screen.queryByRole("button", { name: "Project actions" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ui-ux-audit-round3 salvage: the status poll's failures were swallowed
+ * whole. The card printed "Checking run status…" forever, and a project
+ * deleted mid-poll (404) kept being re-requested every 6s until unmount.
+ */
+describe("run status check failures", () => {
+  beforeEach(() => vi.mocked(apiFetch).mockClear());
+
+  it("says the check failed instead of pretending to check forever", async () => {
+    vi.mocked(apiFetch).mockRejectedValueOnce(new Error("network down"));
+    renderCard({ ...PROJECT, status: "analyzing" });
+
+    expect(await screen.findByText("Couldn't check run status")).toBeInTheDocument();
+  });
+
+  it("stops the 6s poll once the project answers 404", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(apiFetch).mockRejectedValueOnce(new ApiError("Project not found", 404, {}));
+      const { unmount } = renderCard({ ...PROJECT, status: "analyzing" });
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(vi.mocked(apiFetch)).toHaveBeenCalledTimes(1);
+
+      // Three poll windows pass; a frozen count proves the interval is gone.
+      await act(async () => { await vi.advanceTimersByTimeAsync(18000); });
+      expect(vi.mocked(apiFetch)).toHaveBeenCalledTimes(1);
+
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
