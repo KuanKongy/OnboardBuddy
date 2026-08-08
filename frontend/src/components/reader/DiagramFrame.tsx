@@ -25,7 +25,46 @@ const MAX_SCALE = 4;
 /** One press of + / −, and one double-click. */
 const ZOOM_STEP = 1.25;
 
+/**
+ * ctrl/cmd+wheel zoom rate, in inverse pixels, applied as `2 ** (-dy * rate)`.
+ * This is d3-zoom's own ctrl+wheel number (its 0.002 px⁻¹ base times the ×10
+ * it applies when ctrlKey is set), which is what React Flow zooms at — and the
+ * Architecture canvas IS React Flow, so matching the constant is what makes
+ * the two surfaces feel like the same control rather than two guesses.
+ */
+const ZOOM_WHEEL_RATE = 0.02;
+/**
+ * Firefox and some mice report wheel deltas in lines (deltaMode 1) rather than
+ * pixels, where one notch is ~3. Panning by the raw number would move the
+ * diagram three pixels per notch, which reads as a dead gesture.
+ */
+const WHEEL_LINE_PX = 16;
+
 const clampScale = (scale: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+
+/**
+ * Frame bounds for the enlarged view. The width cap is the viewport-relative
+ * one first, so the modal never runs off a narrow window; the absolute 80rem
+ * stops a 4K monitor from turning a wide diagram into a left-to-right scan.
+ * The height floor keeps a 90px flowchart from opening as a letterbox slot.
+ */
+const FRAME_MAX_VW = 0.92;
+const FRAME_MAX_REM = 80;
+const STAGE_MIN_REM = 16;
+const STAGE_MAX_VH = 0.82;
+/** Used only when the diagram's size is not knowable yet. */
+const STAGE_DEFAULT_REM = 32;
+/**
+ * A CSS backstop on the computed width, since the frame is a fixed px chosen
+ * when the modal opens and the window can be resized after that.
+ */
+const FRAME_MAX_CSS = `min(${FRAME_MAX_VW * 100}vw, ${FRAME_MAX_REM}rem)`;
+/**
+ * DialogContent's own horizontal chrome, added back so the frame is sized to
+ * hold the diagram rather than to equal it: `p-6` on both sides plus the 1px
+ * border, under the global `box-sizing: border-box`.
+ */
+const DIALOG_CHROME_X = 2 * 24 + 2;
 
 /** Pan offset in px from the viewport centre, plus the zoom factor. */
 interface StageView {
@@ -34,31 +73,113 @@ interface StageView {
   y: number;
 }
 
+/** The diagram's laid-out size, in CSS px, once mermaid has rendered it. */
+interface NaturalSize {
+  width: number;
+  height: number;
+}
+
+/** Everything about the enlarged view that is decided before it opens. */
+interface OpenFrame {
+  /** Dialog width and stage height, in px. */
+  width: number;
+  stageHeight: number;
+  /** The scale the stage opens at. */
+  scale: number;
+}
+
+/**
+ * The whole sizing decision, taken once, synchronously, from numbers that are
+ * already known when the reader clicks Enlarge.
+ *
+ * This replaced an observe-measure-resize-refit loop, and the reason is worth
+ * keeping: the modal cannot measure a diagram that has not rendered yet, so
+ * anything that starts from the modal is necessarily asynchronous, and every
+ * asynchronous version of this raced something. Live, the last one never
+ * applied at all and pinned the renderer. But the inline preview HAS already
+ * rendered — nobody can click Enlarge before it has — and it publishes its own
+ * natural size (see MermaidDiagram). The modal renders the same diagram with
+ * the same renderer, so that number describes it too, and the answer is
+ * arithmetic rather than a race.
+ *
+ * Both boxes are px rather than `min()`/`clamp()` so the scale below divides by
+ * the stage that will actually exist, instead of a CSS expression this code
+ * would have to predict.
+ */
+function frameFor(natural: NaturalSize | null): OpenFrame {
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  // innerWidth, not `documentElement.clientWidth`: the dialog is modal, so by
+  // the time it is laid out the page scrollbar has been removed and the width
+  // it gets is the one INCLUDING that gutter.
+  const maxWidth = Math.min(FRAME_MAX_VW * window.innerWidth, FRAME_MAX_REM * rem);
+  const maxStageHeight = STAGE_MAX_VH * window.innerHeight;
+
+  if (!natural) {
+    // No diagram to size to: an unrendered preview, or one that fell back to
+    // its source. Open at the caps rather than guessing; Fit is one click away.
+    return {
+      width: Math.round(maxWidth),
+      stageHeight: Math.round(Math.min(STAGE_DEFAULT_REM * rem, maxStageHeight)),
+      scale: 1,
+    };
+  }
+
+  const width = Math.round(Math.min(natural.width + DIALOG_CHROME_X, maxWidth));
+  const stageHeight = Math.round(
+    Math.min(Math.max(STAGE_MIN_REM * rem, natural.height), maxStageHeight),
+  );
+  const stageWidth = width - DIALOG_CHROME_X;
+  return {
+    width,
+    stageHeight,
+    // Scaled DOWN to fit, never up: a five-node cluster map blown up to fill
+    // the stage is as unhelpful as a 37-table ER squeezed into 285px.
+    scale: clampScale(
+      Math.min(1, stageWidth / natural.width, stageHeight / natural.height),
+    ),
+  };
+}
+
+/** The size the inline preview published when its diagram landed. */
+function readNaturalSize(root: HTMLElement | null): NaturalSize | null {
+  const figure = root?.querySelector<HTMLElement>("[data-natural-width]");
+  if (!figure) return null;
+  const width = Number(figure.dataset.naturalWidth);
+  const height = Number(figure.dataset.naturalHeight);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
 /**
  * A pan/zoom surface for the enlarged diagram.
  *
  * Hand-rolled rather than a library: the whole interaction is one transform
  * string and three handlers, and the reader bundle already carries mermaid.
  *
- * The stage opens fit-and-centred — the diagram is scaled DOWN until it fits
- * the viewport, never up, because the complaint that produced the inline
- * preview's height clamp cuts both ways: a five-node cluster map blown up to
- * fill 76vh is as unhelpful as a 37-table ER squeezed into 285px.
+ * Deliberately inert until touched. It observes nothing, measures nothing on
+ * mount and schedules no frames: the opening view arrives fully decided in
+ * `frame`, as the stage's initial state. Everything that reads live geometry
+ * is behind a user action (the Fit button), so once the modal is open this
+ * component does no work at all until the reader does something. That is the
+ * whole point of the rewrite. The version it replaced measured on a frame
+ * clock, and in the real reader tree it never converged and pinned the
+ * renderer instead.
  */
-function ZoomStage({ children }: { children: ReactNode }) {
+function ZoomStage({ children, frame }: { children: ReactNode; frame: OpenFrame }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<StageView>({ scale: 1, x: 0, y: 0 });
+  // Fresh on every open: Radix unmounts the dialog's content when it closes,
+  // so the opening scale is simply what this mounts with.
+  const [view, setView] = useState<StageView>({ scale: frame.scale, x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
   const dragFrom = useRef<{ x: number; y: number } | null>(null);
-  /**
-   * Auto-fit tracks the diagram until the reader takes over. After that a
-   * re-render must not yank their zoom back: flipping the theme re-runs
-   * `mermaid.render` and resizes the content, and re-fitting there would have
-   * thrown away the position they had just panned to.
-   */
-  const readerDrove = useRef(false);
 
+  /**
+   * The Fit button, and only the Fit button. This is the one place that reads
+   * the live boxes, which is what makes it the correct recourse whenever the
+   * click-time arithmetic and reality disagree: a window resized while the
+   * modal is open, or a diagram whose modal render came out a different size
+   * from its preview.
+   */
   const fit = useCallback(() => {
     const viewport = viewportRef.current;
     const content = contentRef.current;
@@ -67,27 +188,10 @@ function ZoomStage({ children }: { children: ReactNode }) {
     // diagram at its laid-out size whatever scale is currently applied.
     const width = content.offsetWidth;
     const height = content.offsetHeight;
-    // Mermaid renders asynchronously (dynamic import, then an async render), so
-    // the first frames are 0x0 — and jsdom never lays anything out at all.
-    // Leaving the view alone beats dividing by zero and blanking the stage.
     if (width <= 0 || height <= 0) return;
     const ratio = Math.min(viewport.clientWidth / width, viewport.clientHeight / height);
     setView({ scale: clampScale(Math.min(1, ratio)), x: 0, y: 0 });
   }, []);
-
-  useEffect(() => {
-    const content = contentRef.current;
-    if (!content) return;
-    fit();
-    if (typeof ResizeObserver === "undefined") return;
-    // The SVG lands one or more frames after mount, so mount-time measurement
-    // alone always reads 0 — the observer is what makes the opening view fit.
-    const observer = new ResizeObserver(() => {
-      if (!readerDrove.current) fit();
-    });
-    observer.observe(content);
-    return () => observer.disconnect();
-  }, [fit]);
 
   /** Zoom keeping the diagram point under (clientX, clientY) under it. */
   const zoomAt = useCallback((clientX: number, clientY: number, factor: number) => {
@@ -99,7 +203,6 @@ function ZoomStage({ children }: { children: ReactNode }) {
     // viewport centre; the pointer has to be expressed the same way.
     const px = clientX - box.left - box.width / 2;
     const py = clientY - box.top - box.height / 2;
-    readerDrove.current = true;
     setView((v) => {
       const scale = clampScale(v.scale * factor);
       if (scale === v.scale) return v;
@@ -108,24 +211,46 @@ function ZoomStage({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const panBy = useCallback((dx: number, dy: number) => {
+    if (dx === 0 && dy === 0) return;
+    setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+  }, []);
+
   useEffect(() => {
     const viewport = viewportRef.current;
     if (!viewport) return;
-    // React registers `onWheel` passively on the root container, so
-    // `preventDefault` from a JSX handler is a no-op and every zoom also
-    // scrolls the dialog behind it. A native non-passive listener is the only
-    // way to own the gesture.
+    /**
+     * React Flow's wheel contract, which the Architecture canvas already has:
+     * a plain wheel — which is what a macOS two-finger scroll sends — PANS, and
+     * only ctrl/cmd+wheel zooms. The previous handler zoomed on every wheel
+     * event, so the ordinary gesture for "look around" rescaled the diagram
+     * instead of moving it (the reported friction). macOS delivers a trackpad
+     * pinch as a wheel event with ctrlKey set, so pinch lands on the zoom
+     * branch without any gesture-event plumbing.
+     */
     const onWheel = (event: WheelEvent) => {
+      // React registers `onWheel` passively on the root container, so
+      // `preventDefault` from a JSX handler is a no-op and the gesture also
+      // scrolls the dialog behind it. A native non-passive listener is the
+      // only way to own it — for the pan branch as much as the zoom branch.
       event.preventDefault();
-      zoomAt(event.clientX, event.clientY, Math.exp(-event.deltaY * 0.0015));
+      const unit =
+        event.deltaMode === 1 ? WHEEL_LINE_PX : event.deltaMode === 2 ? viewport.clientHeight : 1;
+      const dy = event.deltaY * unit;
+      if (event.ctrlKey || event.metaKey) {
+        zoomAt(event.clientX, event.clientY, 2 ** (-dy * ZOOM_WHEEL_RATE));
+        return;
+      }
+      // 1:1 and both axes: the content moves with the fingers, so scrolling
+      // down walks DOWN the diagram (the translate goes the other way).
+      panBy(-event.deltaX * unit, -dy);
     };
     viewport.addEventListener("wheel", onWheel, { passive: false });
     return () => viewport.removeEventListener("wheel", onWheel);
-  }, [zoomAt]);
+  }, [zoomAt, panBy]);
 
   /** Button zoom: same maths with the pointer pinned to the centre. */
   const zoomCentre = (factor: number) => {
-    readerDrove.current = true;
     setView((v) => {
       const scale = clampScale(v.scale * factor);
       if (scale === v.scale) return v;
@@ -146,8 +271,7 @@ function ZoomStage({ children }: { children: ReactNode }) {
     const dx = event.clientX - from.x;
     const dy = event.clientY - from.y;
     dragFrom.current = { x: event.clientX, y: event.clientY };
-    readerDrove.current = true;
-    setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }));
+    panBy(dx, dy);
   };
 
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -172,12 +296,22 @@ function ZoomStage({ children }: { children: ReactNode }) {
         // sits at the top of a track taller than the window, and scaling it
         // about its own centre pushed every table below the fold — the stage
         // opened blank at a correctly computed scale. `minmax(0, 1fr)` pins the
-        // track to the 76vh viewport, so an overflowing diagram is centred in
-        // the window and overflows it evenly on both sides.
+        // track to the stage's own height, so an overflowing diagram is centred
+        // in the window and overflows it evenly on both sides. That is also why
+        // the height below is a definite length rather than `fit-content`: an
+        // auto-sized row would grow back to 6979px and reinstate the bug.
+        //
+        // `grid-cols-1` is the same fix in the other axis, and it became
+        // load-bearing when the content box became max-content sized. Measured
+        // in Chrome: without it the implicit column grew to the 37-table ER's
+        // 7005px, so the stage's own box was 7005px wide, `overflow-hidden`
+        // clipped nothing, and the diagram overflowed the modal to the right
+        // only instead of being centred in it.
+        style={{ height: `${frame.stageHeight}px` }}
         className={cn(
           // select-none: without it a pan drag doubles as text selection and
           // paints the diagram's labels blue.
-          "grid h-[76vh] grid-rows-1 touch-none select-none place-items-center overflow-hidden rounded-lg",
+          "grid grid-cols-1 grid-rows-1 touch-none select-none place-items-center overflow-hidden rounded-lg",
           dragging ? "cursor-grabbing" : "cursor-grab",
         )}
         onPointerDown={onPointerDown}
@@ -186,9 +320,23 @@ function ZoomStage({ children }: { children: ReactNode }) {
         onPointerCancel={endDrag}
         onDoubleClick={(event) => zoomAt(event.clientX, event.clientY, ZOOM_STEP)}
       >
+        {/* `w-max` (max-content), not `w-full` and not the default fit-content.
+            This box IS the measurement the frame is sized from, so it must not
+            depend on the frame: `w-full` measures the stage back to itself
+            (which is how the modal ended up identical for a two-participant
+            sequence diagram and a 37-table ER), and fit-content clamps at the
+            available width, which feeds the frame's own width back in — the
+            empty figure that exists for the frames before mermaid resolves
+            would shrink the frame, and the diagram would then be laid out
+            inside that shrunken frame and lock it there.
+
+            Max-content is the diagram's own width whatever the frame is doing,
+            so it only ever grows as the SVG arrives. A diagram wider than the
+            stage overflows it evenly on both sides (place-items-center) and is
+            clipped, which is what the fit scale and the pan exist for. */}
         <div
           ref={contentRef}
-          className="w-full origin-center will-change-transform"
+          className="w-max origin-center will-change-transform"
           style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
         >
           {children}
@@ -220,10 +368,7 @@ function ZoomStage({ children }: { children: ReactNode }) {
           size="xs"
           variant="outline"
           className="gap-1 bg-background/85 backdrop-blur"
-          onClick={() => {
-            readerDrove.current = false;
-            fit();
-          }}
+          onClick={fit}
           aria-label="Fit diagram to view"
         >
           <Scan className="h-3 w-3" aria-hidden />
@@ -253,36 +398,65 @@ export function DiagramFrame({
   projectId?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const previewRef = useRef<HTMLDivElement>(null);
+  const [frame, setFrame] = useState<OpenFrame | null>(null);
+
   return (
     <div className="group relative">
-      <div className="max-h-[22rem] overflow-auto rounded-lg">
+      <div ref={previewRef} className="max-h-[22rem] overflow-auto rounded-lg">
         <MermaidDiagram code={code} label={label} projectId={projectId} />
       </div>
       <Button
         size="xs"
         variant="outline"
         className="absolute right-2 top-2 gap-1 bg-background/85 backdrop-blur"
-        onClick={() => setOpen(true)}
+        // Both updates in one handler, so they land in one commit and the
+        // dialog's first render already has the size it should be.
+        onClick={() => {
+          setFrame(frameFor(readNaturalSize(previewRef.current)));
+          setOpen(true);
+        }}
         aria-label={`Enlarge ${label}`}
       >
         <Maximize2 className="h-3 w-3" aria-hidden />
         Enlarge
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        {/* 64rem, not 80rem: at the wider cap a diagram sat edge to edge on a
-            laptop and reading it meant scanning left-right across the whole
-            screen for every edge. The stage below is what recovers the detail
-            that the narrower frame costs. */}
-        <DialogContent className="max-h-[92vh] w-[min(92vw,64rem)] overflow-auto sm:max-w-[min(92vw,64rem)]">
-          {/* Radix requires a title on every dialog, but the figure inside
-              already prints one — two stacked headers saying "sequence
-              diagram" is the visible duplicate. Kept in the tree for the
-              accessible name, taken off the screen. */}
-          <DialogTitle className="sr-only">{label}</DialogTitle>
-          <ZoomStage>
-            <MermaidDiagram code={code} label={label} projectId={projectId} />
-          </ZoomStage>
-        </DialogContent>
+        {/* The frame follows the diagram. A fixed 64rem × 76vh box put a
+            two-participant sequence diagram in a sea of empty background, and
+            the cap it was set to was itself a compromise: 80rem used to put a
+            wide diagram edge to edge on a laptop, so the width was capped for
+            everyone to protect the few that needed it. Sizing to content
+            separates the two — small diagrams get a small modal, and only a
+            diagram that genuinely fills the screen reaches the wide cap, where
+            the stage's pan/zoom is what makes it readable.
+
+            A px width with a CSS cap behind it, not a `min()`: the width is
+            chosen once when the modal opens, and `maxWidth` is what keeps a
+            window resized afterwards from pushing it off screen. `maxWidth`
+            also has to be set at all, because `sm:max-w-lg` from the base
+            DialogContent would otherwise win over the width alone.
+
+            `grid-cols-1` for the reason spelled out on the stage below: the
+            base DialogContent is a grid with an implicit auto column, which a
+            max-content stage grows past the dialog's own width, and
+            `overflow-auto` then hands the modal a horizontal scrollbar over a
+            diagram that is supposed to be panned, not scrolled. */}
+        {frame && (
+          <DialogContent
+            className="max-h-[92vh] grid-cols-1 overflow-auto"
+            style={{ width: `${frame.width}px`, maxWidth: FRAME_MAX_CSS }}
+          >
+            {/* Radix requires a title on every dialog, but the figure inside
+                already prints one — two stacked headers saying "sequence
+                diagram" is the visible duplicate. Kept in the tree for the
+                accessible name, taken off the screen. */}
+            <DialogTitle className="sr-only">{label}</DialogTitle>
+            <ZoomStage frame={frame}>
+              <MermaidDiagram code={code} label={label} projectId={projectId} />
+            </ZoomStage>
+          </DialogContent>
+        )}
       </Dialog>
     </div>
   );

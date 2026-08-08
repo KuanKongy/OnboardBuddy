@@ -13,6 +13,14 @@ import { cn } from "@/lib/utils";
  * always visible, the full explanatory sentence lives in its tooltip. Colors
  * follow the pipeline-chip rule the landing page already established:
  * AI = primary, deterministic = muted.
+ *
+ * Both tones carry a border and neither is a tint of the surface it sits on.
+ * The round-1 lesson on this project was that muted-on-muted disappears: a
+ * `bg-muted text-muted-foreground` chip inside a muted card is a smudge, and
+ * `bg-primary/10` was reported as "now less visible" for the same reason. A
+ * provenance mark that has to be hunted for is a provenance mark nobody reads,
+ * and the two tones have to differ at a glance or the distinction they exist
+ * to draw is lost.
  */
 export type TextSource = "ai" | "code";
 
@@ -23,13 +31,16 @@ const TONE: Record<
   ai: {
     icon: Sparkles,
     label: "AI",
-    chip: "bg-primary/10 text-primary",
+    // Solid, not a tint: primary-on-primary-foreground is the app's own
+    // button combo, so it passes AA where a primary/15 tint measured 3.8:1,
+    // and nothing else in body prose looks like it.
+    chip: "bg-primary text-primary-foreground border border-primary",
     defaultTip: "Written by the model from repository evidence.",
   },
   code: {
     icon: Code2,
     label: "From code",
-    chip: "bg-muted text-muted-foreground",
+    chip: "bg-muted text-foreground/85 border border-border",
     defaultTip: "Derived from the traced structure of the code. No AI involved.",
   },
 };

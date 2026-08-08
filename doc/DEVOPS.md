@@ -412,19 +412,25 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 |---|---|---|---|
 | `NODE_ENV` | `backend/.env` | `development` or `production` | Set manually |
 | `PORT` | `backend/.env` | API listen port (default `3000`) | Set manually |
-| `CORS_ORIGIN` | `backend/.env` | Allowed origin (e.g. `http://localhost:5173`) | Set manually |
+| `CORS_ORIGIN` | `backend/.env` | Allowed origin (e.g. `http://localhost:5173`). Required when `NODE_ENV=production` | Set manually |
+| `FRONTEND_URL` | `backend/.env` | Frontend origin the GitHub App OAuth/setup redirects land on | Set manually |
 | `SUPABASE_URL` | `backend/.env` | Supabase project URL | Supabase → Settings → Data API |
 | `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | Service-role secret key | Supabase → Settings → API Keys → create Secret key |
 | `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Transaction mode, port 6543) | Supabase → Settings → Database → Connection string |
 | `DIRECT_DATABASE_URL` | `backend/.env` | Session-mode string (port 5432), DDL/migrations only | Same page, Session mode |
-| `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string | Upstash Console → Database → Details |
-| `WORKER_POLL_INTERVAL_MS` | `backend/.env` | Worker poll interval in ms (default `5000`) | Set manually |
+| `PG_POOL_MAX` | `backend/.env` | Per-process pg pool cap (code default `30`; 10 for api, 30 for worker) | Set manually (see "Connection pooling" above) |
+| `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string. Required when `NODE_ENV=production` (or `REDIS_HOST`) | Upstash Console → Database → Details |
+| `QUEUE_SUFFIX` | `backend/.env` | BullMQ queue-name suffix. Empty locally; `-prod` in production. **Must match between api and worker** | Set manually |
+| `WORKER_POLL_INTERVAL_MS` | `backend/.env` | Worker poll interval in ms (default `30000`) | Set manually |
+| `GITHUB_CLIENT_ID` | (none) | **Retired.** Login runs through the GitHub App's OAuth; no backend code reads this | Lives only in Supabase → Authentication → Providers → GitHub |
+| `GITHUB_CLIENT_SECRET` | (none) | **Retired.** Same as above | Lives only in the Supabase dashboard |
 | `GITHUB_APP_ID` | `backend/.env` | GitHub App numeric ID | github.com → Settings → Developer settings → GitHub Apps |
 | `GITHUB_WEBHOOK_SECRET` | `backend/.env` | Push-webhook HMAC secret (optional) | Same page → Webhook secret |
 | `GITHUB_APP_CLIENT_ID` | `backend/.env` | GitHub App client ID | Same page as above |
 | `GITHUB_APP_CLIENT_SECRET` | `backend/.env` | GitHub App client secret | Same page as above |
 | `GITHUB_APP_PRIVATE_KEY_PATH` | `backend/.env` | Path to `.pem` file | Generate on GitHub App page → download |
 | `GITHUB_APP_PRIVATE_KEY` | `backend/.env` | PEM contents (hosted alternative to the path, e.g. Railway) | Same `.pem` file — paste its contents |
+| `GITHUB_INSTALL_STATE_SECRET` | `backend/.env` | Signs the GitHub App install state parameter. Falls back to `TOKEN_ENCRYPTION_KEY` if unset | Generate like `TOKEN_ENCRYPTION_KEY` below |
 | `OPENROUTER_API_KEY` | `backend/.env` | OpenRouter API key | openrouter.ai → Keys |
 | `OPENROUTER_BASE_URL` | `backend/.env` | OpenRouter base URL | `https://openrouter.ai/api/v1` (static) |
 | `OPENROUTER_MODEL` | `backend/.env` | LLM model identifier | openrouter.ai → Models |
@@ -728,11 +734,30 @@ differences:
 - `FRONTEND_URL` = the same frontend origin (GitHub App OAuth/setup redirects
   land there).
 - `GITHUB_WEBHOOK_SECRET` = see the webhook section above.
+- `REDIS_URL` = the Upstash TCP/TLS string. **Required**: with
+  `NODE_ENV=production` the process now refuses to start when neither
+  `REDIS_URL` nor `REDIS_HOST` is set, instead of falling back to
+  `localhost:6379`. The fallback was the worst kind of misconfiguration to
+  diagnose, because the queue client retries forever by design (Upstash drops
+  idle sockets), so the service came up healthy, answered `/api/health`,
+  accepted every enqueue, and ran nothing.
+- `QUEUE_SUFFIX` = `-prod`. See the note under `worker` below.
 - Do **not** set `PORT` — Railway provides it.
 
 **`worker`** — the same `backend/.env` set minus `CORS_ORIGIN`,
 `FRONTEND_URL`, and `GITHUB_WEBHOOK_SECRET` (it serves no HTTP). It DOES need
-`GITHUB_APP_PRIVATE_KEY` (it downloads repo zipballs).
+`GITHUB_APP_PRIVATE_KEY` (it downloads repo zipballs), and the same `REDIS_URL`
+guard applies to it.
+
+- `QUEUE_SUFFIX` = `-prod`, **exactly the value set on `api`**. The two
+  processes resolve their queue names independently from their own
+  environments, so a mismatch is not an error anywhere: `api` enqueues into
+  `analysis-prod`, `worker` listens on `analysis`, and the job sits in
+  `waiting` forever looking like a slow analysis. `-prod` rather than empty
+  because the team's dev machines share one Upstash instance with the
+  deployment: with no suffix, a teammate's local worker is a legitimate
+  consumer of production jobs and will take them (and fail them, since it holds
+  different GitHub credentials).
 
 **`frontend`** — read at **container start**, not baked into the image (see
 "Runtime configuration" below). Set exactly these three, and nothing else:
@@ -747,6 +772,63 @@ publishes those three names only.
 > The API domain must exist before the frontend can be pointed at it, but not
 > before it can be *built*. Deploy `api`, generate its domain, then set
 > `VITE_API_URL` on `frontend` and restart it.
+
+#### Frontend on Vercel (alternative to the Railway frontend container)
+
+Vercel serves the built static bundle directly, so the nginx container is not
+involved and neither is its runtime configuration. `api` and `worker` still
+belong on Railway; only the `frontend` service is replaced.
+
+| Vercel project setting | Value |
+|---|---|
+| Root Directory | the repo root (this is a workspace build, not a `frontend/` build) |
+| Install Command | `npm install --workspaces --include-workspace-root` (already encoded in `/vercel.json`) |
+| Build Command | `npm run build -w frontend` (already encoded in `/vercel.json`) |
+| Output Directory | `frontend/dist` (already encoded in `/vercel.json`) |
+
+Set the same three variables in **Settings > Environment Variables**:
+`VITE_API_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`.
+
+The important difference from the Railway container: **these are build-time
+values on Vercel.** Vite inlines `import.meta.env.VITE_*` into the JavaScript
+during the build, and there is no container start to write a `/config.js` at
+(see "Runtime configuration" below for what the nginx image does instead). So
+changing any of the three means **redeploying**, not restarting, and the
+`/config.js` smoke check from the Railway steps does not apply here. Deploy the
+frontend only after the API domain exists, because the build bakes it in.
+
+`/vercel.json` (repo root, where Vercel reads it when Root Directory is the
+repo root) carries the install/build/output settings above plus what the nginx
+config carried:
+
+- **SPA rewrite.** Every path that is not `/assets/` or `/fonts/` falls back to
+  `/index.html`, which is what lets `/auth/callback`, `/github/oauth/callback`
+  and `/github/setup` be hard-loaded rather than only reached by client-side
+  navigation. Vercel checks the filesystem before applying rewrites, so real
+  files are still served as themselves; the two excluded directories are
+  excluded so that a **missing** asset 404s instead of returning an HTML page
+  with a 200, which is how a stale hashed chunk turns into a blank screen with
+  no error.
+- **Security headers**, mirroring `frontend/security-headers.conf.template`.
+- **Cache-Control**: `no-cache` on `/index.html` and everything else unhashed,
+  one year `immutable` on `/assets/`, one year (not `immutable`) on `/fonts/`,
+  for the reasons written in `frontend/nginx.conf`.
+
+One thing the deployer has to do by hand, because Vercel cannot derive it:
+
+1. **Fill in the CSP `connect-src` origins.** The nginx entrypoint builds that
+   directive from `VITE_API_URL` and `VITE_SUPABASE_URL` at container start;
+   Vercel has no equivalent hook, so `/vercel.json` ships the placeholders
+   `https://YOUR-API-DOMAIN`, `https://YOUR-SUPABASE-REF.supabase.co` and
+   `wss://YOUR-SUPABASE-REF.supabase.co`. Replace all three with the real
+   origins before the first deploy. Left as they are, the browser blocks every
+   API and Supabase call and the app looks broken with only console errors to
+   show for it.
+
+Verify after deploying: `curl -sI https://<domain>/` must show the
+`Content-Security-Policy` header. If it is absent, Vercel never read
+`/vercel.json` (wrong Root Directory) and the app is running with no CSP at
+all.
 
 ### 3. Point the external services at the deployment
 
