@@ -699,14 +699,7 @@ export function SectionView({
   });
 
   return (
-    // Breakout-column layout: everything lives in a centred measure column
-    // (min(70ch, full width) at the body font, matching the prose paragraph
-    // cap), while a child marked col-span-full may run wider — centred on the
-    // SAME axis, so it overhangs the text symmetrically instead of hanging off
-    // its right edge. That axis-sharing is the point: a left-aligned column
-    // has no room on its left, so a wide figure could only ever stick out one
-    // way.
-    <div className="grid grid-cols-[1fr_min(70ch,100%)_1fr] gap-y-5 text-[0.9375rem] [&>*]:col-start-2">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center gap-2">
         {referenceProvenance ? (
           <>
@@ -792,17 +785,9 @@ export function SectionView({
           </SectionMarkdown>
         </div>
       )}
-      {/* Full-size, not shrunk to the measure: the figure spans the whole
-          grid and centres itself on the column's axis, so a diagram wider
-          than the text overhangs it EQUALLY on both sides (owner request:
-          match the centre lines, don't make it smaller). */}
-      {(section.diagrams ?? []).length > 0 && (
-        <div className="w-fit max-w-full justify-self-center space-y-5 !col-span-full !col-start-1">
-          {(section.diagrams ?? []).map((d, i) => (
-            <DiagramFrame key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
-          ))}
-        </div>
-      )}
+      {(section.diagrams ?? []).map((d, i) => (
+        <DiagramFrame key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
+      ))}
 
       {section.blocks.map((block, bi) => {
         const isLead = bi === 0;
