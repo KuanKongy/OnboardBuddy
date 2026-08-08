@@ -153,7 +153,7 @@ export function createAppJwt(): string {
 
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "RS256", typ: "JWT" };
-  const payload = { iss: appId, iat: now - 60, exp: now + 600 };
+  const payload = { iss: appId, iat: now - 60, exp: now + 540 };
 
   const headerB64 = base64url(Buffer.from(JSON.stringify(header)));
   const payloadB64 = base64url(Buffer.from(JSON.stringify(payload)));

@@ -66,11 +66,10 @@ invitationsRouter.get("/:invitationId", requireUuidParam("invitationId"), async 
   }
 });
 
-// #72: migration 004 added the 'declined' arm to the status CHECK, so a refusal
-// is no longer recorded as if an admin had revoked it. Declines written before
-// that migration are still sitting in the table as 'revoked' and read as
-// revocations — they are indistinguishable from real ones, so nothing backfills
-// them.
+// #72: the status CHECK gained a 'declined' arm, so a refusal is no longer
+// recorded as if an admin had revoked it. Declines written before that change
+// are still sitting in the table as 'revoked' and read as revocations — they
+// are indistinguishable from real ones, so nothing backfills them.
 // No expiry guard, unlike accept: a stale invitation is still discardable.
 invitationsRouter.post("/:invitationId/decline", requireUuidParam("invitationId"), async (req, res) => {
   try {

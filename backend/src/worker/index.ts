@@ -88,7 +88,7 @@ interface ProjectRow {
   budget_stop_behavior: 'fail' | 'pause' | 'degrade';
   model_failure_behavior: unknown;
   model_tier_overrides: unknown;
-  /** Opt-in (migration 003): rebuild stale content as soon as a diff flags it. */
+  /** Opt-in: rebuild stale content as soon as a diff flags it. */
   auto_regenerate_stale: boolean;
 }
 
@@ -998,7 +998,7 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         err instanceof Error ? err.message : err,
       ));
     } else if (project.auto_regenerate_stale && staleRegenIds.length > 0) {
-      // Opt-in only (migration 003): rebuild what this diff just flagged,
+      // Opt-in only (auto_regenerate_stale): rebuild what this diff just flagged,
       // one only-stale job per affected package, against THIS snapshot.
       // Deliberately NOT chainedFrom-linked: run history merges a chained
       // generation into its analysis row, and N regenerations collapsing into
