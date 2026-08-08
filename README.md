@@ -357,7 +357,7 @@ area passed. Every number is parsed from the runners' own machine-readable outpu
 | Queue | BullMQ backed by Redis |
 | Repo Access | GitHub OAuth + GitHub App + Zipball archives + push webhook (HMAC) |
 | AI | OpenRouter (ZDR-only routing); default `google/gemini-2.5-flash-lite`, auto-rotated per job |
-| Embeddings | OpenAI `text-embedding-3-small` + pgvector |
+| Embeddings | `perplexity/pplx-embed-v1-4b` via OpenRouter (same ZDR-only routing) + pgvector |
 | Infra | Docker, nginx (CSP + security headers), GitHub Actions |
 
 ## What it can analyse
