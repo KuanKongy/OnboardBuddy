@@ -78,7 +78,8 @@ non-trivial feature families** and **12 standard features** that every milestone
 ## Key Features
 
 The core loop: import a repository, let the analysis run, then read — and everything you read can be
-audited back to code. Screenshots below follow your light/dark preference.
+audited back to code. Every screenshot below is the live app analyzing **its own repository** (no
+mocked data), and follows your light/dark preference.
 
 ### 1. The onboarding handbook
 
@@ -113,6 +114,11 @@ an unsupported answer is flagged rather than asserted.
   <img alt="A receipt opened from a citation chip: file, line range, confidence, verification commit, and the code itself" src="doc/screenshots/receipt-light.jpg">
 </picture>
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/ask-dark.jpg">
+  <img alt="The Ask panel: a free-form question answered with numbered, clickable receipts — and gaps stated, not guessed" src="doc/screenshots/ask-light.jpg">
+</picture>
+
 ### 3. Four interactive maps
 
 *Architecture* (subsystem clusters and how critical each is), *Dependencies* (searchable file and
@@ -121,8 +127,23 @@ product does, linked to the code that delivers it). Every node opens its underly
 criticality scores explain themselves signal by signal rather than presenting a bare number.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/architecture-dark.png">
-  <img alt="The architecture map: subsystem clusters with criticality and drill-down" src="doc/screenshots/architecture-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/architecture-dark.jpg">
+  <img alt="The architecture map: subsystem clusters with criticality and drill-down" src="doc/screenshots/architecture-light.jpg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/workflows-dark.jpg">
+  <img alt="The workflows map: 103 traced flows ranked by criticality, each step annotated and scored" src="doc/screenshots/workflows-light.jpg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/dependencies-dark.jpg">
+  <img alt="The dependencies map: directory groups with real import counts, drill-down to files and classes" src="doc/screenshots/dependencies-light.jpg">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/capabilities-dark.jpg">
+  <img alt="The capabilities map: what the product does, derived from traced flows, with confidence labels" src="doc/screenshots/capabilities-light.jpg">
 </picture>
 
 ### 4. Guided walkthroughs
@@ -132,8 +153,8 @@ and receipts that deep-link to the exact lines on GitHub. Walkthroughs are gener
 call graphs, so the steps are the path a request actually takes, not a narrative reconstruction.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/tutorials-dark.png">
-  <img alt="A guided walkthrough: step pager with real code, explanation and receipts at each stop" src="doc/screenshots/tutorials-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/tutorials-dark.jpg">
+  <img alt="A guided walkthrough: real code with the lines that matter highlighted, phases, and per-step explanations" src="doc/screenshots/tutorials-light.jpg">
 </picture>
 
 ### 5. Analysis you can watch, budget, and keep fresh
@@ -153,8 +174,8 @@ providers that do not retain data. A cold analysis of a 2.3M-token repository ta
 minutes and costs about $0.35.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/overview-dark.png">
-  <img alt="Project overview: analysis status, pipeline phases and spend, and run history" src="doc/screenshots/overview-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="doc/screenshots/overview-dark.jpg">
+  <img alt="Project overview: per-phase pipeline progress with timings, AI calls, cache hits and total spend" src="doc/screenshots/overview-light.jpg">
 </picture>
 
 ## Non-Trivial Features
