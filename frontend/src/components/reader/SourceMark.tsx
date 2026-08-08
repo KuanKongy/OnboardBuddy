@@ -86,12 +86,15 @@ export function SourceMark({
           tabIndex={0}
           data-source={source}
           className={cn(
-            "inline-flex shrink-0 cursor-help items-center gap-1 rounded-full px-1.5 py-0.5 text-[0.625rem] font-medium leading-none",
+            // h-5 with 11px text: the same height as the badges and the
+            // confidence pie it sits beside, so the mark reads as a peer of
+            // the row rather than a speck under it.
+            "inline-flex h-5 shrink-0 cursor-help items-center gap-1 rounded-full px-2 text-[0.6875rem] font-semibold leading-none",
             tone.chip,
             className,
           )}
         >
-          <Icon className="h-2.5 w-2.5 shrink-0" aria-hidden />
+          <Icon className="h-3 w-3 shrink-0" aria-hidden />
           {tone.label}
           {detail ? <span className="opacity-80">· {detail}</span> : null}
         </span>

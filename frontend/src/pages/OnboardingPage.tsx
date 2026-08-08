@@ -785,9 +785,17 @@ export function SectionView({
           </SectionMarkdown>
         </div>
       )}
-      {(section.diagrams ?? []).map((d, i) => (
-        <DiagramFrame key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
-      ))}
+      {/* Same measure as the prose (70ch at the body font): on a wide window
+          an uncapped figure overhangs the text column's right edge, which
+          reads as the diagram sticking out rather than as generous width. The
+          full-size rendering lives behind Enlarge. */}
+      {(section.diagrams ?? []).length > 0 && (
+        <div className="max-w-[70ch] text-[0.9375rem]">
+          {(section.diagrams ?? []).map((d, i) => (
+            <DiagramFrame key={i} code={d.mermaid} label={`${d.kind.replace(/_/g, " ")} diagram`} projectId={projectId} />
+          ))}
+        </div>
+      )}
 
       {section.blocks.map((block, bi) => {
         const isLead = bi === 0;
