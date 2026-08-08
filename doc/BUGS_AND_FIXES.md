@@ -38,7 +38,7 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 | **File + Close** | #30–#34 | New M3 bugs, already fixed — file with the full body from this doc, then close with the fix notes. |
 | **File + Close** | #35 | Fixed same day — file then close with fix note. |
 | **File (Open)** | #36 | Known open item — file and leave Open (P5 future work). |
-| **File (Open)** | #37 | GitHub sign-up provider error — file Open; close once the Supabase GitHub provider config is fixed and sign-up verified. |
+| **Close** | #37 | Done 2026-08-07: closed as GitHub issue #56 with the fix notes. The provider config was fixed by the single-App switch (2026-08-03) and sign-in verified live — the entry's closing criterion. |
 | **File + Close** | #38–#45 | Found during the first real M3 end-to-end run (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
 | **File + Close** | #46–#48 | Found testing CourseInsights (2026-07-11), fixed same day — file with the bodies below, close with the fix notes. |
 | **File + Close** | #49–#52 | Found during M3 polish testing (2026-07-11/12), fixed same day — file with the bodies below, close with the fix notes. |
@@ -93,7 +93,7 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 | 34 | Graph layout stacked nodes / rendered a line of nodes | P2 | Closed | Fixed (M3) |
 | 35 | Inline code in onboarding markdown shows decorative backticks | P4 | Closed | Fixed (M3) |
 | 36 | Stale tutorials cannot be regenerated individually | P5 | Closed | Fixed (M5) |
-| 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Open | Frontend part fixed; Supabase config pending |
+| 37 | GitHub sign-up fails: "Error getting user profile from external provider" | P1 | Closed | Fixed (M5) — provider config replaced by the single GitHub App (2026-08-03); verified live 2026-08-07 |
 | 38 | Semantic analysis extremely slow (23 min analyze + 10 min generate) and ~$2/run | P1 | Closed | Fixed (M3) |
 | 39 | Workflow extraction finds 0 workflows on real repos (alias imports + fake route entrypoints) | P1 | Closed | Fixed (M3) |
 | 40 | Onboarding section titles not standardized (raw type strings / LLM-invented) | P3 | Closed | Fixed (M3) |
@@ -301,6 +301,20 @@ deferred):
 the external auth provider's configuration. Our half (a plain-language explanation instead of a raw
 provider error) shipped in M4.
 
+### M5 progress — #37 closed: zero Open bugs (2026-08-07)
+
+The last Open row is done. #37's provider-config half turned out to be fixed already — the
+2026-08-03 single-GitHub-App switch (`d4eb5dd`) gave Supabase the App's own credentials with the
+email read-only permission the entry prescribed — but the entry's closing criterion ("config
+fixed **and sign-up verified**") had never been exercised. Verified today against the live
+stack: six GitHub sign-ups on record since 2026-07-16, and a fresh **Sign in with GitHub**
+round trip completed with no error params, advancing `last_sign_in_at` for a GitHub-only
+account. The duplicate-email identity conflict stays a Won't-Fix sub-item with a reason (GoTrue
+limitation, explained in-app). Details in the entry's fix notes; GitHub issue #56 closed the
+same day.
+
+**The M5 commitment ("26 Open → 0") is met: 0 Open, 85 tracked.**
+
 ---
 
 ## M5 bug plan — every Open bug resolved or closed
@@ -335,7 +349,11 @@ Won't-Fix with a stated reason. Sequenced by risk, not by number.
   Won't-Fix. "Regenerate the set" is not free — it rebuilds every section too — and the tab was
   showing a stale badge with nothing to press. Mirroring `regenerate_section` cost one route, one
   generator entry point and one banner, with no schema change.
-- **#37** — GitHub sign-up identity conflict. Our half is fixed (the error now gets a plain-language explanation); the rest is a known limitation of the auth provider, not our code.
+- ~~**#37** — GitHub sign-up identity conflict.~~ **Closed–Fixed (2026-08-07)** for the bug as
+  filed: the profile-fetch failure was cured by the 2026-08-03 single-App switch — the App holds
+  the email read-only permission the entry prescribed — and verified live against the running
+  stack. Only the duplicate-email edge stays Won't-Fix: a GoTrue linking limitation
+  (supabase/auth#1242), named plainly on the callback page. See the entry's fix notes.
 - **Invitation emails** (part of **#72**) — needs an email provider we have not provisioned. The likely outcome is relabelling the action "Create invitation" with a share-the-link hint and closing the email half Won't-Fix. Decline and leave-project still ship.
 
 **Standing rule for M5:** anything found in a walkthrough gets filed the same day, with a priority,
@@ -1922,7 +1940,7 @@ snapshot, and both directions of the settle predicate.
 
 ---
 
-## [P1][Open] Bug 37: GitHub sign-up fails with "Error getting user profile from external provider"
+## [P1][Closed] Bug 37: GitHub sign-up fails with "Error getting user profile from external provider"
 
 **Bug #37**
 
@@ -1931,7 +1949,7 @@ snapshot, and both directions of the settle predicate.
 | Date created | 2026-07-10 |
 | Reported by | OnboardBuddies (Team 15) |
 | Priority | P1 |
-| State | Open |
+| State | Closed |
 | File / area | Supabase GitHub auth provider config; frontend/src/pages/AuthCallbackPage.tsx |
 
 ## Expected behavior
@@ -1957,6 +1975,34 @@ Two independent problems:
    - The OAuth App client secret in the Supabase dashboard was rotated/mistyped.
 
    Fix: in Supabase → Authentication → Providers → GitHub, make sure the Client ID/Secret belong to the login **OAuth App** from DEVOPS.md "GitHub OAuth App (for login)" (create one if missing). If the team intentionally reuses the GitHub App for login instead, grant it "Email addresses: Read-only" under Account permissions and have users re-authorize. Email/password signup is unaffected either way.
+
+## Fix notes (2026-08-07)
+
+Closed. The provider-config half was fixed on 2026-08-03 by the single-GitHub-App switch
+(`d4eb5dd`): Supabase's GitHub provider now holds the GitHub App's own client ID/secret, and the
+App carries **Account permissions → Email addresses: Read-only** — the second remedy prescribed
+above (DEVOPS.md § "GitHub login (the GitHub App's own OAuth — no separate OAuth App)" documents
+the setup and cites this bug). What remained was this entry's own closing criterion — "close once
+the Supabase GitHub provider config is fixed and sign-up verified" — so it was verified against
+the live stack rather than asserted:
+
+- **Sign-ups succeeded.** `auth.identities` holds six GitHub sign-ups between 2026-07-16 and
+  2026-07-27 — every teammate plus the dogfood account — so the filed failure was gone once the
+  provider had working credentials.
+- **The current config verified live (2026-08-07).** Signed the dogfood account out and back in
+  via **Sign in with GitHub** on the running stack: GitHub account chooser → Supabase
+  (`/auth/v1/callback`) → `/auth/callback` with **no error params** → signed in on Settings, and
+  `auth.users.last_sign_in_at` for `ldnkoff@gmail.com` (a GitHub-only identity, so no other
+  sign-in path could have moved it) advanced to `2026-08-08T02:19Z`. The profile/email fetch this
+  bug is about runs on every OAuth exchange, sign-up and sign-in alike, so the live round trip
+  exercises exactly the step that used to fail.
+
+**Won't-Fix sub-item, with reason:** the duplicate-email identity conflict — signing up with
+GitHub when the same address already exists under another sign-in method — is a GoTrue
+limitation (supabase/auth#1242), not our code: automatic linking refuses to guess between two
+existing accounts. The callback page names it plainly and points at the action the user can
+actually take (sign in the original way, then link GitHub from Account Settings):
+`AuthCallbackPage.tsx`, the `isDuplicateEmailError` branch.
 
 ---
 
