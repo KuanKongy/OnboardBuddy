@@ -13,8 +13,8 @@ const RESILIENCE = {
   reconnectOnError: () => true,   // e.g. Upstash READONLY/connection-reset errors
 };
 
-export function buildConnection() {
-  const url = process.env.REDIS_URL;
+export function buildConnection(env: NodeJS.ProcessEnv = process.env) {
+  const url = env.REDIS_URL;
   if (url) {
     const parsed = new URL(url);
     return {
@@ -25,10 +25,26 @@ export function buildConnection() {
       ...RESILIENCE,
     };
   }
+
+  // Same shape as the CORS guard in api/app.ts (bug #15): a production process
+  // must not boot on a development default. The failure this prevents is
+  // silent rather than loud — RESILIENCE above reconnects forever with capped
+  // backoff, so a container with no Redis configured comes up healthy, answers
+  // /api/health, accepts every enqueue, and never runs a job. There is no
+  // error to find because nothing has failed yet.
+  if (!env.REDIS_HOST && env.NODE_ENV === 'production') {
+    throw new Error(
+      'REDIS_URL is required in production: set it to the Upstash TCP/TLS connection string ' +
+        '(or set REDIS_HOST, plus REDIS_PORT/REDIS_PASSWORD, if you have the parts rather than ' +
+        'a URL). Refusing to start on the localhost:6379 default, where BullMQ would retry the ' +
+        'connection forever and every enqueued job would sit in "waiting" with nothing consuming it.',
+    );
+  }
+
   return {
-    host: process.env.REDIS_HOST ?? 'localhost',
-    port: Number(process.env.REDIS_PORT ?? 6379),
-    password: process.env.REDIS_PASSWORD,
+    host: env.REDIS_HOST ?? 'localhost',
+    port: Number(env.REDIS_PORT ?? 6379),
+    password: env.REDIS_PASSWORD,
     ...RESILIENCE,
   };
 }
@@ -40,7 +56,10 @@ const queueOpts: QueueOptions = { connection };
 // Dev isolation: teammates share one cloud Redis, so a stale worker on
 // another machine can steal (and 401-fail) jobs enqueued here. Setting
 // QUEUE_SUFFIX (e.g. "-alice") gives this machine's producers AND consumers
-// their own queue names. Default '' = shared team queues.
+// their own queue names. Default '' = shared team queues. The api and worker
+// processes must be given the SAME value: they resolve their queue names
+// independently, so a mismatch enqueues into a queue nobody is consuming and
+// jobs sit in 'waiting' with no error anywhere.
 const QUEUE_SUFFIX = process.env.QUEUE_SUFFIX ?? '';
 export const ANALYSIS_QUEUE = `analysis${QUEUE_SUFFIX}`;
 export const SUMMARY_QUEUE = `summary${QUEUE_SUFFIX}`;
