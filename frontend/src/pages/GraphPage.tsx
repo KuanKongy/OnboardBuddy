@@ -486,7 +486,15 @@ export function GraphPage() {
     view === "files" && !!data && !loading,
   );
 
-  const selectedNode = nodes.find((n) => n.id === selectedNodeId);
+  // Resolved through `cycleIds` (drawn AND not legend-hidden), not `nodes`:
+  // a search or a legend toggle that removes the selected node from the
+  // canvas must take its panel with it, or the aside describes a node the
+  // graph no longer shows. Display-side only, so clearing the search brings
+  // both the node and its panel straight back.
+  const selectedNode =
+    selectedNodeId && cycleIds.includes(selectedNodeId)
+      ? nodes.find((n) => n.id === selectedNodeId)
+      : undefined;
   const panelNode: GraphNode | undefined = selectedNode;
   // Every node here is selectable, groups included: a click on a group box
   // explains it in the panel rather than navigating (see `onDrillInto`). So

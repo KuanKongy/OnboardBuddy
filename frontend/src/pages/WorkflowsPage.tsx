@@ -322,7 +322,15 @@ export function WorkflowsPage() {
       .then((res) => {
         setWorkflows(res.workflows);
         setOrdering(res.ordering ?? null);
-        if (res.workflows.length > 0) setSelectedWorkflowId((prev) => prev || res.workflows[0]!.id);
+        if (res.workflows.length > 0) {
+          // A ?workflow= deep link can name a flow this list does not contain
+          // (a stale share, or the capabilities hub after a re-analysis).
+          // Keeping it selected left a dead detail fetch: a scoped error with
+          // a Retry that could never succeed, and no rail row highlighted.
+          setSelectedWorkflowId((prev) =>
+            prev && res.workflows.some((w) => w.id === prev) ? prev : res.workflows[0]!.id,
+          );
+        }
       })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoadingList(false));
