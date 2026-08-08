@@ -140,7 +140,7 @@ Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` au
 | 71 | Accessibility gaps and measured contrast failures | P3 | Closed | Eugene | 4 — Fixed (M5): announce/label/keyboard sweep + dark-token lift, re-measured |
 | 72 | Team lifecycle is a one-way door (no email, decline, leave, or ownership transfer) | P3 | Closed | Nam | 5 — Fixed (M5): decline, leave, transfer, invite hygiene; email half Won't-Fix (W1) |
 | 73 | The frontend image only works when the browser is on the Docker host | P3 | Closed | Fixed (M5) — runtime config.js written at container start; same image proven against three different API origins, CSP connect-src now derived not hardcoded |
-| 74 | [Tracker] Polish tail from the two end-of-M4 audits — 49 low-severity findings | P4 | Closed | Eugene | 7 — Fixed (M5): all 63 checklist lines ticked with per-line evidence; 8 Won't-Fix sub-items (W1–W8) |
+| 74 | [Tracker] Polish tail from the two end-of-M4 audits — 49 low-severity findings | P4 | Closed | Eugene | 7 — Fixed (M5): all 63 checklist lines ticked with per-line evidence; 8 Won't-Fix sub-items (W1–W8; W3 later shipped after all, leaving 7) |
 
 #### Milestone 5 — filed and fixed in the sprint (#84–#85)
 
@@ -259,7 +259,7 @@ files: **#67**'s declared remainder, **#71** and **#72**. Six commits, oldest fi
 
 | # | Was | Now | One line |
 |---|-----|-----|----------|
-| 74 | P4 Open | **Closed** | All 63 checklist lines ticked with per-line evidence — 46 fixed here, 17 verified already-fixed; 8 Won't-Fix sub-items, each with a reason |
+| 74 | P4 Open | **Closed** | All 63 checklist lines ticked with per-line evidence — 46 fixed here, 17 verified already-fixed; 8 Won't-Fix sub-items, each with a reason (W3 later shipped after all) |
 | 67 | P2 Open | **Closed** | The declared remainder: already-imported repos badged and unselectable, the 409 links the existing project, step 2 survives a refresh via `?project=` |
 | 71 | P3 Open | **Closed** | Announce/label/keyboard-reach sweep, reduced motion, hotkey preference; dark tokens lifted and **re-measured** (table in the entry — only input/card is a 1.4.11 pass, the rest are reported as perceptual lifts) |
 | 72 | P3 Open | **Closed** | Decline, leave, ownership transfer, invitation hygiene + 14-day TTL. Email delivery Won't-Fix (W1) |
@@ -290,7 +290,7 @@ deferred):
 |-----|------|--------|
 | W1 | Invitation email delivery | No mail provider provisioned and none planned for M5 (pre-declared). The UI no longer implies one is sent |
 | W2 | Merging the two invitation route surfaces | Different principals and authorization — project-scoped management vs a cross-project invitee inbox. Merging mid-freeze breaks the API and its tests for no user-visible gain; documented at the mount point, UI naming unified |
-| W3 | A first-class `'declined'` status | The status CHECK is frozen for M5; decline maps to terminal `'revoked'` with identical downstream behaviour. The one-line migration is recorded as a post-freeze follow-up |
+| W3 | A first-class `'declined'` status | The status CHECK is frozen for M5; decline maps to terminal `'revoked'` with identical downstream behaviour. The one-line migration is recorded as a post-freeze follow-up. **Update 2026-08-06: that follow-up shipped** — migration 004 (`e95be2f`, approved under the database-change policy, since folded into `001_initial_schema.sql`) added the `'declined'` arm and declining now writes it, so W3 ended up fixed rather than Won't-Fix (seven Won't-Fix items stand) |
 | W4 | Background expiry sweeper | Expiry is enforced at every read (accept plus both lists); a write sweeper adds a failure mode with no observable benefit |
 | W5 | Eradicating all sub-12px text | Opacity was dropped on meaningful text only; decorative micro-labels keep the type scale by design |
 | W6 | Reader receipts rail | Receipts render inline under each block and are real buttons since #68; the dead gutter is closed by docking the prose. Recorded as a post-M5 idea |
@@ -3761,7 +3761,10 @@ capabilities, all application-level — **no schema change**, per the M5 freeze.
    accept path's fetch and email-match guards, then moves the row to `'revoked'`. The status CHECK is
    frozen and has no `'declined'` value, so `'revoked'` is the terminal stand-in and the code says so
    (`invitations.ts:64`); downstream behaviour is identical. The permanently-disabled button and its
-   "isn't supported yet" tooltip are gone.
+   "isn't supported yet" tooltip are gone. *(Superseded 2026-08-06: migration 004 — approved under
+   the database-change policy, since folded into `001_initial_schema.sql` — added the `'declined'`
+   arm and decline now writes `'declined'`; rows declined before then stay `'revoked'`. That closed
+   W3 as fixed rather than Won't-Fix. Commit `e95be2f`.)*
 2. **Leave** — `DELETE /api/projects/:id/members/me` (`members.ts:385`), registered before
    `delete("/:userId")` so the literal wins, open to any member and 403 for the owner ("transfer
    ownership first"). Dependent rows were checked: `default_package_id` lives on the deleted row and
@@ -3956,7 +3959,9 @@ first because that is what a reviewer notices. Anything not done by the freeze i
 Every one of the 63 lines above is ticked, each with its own evidence: **46 fixed in this batch, 17
 verified already-fixed** (checked against current source or a test, not assumed). Eight sub-items are
 Won't-Fix with a stated reason — W1–W8 in the batch-7 progress section. Nothing on the checklist is
-wholly Won't-Fix; the eight are halves of items whose other half shipped.
+wholly Won't-Fix; the eight are halves of items whose other half shipped. (One of the eight was later
+un-Won't-Fixed: W3, the first-class `'declined'` status, shipped 2026-08-06 via migration 004 — see
+the update under #72 — so seven stand.)
 
 Three items that lived only in this log's prose were closed with the batch: the two pre-existing
 `react-hooks/exhaustive-deps` errors (DashboardPage's tour effect, WalkthroughTab's `load` — proven

@@ -277,8 +277,10 @@ so those tabs are legitimately empty for that shape of project.
 ### Bug list
 
 **Every bug is closed: 85 GitHub issues filed across M2–M5, 0 open.** All P0/P1 bugs are resolved,
-and no whole bug was closed Won't-Fix. The eight Won't-Fix items (W1–W8) are sub-items of otherwise
-fixed bugs, each closed with a stated reason (invitation email delivery being the most visible).
+and no whole bug was closed Won't-Fix. The seven Won't-Fix items are sub-items of otherwise fixed
+bugs, each closed with a stated reason (invitation email delivery being the most visible); an eighth
+on that list, the first-class `declined` invitation status, shipped after all under the approved
+schema change.
 The tracker is [GitHub Issues](../../issues?q=is%3Aissue); the underlying ledger with expected vs
 actual, repro steps, fix notes and per-bug verification is
 [doc/BUGS_AND_FIXES.md](doc/BUGS_AND_FIXES.md).

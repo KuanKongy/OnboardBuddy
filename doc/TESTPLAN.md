@@ -413,8 +413,9 @@ fork (Parts 4 and 5 need push access).
 # Reporting anything you find
 
 **The tracked bug list is closed: 85 GitHub issues across M2–M5, 0 open.** Every one was resolved
-or closed with a stated reason (the eight Won't-Fix items are sub-items of otherwise-fixed bugs,
-each with its reason recorded). The per-bug ledger (expected vs actual, repro steps, fix and
+or closed with a stated reason (the seven Won't-Fix items are sub-items of otherwise-fixed bugs,
+each with its reason recorded; an eighth was Won't-Fixed during the audits and then shipped after
+all). The per-bug ledger (expected vs actual, repro steps, fix and
 verification) is [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md).
 
 If you do find something new, please note the page, what you did, what you expected, and what
