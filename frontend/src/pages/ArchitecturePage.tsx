@@ -338,7 +338,11 @@ export function ArchitecturePage() {
   // (owner I1). Before this, a root click drilled immediately and the
   // component's own narrative — responsibility, boundary, why it is separate —
   // was only ever visible on the way past.
-  const rootSelectedCluster = !insideCluster && selectedId ? clusterById.get(selectedId) ?? null : null;
+  // From `visibleClusters`, not `clusterById`: the sibling `selectedMember`
+  // line above already scopes to what the search left drawn, and the root
+  // aside must not describe a component the canvas no longer shows.
+  const rootSelectedCluster =
+    !insideCluster && selectedId ? visibleClusters.find((c) => c.id === selectedId) ?? null : null;
   const asideCluster = insideCluster ? (selectedMember ? null : openCluster) : rootSelectedCluster;
   /**
    * How many of this component's members actually carry a description.

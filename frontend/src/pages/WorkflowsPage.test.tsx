@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorkflowsPage } from "./WorkflowsPage";
 import { fetchWorkflowsList } from "@/lib/graphData";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 // The rail lets a reader click several flows in a row, each firing its own request.
 
@@ -85,5 +85,30 @@ describe("WorkflowsPage", () => {
 
     expect(screen.getByText("handleCallback")).toBeInTheDocument();
     expect(screen.queryByText("startAnalysis")).not.toBeInTheDocument();
+  });
+
+  // ui-ux-audit-round3 salvage: a ?workflow= id the fetched list does not
+  // contain used to stay selected, leaving a dead detail fetch whose Retry
+  // could never succeed and no rail row highlighted.
+  it("falls back to the first flow when the ?workflow= deep link is unknown", async () => {
+    vi.mocked(fetchWorkflowsList).mockResolvedValue({ workflows: WORKFLOWS, ordering: null } as never);
+    vi.mocked(apiFetch).mockImplementation((path: string) => {
+      if (path.includes("wf-slow")) return Promise.resolve(walkthrough("wf-slow", "startAnalysis") as unknown);
+      if (path.includes("wf-fast")) return Promise.resolve(walkthrough("wf-fast", "handleCallback") as unknown);
+      return Promise.reject(new ApiError("Workflow not found", 404, {}));
+    });
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/projects/proj-1/workflows?workflow=wf-deleted"]}>
+          <Routes>
+            <Route path="/projects/:id/workflows" element={<WorkflowsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    // The unknown id gives way to the first real flow, whose steps render.
+    expect(await screen.findByText("startAnalysis")).toBeInTheDocument();
   });
 });
