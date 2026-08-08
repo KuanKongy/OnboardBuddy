@@ -377,7 +377,7 @@ holds a client while awaiting another, so waiting is always the right answer.
 
 Under heavy parallel load the failure mode is pooler queue wait (slow queries),
 not `EMAXCONNSESSION` — if that shows up, raise `default_pool_size` in Supabase
-(Settings → Database → Connection pooling) before raising `PG_POOL_MAX`.
+(Database → Settings → Connection pooling) before raising `PG_POOL_MAX`.
 
 ### 9. Scaling workers (parallel analyses)
 
@@ -418,8 +418,8 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `FRONTEND_URL` | `backend/.env` | Frontend origin the GitHub App OAuth/setup redirects land on | Set manually |
 | `SUPABASE_URL` | `backend/.env` | Supabase project URL | Supabase → Settings → Data API |
 | `SUPABASE_SERVICE_ROLE_KEY` | `backend/.env` | Service-role secret key | Supabase → Settings → API Keys → create Secret key |
-| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Transaction mode, port 6543) | Supabase → Settings → Database → Connection string |
-| `DIRECT_DATABASE_URL` | `backend/.env` | Session-mode string (port 5432), DDL/migrations only | Same page, Session mode |
+| `DATABASE_URL` | `backend/.env` | PostgreSQL connection string (Transaction pooler, port 6543) | Supabase → **Connect** (top of dashboard) → Transaction pooler |
+| `DIRECT_DATABASE_URL` | `backend/.env` | Session-pooler string (port 5432), DDL/migrations only | Same dialog, Session pooler |
 | `PG_POOL_MAX` | `backend/.env` | Per-process pg pool cap (code default `30`; 10 for api, 30 for worker) | Set manually (see "Connection pooling" above) |
 | `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string. Required when `NODE_ENV=production` (or `REDIS_HOST`) | Upstash Console → Database → Details |
 | `QUEUE_SUFFIX` | `backend/.env` | BullMQ queue-name suffix. Empty locally; `-prod` in production. **Must match between api and worker** | Set manually |
@@ -453,9 +453,9 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 3. **Settings → API Keys**:
    - Copy the **Publishable key** (`sb_publishable_...`) → paste into `VITE_SUPABASE_ANON_KEY`.
    - Create (or reveal) the **Secret key** (`sb_secret_...`) → paste into `SUPABASE_SERVICE_ROLE_KEY`.
-4. **Settings → Database** → copy the **Connection string** twice:
-   - **Transaction mode** (port 6543) → paste into `DATABASE_URL`.
-   - **Session mode** (port 5432) → paste into `DIRECT_DATABASE_URL` (DDL/migrations only).
+4. Click **Connect** at the top of the dashboard and copy the connection string twice:
+   - **Transaction pooler** (port 6543) → paste into `DATABASE_URL`.
+   - **Session pooler** (port 5432) → paste into `DIRECT_DATABASE_URL` (DDL/migrations only).
 5. **Authentication → Sign In / Providers → GitHub** → enable the provider.
    - Copy the **Callback URL** shown — you'll need it for the GitHub OAuth App.
 6. Run the database migration:
