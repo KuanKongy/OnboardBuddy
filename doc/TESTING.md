@@ -1,9 +1,9 @@
 # What our tests cover
 
-**906 automated tests — 759 backend, 147 frontend** — plus 68 Playwright browser specs that the
+**1,406 automated tests — 980 backend, 426 frontend** — plus 9 Playwright browser spec files that the
 one-command run reports as *skipped* rather than pretending to have run them. This document explains
-what each group protects, why it exists, and how it runs. For the hands-on walkthrough of Milestone 4,
-see [TESTPLAN.md](./TESTPLAN.md).
+what each group protects, why it exists, and how it runs. For the hands-on walkthrough of the final
+release, see [TESTPLAN.md](./TESTPLAN.md).
 
 ## Run everything
 
@@ -34,22 +34,28 @@ at a glance where the coverage is and what broke. This is the literal, unedited 
   AREA                                                  PASSED   FAILED  SKIPPED    RESULT
   ────────────────────────────────────────────────────────────────────────────────────────
   Backend · security (hostile input)                        83        0        0      PASS
-  Backend · analysis pipeline                              245        0        0      PASS
-  Backend · AI, caching & model routing                     89        0        0      PASS
-  Backend · document generation                            167        0        0      PASS
-  Backend · API & auth (HTTP)                              156        0        0      PASS
-  Backend · unit (libs, queue, crypto)                      19        0        0      PASS
-  Frontend · unit (components, pages, safe rendering)      147        0        0      PASS
-  E2E · Playwright (browser)                                 0        0       68   SKIPPED
+  Backend · analysis pipeline                              299        0        0      PASS
+  Backend · AI, caching & model routing                    135        0        0      PASS
+  Backend · document generation                            196        0        0      PASS
+  Backend · API & auth (HTTP)                              227        0        0      PASS
+  Backend · unit (libs, queue, crypto)                      35        0        0      PASS
+  Backend · other (unclassified files)                       5        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      426        0        0      PASS
+  E2E · Playwright (browser)                                 0        0        9   SKIPPED
   ────────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                                                    906        0       68      PASS
+  TOTAL                                                   1406        0        9      PASS
 
   Counts are parsed from each runner's own machine-readable output:
-    mocha      → /tmp/onboardbuddy-test-results/backend-mocha.json  (759 tests across 68 files, exit 0)
-    vitest     → /tmp/onboardbuddy-test-results/frontend-vitest.json  (147 tests across 21 files, exit 0)
-    playwright → not run — no browser in this image; on a host: npx playwright install chromium && RUN_E2E=1 npm test
+    mocha      → /tmp/onboardbuddy-test-results/backend-mocha.json  (980 tests across 96 files, exit 0)
+    vitest     → /tmp/onboardbuddy-test-results/frontend-vitest.json  (426 tests across 69 files, exit 0)
+    playwright → not run — 9 spec file(s) found; playwright could not list tests here
 
-  Overall: PASS — 906 tests passed, 0 failed. Exit code 0.
+  NOTE:
+    • 2 backend test file(s) matched no area rule and were counted under "Backend · other (unclassified files)". Add them to BACKEND_AREAS in scripts/test-summary.mjs:
+      src/api/lib/__tests__/gapSummary.test.ts
+      src/retrieval/__tests__/modelDetection.test.ts
+
+  Overall: PASS — 1406 tests passed, 0 failed. Exit code 0.
 ```
 
 The full spec output from both runners still scrolls past above it; the table is only the summary.
@@ -101,7 +107,7 @@ the table with their file and assertion message, and the exit code is 1:
 
 **Why E2E says SKIPPED.** The test image is `node:22-alpine` with no browser in it, so the Playwright
 specs genuinely cannot run there — reporting them as passed would be a lie, and omitting them would
-hide 68 tests. They are counted (by asking Playwright) and marked skipped. To actually run them, on a
+hide them. They are counted (by asking Playwright) and marked skipped. To actually run them, on a
 machine with a browser:
 
 ```bash
@@ -109,10 +115,11 @@ npx playwright install chromium     # once
 RUN_E2E=1 npm test                  # summary then executes them and reports real pass/fail
 ```
 
-**Growth:** M2 `137 + 20` → M3 `321 + 25` → M4 `759 + 147`. The M4 jump is the security suite, the
-rebuilt document generation, and a regression test for every bug fixed during the sprint. The table is
-regenerated on every run, so the numbers above are a snapshot — the command always prints the current
-ones.
+**Growth:** M2 `137 + 20` → M3 `321 + 25` → M4 `759 + 147` → M5 `980 + 426`. The M4 jump is the
+security suite, the rebuilt document generation, and a regression test for every bug fixed during the
+sprint; the M5 jump is a regression test for every bug closed out of the M4 backlog, plus the
+frontend pages and flows finished in M5. The table is regenerated on every run, so the numbers above
+are a snapshot — the command always prints the current ones.
 
 ## Two things worth knowing about how these are written
 
@@ -127,7 +134,11 @@ the ones a manual pass will not catch, so they are the ones most worth automatin
 
 ---
 
-# Backend — 820 tests
+# Backend — 980 tests
+
+> The per-group counts below were audited when this document was written and have grown since as
+> M5 bug fixes added regression tests; the summary table above is always the current truth. The
+> groups exist to explain what each area protects, not to reconcile to the total.
 
 ## 1. Reading the code (167 tests)
 
@@ -254,12 +265,17 @@ fast and need no credentials.
 
 | Tests | Group | Covers |
 |------:|-------|--------|
-| 31 | Auth and GitHub | Signup/login validation, session guards, account deletion cascading correctly, GitHub App and repository routes, and the push webhook — signature verification, disabled-without-a-secret, and redelivery not causing a duplicate run |
+| 31 | Auth and GitHub | Signup/login validation, session guards, account deletion cascading correctly, and the GitHub App and repository routes |
 | 23 | Projects and runs | Project CRUD permissions, analysis start with its concurrency rule (identical target conflicts, different targets do not), and run progress reporting — monotonic percentage, stage labels, stalled detection |
 | 48 | Onboarding and packages | Package resolution order (explicit choice → your default → latest), section and receipt routes, export, review permissions, on-demand generation, and the receipt presentation logic that used to return hardcoded values (bug #57) |
 | 39 | Everything else | Graph and workflow route guards, grounded Q&A including its error taxonomy, bring-your-own API keys (asserting the key value is never returned), team and invitation permissions, health check |
 | 15 | Score provenance | The "why is this file ranked here" payload — per-candidate provenance, the mean it is compared against, and the weight table the reader is shown |
 | 11 | Token encryption | Round-trip, unique initialisation vectors, and correct failure on tampering, malformed input, and a wrong-length key |
+
+One honest gap in this area: the **push webhook endpoint has no automated tests in this tree**. Its
+behaviour — HMAC signature verification, answering 503 when no secret is configured, redelivery not
+causing a duplicate run, superseded pushes skipped — was verified manually against the deployed
+instance, where GitHub can actually deliver webhooks ([TESTPLAN.md](./TESTPLAN.md) → Test 5.4).
 
 ## 8. End-to-end on a real repository (27 tests)
 
@@ -295,7 +311,10 @@ in the graph and another in the document, or an export that quietly drops what t
 
 ---
 
-# Frontend — 147 tests
+# Frontend — 426 tests
+
+> As with the backend, the per-group counts below predate the M5 additions (page tests for the team
+> lifecycle, settings automation, and the pages finished in M5); the summary table is the current truth.
 
 Vitest with Testing Library. Supabase and every API call are mocked, so no backend is needed.
 
