@@ -1171,25 +1171,43 @@ export function OnboardingPage() {
   // row that powers "Continue onboarding" — so no schema is involved.
   // null = not initialized yet; saving before init would wipe stored marks.
   const [readSections, setReadSections] = useState<string[] | null>(null);
+  // Which package readSections currently describes. State, not a ref, so the
+  // save effect below sees a consistent (marks, package) pair within a commit:
+  // on a package switch it stands down for one render instead of filing the
+  // old package's marks under the new id.
+  const [readSectionsPkg, setReadSectionsPkg] = useState<string | null>(null);
   useEffect(() => {
     if (!pkg?.id || !progressLoaded) return;
     const item = progressItems.find((p) => p.kind === "onboarding" && p.ref_id === pkg.id);
     const stored = Array.isArray(item?.position?.readSections)
       ? (item!.position.readSections as string[])
       : [];
-    setReadSections((prev) => [...new Set([...(prev ?? []), ...stored])]);
-  }, [pkg?.id, progressItems, progressLoaded]);
+    if (readSectionsPkg === pkg.id) {
+      // Same package: a progress refetch can lag marks made locally between
+      // saves, so merge instead of dropping them.
+      setReadSections((prev) => [...new Set([...(prev ?? []), ...stored])]);
+    } else {
+      // First init or a package switch: the stored marks ARE the state.
+      // Merging here bled one package's marks into the next, and the save
+      // effect then persisted that union under the new package's id.
+      setReadSections(stored);
+      setReadSectionsPkg(pkg.id);
+    }
+  }, [pkg?.id, progressItems, progressLoaded, readSectionsPkg]);
 
   // Remember where the reader is so "Continue onboarding" resumes here.
   useEffect(() => {
     if (view !== "reader" || !pkg?.id || pkg.status === "missing" || readSections === null) return;
+    // Marks that describe a different package must never be written under
+    // this one's id (the render right after a package switch).
+    if (readSectionsPkg !== pkg.id) return;
     saveProgress("onboarding", pkg.id, {
       sectionType: activeSectionId,
       role: pkg.role ?? selectedRole,
       packageId: pkg.id,
       readSections,
     });
-  }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, readSections, saveProgress]);
+  }, [view, pkg?.id, pkg?.role, pkg?.status, activeSectionId, selectedRole, readSections, readSectionsPkg, saveProgress]);
 
   // `replace` by default — a role or package tweak refines the current view. Only a
   // view boundary passes `{ replace: false }`, or Back leaves the tab entirely.

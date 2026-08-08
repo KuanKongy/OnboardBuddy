@@ -168,12 +168,9 @@ function RunCard({
                   </Tooltip>
                 </>
               )}
-              {job.status === "paused" && (
-                <Button variant="outline" size="xs" onClick={() => onControl(job.id, "resume")} disabled={controlBusy}>
-                  <Play className="mr-1 h-3 w-3" />
-                  Resume
-                </Button>
-              )}
+              {/* No Resume here: this card only ever renders active
+                  (queued/running) jobs, so a paused branch was dead code.
+                  Paused runs surface through runAlertCard below. */}
             </div>
           )}
         </div>
@@ -1192,8 +1189,11 @@ export function ProjectOverviewPage() {
         </div>
       )}
 
-      {/* Paused / just-failed runs surface here for resume without digging into history. */}
-      {activeJobs.length === 0 && currentAlerts.length > 0 && (
+      {/* Paused / just-failed runs surface here for resume without digging
+          into history. NOT gated on activeJobs: this is the only surface with
+          a Resume control, so hiding it while a different run was active made
+          a paused run unreachable until the other one finished. */}
+      {currentAlerts.length > 0 && (
         <div className="mb-4 space-y-2">{currentAlerts.map(runAlertCard)}</div>
       )}
 

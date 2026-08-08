@@ -58,7 +58,9 @@ const PACKAGE_RUN: RunHistoryEntry = {
   package: { id: "pkg-1", role: "backend", branch: "main", status: "ready" },
 };
 
-vi.mock("@/lib/api", () => ({
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+  return { ...actual,
   apiFetch: vi.fn(async (path: string) => {
     if (path.includes("/runs")) return { runs: [PACKAGE_RUN, ANALYZE_RUN] };
     // The idle status block mounts the pipeline panel open, which fetches the
@@ -66,8 +68,8 @@ vi.mock("@/lib/api", () => ({
     if (path.includes("/metrics")) return { snapshot: {}, phases: [] };
     return {};
   }),
-  ApiError: class ApiError extends Error {},
-}));
+  };
+});
 
 vi.mock("@/contexts/ProjectContext", () => ({
   useProject: () => ({
@@ -96,7 +98,9 @@ vi.mock("@/contexts/PackagesContext", () => ({
     selectedPackage: null,
     status: { ...ANALYZED_STATUS, jobs: jobs.current },
     refreshStatus: vi.fn().mockResolvedValue(undefined),
-    activeJobs: [],
+    // Derived exactly like the real context's isActiveStatus filter, so a
+    // test can put a running job on the page (the paused-run gate needs one).
+    activeJobs: jobs.current.filter((j) => j.status === "queued" || j.status === "running"),
     registerSessionJob: vi.fn(),
     packagesError: false,
     statusError: false,
@@ -214,5 +218,51 @@ describe("failed-run banner", () => {
 
     expect(await screen.findByText(/Package generation failed/)).toBeInTheDocument();
     expect(screen.queryByText(/An earlier run/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * ui-ux-audit-round3 salvage: the alert strip with the page's only working
+ * Resume control was gated on `activeJobs.length === 0`, so pausing run A and
+ * starting run B left A's resume unreachable until B finished. (The Resume
+ * button RunCard itself used to carry was dead code: that card only ever
+ * renders queued/running jobs.)
+ */
+describe("paused-run reachability", () => {
+  afterEach(() => { jobs.current = []; });
+
+  it("keeps a paused run's Resume reachable while another run is active", async () => {
+    jobs.current = [
+      {
+        ...FAILED_GENERATION,
+        id: "job-live",
+        job_type: "analyze_scope",
+        status: "running",
+        error_message: null,
+        finished_at: null,
+        created_at: "2026-07-20T15:00:00Z",
+        started_at: "2026-07-20T15:00:00Z",
+      },
+      {
+        ...FAILED_GENERATION,
+        id: "job-paused",
+        job_type: "generate_package",
+        status: "paused",
+        error_message: null,
+        finished_at: null,
+      },
+    ];
+
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/projects/p1"]}>
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectOverviewPage />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    expect(await screen.findByRole("button", { name: /resume run/i })).toBeInTheDocument();
   });
 });

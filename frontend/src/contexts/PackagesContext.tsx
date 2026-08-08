@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 import { useProject } from "@/contexts/ProjectContext";
 import type { AnalysisJob, AnalysisStatus } from "@/types/analysis";
 import type { PackageCard } from "@/types/onboarding";
@@ -180,8 +180,16 @@ export function PackagesProvider({ projectId, children }: { projectId: string; c
       const data = (await apiFetch(`/projects/${projectId}/analysis-status`)) as AnalysisStatus;
       applyStatus(data);
       setStatusError(false);
-    } catch {
+    } catch (err) {
       setStatusError(true);
+      // 404/403 is terminal: the project (or our access to it) is gone, and
+      // `hasActive` below reads the LAST GOOD status, so without this the 5s
+      // poll re-requested a dead project forever. Clearing the status empties
+      // activeJobs, which ends the poll; statusError keeps the banner up.
+      // Transient failures (5xx, network) keep the last status and the poll.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+        setStatus(null);
+      }
     }
   }, [projectId, applyStatus]);
 

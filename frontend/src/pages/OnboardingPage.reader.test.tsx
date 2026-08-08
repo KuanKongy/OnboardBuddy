@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OnboardingPage, SectionView } from "./OnboardingPage";
 import type { OnboardingPackage, OnboardingSection } from "@/types/onboarding";
@@ -60,13 +60,18 @@ vi.mock("@/contexts/ProjectContext", () => ({
   }),
 }));
 
+// Stateful like the real context: the reader's M3 sync adopts the URL's
+// package as the project-wide selection on entry, and AFTER that the chooser
+// drives the URL — with a frozen `selectedPackageId: null` that second branch
+// rewrote `?package=` back to null and no test could ever switch packages.
+const packagesCtx = vi.hoisted(() => ({ selectedPackageId: null as string | null }));
 vi.mock("@/contexts/PackagesContext", () => ({
   usePackages: () => ({
     packages: [],
     packagesError: false,
     refreshPackages: vi.fn(),
-    selectPackage: vi.fn(),
-    selectedPackageId: null,
+    selectPackage: (pkgId: string | null) => { packagesCtx.selectedPackageId = pkgId; },
+    selectedPackageId: packagesCtx.selectedPackageId,
     registerSessionJob: vi.fn(),
   }),
 }));
@@ -371,5 +376,94 @@ describe("reader place in the URL", () => {
     fireEvent.keyDown(document.body, { key: "ArrowRight" });
 
     await waitFor(() => expect(screen.getByTestId("search").textContent).toContain("section=concepts"));
+  });
+});
+
+/**
+ * ui-ux-audit-round3 salvage: switching packages while the reader stayed
+ * mounted merged the previous package's read marks into the next one, and the
+ * save effect then persisted that union under the NEW package's id — display
+ * corruption that wrote itself into user_progress. Marks must swap wholesale
+ * with the package, and nothing of package A may ever be saved under B's id.
+ */
+const PACKAGE_B: OnboardingPackage = {
+  ...PACKAGE,
+  id: "pkg-2",
+  sections: [
+    {
+      id: "big-picture",
+      sectionId: "sec-1b",
+      label: "Big picture",
+      status: "complete",
+      confidence: "high",
+      blocks: [{ title: "Big picture", body: "Two queues, two workers.", receipts: [] }],
+    },
+  ],
+};
+
+function SwitchToB() {
+  const navigate = useNavigate();
+  return (
+    <button
+      onClick={() => {
+        // The chooser and the URL move together in the real flow (the M3 sync
+        // effect would revert a URL that disagrees with the selection).
+        packagesCtx.selectedPackageId = "pkg-2";
+        navigate("/projects/p1/onboarding?view=reader&package=pkg-2&role=backend");
+      }}
+    >
+      __switch-package__
+    </button>
+  );
+}
+
+describe("read marks across a package switch", () => {
+  beforeEach(() => {
+    fetchOnboardingPackage.mockReset();
+    fetchOnboardingPackage.mockImplementation(
+      (_projectId: string, opts?: { packageId?: string | null }) =>
+        Promise.resolve(opts?.packageId === "pkg-2" ? PACKAGE_B : PACKAGE),
+    );
+    progress.items = [
+      { kind: "onboarding", ref_id: "pkg-1", still_exists: true, position: { readSections: ["big-picture"] } },
+    ] as never;
+    progress.loaded = true;
+    progress.loadError = false;
+    progress.save.mockReset();
+    tier.current = "developer";
+    packagesCtx.selectedPackageId = null;
+  });
+
+  afterEach(() => {
+    progress.items = [] as never;
+  });
+
+  it("swaps marks with the package instead of merging and re-saving them", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/projects/p1/onboarding?view=reader&package=pkg-1&role=backend"]}>
+          <SwitchToB />
+          <Routes>
+            <Route path="/projects/:id/onboarding" element={<OnboardingPage />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    );
+
+    // pkg-1: its stored mark is on screen (the only section reads as Read).
+    expect(await screen.findByRole("button", { name: "Read" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "__switch-package__" }));
+
+    // pkg-2 rendered, and its identically-named section is NOT marked read.
+    await screen.findByText(/Two queues, two workers\./);
+    expect(await screen.findByRole("button", { name: "Mark as read" })).toBeInTheDocument();
+
+    // Nothing of pkg-1 was ever written under pkg-2's id.
+    const savesForB = progress.save.mock.calls.filter((c) => c[1] === "pkg-2");
+    for (const call of savesForB) {
+      expect((call[2] as { readSections: string[] }).readSections).not.toContain("big-picture");
+    }
   });
 });
