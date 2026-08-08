@@ -143,6 +143,9 @@ export function AnalysisRunPanel({
   phaseKeys?: string[];
 }) {
   const [data, setData] = useState<MetricsResponse | null>(null);
+  // A failed metrics fetch must not fall through to the "no phases recorded"
+  // copy below: that line is a claim about the run, not about the request.
+  const [metricsError, setMetricsError] = useState(false);
 
   // Ticking clock for the running phase's live elapsed time — a frozen
   // "22:48:59…" gave no clue whether anything was still happening.
@@ -156,13 +159,14 @@ export function AnalysisRunPanel({
   useEffect(() => {
     if (!snapshotId) {
       setData(null);
+      setMetricsError(false);
       return;
     }
     let cancelled = false;
     const load = () => {
       apiFetch(`/projects/${projectId}/snapshots/${snapshotId}/metrics`)
-        .then((d: MetricsResponse) => { if (!cancelled) setData(d); })
-        .catch(() => {});
+        .then((d: MetricsResponse) => { if (!cancelled) { setData(d); setMetricsError(false); } })
+        .catch(() => { if (!cancelled) setMetricsError(true); });
     };
     load();
     if (!isActive) return () => { cancelled = true; };
@@ -253,6 +257,10 @@ export function AnalysisRunPanel({
               );
             })}
           </ol>
+        ) : metricsError ? (
+          <p className="py-1 text-[0.71875rem] text-muted-foreground">
+            Couldn't fetch this run's pipeline phases. This is a failed request, not a run without phases.
+          </p>
         ) : (
           <p className="py-1 text-[0.71875rem] text-muted-foreground">No pipeline phases recorded for this run yet.</p>
         )}

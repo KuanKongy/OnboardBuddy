@@ -116,10 +116,15 @@ export function ReceiptViewer({ receipt, onClose }: ReceiptViewerProps) {
         <DialogHeader className="border-b px-5 py-4 pr-10 text-left">
           <DialogTitle className="flex items-center gap-2 text-[0.875rem] font-semibold text-foreground">
             <FileCode2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-            <span className="truncate font-mono" title={receipt.filePath}>{receipt.filePath}</span>
+            {/* Ask receipts can arrive with an empty path; an icon beside
+                blank text reads as a rendering fault, so fall back to the
+                symbol. `||` on purpose: the empty string must not win. */}
+            <span className="truncate font-mono" title={receipt.filePath || receipt.symbolName || "Source unavailable"}>
+              {receipt.filePath || receipt.symbolName || "Source unavailable"}
+            </span>
           </DialogTitle>
           <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted-foreground">
-            {receipt.symbolName && (
+            {receipt.symbolName && receipt.filePath && (
               <span className="flex items-center gap-1">
                 <Code2 className="h-3 w-3" />
                 {receipt.symbolName}
