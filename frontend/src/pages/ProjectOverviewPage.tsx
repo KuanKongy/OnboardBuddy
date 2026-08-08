@@ -13,6 +13,7 @@ import {
   RotateCcw,
   Square,
   User,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -814,6 +815,18 @@ function QuickAction({
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+/** The per-project set of run alerts this browser has dismissed. Pure and
+ *  module-level so the effect that re-reads it on project change can honestly
+ *  depend on the project id alone. */
+function readDismissedAlerts(projectId: string | undefined): ReadonlySet<string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(`obb.dismissedRunAlerts.${projectId}`) ?? "[]");
+    return new Set(Array.isArray(raw) ? raw.filter((v): v is string => typeof v === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
 export function ProjectOverviewPage() {
   const { project, refetch } = useProject();
   const { id } = useParams<{ id: string }>();
@@ -845,6 +858,27 @@ export function ProjectOverviewPage() {
   const tutorialResumeLink = tutorialProgress
     ? `/projects/${id}/walkthrough?tutorial=${tutorialProgress.ref_id}&step=${(tutorialProgress.position.stepOrder as number) ?? 1}`
     : `/projects/${id}/walkthrough`;
+
+  // Dismissed run-alert notes, per project and per browser (localStorage; no
+  // API, the run itself stays in Run history). Needed because a superseded
+  // failure can squat in the "earlier runs" disclosure indefinitely: it only
+  // leaves when a NEWER run of the SAME job type exists, and e.g. a failed
+  // incremental_update is only replaced by the next push, never by the "New
+  // run" button (which launches analyze_scope).
+  const [dismissedAlertIds, setDismissedAlertIds] = useState<ReadonlySet<string>>(() => readDismissedAlerts(id));
+  useEffect(() => {
+    setDismissedAlertIds(readDismissedAlerts(id));
+  }, [id]);
+  const dismissAlert = (jobId: string) => {
+    setDismissedAlertIds((prev) => {
+      const next = new Set(prev);
+      next.add(jobId);
+      try {
+        localStorage.setItem(`obb.dismissedRunAlerts.${id}`, JSON.stringify([...next]));
+      } catch { /* storage full or blocked: the dismissal still holds for this visit */ }
+      return next;
+    });
+  };
 
   // Run history: refetched when the set of active runs changes (one just
   // started or finished) — not on the hot status poll.
@@ -940,6 +974,9 @@ export function ProjectOverviewPage() {
     }
     return [current, superseded] as const;
   })();
+  // Only the demoted placement is dismissible: a current alert is the page's
+  // headline (and the only Resume surface), a superseded one is housekeeping.
+  const visibleSupersededAlerts = supersededAlerts.filter((j) => !dismissedAlertIds.has(j.id));
 
   /** The newest run as a GROUP: raw `runs[0]` is often the package generation
    *  half of a chained pair, which would report that half's status, spend and
@@ -948,7 +985,7 @@ export function ProjectOverviewPage() {
 
   /** One card, two placements: the prominent alert above and the collapsed
    *  "an earlier run failed" disclosure below the status panel. */
-  function runAlertCard(job: AnalysisJob) {
+  function runAlertCard(job: AnalysisJob, opts?: { dismissible?: boolean }) {
     // A budget pause is only actionable if the banner says how much of the
     // per-run cap was actually spent — the run-history row for this same job
     // already carries those numbers.
@@ -989,6 +1026,17 @@ export function ProjectOverviewPage() {
             <Button variant="outline" size="xs" onClick={() => setAnalyzeOpen(true)}>
               <RefreshCw className="mr-1 h-3 w-3" />
               New run…
+            </Button>
+          )}
+          {opts?.dismissible && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => dismissAlert(job.id)}
+              title="Hides this note on this browser. The run itself stays in Run history below."
+              aria-label="Dismiss this run alert"
+            >
+              <X className="h-3 w-3" />
             </Button>
           )}
         </CardContent>
@@ -1194,7 +1242,7 @@ export function ProjectOverviewPage() {
           a Resume control, so hiding it while a different run was active made
           a paused run unreachable until the other one finished. */}
       {currentAlerts.length > 0 && (
-        <div className="mb-4 space-y-2">{currentAlerts.map(runAlertCard)}</div>
+        <div className="mb-4 space-y-2">{currentAlerts.map((j) => runAlertCard(j))}</div>
       )}
 
       {/* Nothing is running: the newest run IS the current state, so say it
@@ -1205,14 +1253,17 @@ export function ProjectOverviewPage() {
 
       {/* Superseded failures: one quiet line UNDER the status panel, because a
           later run already answered them. Still expandable to the same card
-          with the same resume/re-run buttons — demoted, not dropped. */}
-      {activeJobs.length === 0 && supersededAlerts.length > 0 && (
+          with the same resume/re-run buttons — demoted, not dropped — and
+          dismissible, because a run only leaves this list when a NEWER run of
+          the SAME type exists (a failed incremental_update would otherwise
+          sit here until the next push). */}
+      {activeJobs.length === 0 && visibleSupersededAlerts.length > 0 && (
         <details className="mb-4 rounded-md border border-border bg-muted/25 px-3 py-1.5">
           <summary className="cursor-pointer text-[0.6875rem] text-muted-foreground hover:text-foreground">
-            {supersededAlerts.length === 1 ? "An earlier run" : `${supersededAlerts.length} earlier runs`}{" "}
-            {supersededAlerts.every((j) => j.status === "failed") ? "failed" : "did not finish"} · details
+            {visibleSupersededAlerts.length === 1 ? "An earlier run" : `${visibleSupersededAlerts.length} earlier runs`}{" "}
+            {visibleSupersededAlerts.every((j) => j.status === "failed") ? "failed" : "did not finish"} · details
           </summary>
-          <div className="mt-2 space-y-2">{supersededAlerts.map(runAlertCard)}</div>
+          <div className="mt-2 space-y-2">{visibleSupersededAlerts.map((j) => runAlertCard(j, { dismissible: true }))}</div>
         </details>
       )}
 

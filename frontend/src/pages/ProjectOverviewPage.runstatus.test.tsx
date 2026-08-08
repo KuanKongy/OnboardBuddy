@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { AnalysisJob, AnalysisStatus, RunHistoryEntry } from "@/types/analysis";
@@ -217,6 +217,26 @@ describe("failed-run banner", () => {
     renderOverview();
 
     expect(await screen.findByText(/Package generation failed/)).toBeInTheDocument();
+    expect(screen.queryByText(/An earlier run/)).not.toBeInTheDocument();
+  });
+
+  // A superseded failure only leaves this list when a newer run of the SAME
+  // job type exists, which for a failed incremental_update means "on the next
+  // push" - so it must be dismissible by hand. The dismissal is local to this
+  // browser (localStorage, no API) and the run stays in Run history.
+  it("lets a superseded failure be dismissed, and keeps it dismissed on a fresh mount", async () => {
+    localStorage.clear();
+    jobs.current = [FAILED_GENERATION, analysisFinishedAt("2026-07-20T14:16:00Z")];
+    const first = renderOverview();
+    expect(await screen.findByText(/An earlier run failed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss this run alert" }));
+    expect(screen.queryByText(/An earlier run/)).not.toBeInTheDocument();
+
+    // A fresh mount reads the dismissal back from storage.
+    first.unmount();
+    renderOverview();
+    expect((await screen.findAllByText("complete")).length).toBeGreaterThan(0);
     expect(screen.queryByText(/An earlier run/)).not.toBeInTheDocument();
   });
 });
