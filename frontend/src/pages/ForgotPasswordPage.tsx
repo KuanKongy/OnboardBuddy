@@ -29,9 +29,11 @@ export function ForgotPasswordPage() {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/reset-password`,
       });
-      // Rate-limit errors are worth surfacing; "user not found" style errors
-      // are not (Supabase doesn't return those anyway).
-      if (resetError && resetError.status === 429) throw new Error(resetError.message);
+      // Any provider error means no email is going out (rate limit, mailer
+      // fault, 5xx), so the success panel would be a lie. Supabase doesn't
+      // return "user not found" here, so surfacing every failure still can't
+      // be used to probe which emails exist.
+      if (resetError) throw new Error(resetError.message);
       setSent(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not send the reset email");

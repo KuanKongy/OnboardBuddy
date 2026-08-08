@@ -43,11 +43,24 @@ import { WorkflowsPage } from "@/pages/WorkflowsPage";
 import { CapabilitiesPage } from "@/pages/CapabilitiesPage";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+interface ErrorBoundaryProps { children: ReactNode; location: string }
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, { hasError: boolean; error: Error | null }> {
   override state = { hasError: false, error: null as Error | null };
 
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error };
+  }
+
+  // In-app escape from a tripped boundary: this one wraps the public routes
+  // (RouteErrorBoundary only covers the signed-in shells), and its fallback
+  // replaces <Routes>, so without a reset no navigation could ever clear it
+  // and "Reload page" was the only exit. Reset on the location PROP, not via
+  // key={pathname}: a key would remount AuthProvider on every navigation.
+  override componentDidUpdate(prevProps: ErrorBoundaryProps) {
+    if (this.state.hasError && prevProps.location !== this.props.location) {
+      this.setState({ hasError: false, error: null });
+    }
   }
 
   override render() {
@@ -57,12 +70,20 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
           <div className="max-w-md text-center">
             <h1 className="mb-2 text-lg font-semibold text-foreground">Something went wrong</h1>
             <p className="mb-4 text-sm text-muted-foreground">{this.state.error?.message}</p>
-            <button
-              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
-              onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
-            >
-              Reload page
-            </button>
+            <div className="flex items-center justify-center gap-3">
+              <button
+                className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground"
+                onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+              >
+                Reload page
+              </button>
+              <Link
+                to="/dashboard"
+                className="rounded-md border border-border px-4 py-2 text-sm text-foreground hover:bg-accent"
+              >
+                Go to dashboard
+              </Link>
+            </div>
           </div>
         </div>
       );
@@ -216,9 +237,10 @@ export default function App() {
   // Above <Routes> so one effect covers every route: the shells come and go, the
   // title and the focus reset must not.
   usePageChrome();
+  const { pathname } = useLocation();
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary location={pathname}>
     <AuthProvider>
       <TooltipProvider>
         <Routes>

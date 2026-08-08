@@ -91,7 +91,17 @@ export function usePreflight(projectId: string) {
             setPreviewing(false);
           }
         } catch {
-          if (cancelledRef.current) window.clearInterval(pollRef.current);
+          if (cancelledRef.current) {
+            window.clearInterval(pollRef.current);
+            return;
+          }
+          // A dead status endpoint must not poll silently forever with the
+          // spinner up: apply the same deadline the success path enforces.
+          if (Date.now() - started > 180_000) {
+            window.clearInterval(pollRef.current);
+            setError("Preview timed out. Retry, or start the analysis directly.");
+            setPreviewing(false);
+          }
         }
       }, 2500);
     } catch (err) {

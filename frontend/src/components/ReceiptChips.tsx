@@ -25,6 +25,10 @@ export function ReceiptChip({
     ? `:${receipt.lineStart}${receipt.lineEnd && receipt.lineEnd !== receipt.lineStart ? `–${receipt.lineEnd}` : ""}`
     : "";
   const fileLabel = receipt.filePath?.split("/").pop() || receipt.filePath;
+  // Ask receipts can arrive with an empty path; a numbered chip with no text
+  // reads as a rendering fault, so label it by its symbol. `||` on purpose:
+  // the empty string must not win.
+  const chipLabel = fileLabel || receipt.symbolName || "unnamed source";
   return (
     <button
       onClick={() => onClick(receipt)}
@@ -32,7 +36,7 @@ export function ReceiptChip({
         "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[0.71875rem] transition-colors hover:border-primary/50 hover:bg-accent",
         receipt.staleness === "stale" ? "border-warning/40 bg-warning-soft" : "border-border bg-muted/40",
       )}
-      title={`${receipt.filePath}${lineRange}${receipt.symbolName ? ` · ${receipt.symbolName}` : ""}${
+      title={`${receipt.filePath || chipLabel}${lineRange}${receipt.symbolName ? ` · ${receipt.symbolName}` : ""}${
         receipt.snippet ? " (click to view the code snippet)" : ""
       }`}
     >
@@ -43,10 +47,10 @@ export function ReceiptChip({
       )}
       <FileCode2 className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
       <span className="truncate text-foreground">
-        {fileLabel}
+        {chipLabel}
         {lineRange}
       </span>
-      {receipt.symbolName && (
+      {receipt.symbolName && fileLabel && (
         <span className="shrink-0 truncate text-muted-foreground">· {receipt.symbolName}</span>
       )}
       {receipt.staleness === "stale" && <AlertTriangle className="h-2.5 w-2.5 shrink-0 text-warning" />}
@@ -72,10 +76,10 @@ export function InlineReceiptRef({
       onClick={() => onClick(receipt)}
       // Primary tone, not muted: muted is the inert `prose-code` chips around it.
       className="mx-0.5 inline-flex -translate-y-[0.2em] items-center rounded border border-primary/40 bg-muted/60 px-1 align-baseline text-[0.625rem] font-semibold leading-4 text-primary transition-colors hover:border-primary hover:bg-accent"
-      title={`${receipt.filePath}${receipt.lineStart ? `:${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}${
-        receipt.symbolName ? ` · ${receipt.symbolName}` : ""
+      title={`${receipt.filePath || receipt.symbolName || "unnamed source"}${receipt.lineStart ? `:${receipt.lineStart}–${receipt.lineEnd ?? receipt.lineStart}` : ""}${
+        receipt.symbolName && receipt.filePath ? ` · ${receipt.symbolName}` : ""
       }`}
-      aria-label={`Source reference ${index}: ${receipt.filePath}${receipt.symbolName ? `, ${receipt.symbolName}` : ""}`}
+      aria-label={`Source reference ${index}: ${receipt.filePath || receipt.symbolName || "unnamed source"}${receipt.symbolName && receipt.filePath ? `, ${receipt.symbolName}` : ""}`}
     >
       {index}
     </button>
