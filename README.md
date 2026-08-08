@@ -633,7 +633,8 @@ resetting the viewport. Detail and the exact fix for each is in
 
 **[The M5 plan](doc/BUGS_AND_FIXES.md#m5-bug-plan--every-open-bug-resolved-or-closed)** commits all 26
 open items to a resolution: eight ordered batches with owners, plus five declared Won't-Fix **now**
-rather than discovered as such at the deadline. Target: **26 open → 0**. An effort triage — which are
+rather than discovered as such at the deadline. Target: **26 open → 0** — **achieved 2026-08-07**,
+when the last one (#37) closed after live verification. An effort triage — which are
 one-line fixes and which need real work — is in
 [doc/M4_PLAN.md](doc/M4_PLAN.md#5-effort-triage-of-the-open-bug-list).
 
