@@ -27,7 +27,18 @@ jobs:
         run: npm run lint
 
       - name: Test
+        env:
+          # Frontend vitest needs these at import time (createClient). Not real
+          # secrets — placeholders are fine. Repo Secrets → map them here; GitHub
+          # does not inject repository secrets into the job unless referenced.
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run test
 
       - name: Build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: npm run build
