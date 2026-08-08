@@ -1,15 +1,22 @@
-# Milestone 4 — Test Plan
+# Final Release (Milestone 5) — Test Plan
 
-How to validate M4. Follow the parts in order; each **Test** is a numbered table of *do this → you
-should see this*. Nothing here needs you to read code.
+How to validate the final release. Follow the parts in order; each **Test** is a numbered table of
+*do this → you should see this*. Nothing here needs you to read code.
 
-**Two formatting conventions, so you can skim:**
+**Two ways to test.** Everything can be tested on a local Docker install (Part 1), and everything
+except one test can also be tested on the deployed instance at **\<DEPLOYED-URL\>** with zero setup.
+The two behave identically, with a single exception called out where it appears: **automatic
+re-analysis on push (Test 5.4) only works on the deployed instance**, because GitHub must deliver
+the webhook over the public internet and cannot reach `localhost`. Every other feature that works in
+production works locally too.
+
+**One formatting convention, so you can skim:**
 
 > ℹ️ **Blue-labelled blockquotes are context** — why a test exists or what it is really checking. Skip
 > them if you just want to click through.
 
-> ⚠️ **Warning-labelled blockquotes are known bugs** — already filed, with the issue number. If you hit
-> the described behaviour, it is expected, not a new find.
+(Earlier plans also flagged known bugs inline. There are none to flag: every tracked bug is closed —
+see [Reporting anything you find](#reporting-anything-you-find).)
 
 **Time budget**
 
@@ -18,12 +25,12 @@ should see this*. Nothing here needs you to read code.
 | **0** | Automated tests — one command | 3 min |
 | **1** | Get the app running | 5 min |
 | **2** | Import and analyse a repository | 10 min |
-| **3** | The onboarding handbook *(the main M4 deliverable)* | 10 min |
+| **3** | The onboarding handbook | 10 min |
 | **4** | Trust and transparency | 5 min |
-| **5** | Multiple analyses per project | 5 min |
+| **5** | Multiple analyses and staying fresh *(incl. the webhook, deployed only)* | 8 min |
 | **6** | Security mitigations | 5 min |
-| **7** | Everything else — graphs, settings, account, help | 10 min |
-| | **Total** | **~50 min** |
+| **7** | Everything else — graphs, settings, team lifecycle, account, help | 12 min |
+| | **Total** | **~55 min** |
 
 Parts 0–4 are the core. Parts 5–7 are optional if you are short on time.
 
@@ -37,21 +44,23 @@ Parts 0–4 are the core. Parts 5–7 are optional if you are short on time.
 |---|---------|----------------|
 | 1 | From the repo root: `docker compose -f docker-compose.test.yml run --rm test` | Both suites scroll past, then a **per-area summary table** — how many tests passed in each part of the system — ending in `Overall: PASS`. Exit code 0. |
 
-The table is the quickest way to see what is covered where:
+The table is the quickest way to see what is covered where — this is the output of the run above on
+the release commit:
 
 ```text
   AREA                                                  PASSED   FAILED  SKIPPED    RESULT
   ────────────────────────────────────────────────────────────────────────────────────────
   Backend · security (hostile input)                        83        0        0      PASS
-  Backend · analysis pipeline                              276        0        0      PASS
-  Backend · AI, caching & model routing                    100        0        0      PASS
-  Backend · document generation                            188        0        0      PASS
-  Backend · API & auth (HTTP)                              149        0        0      PASS
-  Backend · unit (libs, queue, crypto)                      23        0        0      PASS
-  Frontend · unit (components, pages, safe rendering)      164        0        0      PASS
+  Backend · analysis pipeline                              299        0        0      PASS
+  Backend · AI, caching & model routing                    135        0        0      PASS
+  Backend · document generation                            196        0        0      PASS
+  Backend · API & auth (HTTP)                              227        0        0      PASS
+  Backend · unit (libs, queue, crypto)                      35        0        0      PASS
+  Backend · other (unclassified files)                       5        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      426        0        0      PASS
   E2E · Playwright (browser)                                 0        0        9   SKIPPED
   ────────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                                                    984        0        9      PASS
+  TOTAL                                                   1406        0        9      PASS
 ```
 
 Every number is parsed from the runners' own machine-readable output, not written down anywhere — see
@@ -74,17 +83,20 @@ Nothing else is required — no `.env`, no cloud accounts, no running app. First
 > non-zero if a defence regresses, so it doubles as a CI gate. Output is committed at
 > [SECURITY_TEST_EVIDENCE.md](./SECURITY_TEST_EVIDENCE.md).
 
-What all 984 tests cover and why: [TESTING.md](./TESTING.md).
+What all 1,406 tests cover and why: [TESTING.md](./TESTING.md).
 
 ---
 
 # Part 1 · Get the app running
 
+> ℹ️ **Testing on the deployed instance instead?** Open **\<DEPLOYED-URL\>**, sign in, and skip to
+> Test 1.2 step 2 — everything from there on is identical.
+
 **Test 1.1 — start the stack**
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | Put `backend/.env`, `frontend/.env` and `backend/github-app.pem` (all on Canvas) in place. **Both `.env` files must exist before building.** | — |
+| 1 | Check out the `FinalRelease` branch. Put `backend/.env`, `frontend/.env` and `backend/github-app.pem` (all on Canvas) in place. **Both `.env` files must exist before building.** | — |
 | 2 | `docker compose up --build` | `OnboardBuddy API listening on http://localhost:3000`, and two `listening on queue …` lines from the worker |
 | 3 | Open http://localhost:3000/api/health | `{"status":"ok","service":"onboardbuddy-api"}` |
 | 4 | Open http://localhost:5173 | The landing page |
@@ -96,12 +108,12 @@ What all 984 tests cover and why: [TESTING.md](./TESTING.md).
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | Sign up with an email and a password of 8+ characters, or use the demo account from the Canvas note | Dashboard, with a first-run tour |
+| 1 | Sign up with an email and a password of 8+ characters, or use the demo account from the Canvas note. GitHub sign-in also works | Dashboard, with a first-run tour |
 | 2 | **Account Settings → Connect GitHub**, authorise the App | GitHub shows as connected, with your `@username` |
 
 **What you need to analyse:** fork https://github.com/KuanKongy/CourseInsights (a CPSC 310 project)
 into your own account, and install the OnboardBuddy GitHub App on it during import. Use your own fork
-— Part 5 needs push access.
+— Parts 4 and 5 need push access.
 
 ---
 
@@ -114,8 +126,8 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 | 1 | Dashboard → **Import repository** | Installation picker, then repository, branch and role |
 | 2 | Pick your fork, a branch, and a role → **Create project** | The project overview opens |
 
-> ⚠️ **Known issue #67** — if the App is installed on more than 100 repositories, or the repository has
-> more than 30 branches, the pickers cannot reach past that. They are not paginated yet.
+> ℹ️ The pickers paginate — accounts with more than 100 repositories and repositories with more than
+> 30 branches load further pages as you scroll or search (this was open bug #67 at M4; fixed in M5).
 
 **Test 2.2 — cost preview before spending**
 
@@ -136,7 +148,7 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 | 5 | Hover a phase row | A description of what that phase does |
 
 > ℹ️ **Expected timings.** Our own repository (2.3M tokens, 268 files) is the worst case we benchmark:
-> **analyze ~4:16, ~5:17 end-to-end cold, ~$0.35**. The M5 gates are cold-only: first import ≤ 9:00
+> **analyze ~4:16, ~5:17 end-to-end cold, ~$0.35**. The gates are cold-only: first import ≤ 9:00
 > analysis, re-import ≤ 5:00 analysis — warm re-runs don't count (and are nearly free). A small
 > repository is ~2–3 minutes. The per-phase timings above are how you tell a slow run from a
 > stuck one; a run that is slow across EVERY LLM phase is provider weather, not the pipeline.
@@ -145,10 +157,8 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 
 # Part 3 · The onboarding handbook
 
-> ℹ️ **This is the main M4 deliverable.** At M3 a package was 11 short sections that each pointed at a
-> tab — 7,500 words for a large repository, with no guidance on what to read first. It is now 12
-> sections in four chapters, 13,800 words on the same repository, and the lookup tables are generated
-> from code facts rather than written by the AI.
+> ℹ️ **This is the product's core deliverable.** Twelve sections in four chapters, with the lookup
+> tables generated from code facts rather than written by the AI.
 
 **Test 3.1 — chapters and reading order**
 
@@ -169,9 +179,9 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 | 4 | Open **Guardrails & ops** | Environment variables and operational guardrails |
 
 > ℹ️ **Why this matters.** These four tables are built deterministically from the code and only
-> *annotated* by the AI — it cannot invent a route or a column. At M3 the AI was asked to produce these
-> lists from retrieved snippets, and the paths it produced did not exist (bug #58). This test is
-> checking that the fix holds.
+> *annotated* by the AI — it cannot invent a route or a column. Earlier the AI was asked to produce
+> these lists from retrieved snippets, and the paths it produced did not exist (bug #58). This test
+> is checking that the fix holds.
 
 **Test 3.3 — the practical chapter**
 
@@ -186,15 +196,15 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 |---|---------|----------------|
 | 1 | **Export** | A Markdown file downloads, with chapter headings in the same order as the sidebar |
 
-> ℹ️ **Older packages still work.** A package generated before the M4 redesign opens normally, with its
-> sections under a "Previous layout" group.
+> ℹ️ **Older packages still work.** A package generated before the reader redesign opens normally,
+> with its sections under a "Previous layout" group.
 
 ---
 
 # Part 4 · Trust and transparency
 
-> ℹ️ **What this part checks.** The product's claim is that every statement is backed by code. M4 made
-> that claim auditable. This part is you auditing it.
+> ℹ️ **What this part checks.** The product's claim is that every statement is backed by code, and
+> that the claim is auditable. This part is you auditing it.
 
 **Test 4.1 — follow a claim to the code**
 
@@ -235,11 +245,7 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 
 ---
 
-# Part 5 · Multiple analyses per project
-
-> ℹ️ **Why this changed.** At M3 a project behaved as if one repository meant one commit — generating a
-> new package silently overwrote what everyone was reading, and only one analysis could run at a time.
-> This came directly out of M3 feedback.
+# Part 5 · Multiple analyses and staying fresh
 
 **Test 5.1 — concurrent analyses**
 
@@ -265,16 +271,30 @@ into your own account, and install the OnboardBuddy GitHub App on it during impo
 |---|---------|----------------|
 | 1 | Regenerate a package without changing the repository | Most sections and all tutorials report **cache hits**; the cost in Run history is a fraction of the first run |
 
-**Test 5.4 — automatic re-analysis on push** *(optional — needs a webhook secret and a tunnel)*
+**Test 5.4 — automatic re-analysis on push** *(deployed instance only)*
+
+> ℹ️ **Why this one needs the deployed site.** A webhook is a GitHub → server delivery: GitHub has to
+> reach the API over the public internet, and it cannot reach `localhost`. So this feature works on
+> the deployed instance but not on a local install — the local endpoint just sits disabled (a tunnel
+> such as smee.io or ngrok works for local development, see
+> [DEVOPS.md](./DEVOPS.md) → "Webhook URL — local development", but is out of scope for grading).
+> **This is the only test in this plan with that restriction; every other feature behaves
+> identically locally and in production.**
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | Without a webhook secret set: `curl -i -X POST localhost:3000/api/webhooks/github` | **503** — the feature is simply off, nothing else affected |
-| 2 | With a secret set, enable **Settings → Automation → Re-analyze on push**, then push a commit | An analysis starts on its own |
-| 3 | Re-deliver the same webhook from GitHub's UI | No duplicate run |
+| 1 | On a **local** install (no webhook secret set): `curl -i -X POST localhost:3000/api/webhooks/github` | **503 Webhook not configured** — the feature is simply off, nothing else affected |
+| 2 | On the **deployed instance**: open your fork project → **Settings → Automation → Re-analyze on push** → enable, then push a commit to the analysed branch | Within a few seconds an **incremental analysis starts on its own** (watch Overview → Active runs). When it finishes, sections whose evidence changed carry **Stale** badges. No package generation runs — a push never spends AI budget by itself |
+| 3 | On GitHub: repo → Settings → Webhooks → Recent Deliveries → **Redeliver** the same delivery | No duplicate run — the delivery is recognised and skipped |
 
-Setup for step 2 is in [DEVOPS.md](./DEVOPS.md) → "GitHub App webhook". Skip this test if you would
-rather not configure a tunnel.
+**Test 5.5 — auto-regenerate stale sections** *(optional — this one spends AI budget)*
+
+| # | Do this | You should see |
+|---|---------|----------------|
+| 1 | Enable **Settings → Automation → Auto-regenerate stale sections**, then stale some sections (a webhook push as in 5.4, or a manual incremental **Analyze…** after a real change) | After the incremental run finishes, the staled sections rebuild on their own and their badges clear — no clicks needed |
+
+> ℹ️ Both Automation switches are **off by default** — auto-regenerate is the only setting in the app
+> that spends AI budget with nobody watching, and the settings page says so.
 
 ---
 
@@ -324,7 +344,7 @@ rather not configure a tunnel.
 | # | Do this | You should see |
 |---|---------|----------------|
 | 1 | **Architecture** | Subsystem clusters with criticality bars; click one for its summary (labelled AI or deterministic) and file list |
-| 2 | **Dependencies** | A file map with search; click a node for a symbol summary, signature, a real usage example, and receipts |
+| 2 | **Dependencies** | A file map with search; click a node for a symbol summary, signature, a real usage example, and receipts. Directory groups show real imported-by counts, and searching moves the camera to the matches |
 | 3 | Click legend entries | Hidden kinds dim rather than disappear |
 | 4 | Toggle layout direction, then fullscreen (Escape exits) | The graph refits both times — nothing clipped or off-screen |
 | 5 | Drill into a cluster, then press browser **Back** | Back walks the drill path one level at a time; the breadcrumb and "Up one level" both work |
@@ -332,10 +352,6 @@ rather not configure a tunnel.
 | 7 | **Workflows** | Traced flows and end-to-end journeys; the final step is a **terminal** node, not an edge looping back to the start |
 | 8 | **Capabilities** | What the product does, linked to the flows and components that deliver it |
 | 9 | **Tutorials** | A step pager with real code, an explanation and receipts at each stop |
-
-> ⚠️ **Known issue #70** — in the grouped Dependencies view every directory reads "imported by 0"
-> (drilling in shows correct counts), and searching updates the match count without moving the camera,
-> so the canvas can look blank. Both filed, both first-batch M5.
 
 **Test 7.2 — settings and privacy**
 
@@ -348,19 +364,21 @@ rather not configure a tunnel.
 | 5 | Move a ranking-weight slider → Save | Applies immediately with no re-analysis; **Revert to defaults** restores |
 
 > ℹ️ **Step 3 is a deliberate design position** — privacy mode decides *how* a document is written,
-> never how much the product knows. At M3 the AI-disabled path produced a visibly thinner document from
-> the same analysis (bug #55).
+> never how much the product knows.
 
-**Test 7.3 — permissions**
+**Test 7.3 — permissions and the team lifecycle**
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | **Team** → invite a second account as **Developer** | The invitation is created and appears on their Invitations page |
+| 1 | **Team** → invite a second account as **Developer** | The invitation is created and appears on their Invitations page. The dialog is honest that **no email is sent** — you share the link yourself |
 | 2 | As that Developer, open the project | Can read everything and generate a missing role's package; **cannot** re-run analysis or approve sections |
 | 3 | As the Developer, mark sections **read** | Personal reading progress tracks — separate from the owner/admin "Mark reviewed" |
+| 4 | Invite a third account, and as that account **Decline** the invitation | The invitation is gone from their inbox and no access is granted; the Team page reflects the declined state |
+| 5 | As the Developer, **leave the project** (Team page) | They are removed and the project disappears from their dashboard; the owner sees the membership end |
+| 6 | As the owner, **transfer ownership** to the Developer (Team page), confirming the prompt | Roles swap: they are now Owner and you are no longer able to delete the project — the new owner has full control |
 
-> ⚠️ **Known issue #72** — no invitation email is sent (share the link yourself), Decline is disabled,
-> there is no "Leave project", and ownership cannot be transferred. All filed, M5 batch 5.
+> ℹ️ Decline, leave and ownership transfer are M5 completions — at M4 the team lifecycle was a
+> one-way door (old bug #72, closed).
 
 **Test 7.4 — account management**
 
@@ -382,13 +400,9 @@ rather not configure a tunnel.
 | 4 | Open **/help** | A tour picker, a 9-question FAQ, and a privacy section that matches the project's real privacy mode |
 | 5 | **Account Settings → Appearance** → Large | The whole app scales; reload and the choice survives with no flash |
 | 6 | Change your OS colour scheme without touching the theme toggle | The app follows it. Click the toggle once → it pins your choice and stops following |
-| 7 | Toggle dark/light on every tab | Everything stays legible; graphs recolour |
+| 7 | Toggle dark/light on every tab | Everything stays legible in **both** themes; graphs recolour. (Dark-theme border and avatar contrast were measured failures at M4 — bug #71 — fixed in M5) |
 
-> ⚠️ **Known issue #71** — in **dark theme** specifically, card and input borders are too faint against
-> their background (measured, filed), and coloured avatar initials are low-contrast. Light theme was
-> fixed in M4; dark theme is M5 batch 4.
-
-**Test 7.6 — resilience** *(optional)*
+**Test 7.6 — resilience** *(optional, local install)*
 
 | # | Do this | You should see |
 |---|---------|----------------|
@@ -399,7 +413,10 @@ rather not configure a tunnel.
 
 # Reporting anything you find
 
-Please note the page, what you did, what you expected, and what happened. Known bugs are listed with
-priorities and owners in [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md) — its roll-up table shows all 26 open
-items, and the M5 plan commits every one of them to a fix or an explicit won't-fix before the final
-release.
+**The tracked bug list is closed: 85 GitHub issues across M2–M5, 0 open** — every one resolved or
+closed with a stated reason (the eight Won't-Fix items are sub-items of otherwise-fixed bugs, each
+with its reason recorded). The per-bug ledger — expected vs actual, repro steps, fix and
+verification — is [BUGS_AND_FIXES.md](./BUGS_AND_FIXES.md).
+
+If you do find something new, please note the page, what you did, what you expected, and what
+happened — that is the format every bug in the ledger uses.
