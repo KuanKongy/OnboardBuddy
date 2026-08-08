@@ -195,8 +195,10 @@ them in either of two places:
 
 **M5 gates (cold runs only; warm/incremental runs don't count):** cold first
 import ≤ 9:00 analysis, cold re-import ≤ 5:00 analysis; end-to-end adds ~1:00
-of generation. Standing measurements and evidence live in
-`doc/ONBOARDING_QUALITY_LATENCY_PLAN.md` ("Latency gates").
+of generation. The benchmark case is our own repository (2.3M tokens, 268
+files): analyze ~4:16, ~5:17 end-to-end cold, ~$0.35. (The working document
+that tracked these measurements, `ONBOARDING_QUALITY_LATENCY_PLAN.md`, was
+removed from `doc/` at the final release; it remains in git history.)
 
 The pipeline is sized for a flash-class 1M-context model and a REMOTE
 Postgres: throughput comes from *moderately sized batches × high

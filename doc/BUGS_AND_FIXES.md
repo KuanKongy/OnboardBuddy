@@ -4019,7 +4019,7 @@ Three fixes, independent:
 3. Surface `paused` and its reason; today the reason lives only in `analysis_jobs.error_message`, which
    no screen reads.
 
-Found and re-verified in [UX_AUDIT_FINDINGS.md §18.6](./UX_AUDIT_FINDINGS.md#186-a-failed-analysis-is-indistinguishable-from-a-successful-one).
+Found and re-verified in UX_AUDIT_FINDINGS.md §18.6 (audit doc survives only in git history — see Bug 74's provenance note).
 
 ---
 
@@ -4276,8 +4276,8 @@ completed `generate_package` always returns its snapshot to `complete` and tabs 
 Fix the status transition first — a `generate_package` that completes must return its snapshot to
 `complete`. Then gate tab content on row existence rather than on the snapshot's package status, so a
 stuck status can never blank extracted data again. Make the empty state distinguish the three real cases — detector matched nothing / analysis failed / still generating — using
-`analysis_jobs`, which already holds the information. See
-[UX_AUDIT_FINDINGS.md §18.7](./UX_AUDIT_FINDINGS.md#187-a-paused-package-hides-a-completed-analysis--and-only-on-some-tabs).
+`analysis_jobs`, which already holds the information. See UX_AUDIT_FINDINGS.md §18.7
+(git history — see Bug 74's provenance note).
 
 ---
 
@@ -4329,7 +4329,7 @@ from CSS and was wrong about the occluder — it is the canvas. The user-visible
 
 Render an exit control **inside** the fullscreen container (top-right, over the canvas), and/or give the
 header `relative z-[60]`. Add a transient "Press Esc to exit" hint on entry. See
-[UX_AUDIT_FINDINGS.md §19.8](./UX_AUDIT_FINDINGS.md#198-fullscreen-has-no-visible-way-out).
+UX_AUDIT_FINDINGS.md §19.8 (git history — see Bug 74's provenance note).
 
 ---
 
@@ -4375,8 +4375,8 @@ is reserved for `DrillCamera`'s explicit drill-down transitions.
 
 Pan the minimum distance to bring the node inside the remaining pane and keep the current scale
 (`setCenter` with `getZoom()`); no-op when the node is already visible. Put an explicit "zoom to this" in
-the detail panel where the user asks for it. See
-[UX_AUDIT_FINDINGS.md §19.7](./UX_AUDIT_FINDINGS.md#197-clicking-a-node-throws-away-your-view--setcenterzoom-115).
+the detail panel where the user asks for it. See UX_AUDIT_FINDINGS.md §19.7
+(git history — see Bug 74's provenance note).
 
 ---
 
@@ -4427,8 +4427,7 @@ Group and collapse (`No documented guardrails for 34 environment variables (show
 *template* not the rendered string; drop config-name gaps entirely; report `43 citations · 21 you can
 open`; put `file.ts:120–134 · symbolName` on the chip (those ranges are verified accurate per §17.1);
 reconcile the strip and say what it counts; and rewrite gap copy to describe the codebase, not the
-pipeline. See [UX_AUDIT_FINDINGS.md §19.3](./UX_AUDIT_FINDINGS.md#193-the-citations-footer-43-numbered-file-paths-with-no-names)
-and [§19.4](./UX_AUDIT_FINDINGS.md#194-known-gaps-34-copies-of-one-sentence-63-of-a-section).
+pipeline. See UX_AUDIT_FINDINGS.md §19.3 and §19.4 (git history — see Bug 74's provenance note).
 
 ---
 
