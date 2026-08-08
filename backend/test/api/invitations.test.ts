@@ -315,9 +315,9 @@ describe("POST /api/invitations/:invitationId/decline", () => {
     expect(res.status).to.equal(401);
   });
 
-  // #72: 'declined' only became a legal status in migration 004. Writing it
-  // against an un-migrated database is a CHECK violation and a 500, so this pins
-  // the word the route writes — the migration and this line ship together.
+  // #72: 'declined' is a legal arm of the schema's status CHECK. Writing it
+  // against a database without that arm is a CHECK violation and a 500, so this
+  // pins the word the route writes — the schema and this line ship together.
   it("declines a pending invitation addressed to the caller", async () => {
     const statements = installInvitation({ email: "TESTER@example.com", status: "pending" });
 

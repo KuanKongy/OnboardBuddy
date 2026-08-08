@@ -42,8 +42,7 @@ benefit.
 ## Schema: Pipeline.md Wins
 
 **Decision:** Where Design.md and Pipeline.md schemas conflict, Pipeline.md is
-authoritative. All reconciled tables are in `001_initial_schema.sql` +
-`002_pipeline_tables.sql`.
+authoritative. All reconciled tables are in `001_initial_schema.sql`.
 
 **Key differences resolved:**
 - `graph_nodes.type`: Pipeline.md's expanded set (file, module, function, etc.)

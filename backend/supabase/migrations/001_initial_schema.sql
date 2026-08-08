@@ -6,6 +6,11 @@
 -- projects, membership, invitations, settings (extended), analysis_jobs (extended).
 -- Everything analysis-related is replaced by the scope-aware, symbol-level,
 -- semantic-record model.
+--
+-- 2026-08-08: the M5 additive migrations (002 parsed_file_count comment,
+-- 003 project_settings.auto_regenerate_stale, 004 invitation status
+-- 'declined') are folded in — every live database already has them applied,
+-- so a fresh standup is this one file.
 
 -- ============================================================
 -- Extensions
@@ -119,8 +124,9 @@ create table if not exists public.project_invitations (
     check (developer_role in ('backend', 'frontend', 'devops', 'qa', 'general')),
   invited_by uuid not null references public.users(id) on delete restrict,
   accepted_by uuid references public.users(id) on delete set null,
+  -- 'declined' = the invitee said no; distinct from an admin revoking (#72).
   status varchar not null default 'pending'
-    check (status in ('pending', 'accepted', 'revoked', 'expired')),
+    check (status in ('pending', 'accepted', 'revoked', 'expired', 'declined')),
   created_at timestamptz not null default now(),
   expires_at timestamptz,
   accepted_at timestamptz
@@ -159,8 +165,16 @@ create table if not exists public.project_settings (
   -- onboarding packages triggers an incremental re-analysis per affected
   -- scope (stale-flags sections; never rebuilds packages). Requires the
   -- App webhook + GITHUB_WEBHOOK_SECRET to be configured (doc/DEVOPS.md).
-  auto_reanalyze_on_push boolean not null default false
+  auto_reanalyze_on_push boolean not null default false,
+  -- Opt-in: an incremental analysis that flags content stale immediately
+  -- enqueues one only-stale generation per affected package. Off (default) =
+  -- stale badges wait for a manual Regenerate. Opt-in because regeneration is
+  -- LLM spend without a click.
+  auto_regenerate_stale boolean not null default false
 );
+
+comment on column public.project_settings.auto_regenerate_stale is
+  'When true, an incremental analysis that flags artifacts stale immediately enqueues one only-stale package generation per affected package (checkpoint.onlyStale). False (default) = stale content is flagged and waits for a manual Regenerate. Costs LLM calls without a click, which is why it is opt-in.';
 
 -- Per-project LLM API key override (BYO key). Encrypted with the same
 -- pattern as GitHub tokens. Editable by owner/admin only (enforced in API);
@@ -236,7 +250,7 @@ create table if not exists public.analysis_snapshots (
   privacy_mode varchar not null default 'full_ai'
     check (privacy_mode in ('full_ai', 'facts_only_ai', 'ai_disabled')),
   -- Every file in scope, including assets/docs/lockfiles. NOT a coverage
-  -- number — see parsed_file_count below and migration 002.
+  -- number — see parsed_file_count below.
   file_count integer not null default 0,
   -- Files the AST parser actually read. This is the honest coverage figure.
   parsed_file_count integer,
@@ -259,6 +273,9 @@ create table if not exists public.analysis_snapshots (
   created_at timestamptz not null default now(),
   unique (scope_id, commit_hash)
 );
+
+comment on column public.analysis_snapshots.parsed_file_count is
+  'Files the AST parser actually produced a FileAnalysis for (snapshot.fileAnalyses.length). NULL for snapshots taken before this column existed. Distinct from file_count (all files in scope) and language_inventory.supportedFileCount (files a parser could read).';
 
 -- Per-phase status, metrics, and resume checkpoints (idempotency and resume).
 create table if not exists public.snapshot_phases (
