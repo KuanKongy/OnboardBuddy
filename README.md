@@ -14,10 +14,11 @@
 
 ## Project Description
 
-OnboardBuddy helps a developer get productive in an unfamiliar codebase. Point it at a GitHub
-repository and it produces an **onboarding handbook** for that repository: what the system does, how
-it is put together, the flows that matter, and what to do on day one, with every claim linked back
-to the exact file and lines it came from, so nothing has to be taken on trust.
+OnboardBuddy is a codebase onboarding platform that helps a developer get productive in an
+unfamiliar codebase. Point it at a GitHub repository and it produces an **onboarding handbook** for
+that repository: what the system does, how it is put together, the flows that matter, and what to do
+on day one, with every claim linked back to the exact file and lines it came from, so nothing has to
+be taken on trust.
 
 What makes it different from asking an AI to summarise a repo is the order of operations. The
 structure is **extracted from the code first** (entry points, call flows, data model, dependencies,
