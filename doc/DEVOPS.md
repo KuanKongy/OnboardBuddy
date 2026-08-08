@@ -375,9 +375,17 @@ both died with `timeout exceeded when trying to connect`: the 28-wide semantic
 queueing into failed runs. Statements are short bulk writes and no code path
 holds a client while awaiting another, so waiting is always the right answer.
 
-Under heavy parallel load the failure mode is pooler queue wait (slow queries),
-not `EMAXCONNSESSION` — if that shows up, raise `default_pool_size` in Supabase
-(Database → Settings → Connection pooling) before raising `PG_POOL_MAX`.
+Under heavy parallel load the failure mode is pooler queue wait (slow queries)
+or `pg.Pool` acquire timeouts — never a session-cap error. Supavisor's
+`MaxClientsInSessionMode` exists only in session mode, and application traffic
+never touches the session pooler (DDL-only, above), so it cannot occur here.
+If queries start queueing, raise `default_pool_size` in Supabase (Database →
+Settings → Connection pooling) before raising `PG_POOL_MAX` — it sizes the
+transaction pooler's shared backend pool. The one hard connection error
+transaction mode can produce is the plan-level `Max client connections
+reached`, which counts client connections (the API pool plus `PG_POOL_MAX`
+per worker replica), so keep replicas × pool size under the plan's client
+limit.
 
 ### 9. Scaling workers (parallel analyses)
 
