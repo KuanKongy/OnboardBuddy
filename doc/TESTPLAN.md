@@ -4,7 +4,7 @@ How to validate the final release. Follow the parts in order; each **Test** is a
 *do this → you should see this*. Nothing here needs you to read code.
 
 **Two ways to test.** Everything can be tested on a local Docker install (Part 1), and everything
-except one test can also be tested on the deployed instance at **\<DEPLOYED-URL\>** with zero setup.
+except one test can also be tested on the deployed instance at **https://onboardbuddy-three.vercel.app** with zero setup.
 The two behave identically, with a single exception called out where it appears: **automatic
 re-analysis on push (Test 5.4) only works on the deployed instance**, because GitHub must deliver
 the webhook over the public internet and cannot reach `localhost`. Every other feature that works in
@@ -89,7 +89,7 @@ What all 1,406 tests cover and why: [TESTING.md](./TESTING.md).
 
 # Part 1: Get the app running
 
-> ℹ️ **Testing on the deployed instance instead?** Open **\<DEPLOYED-URL\>**, sign in, and skip to
+> ℹ️ **Testing on the deployed instance instead?** Open **https://onboardbuddy-three.vercel.app**, sign in, and skip to
 > Test 1.2 step 2; everything from there on is identical.
 
 **Test 1.1 — start the stack**

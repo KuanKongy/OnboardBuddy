@@ -10,7 +10,7 @@
 - Sahib Rao
 - Bradley Sakran
 
-**Live app:** \<DEPLOYED-URL\> | **Final release branch:** `FinalRelease` | Run it yourself: [Docker Instructions](#docker-instructions) | Test it: [doc/TESTPLAN.md](doc/TESTPLAN.md)
+**Live app:** https://onboardbuddy-three.vercel.app | **Final release branch:** `FinalRelease` | Run it yourself: [Docker Instructions](#docker-instructions) | Test it: [doc/TESTPLAN.md](doc/TESTPLAN.md)
 
 ## Project Description
 
@@ -205,7 +205,7 @@ core Docker requirement. Final status of each:
 | Stretch goal | Status |
 |---|---|
 | AI chat over the generated package and receipts | **Completed**: the **Ask** panel in the reader (grounded, receipt-cited, rate-limited) |
-| Public deployment | **Completed (M5)**: frontend, API and worker deployed as three services at \<DEPLOYED-URL\> |
+| Public deployment | **Completed (M5)**: frontend, API and worker deployed as three services at https://onboardbuddy-three.vercel.app |
 | Local Ollama / self-hosted AI mode | **Dropped**: bring-your-own-key plus no-retention routing addresses the privacy motivation without a second AI backend |
 | Multi-language support | **Dropped deliberately**: one language parsed well over several parsed shallowly; 29 languages/formats are still read, classified and counted honestly |
 | PR-triggered onboarding update comments | **Partially superseded**: push-triggered re-analysis covers keeping the handbook fresh; posting PR comments was not built |
@@ -218,7 +218,7 @@ core Docker requirement. Final status of each:
 M5 added no new product surface beyond the plan set at the end of M4: close every open bug, finish
 the deferred items, and deploy. What that came to:
 
-1. **Public deployment.** The app is live at **\<DEPLOYED-URL\>**, running the frontend, API and
+1. **Public deployment.** The app is live at **https://onboardbuddy-three.vercel.app**, running the frontend, API and
    worker as three services. The M4 blocker (the frontend baking `localhost:3000` in at build time)
    was cleared by runtime configuration: one image reads its API origin, Supabase URL and
    Content-Security-Policy at container start, so the same build serves local Docker and the cloud.
@@ -296,7 +296,7 @@ docker compose -f docker-compose.test.yml run --rm test    # ends with a per-are
 
 ## Docker Instructions
 
-The app runs via **Docker Compose**. Three containers start together: frontend, backend API, and backend worker. No local Node, Postgres or Redis install is needed: Supabase, Upstash Redis, GitHub and OpenRouter are reached as cloud services using the credentials in the `.env` files. (Prefer not to run anything? The same build is live at \<DEPLOYED-URL\>.)
+The app runs via **Docker Compose**. Three containers start together: frontend, backend API, and backend worker. No local Node, Postgres or Redis install is needed: Supabase, Upstash Redis, GitHub and OpenRouter are reached as cloud services using the credentials in the `.env` files. (Prefer not to run anything? The same build is live at https://onboardbuddy-three.vercel.app.)
 
 1. Clone the repo and check out the `FinalRelease` branch.
 2. Copy the three files submitted on Canvas into the repo:
