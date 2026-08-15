@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { __setQueryForTests } from '../../../lib/db.js';
 import { ProviderError, StructuredOutputError } from '../provider.js';
-import { OpenRouterProvider, coerceNullArrays } from '../openRouterProvider.js';
+import { OpenRouterProvider, coerceNullArrays, humanizeProviderErrorBody } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
@@ -109,6 +109,24 @@ describe('phase 4 — null-array coercion (small-model quirk)', () => {
   });
 });
 
+describe('phase 4 — provider error body humanizing', () => {
+  it('passes non-JSON bodies through untouched', () => {
+    expect(humanizeProviderErrorBody('Bad Gateway')).to.equal('Bad Gateway');
+  });
+
+  it('extracts error.message from a flat JSON body', () => {
+    expect(humanizeProviderErrorBody('{"error":{"message":"Invalid model id","code":400}}')).to.equal('Invalid model id');
+  });
+
+  it('keeps the JSON itself when there is no message field', () => {
+    expect(humanizeProviderErrorBody('{"code":500}')).to.equal('{"code":500}');
+  });
+
+  it('names an empty body instead of ending the message with a colon', () => {
+    expect(humanizeProviderErrorBody('')).to.equal('(empty response body)');
+  });
+});
+
 describe('phase 4 — input hashing', () => {
   it('canonical JSON is key-order independent', () => {
     expect(canonicalJson({ b: 1, a: { d: 2, c: [3] } })).to.equal(canonicalJson({ a: { c: [3], d: 2 }, b: 1 }));
@@ -192,6 +210,22 @@ describe('phase 4 — OpenRouter provider', () => {
         expect(err).to.be.instanceOf(ProviderError);
         expect((err as ProviderError).retryable).to.equal(retryable);
       }
+    }
+  });
+
+  it('unwraps the nested OpenRouter 429 body into a readable message', async () => {
+    // Observed live (Aug 2026): OpenRouter pastes the upstream's raw 429 body
+    // inside its own error.message, so the pause banner showed escaped JSON.
+    const upstream = { error: { message: 'Rate limit exceeded, please try again later.', type: 'request_rate_limit_exceeded', code: 429 } };
+    const body = { error: { message: `HTTP 429: ${JSON.stringify(upstream)}`, code: 429 } };
+    const { provider } = providerWith([{ status: 429, body }]);
+    try {
+      await provider.complete({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, opts);
+      expect.fail('should have thrown');
+    } catch (err) {
+      expect((err as ProviderError).message).to.equal(
+        'provider HTTP 429 (rate limited): Rate limit exceeded, please try again later.',
+      );
     }
   });
 

@@ -239,7 +239,11 @@ export class OpenRouterProvider implements AiProvider {
     }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new ProviderError(`provider HTTP ${res.status}: ${text.slice(0, 500)}`, res.status, isRetryableStatus(res.status));
+      throw new ProviderError(
+        `provider HTTP ${res.status}${statusGloss(res.status)}: ${humanizeProviderErrorBody(text)}`,
+        res.status,
+        isRetryableStatus(res.status),
+      );
     }
     return (await res.json()) as T;
   }
@@ -273,6 +277,42 @@ export function openRouterProviderPrefs(): Record<string, unknown> {
     ...(zdr ? { zdr: true } : {}),
     ...(dataCollection ? { data_collection: dataCollection } : {}),
   };
+}
+
+/** One-phrase reading of the status — this string ends up in the paused-run banner. */
+function statusGloss(status: number): string {
+  if (status === 429) return ' (rate limited)';
+  if (status === 401 || status === 403) return ' (auth rejected)';
+  if (status >= 500) return ' (upstream error)';
+  return '';
+}
+
+/**
+ * Error bodies are JSON ({"error":{"message":...}}), and OpenRouter nests the
+ * upstream's raw body verbatim inside its own message ("HTTP 429: {\"error\"
+ * :...}") — pasted as-is, a pause banner reads as three layers of escaped
+ * JSON. Unwrap to the innermost human sentence; non-JSON bodies pass through.
+ * Exported for tests.
+ */
+export function humanizeProviderErrorBody(text: string): string {
+  let message = text.trim();
+  for (let depth = 0; depth < 4; depth += 1) {
+    const candidate = message.replace(/^HTTP \d{3}:\s*/, '');
+    let inner: unknown;
+    try {
+      const parsed = JSON.parse(candidate) as { error?: { message?: unknown }; message?: unknown };
+      inner = (parsed?.error && typeof parsed.error === 'object' ? parsed.error.message : undefined) ?? parsed?.message;
+    } catch {
+      message = candidate;
+      break;
+    }
+    if (typeof inner !== 'string' || inner.trim() === '') {
+      message = candidate;
+      break;
+    }
+    message = inner.trim();
+  }
+  return message.slice(0, 300) || '(empty response body)';
 }
 
 function isFiniteNumberArray(value: unknown): value is number[] {
