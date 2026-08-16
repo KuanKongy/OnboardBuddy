@@ -54,7 +54,8 @@ const BATCH_SIZE = 128;
 const CHUNK = 64;
 /** Not env-driven in the pass — mirrored here so the bounds below stay derived. */
 const QUEUE_MAX_CHUNKS = 16;
-const PRODUCER_SLOTS = 8;
+/** Pinned via EMBED_REQUEST_CONCURRENCY below. */
+const PRODUCER_SLOTS = 3;
 const PROGRESS_EVERY_CHUNKS = 4;
 const CHUNKS_PER_BATCH = Math.ceil(BATCH_SIZE / CHUNK);
 
@@ -73,6 +74,9 @@ interface Probe {
   vectorLiterals: Set<string>;
   /** Input counts of every ctx.ai.embed call. */
   embedCalls: number[];
+  embedInFlight: number;
+  /** Peak concurrent embed requests — what the upstream's per-key limit sees. */
+  maxEmbedInFlight: number;
   progress: Array<{ done: number; total: number }>;
 }
 
@@ -92,7 +96,7 @@ function harness(records: number, onInsert?: (probe: Probe) => Promise<void>): H
   const probe: Probe = {
     statements: 0, inFlight: 0, maxInFlight: 0,
     rowKeys: [], paramsPerRow: new Set(), vectorLiterals: new Set(),
-    embedCalls: [], progress: [],
+    embedCalls: [], embedInFlight: 0, maxEmbedInFlight: 0, progress: [],
   };
   const rows = Array.from({ length: records }, (_, i) => ({
     record_id: `rec-${i}`, stable_key: `src/a${i}.ts#fn`, record_level: 'symbol',
@@ -133,7 +137,15 @@ function harness(records: number, onInsert?: (probe: Probe) => Promise<void>): H
     embeddingModel: 'text-embedding-3-small',
     embed: async (inputs: string[]) => {
       probe.embedCalls.push(inputs.length);
-      return { vectors: inputs.map(() => [0.1, 0.2]) };
+      probe.embedInFlight += 1;
+      probe.maxEmbedInFlight = Math.max(probe.maxEmbedInFlight, probe.embedInFlight);
+      try {
+        // Yield a macrotask so overlapping requests are observable.
+        await new Promise((resolve) => { setTimeout(resolve, 0); });
+        return { vectors: inputs.map(() => [0.1, 0.2]) };
+      } finally {
+        probe.embedInFlight -= 1;
+      }
     },
   } as unknown as SemanticContext['ai'];
 
@@ -163,15 +175,18 @@ describe('embedding pass — bounded-writer insert queue', () => {
     batchSize: process.env.EMBED_BATCH_SIZE,
     chunk: process.env.EMBED_INSERT_CHUNK,
     writers: process.env.EMBED_WRITE_CONCURRENCY,
+    producers: process.env.EMBED_REQUEST_CONCURRENCY,
   };
   before(() => {
     process.env.EMBED_BATCH_SIZE = String(BATCH_SIZE);
     process.env.EMBED_INSERT_CHUNK = String(CHUNK);
+    process.env.EMBED_REQUEST_CONCURRENCY = String(PRODUCER_SLOTS);
   });
   after(() => {
     restore('EMBED_BATCH_SIZE', previous.batchSize);
     restore('EMBED_INSERT_CHUNK', previous.chunk);
     restore('EMBED_WRITE_CONCURRENCY', previous.writers);
+    restore('EMBED_REQUEST_CONCURRENCY', previous.producers);
   });
   afterEach(() => __setQueryForTests(null));
 
@@ -192,6 +207,11 @@ describe('embedding pass — bounded-writer insert queue', () => {
         expect(new Set(probe.rowKeys).size, 'rows written exactly once').to.equal(pendingRows);
         expect(result.embedded).to.equal(pendingRows);
         expect(probe.embedCalls).to.have.length(batches);
+        // pplx-embed rides one ZDR upstream with per-key rate limits, so the
+        // burst width matters more than the batch count: 8 large batches at
+        // once is what drew the 429s that paused runs (2026-08-15).
+        expect(probe.maxEmbedInFlight, 'concurrent embedding requests')
+          .to.equal(Number(process.env.EMBED_REQUEST_CONCURRENCY));
         // `content` is stored on purpose (product decision, 2026-07-28) — a
         // dropped column would show up here as 5 params per row.
         expect([...probe.paramsPerRow], 'params per VALUES tuple').to.deep.equal([COLUMNS_PER_ROW]);

@@ -71,6 +71,21 @@ const EMBED_INSERT_CHUNK_DEFAULT = 64;
  */
 const EMBED_WRITE_CONCURRENCY_DEFAULT = 2;
 /**
+ * Embedding requests in flight at once (EMBED_REQUEST_CONCURRENCY).
+ *
+ * The old value was 8, and it bursts 8 × EMBED_BATCH_SIZE inputs at ONE
+ * upstream: pplx-embed rides a single ZDR endpoint through OpenRouter, whose
+ * rate limits are per key, not per batch. That burst is what draws the 429s
+ * that pause runs ("embedding_batch: provider HTTP 429"). 3 concurrent large
+ * batches stays under them.
+ *
+ * Reliability over speed (user decision 2026-08-15): the API leg was never
+ * this phase's bottleneck — 41 batches cost 82s of a 673s phase in the
+ * measurement above — so trading some of its parallelism for not being rate
+ * limited costs very little wall clock and removes a whole pause class.
+ */
+const EMBED_REQUEST_CONCURRENCY_DEFAULT = 3;
+/**
  * How far the writers may fall behind before producers stop embedding. A memory
  * bound, not a throughput knob (see EMBED_WRITE_CONCURRENCY for the arithmetic
  * at the current defaults). Without a bound the fast API leg (82s for the whole
@@ -146,6 +161,7 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   const batchSize = envInt('EMBED_BATCH_SIZE', EMBED_BATCH_SIZE_DEFAULT);
   const insertChunk = envInt('EMBED_INSERT_CHUNK', EMBED_INSERT_CHUNK_DEFAULT);
   const writeConcurrency = envInt('EMBED_WRITE_CONCURRENCY', EMBED_WRITE_CONCURRENCY_DEFAULT);
+  const requestConcurrency = envInt('EMBED_REQUEST_CONCURRENCY', EMBED_REQUEST_CONCURRENCY_DEFAULT);
 
   // The three reads below are wrapped too, not just the writes: on 2026-07-26
   // StudyFlow spent 43s in this preamble before its first vector left for the
@@ -217,10 +233,11 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
   for (let i = 0; i < pending.length; i += batchSize) {
     embedBatches.push(pending.slice(i, i + batchSize));
   }
-  // Producer/consumer split (see EMBED_INSERT_CHUNK): the 8 producers below do
-  // ONLY the API call and tuple building, and hand chunks to a fixed set of
-  // writers. The number of insert statements this phase has outstanding at any
-  // instant is therefore exactly EMBED_WRITE_CONCURRENCY, where it used to be 8
+  // Producer/consumer split (see EMBED_INSERT_CHUNK): the
+  // EMBED_REQUEST_CONCURRENCY producers below do ONLY the API call and tuple
+  // building, and hand chunks to a fixed set of writers. The number of insert
+  // statements this phase has outstanding at any instant is therefore exactly
+  // EMBED_WRITE_CONCURRENCY, where it used to be one per producer slot (8)
   // — which is what actually cost the 673s above, and which also removes this
   // phase's share of the 2026-07-26 57014 deaths (its inserts can no longer
   // queue up 8-deep behind each other).
@@ -263,7 +280,8 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
       // load. It goes out in EMBED_INSERT_CHUNK-row statements (see the
       // constant) so no single statement can spend its whole 120s budget queued
       // behind the writers of the OTHER analyses running at the same time —
-      // within this job there are now EMBED_WRITE_CONCURRENCY of them, not 8.
+      // within this job there are now EMBED_WRITE_CONCURRENCY of them, not one
+      // per producer slot (8 when this was written).
       // ON CONFLICT DO NOTHING makes the one retry a no-op for anything that
       // did land, and makes each chunk independently resumable: a chunk that
       // committed before a later one failed is skipped by the `loadExisting`
@@ -298,7 +316,7 @@ export async function runEmbeddingPass(ctx: SemanticContext): Promise<EmbeddingP
 
   const producers = (async () => {
     try {
-      await mapLimit(embedBatches, 8, async (batch) => {
+      await mapLimit(embedBatches, requestConcurrency, async (batch) => {
         if (writerStopped) return; // don't pay for vectors nothing will store
         const { vectors } = await ctx.ai.embed(batch.map((p) => p.content), { targetType: 'embedding_batch' });
         batches += 1;
