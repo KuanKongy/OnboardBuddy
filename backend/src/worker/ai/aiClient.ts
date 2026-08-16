@@ -18,6 +18,7 @@ import {
   StructuredOutputError,
 } from './provider.js';
 import { OpenRouterProvider } from './openRouterProvider.js';
+import { rateLimitGate } from './rateLimitGate.js';
 import { resolveTierConfig, estimateCostUsd, type TierConfig, type FailureBehavior } from './modelTiers.js';
 import { resolveApiKey, resolveEmbeddingsKey, type ResolvedKey } from './keyResolver.js';
 import {
@@ -36,9 +37,17 @@ import { assertAiAllowed, type PrivacyMode } from './privacy.js';
 
 /** The tier's failure behavior asked for a resumable pause. */
 export class AiPausedError extends Error {
-  constructor(public readonly reason: string) {
+  /**
+   * True when the pause was provider rate limiting rather than a broken call.
+   * A rate-limited pause is the one kind that resolves purely by waiting, so
+   * it is the one a resume can be scheduled for instead of asking the user.
+   */
+  readonly rateLimited: boolean;
+
+  constructor(public readonly reason: string, opts: { rateLimited?: boolean } = {}) {
     super(`LLM work paused: ${reason}`);
     this.name = 'AiPausedError';
+    this.rateLimited = opts.rateLimited ?? false;
   }
 }
 
@@ -113,11 +122,31 @@ export interface AiClientOptions {
   provider?: AiProvider;
   maxConcurrency?: number;
   maxRetries?: number;
+  /** 429 waits allowed per call, separate from maxRetries. */
+  maxRateLimitWaits?: number;
   sleep?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 500;
+/**
+ * 429 waits allowed per call. Six waits on the schedule below is ~285s of
+ * patience before the tier's failure behavior takes over — long enough to
+ * outlast the per-minute windows that pause runs today, short enough that a
+ * key which is genuinely out of quota still surfaces a (resumable) pause in
+ * under five minutes instead of holding a worker slot indefinitely.
+ */
+const DEFAULT_MAX_RATE_LIMIT_WAITS = 6;
+/**
+ * Cooldowns per successive 429, indexed by waits already taken and clamped to
+ * the last entry: 15s, 30s, 60s, 60s, 60s, 60s. The old generic backoff
+ * (500ms · 2^attempt, ~3.5s over three attempts) is shorter than any
+ * rate-limit window an upstream enforces, so 429s deterministically exhausted
+ * it and paused the run — the numbers here are sized against per-minute
+ * windows, not against transient 5xx. Only used when the response carried no
+ * Retry-After of its own.
+ */
+const RATE_LIMIT_BACKOFF_MS = [15_000, 30_000, 60_000];
 
 export class AiClient {
   readonly stats: AiClientStats = {
@@ -129,6 +158,7 @@ export class AiClient {
   private readonly tierConfig: TierConfig;
   private readonly semaphore: Semaphore;
   private readonly maxRetries: number;
+  private readonly maxRateLimitWaits: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private keyPromise: Promise<ResolvedKey> | null = null;
 
@@ -139,6 +169,7 @@ export class AiClient {
     // overhaul Track D); env LLM_MAX_CONCURRENCY still wins.
     this.semaphore = new Semaphore(options.maxConcurrency ?? Number(process.env.LLM_MAX_CONCURRENCY ?? 12));
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.maxRateLimitWaits = options.maxRateLimitWaits ?? DEFAULT_MAX_RATE_LIMIT_WAITS;
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
   }
 
@@ -319,9 +350,18 @@ export class AiClient {
     }
   }
 
-  /** Exponential backoff on retryable provider errors when the tier allows 'retry'. */
+  /**
+   * Exponential backoff on retryable provider errors when the tier allows
+   * 'retry', plus a separate, much longer budget for 429s.
+   *
+   * The two counters are deliberately independent. A 429 says nothing about
+   * this call's health — it is the shared key's window being shut — so
+   * spending the generic budget on it (and vice versa) meant a run could be
+   * paused by a rate limit having made no failing call at all.
+   */
   private async withRetries<T>(tier: ModelTier, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     const canRetry = this.tierConfig.failureBehavior[tier]?.includes('retry') ?? true;
+    const gate = rateLimitGate(this.provider.id);
     // An aborted request was cancelled deliberately — the losing copy of a
     // hedged straggler batch, whose twin has already answered. The provider
     // reports an abort as a RETRYABLE ProviderError, so without this bail the
@@ -329,10 +369,27 @@ export class AiClient {
     // work that is already persisted.
     if (signal?.aborted) throw abortError(signal);
     let attempt = 0;
+    let rateLimitWaits = 0;
     for (;;) {
+      // Outside the semaphore (fn() is what takes a slot): a call parked on a
+      // shut window must not hold concurrency the whole time, and a call that
+      // arrives mid-window waits here rather than spending a request on a door
+      // it already knows is closed.
+      await gate.wait(signal);
       try {
         return await fn();
       } catch (err) {
+        if (err instanceof ProviderError && err.status === 429) {
+          const base = err.retryAfterMs
+            ?? RATE_LIMIT_BACKOFF_MS[Math.min(rateLimitWaits, RATE_LIMIT_BACKOFF_MS.length - 1)]!;
+          // Trip before deciding whether to give up: a call that is about to
+          // pause the run still has to cool the window for the sibling jobs
+          // sharing this key, or they walk straight into the same 429.
+          gate.trip(this.jitter(base), `HTTP 429 (${tier})`);
+          if (!canRetry || signal?.aborted || rateLimitWaits >= this.maxRateLimitWaits) throw err;
+          rateLimitWaits += 1;
+          continue; // the gate does all the 429 sleeping, at the top of the loop
+        }
         // StructuredOutputError is retryable too: malformed JSON is largely
         // stochastic (observed on BOTH deepseek and scout for the same
         // capability payload) — a fresh sample usually lands where the
@@ -344,6 +401,14 @@ export class AiClient {
         attempt += 1;
       }
     }
+  }
+
+  /**
+   * Up to +25%. Without it the whole fan-out that 429'd together would come
+   * back on the same tick and re-close the window on the first caller through.
+   */
+  private jitter(ms: number): number {
+    return ms + Math.floor(Math.random() * 0.25 * ms);
   }
 
   private async recordSuccess(usage: TokenUsage, costUsd: number): Promise<void> {
@@ -361,7 +426,9 @@ export class AiClient {
    */
   private applyTerminalBehavior(behaviors: FailureBehavior[], req: Pick<AiRequest, 'targetType'>, cause: unknown): never {
     const message = `${req.targetType}: ${errMessage(cause)}`;
-    if (behaviors.includes('pause')) throw new AiPausedError(message);
+    if (behaviors.includes('pause')) {
+      throw new AiPausedError(message, { rateLimited: cause instanceof ProviderError && cause.status === 429 });
+    }
     throw new AiFailedError(`LLM work failed (${message})`, cause);
   }
 }

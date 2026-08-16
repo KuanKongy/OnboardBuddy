@@ -140,8 +140,11 @@ export class FakeProvider implements AiProvider {
     return { value: this.structuredValue as T, usage: { inputTokens: 150, outputTokens: 30 }, usedSchemaFallback: false };
   }
 
-  async embed(inputs: string[], _model: string, _opts: ProviderCallOptions): Promise<{ vectors: number[][]; usage: { inputTokens: number; outputTokens: number } }> {
+  async embed(inputs: string[], model: string, _opts: ProviderCallOptions): Promise<{ vectors: number[][]; usage: { inputTokens: number; outputTokens: number } }> {
     this.embedCalls.push(inputs);
+    // Same error queue as the chat paths: embedding failures (the 429s that
+    // pause runs today) have to be scriptable against the same stub.
+    this.maybeThrow(model);
     return { vectors: inputs.map(() => [0.1, 0.2]), usage: { inputTokens: 10, outputTokens: 0 } };
   }
 
@@ -183,6 +186,14 @@ export function makeClient(provider: FakeProvider, opts: {
   budget?: BudgetEnforcer;
   models?: Partial<Record<'cheap' | 'strong', string[]>>;
   behaviors?: Partial<Record<'cheap' | 'strong', Array<'retry' | 'degrade' | 'pause' | 'fail'>>>;
+  maxRetries?: number;
+  maxRateLimitWaits?: number;
+  /**
+   * Collects the GENERIC backoff sleeps (they still resolve instantly). 429
+   * waits are the rate-limit gate's, not this one's — a test that finds a
+   * 429 delay in here is watching the two budgets bleed into each other.
+   */
+  sleeps?: number[];
 } = {}): AiClient {
   const tierConfig = resolveTierConfig();
   if (opts.models?.cheap) tierConfig.models.cheap = opts.models.cheap;
@@ -196,7 +207,8 @@ export function makeClient(provider: FakeProvider, opts: {
     budget: opts.budget ?? makeBudget(),
     provider,
     tierConfig,
-    maxRetries: 2,
-    sleep: async () => {},
+    maxRetries: opts.maxRetries ?? 2,
+    maxRateLimitWaits: opts.maxRateLimitWaits,
+    sleep: opts.sleeps ? async (ms) => { opts.sleeps!.push(ms); } : async () => {},
   });
 }

@@ -13,6 +13,11 @@ import {
   summarizeRunBudget,
 } from '../budgetEnforcer.js';
 import { AiPausedError, AiFailedError } from '../aiClient.js';
+import {
+  rateLimitGate,
+  __resetRateLimitGatesForTests,
+  __setRateLimitGateHooksForTests,
+} from '../rateLimitGate.js';
 import { stripSnippetsDeep, applyPrivacyMode, AiDisabledError } from '../privacy.js';
 // Shared fakes (test/helpers/aiHarness.ts) — the privacy-mode suites assert
 // against the same provider stub, so a call site cannot drift out from under
@@ -613,11 +618,37 @@ describe('phase 4 — budget enforcer', () => {
   });
 });
 
+/**
+ * Fake clock for the rate-limit gate: records every 429 wait and advances
+ * time by exactly what was waited, so no case here spends a real second.
+ */
+function installGateClock(): number[] {
+  const sleeps: number[] = [];
+  let now = 0;
+  __setRateLimitGateHooksForTests({
+    now: () => now,
+    sleep: async (ms) => { sleeps.push(ms); now += ms; },
+  });
+  return sleeps;
+}
+
 describe('phase 4 — AiClient', () => {
   const envKey = process.env.OPENROUTER_API_KEY;
   before(() => { process.env.OPENROUTER_API_KEY = 'server-key'; });
   after(() => { process.env.OPENROUTER_API_KEY = envKey; });
-  afterEach(() => __setQueryForTests(null));
+  // The 429 gate is process-global on purpose (one key, many jobs), so every
+  // case starts from an empty registry on a fake clock — otherwise one case's
+  // cooldown is real minutes of the next one's runtime.
+  let gateSleeps: number[] = [];
+  beforeEach(() => {
+    __resetRateLimitGatesForTests();
+    gateSleeps = installGateClock();
+  });
+  afterEach(() => {
+    __setQueryForTests(null);
+    __setRateLimitGateHooksForTests(null);
+    __resetRateLimitGatesForTests();
+  });
 
   it('completes, audits the run, and records budget usage', async () => {
     const log = installFakeDb();
@@ -648,6 +679,153 @@ describe('phase 4 — AiClient', () => {
     const response = await client.call(baseRequest);
     expect(response.degraded).to.equal(false);
     expect(provider.completeCalls).to.have.length(3);
+  });
+
+  /**
+   * The bug this whole section exists for: 500ms·2^attempt over 3 attempts is
+   * ~3.5s of patience, shorter than any rate-limit window an upstream
+   * enforces, so a 429 burst deterministically exhausted the retry budget and
+   * paused the run ("LLM work paused: embedding_batch: provider HTTP 429").
+   */
+  it('waits out 429s on the long schedule, spending none of the generic retry budget', async () => {
+    installFakeDb();
+    const provider = new FakeProvider();
+    provider.errors = [new ProviderError('429', 429, true), new ProviderError('429', 429, true)];
+    const sleeps: number[] = [];
+    const client = makeClient(provider, { sleeps });
+
+    await client.call(baseRequest);
+
+    expect(provider.completeCalls).to.have.length(3);
+    expect(gateSleeps, 'one gate wait per 429').to.have.length(2);
+    // RATE_LIMIT_BACKOFF_MS plus up to 25% jitter — not 500ms, 1s.
+    expect(gateSleeps[0]).to.be.within(15_000, 18_750);
+    expect(gateSleeps[1]).to.be.within(30_000, 37_500);
+    expect(sleeps, 'generic backoff never fired').to.deep.equal([]);
+  });
+
+  it('keeps the 429 budget separate from maxRetries in both directions', async () => {
+    installFakeDb();
+    // Zero generic retries: a 429 is still waited out, because it says nothing
+    // about this call's health — it is the shared key's window being shut.
+    const provider = new FakeProvider();
+    provider.errors = [new ProviderError('429', 429, true)];
+    await makeClient(provider, { maxRetries: 0 }).call(baseRequest);
+    expect(provider.completeCalls).to.have.length(2);
+
+    // And the reverse: an ordinary retryable error still respects maxRetries.
+    const strict = new FakeProvider();
+    strict.errors = [new ProviderError('503', 503, true)];
+    const err = await makeClient(strict, { maxRetries: 0 }).call(baseRequest).then(() => null, (e: unknown) => e);
+    expect(err).to.be.instanceOf(AiFailedError);
+    expect(strict.completeCalls).to.have.length(1);
+  });
+
+  it("prefers the provider's own Retry-After to the default schedule", async () => {
+    installFakeDb();
+    const provider = new FakeProvider();
+    provider.errors = [new ProviderError('429', 429, true, 5_000)];
+    await makeClient(provider).call(baseRequest);
+    // On a 429 the upstream is the only party that knows when its window
+    // reopens, so 5s beats the 15s we would otherwise have guessed.
+    expect(gateSleeps).to.have.length(1);
+    expect(gateSleeps[0]).to.be.within(5_000, 6_250);
+  });
+
+  it('pauses with rateLimited set once the 429 waits run out', async () => {
+    installFakeDb();
+    const provider = new FakeProvider();
+    provider.errors = [
+      new ProviderError('429', 429, true),
+      new ProviderError('429', 429, true),
+      new ProviderError('429', 429, true),
+    ];
+    const client = makeClient(provider, { maxRateLimitWaits: 2 });
+
+    const err = await client.call({ ...baseRequest, tier: 'strong' }).then(() => null, (e: unknown) => e);
+
+    expect(err).to.be.instanceOf(AiPausedError);
+    // The one pause kind that resolves by waiting — a resume can be scheduled
+    // for it rather than asking the user to press the button.
+    expect((err as AiPausedError).rateLimited).to.equal(true);
+    expect(provider.completeCalls).to.have.length(3);
+    expect(gateSleeps).to.have.length(2);
+  });
+
+  it("one job's 429 gates a sibling job on the same key before it dispatches", async () => {
+    installFakeDb();
+    const providerA = new FakeProvider();
+    providerA.errors = [new ProviderError('429', 429, true)];
+    const clientA = makeClient(providerA);
+    // A DIFFERENT client instance: WORKER_CONCURRENCY jobs each build their
+    // own AiClient but share one OPENROUTER_API_KEY, so the cooldown has to
+    // live in the process, not in the client that happened to draw the 429.
+    const providerB = new FakeProvider();
+    const clientB = makeClient(providerB);
+
+    const waits: Array<{ ms: number; siblingCalls: number }> = [];
+    let now = 0;
+    let sibling: Promise<unknown> | null = null;
+    __setRateLimitGateHooksForTests({
+      now: () => now,
+      sleep: async (ms) => {
+        waits.push({ ms, siblingCalls: providerB.completeCalls.length });
+        if (sibling === null) {
+          // B arrives while A's window is still shut — the case that matters.
+          sibling = clientB.call(baseRequest);
+          for (let i = 0; i < 200 && waits.length < 2; i++) await Promise.resolve();
+        }
+        now += ms;
+      },
+    });
+
+    await clientA.call(baseRequest);
+    await sibling;
+
+    expect(waits, 'both calls waited').to.have.length(2);
+    expect(waits[1]!.ms, 'on the same window').to.equal(waits[0]!.ms);
+    expect(waits[1]!.siblingCalls, 'B waited before spending a request').to.equal(0);
+    expect(providerB.completeCalls, 'B dispatched once, after the window').to.have.length(1);
+  });
+
+  it('lets an aborted call out of the cooldown instead of waiting it out', async () => {
+    installFakeDb();
+    const waits: number[] = [];
+    // A sleep that never resolves: the abort is the only way out, which is the
+    // point — a hedged loser must not sit out 60s for work already persisted.
+    __setRateLimitGateHooksForTests({
+      now: () => 0,
+      sleep: (ms) => { waits.push(ms); return new Promise<void>(() => {}); },
+    });
+    rateLimitGate('openrouter').trip(60_000, 'HTTP 429 (cheap)');
+
+    const provider = new FakeProvider();
+    const controller = new AbortController();
+    const call = makeClient(provider).call({ ...baseRequest, signal: controller.signal });
+    for (let i = 0; i < 200 && waits.length === 0; i++) await Promise.resolve();
+    expect(waits, 'the call parked on the gate').to.have.length(1);
+    controller.abort(new Error('hedge winner already landed'));
+
+    const err = await call.then(() => null, (e: unknown) => e);
+    expect(err).to.be.instanceOf(AiFailedError);
+    expect(provider.completeCalls, 'never dispatched').to.have.length(0);
+  });
+
+  it('embed: a rate-limited batch waits, then pauses resumably', async () => {
+    installFakeDb();
+    process.env.EMBEDDINGS_API_KEY = 'emb-key';
+    const provider = new FakeProvider();
+    provider.errors = Array.from({ length: 7 }, () => new ProviderError('429', 429, true));
+    const client = makeClient(provider);
+
+    const err = await client.embed(['one', 'two']).then(() => null, (e: unknown) => e);
+
+    // Six waits (~285s) before the embedding tier's ['retry','pause'] gives up.
+    expect(err).to.be.instanceOf(AiPausedError);
+    expect((err as AiPausedError).rateLimited).to.equal(true);
+    expect(provider.embedCalls, 'attempts').to.have.length(7);
+    expect(gateSleeps, 'gate waits').to.have.length(6);
+    delete process.env.EMBEDDINGS_API_KEY;
   });
 
   it('re-rolls a fresh attempt when structured output fails validation', async () => {
@@ -687,6 +865,9 @@ describe('phase 4 — AiClient', () => {
       expect.fail('should have thrown');
     } catch (err) {
       expect(err).to.be.instanceOf(AiPausedError);
+      // Not every pause is a cooldown: a model that is simply down must not
+      // be handed to a resume-when-the-window-reopens path.
+      expect((err as AiPausedError).rateLimited).to.equal(false);
     }
   });
 
