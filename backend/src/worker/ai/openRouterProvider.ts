@@ -243,6 +243,7 @@ export class OpenRouterProvider implements AiProvider {
         `provider HTTP ${res.status}${statusGloss(res.status)}: ${humanizeProviderErrorBody(text)}`,
         res.status,
         isRetryableStatus(res.status),
+        parseRetryAfterMs(res.headers.get('retry-after')),
       );
     }
     return (await res.json()) as T;
@@ -313,6 +314,34 @@ export function humanizeProviderErrorBody(text: string): string {
     message = inner.trim();
   }
   return message.slice(0, 300) || '(empty response body)';
+}
+
+/**
+ * RFC 9110 Retry-After, in ms: either delta-seconds or an HTTP date. Returned
+ * undefined means "no usable hint" — the caller falls back to its own
+ * schedule rather than treating a garbage header as "retry immediately".
+ *
+ * Clamped to [1s, 5min]: a 0 would spend the retry instantly against a window
+ * that has not reopened, and an upstream asking for an hour would strand the
+ * job far past any deadline a caller is willing to hold (the tier's pause is
+ * resumable, so waiting that long buys nothing). A past date is a stale or
+ * skewed clock, not a wait — undefined. `nowMs` is injectable for tests.
+ * Exported for tests.
+ */
+export function parseRetryAfterMs(header: string | null, nowMs = Date.now()): number | undefined {
+  if (header === null) return undefined;
+  const raw = header.trim();
+  if (raw === '') return undefined;
+  let ms: number;
+  if (/^\d+$/.test(raw)) {
+    ms = Number(raw) * 1000;
+  } else {
+    const at = Date.parse(raw);
+    if (Number.isNaN(at)) return undefined;
+    ms = at - nowMs;
+  }
+  if (!Number.isFinite(ms) || ms < 0) return undefined;
+  return Math.min(Math.max(ms, 1_000), 300_000);
 }
 
 function isFiniteNumberArray(value: unknown): value is number[] {

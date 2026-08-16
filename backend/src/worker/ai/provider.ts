@@ -63,6 +63,12 @@ export class ProviderError extends Error {
     message: string,
     public readonly status: number | null,
     public readonly retryable: boolean,
+    /**
+     * The upstream's own Retry-After, in ms, when it sent a usable one. It
+     * beats any backoff schedule we could guess at: on a 429 the provider is
+     * the only party that knows when its window reopens.
+     */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'ProviderError';

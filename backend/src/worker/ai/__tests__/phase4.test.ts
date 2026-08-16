@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { __setQueryForTests } from '../../../lib/db.js';
 import { ProviderError, StructuredOutputError } from '../provider.js';
-import { OpenRouterProvider, coerceNullArrays, humanizeProviderErrorBody } from '../openRouterProvider.js';
+import { OpenRouterProvider, coerceNullArrays, humanizeProviderErrorBody, parseRetryAfterMs } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
@@ -178,12 +178,12 @@ describe('phase 4 — json schema validator', () => {
 describe('phase 4 — OpenRouter provider', () => {
   const opts = { apiKey: 'k' };
 
-  function providerWith(responses: Array<{ status: number; body: unknown }>): { provider: OpenRouterProvider; requests: Array<{ url: string; body: Record<string, unknown> }> } {
+  function providerWith(responses: Array<{ status: number; body: unknown; headers?: Record<string, string> }>): { provider: OpenRouterProvider; requests: Array<{ url: string; body: Record<string, unknown> }> } {
     const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
       requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
       const next = responses.shift() ?? { status: 500, body: 'exhausted' };
-      return new Response(typeof next.body === 'string' ? next.body : JSON.stringify(next.body), { status: next.status });
+      return new Response(typeof next.body === 'string' ? next.body : JSON.stringify(next.body), { status: next.status, headers: next.headers });
     }) as typeof fetch;
     return { provider: new OpenRouterProvider({ baseUrl: 'https://test.local/v1', fetchImpl }), requests };
   }
@@ -227,6 +227,48 @@ describe('phase 4 — OpenRouter provider', () => {
         'provider HTTP 429 (rate limited): Rate limit exceeded, please try again later.',
       );
     }
+  });
+
+  /** The ProviderError one scripted response produces. */
+  async function errorFrom(response: { status: number; body: unknown; headers?: Record<string, string> }): Promise<ProviderError> {
+    const { provider } = providerWith([response]);
+    const err = await provider
+      .complete({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }, opts)
+      .then(() => null, (e: unknown) => e);
+    expect(err, 'should have thrown').to.be.instanceOf(ProviderError);
+    return err as ProviderError;
+  }
+
+  it('captures Retry-After delta-seconds off a 429', async () => {
+    const err = await errorFrom({ status: 429, body: 'slow down', headers: { 'retry-after': '30' } });
+    expect(err.retryAfterMs).to.equal(30_000);
+  });
+
+  it('captures the HTTP-date form, capped at 5 minutes, and ignores a past date', async () => {
+    const far = await errorFrom({
+      status: 429, body: 'slow down',
+      headers: { 'retry-after': new Date(Date.now() + 20 * 60_000).toUTCString() },
+    });
+    // An upstream asking for 20 minutes gets the cap: the pause is resumable,
+    // so holding the job that long buys nothing.
+    expect(far.retryAfterMs).to.equal(300_000);
+
+    const stale = await errorFrom({
+      status: 429, body: 'slow down',
+      headers: { 'retry-after': new Date(Date.now() - 60_000).toUTCString() },
+    });
+    expect(stale.retryAfterMs).to.equal(undefined);
+  });
+
+  it('leaves retryAfterMs undefined when the header is missing or unparseable', async () => {
+    expect((await errorFrom({ status: 429, body: 'slow down' })).retryAfterMs).to.equal(undefined);
+    expect((await errorFrom({ status: 429, body: 'slow down', headers: { 'retry-after': 'soon' } })).retryAfterMs)
+      .to.equal(undefined);
+    // Floor: a "0" would spend the retry against a window that has not reopened.
+    expect(parseRetryAfterMs('0')).to.equal(1_000);
+    expect(parseRetryAfterMs('45')).to.equal(45_000);
+    expect(parseRetryAfterMs(null)).to.equal(undefined);
+    expect(parseRetryAfterMs(new Date(1_000_000).toUTCString(), 1_060_000)).to.equal(undefined);
   });
 
   it('structured: strict json_schema request parses the response', async () => {
