@@ -60,6 +60,12 @@ import {
   trackInFlightJob,
   type OrphanedJob,
 } from './jobRecovery.js';
+import {
+  MAX_RATE_LIMIT_RESUMES,
+  RATE_LIMIT_RESUME_DELAY_MS,
+  claimRateLimitResume,
+  isRateLimitPause,
+} from './rateLimitResume.js';
 import { drainWorkers } from './shutdown.js';
 import { recordJobFailure } from './retryPolicy.js';
 
@@ -943,6 +949,39 @@ async function processAnalysisJob(job: Job<AnalysisJobData>): Promise<void> {
         // Amortized counters must survive every terminal path (Track C).
         await budget.flush().catch(() => {});
         if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+          // A pause the provider's rate limiter caused resolves by waiting, so
+          // it schedules its own resume instead of asking a human for one. The
+          // claim is bounded and atomic (rateLimitResume.ts); a null means the
+          // cap is spent or the row already left 'running', and the ordinary
+          // pause below is then exactly right.
+          if (isRateLimitPause(err)) {
+            const claim = await claimRateLimitResume(jobId).catch(() => null);
+            if (claim) {
+              await getAnalysisQueue().add('analyze_scope', {
+                jobId,
+                projectId: claim.project_id,
+                scopeId: claim.scope_id ?? undefined,
+                commit: claim.commit_hash ?? undefined,
+                branch: claim.branch ?? undefined,
+                depth: (claim.semantic_depth ?? undefined) as AnalysisJobData['depth'],
+                role: claim.role ?? undefined,
+                // Same rule as POST /resume and orphan recovery: without force
+                // the snapshot-reuse short-circuit sees the optimistic
+                // 'complete' written at 46% and declares the run done with the
+                // semantic phases never executed.
+                force: true,
+              } satisfies AnalysisJobData, { ...RECOVERY_ENQUEUE_OPTS, delay: RATE_LIMIT_RESUME_DELAY_MS });
+              // Deliberately NOT marking the snapshot 'paused': the job row is
+              // 'queued' again, and a 'paused' snapshot under a queued job
+              // flips the project card to a stopped-looking state for a run
+              // that is still going. snapshot_phases were already marked
+              // 'paused' by the pipeline before the rethrow — the forced
+              // re-run re-marks them.
+              console.warn(`[worker] rate-limited pause on job ${jobId} — auto-resume `
+                + `${claim.attempt}/${MAX_RATE_LIMIT_RESUMES} in ~${Math.round(RATE_LIMIT_RESUME_DELAY_MS / 1000)}s`);
+              return;
+            }
+          }
           // Resumable: checkpointed phases + content-addressed records make
           // a re-run skip everything already paid for.
           await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]);

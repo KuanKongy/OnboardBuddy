@@ -10,7 +10,7 @@
 
 import { Worker, Job, Queue } from 'bullmq';
 import { startQueueWatchdog } from '../lib/queueWatchdog.js';
-import { SUMMARY_QUEUE, connection } from '../lib/queue.js';
+import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
 import { envInt } from '../lib/env.js';
@@ -26,6 +26,12 @@ import type { SemanticDepth } from './engine/budgets.js';
 import type { DeveloperRole } from './semantic/projections.js';
 import { settlePackageStaleness } from './incrementalAnalyzer.js';
 import { trackInFlightJob } from './jobRecovery.js';
+import {
+  MAX_RATE_LIMIT_RESUMES,
+  RATE_LIMIT_RESUME_DELAY_MS,
+  claimRateLimitResume,
+  isRateLimitPause,
+} from './rateLimitResume.js';
 import { recordJobFailure } from './retryPolicy.js';
 import { SECTION_SPECS, SECTION_TITLES, SECTION_TYPES, buildSectionDeps, type SectionType } from './generation/sectionSpecs.js';
 import { generateSection } from './generation/sectionGenerator.js';
@@ -703,6 +709,34 @@ async function processSummaryJob(job: Job<SummaryJobData>): Promise<void> {
       ).catch(() => {});
     }
     if (err instanceof AiPausedError || (err instanceof BudgetExceededError && err.behavior === 'pause')) {
+      // Provider rate limiting is the one pause that resolves by waiting, so it
+      // schedules its own resume rather than parking the package for a human.
+      // Bounded and atomic (rateLimitResume.ts): a null claim means the cap is
+      // spent or the row already left 'running', and the pause below stands.
+      if (isRateLimitPause(err)) {
+        const claim = await claimRateLimitResume(jobId).catch(() => null);
+        if (claim) {
+          // The same job data: the checkpoint carries the resume cursor and the
+          // run's flags, so the re-run skips every section already written.
+          // attempts: 1 because the durable resume count is the bound here —
+          // BullMQ retries on top of it would multiply the cap.
+          await getSummaryQueue().add(job.name, job.data, {
+            attempts: 1,
+            delay: RATE_LIMIT_RESUME_DELAY_MS,
+            removeOnComplete: { count: 10 },
+            removeOnFail: { count: 10 },
+          });
+          // None of the pause bookkeeping below applies to a run that is coming
+          // back: the snapshot is not paused (it would blank two tabs under a
+          // queued job), the package is not stopping so `settleStoppedPackage`
+          // would demote a live 'generating' row to 'draft'/'failed', and the
+          // generation phase is left mid-flight rather than marked 'paused' —
+          // the resumed run finishes it and writes the real terminal state.
+          console.warn(`[summary-worker] rate-limited pause on job ${jobId} — auto-resume `
+            + `${claim.attempt}/${MAX_RATE_LIMIT_RESUMES} in ~${Math.round(RATE_LIMIT_RESUME_DELAY_MS / 1000)}s`);
+          return;
+        }
+      }
       const message = err.message.slice(0, 200);
       await markPhase(snapshotId, 'generation', 'paused', {}, { errorMessage: message }).catch(() => {});
       await query(`UPDATE analysis_snapshots SET status = 'paused' WHERE id = $1`, [snapshotId]).catch(() => {});
