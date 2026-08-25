@@ -50,7 +50,7 @@ describe('entrypointDetector', () => {
 });
 
 /**
- * The two archetypes none of the 11 calibration repos covers. A grader can
+ * The two archetypes none of the 11 calibration repos covers. Anyone can
  * point the product at any repository, and until now a published library
  * reported one `index.ts` and a command-line tool reported one symbol per file.
  */

@@ -85,7 +85,7 @@ backend/.probe-tmp/
 #   doc/AUDIT_LEDGER.md, CONTENT_AUDIT.md, OWNER_FEEDBACK_M4.md,
 #   READER_REDESIGN.md, TUTORIAL_REDESIGN.md, VISUAL_QA_M4.md,
 #   ROLE_DIFFERENTIATION_PLAN.md, PROJECT_SCORECARD.md
-#     -> the findings/goals corpus the rework is graded against.
+#     -> the findings/goals corpus the rework is measured against.
 #   doc/reader-audit/, doc/visual-qa-m4-shots/  (~2.4 MB, 23 images)
 #     -> the audit docs cite these by filename as evidence; a dangling
 #        reference is worse than the bytes.
@@ -99,6 +99,6 @@ backend/.probe-tmp/
 
 # ── Working notes: ours, not the reader's ────────────────────────────────────
 # Audits, scorecards, owner-feedback logs, redesign specs and audit screenshots.
-# They live OUTSIDE doc/ so the doc/ folder is exactly what a TA or teammate
+# They live OUTSIDE doc/ so the doc/ folder is exactly what a reader
 # should read. Kept on disk because the task list and agent briefs cite them.
 .notes/

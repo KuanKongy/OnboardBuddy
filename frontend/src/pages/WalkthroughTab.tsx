@@ -180,7 +180,7 @@ const PROCEDURE_META: Record<ProcedureKind, { label: string; icon: typeof PlayCi
 
 /**
  * The two groups, captioned. Naming what the second group IS — task guides, not
- * tutorials — is the whole point of the split: a grader who opens this tab
+ * tutorials — is the whole point of the split: a reader who opens this tab
  * should not have to decide for themselves whether "bring the stack up" is a
  * tutorial, because Diátaxis already decided and the caption says so.
  */

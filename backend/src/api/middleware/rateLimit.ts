@@ -4,7 +4,7 @@ import type { NextFunction, Request, RequestHandler, Response } from "express";
  * Fixed-window rate limiting, in memory.
  *
  * In-memory by design: the API runs as a single process, so a Redis-backed
- * limiter would add operational coupling for a course-scope control with no
+ * limiter would add operational coupling for a small-deployment control with no
  * corresponding benefit. Revisit if the API ever runs multiple instances —
  * with N instances each window allows N × `max`.
  *

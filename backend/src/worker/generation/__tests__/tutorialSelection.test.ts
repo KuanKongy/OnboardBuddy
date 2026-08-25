@@ -60,7 +60,7 @@ describe('tutorialGenerator.pickDiverseWorkflows', () => {
 /**
  * The two gates that keep this tab from sliding back into being a second
  * sections tab. Both failures are SILENT: loosen either one and the generator
- * still emits four confident-looking tutorials — which is exactly the graded
+ * still emits four confident-looking tutorials — which is exactly the reported
  * defect ("no difference with writing sections", four "Trace the X page UI
  * flow" essays). Nothing else fails when they regress, so they are tested here.
  */

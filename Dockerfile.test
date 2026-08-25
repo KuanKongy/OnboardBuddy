@@ -1,5 +1,5 @@
 # Test-runner image: everything needed to run the automated suites inside
-# Docker — no local Node/npm required (TA feedback from M2).
+# Docker — no local Node/npm required.
 #
 #   docker compose -f docker-compose.test.yml run --rm test
 #

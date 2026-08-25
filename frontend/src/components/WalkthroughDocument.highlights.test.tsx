@@ -33,7 +33,7 @@ const STEP: WalkthroughStepData = {
   receipts: [],
 };
 
-const REPO = { owner: "ldnkoff", repo: "team15", branch: "Milestone5" };
+const REPO = { owner: "KuanKongy", repo: "OnboardBuddy", branch: "main" };
 
 /**
  * The provider is not scenery: a step card carries a `SourceMark` chip whose
@@ -78,7 +78,7 @@ describe("walkthrough highlight chips", () => {
     const link = screen.getByText("flushes progress").closest("a");
     expect(link).toHaveAttribute(
       "href",
-      "https://github.com/ldnkoff/team15/blob/Milestone5/backend/src/worker/summaryWorker.ts#L508-L508",
+      "https://github.com/KuanKongy/OnboardBuddy/blob/main/backend/src/worker/summaryWorker.ts#L508-L508",
     );
     // The one that IS in the snippet stays a plain chip over its lit lines.
     expect(screen.getByText("enqueues the next phase").closest("a")).toBeNull();
