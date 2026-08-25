@@ -27,5 +27,12 @@
     "eslint": "^9.28.0",
     "prettier": "^3.5.3",
     "typescript": "^5.8.3"
+  },
+  "license": "SEE LICENSE IN LICENSE",
+  "description": "Codebase onboarding platform: import a GitHub repository and get a role-aware handbook, architecture maps and walkthroughs that cite real code",
+  "homepage": "https://onboardbuddy.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KuanKongy/OnboardBuddy.git"
   }
 }
