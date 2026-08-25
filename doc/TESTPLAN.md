@@ -1,10 +1,10 @@
-# Final Release (Milestone 5) Test Plan
+# Manual Test Plan
 
-How to validate the final release. Follow the parts in order; each **Test** is a numbered table of
+How to validate a build by hand. Follow the parts in order; each **Test** is a numbered table of
 *do this → you should see this*. Nothing here needs you to read code.
 
 **Two ways to test.** Everything can be tested on a local Docker install (Part 1), and everything
-except one test can also be tested on the deployed instance at **https://onboardbuddy-three.vercel.app** with zero setup.
+except one test can also be tested on the deployed instance at **https://onboardbuddy.dev** with zero setup.
 The two behave identically, with a single exception called out where it appears: **automatic
 re-analysis on push (Test 5.4) only works on the deployed instance**, because GitHub must deliver
 the webhook over the public internet and cannot reach `localhost`. Every other feature that works in
@@ -45,22 +45,22 @@ Parts 0–4 are the core. Parts 5–7 are optional if you are short on time.
 | 1 | From the repo root: `docker compose -f docker-compose.test.yml run --rm test` | Both suites scroll past, then a **per-area summary table** showing how many tests passed in each part of the system, ending in `Overall: PASS`. Exit code 0. |
 
 The table is the quickest way to see what is covered where. This is the output of the run above on
-the release commit (the separators inside it are printed by the test script itself):
+the current commit (the separators inside it are printed by the test script itself):
 
 ```text
   AREA                                                  PASSED   FAILED  SKIPPED    RESULT
   ────────────────────────────────────────────────────────────────────────────────────────
   Backend · security (hostile input)                        83        0        0      PASS
-  Backend · analysis pipeline                              299        0        0      PASS
-  Backend · AI, caching & model routing                    135        0        0      PASS
+  Backend · analysis pipeline                              302        0        0      PASS
+  Backend · AI, caching & model routing                    156        0        0      PASS
   Backend · document generation                            196        0        0      PASS
   Backend · API & auth (HTTP)                              227        0        0      PASS
   Backend · unit (libs, queue, crypto)                      35        0        0      PASS
   Backend · other (unclassified files)                       5        0        0      PASS
-  Frontend · unit (components, pages, safe rendering)      426        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      436        0        0      PASS
   E2E · Playwright (browser)                                 0        0        9   SKIPPED
   ────────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                                                   1406        0        9      PASS
+  TOTAL                                                   1440        0        9      PASS
 ```
 
 Every number is parsed from the runners' own machine-readable output, not written down anywhere
@@ -83,20 +83,20 @@ Nothing else is required: no `.env`, no cloud accounts, no running app. First ru
 > non-zero if a defence regresses, so it doubles as a CI gate. Output is committed at
 > [SECURITY_TEST_EVIDENCE.md](./SECURITY_TEST_EVIDENCE.md).
 
-What all 1,406 tests cover and why: [TESTING.md](./TESTING.md).
+What all 1,440 tests cover and why: [TESTING.md](./TESTING.md).
 
 ---
 
 # Part 1: Get the app running
 
-> ℹ️ **Testing on the deployed instance instead?** Open **https://onboardbuddy-three.vercel.app**, sign in, and skip to
+> ℹ️ **Testing on the deployed instance instead?** Open **https://onboardbuddy.dev**, sign in, and skip to
 > Test 1.2 step 2; everything from there on is identical.
 
 **Test 1.1 — start the stack**
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | Check out the `FinalRelease` branch. Put `backend/.env`, `frontend/.env` and `backend/github-app.pem` (all on Canvas) in place. **Both `.env` files must exist before building.** | — |
+| 1 | Check out `main`. Create `backend/.env` and `frontend/.env` from the `.env.example` files and place your GitHub App private key at `backend/github-app.pem` (see the README, "Run it locally"). **Both `.env` files must exist before building.** | — |
 | 2 | `docker compose up --build` | `OnboardBuddy API listening on http://localhost:3000`, and two `listening on queue …` lines from the worker |
 | 3 | Open http://localhost:3000/api/health | `{"status":"ok","service":"onboardbuddy-api"}` |
 | 4 | Open http://localhost:5173 | The landing page |
@@ -108,10 +108,10 @@ What all 1,406 tests cover and why: [TESTING.md](./TESTING.md).
 
 | # | Do this | You should see |
 |---|---------|----------------|
-| 1 | Sign up with an email and a password of 8+ characters, or use the demo account from the Canvas note. GitHub sign-in also works | Dashboard, with a first-run tour |
+| 1 | Sign up with an email and a password of 8+ characters. GitHub sign-in also works | Dashboard, with a first-run tour |
 | 2 | **Account Settings → Connect GitHub**, authorise the App | GitHub shows as connected, with your `@username` |
 
-**What you need to analyse:** fork https://github.com/KuanKongy/CourseInsights (a CPSC 310 project)
+**What you need to analyse:** fork https://github.com/KuanKongy/CourseInsights (a TypeScript/Express project we use as a calibration repository)
 into your own account, and install the OnboardBuddy GitHub App on it during import. Use your own
 fork (Parts 4 and 5 need push access).
 
@@ -127,7 +127,7 @@ fork (Parts 4 and 5 need push access).
 | 2 | Pick your fork, a branch, and a role → **Create project** | The project overview opens |
 
 > ℹ️ The pickers paginate: accounts with more than 100 repositories and repositories with more than
-> 30 branches load further pages as you scroll or search (this was open bug #67 at M4; fixed in M5).
+> 30 branches load further pages as you scroll or search (bug #67).
 
 **Test 2.2 — cost preview before spending**
 
@@ -277,7 +277,7 @@ fork (Parts 4 and 5 need push access).
 > reach the API over the public internet, and it cannot reach `localhost`. So this feature works on
 > the deployed instance but not on a local install, where the endpoint just sits disabled. (A tunnel
 > such as smee.io or ngrok works for local development, see [DEVOPS.md](./DEVOPS.md) "Webhook URL —
-> local development", but that is out of scope for grading.) **This is the only test in this plan
+> local development", but that is out of scope for this plan.) **This is the only test in this plan
 > with that restriction; every other feature behaves identically locally and in production.**
 
 | # | Do this | You should see |
@@ -376,8 +376,8 @@ fork (Parts 4 and 5 need push access).
 | 5 | As the Developer, **leave the project** (Team page) | They are removed and the project disappears from their dashboard; the owner sees the membership end |
 | 6 | As the owner, **transfer ownership** to the Developer (Team page), confirming the prompt | Roles swap: they are now Owner and you are no longer able to delete the project; the new owner has full control |
 
-> ℹ️ Decline, leave and ownership transfer are M5 completions: at M4 the team lifecycle was a
-> one-way door (old bug #72, closed).
+> ℹ️ The team lifecycle is fully reversible: an invitation can be declined, a member can leave, and
+> an owner can transfer the project to someone else (bug #72, closed).
 
 **Test 7.4 — account management**
 
@@ -399,7 +399,7 @@ fork (Parts 4 and 5 need push access).
 | 4 | Open **/help** | A tour picker, a 9-question FAQ, and a privacy section that matches the project's real privacy mode |
 | 5 | **Account Settings → Appearance** → Large | The whole app scales; reload and the choice survives with no flash |
 | 6 | Change your OS colour scheme without touching the theme toggle | The app follows it. Click the toggle once → it pins your choice and stops following |
-| 7 | Toggle dark/light on every tab | Everything stays legible in **both** themes; graphs recolour. (Dark-theme border and avatar contrast were measured failures at M4, bug #71, fixed in M5) |
+| 7 | Toggle dark/light on every tab | Everything stays legible in **both** themes; graphs recolour. (dark-theme border and avatar contrast were measured failures, bug #71, fixed) |
 
 **Test 7.6 — resilience** *(optional, local install)*
 
@@ -412,7 +412,7 @@ fork (Parts 4 and 5 need push access).
 
 # Reporting anything you find
 
-**The tracked bug list is closed: 85 GitHub issues across M2–M5, 0 open.** Every one was resolved
+**The tracked bug list is closed: 85 bugs filed, 0 open.** Every one was resolved
 or closed with a stated reason (the seven Won't-Fix items are sub-items of otherwise-fixed bugs,
 each with its reason recorded; an eighth was Won't-Fixed during the audits and then shipped after
 all). The per-bug ledger (expected vs actual, repro steps, fix and

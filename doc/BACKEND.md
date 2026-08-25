@@ -136,7 +136,7 @@ Errors: none expected
 | GET | `/auth/me` | Yes | Profile + whether GitHub App is connected |
 | DELETE | `/auth/account` | Yes | Permanently delete the account and its data |
 
-**There is no `POST /auth/signup`.** It was removed in M5 (bug #66): an
+**There is no `POST /auth/signup`.** It was removed (bug #66): an
 unauthenticated caller could create an *email-confirmed* account for any
 address, bypassing the confirmation email that real sign-up sends — and since
 invitations are matched on email address, that let an attacker pre-register a

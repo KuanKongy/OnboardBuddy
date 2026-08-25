@@ -357,7 +357,7 @@ injection is solved":
   route). Sanitization cannot detect an omission. The mitigations here are the
   boundary, the citation validator, and the section critique; none is a
   guarantee. **A generated doc is not a security review of the repo it describes.**
-- **`connect-src` is generated per deployment** (M5, issue #73). It used to be
+- **`connect-src` is generated per deployment** (issue #73). It used to be
   hardcoded to the compose topology (`localhost:3000`, `*.supabase.co`), which
   meant a different deployment had to edit the line. The container's startup
   script now derives it from the same `VITE_API_URL` / `VITE_SUPABASE_URL` it

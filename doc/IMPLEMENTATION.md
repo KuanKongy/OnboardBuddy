@@ -105,15 +105,13 @@ surfaced.
 debugging difficult. The Error Boundary added to `App.tsx` provides a user-friendly
 fallback for unhandled exceptions.
 
-## Deferred Items (Phase 6)
+## Items deferred at the time, since shipped
 
-The following were explicitly deferred as non-blocking:
-- Receipt viewer UI (click receipt → code viewer at file/line)
-- Citation validator (reject sections with uncited claims)
-- Receipt staleness tracking (compare hashes across snapshots)
-- Confidence badges on individual receipts
-
-These can be implemented once the core pipeline is battle-tested with real repos.
+Four items were deferred from the first pipeline build as non-blocking and have all since shipped:
+the receipt viewer (click a citation to open file, lines and code; see [FRONTEND.md](./FRONTEND.md)),
+the citation validator that checks generated sections against their own receipts, receipt staleness
+tracking across snapshots, and confidence labels on receipts and sections (the last three are
+described in [Pipeline.md](./Pipeline.md)).
 
 ---
 

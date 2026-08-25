@@ -1,18 +1,23 @@
 # Bug Log
 
-Copy each `## [P…][State] Bug …` block into a GitHub issue.
+Entries below reference the project's internal development phases: M1 (to 2026-06-14), M2 (to
+2026-07-08), M3 (to 2026-07-16), M4 (2026-07-16 to 2026-07-25) and M5 (2026-07-26 to 2026-08-07).
+During development the issues were mirrored to a private GitHub instance; this file is the public
+record.
+
+Each bug is one `## [P…][State] Bug …` block.
 
 **Priority:** P0 crash · P1 intermittent · P2 reproducible · P3 patch later · P4 annoying · P5 idea
 **State:** New (not investigated) · Open (someone is working on it) · Closed (fixed) · Won't-Fix (closed with a reason)
 
 **Bugs #1–#52** — Milestones 2 and 3. **Bugs #53–#74** — Milestone 4 (2026-07-16 → 2026-07-25). **Bugs
 #75–#83** — found by the eleven-project audit and the owner-directed reader/graph pass on 2026-07-25
-(eight P1, one P2), and **all nine fixed 2026-07-25/26** in the final pre-submission commits (see each
+(eight P1, one P2), and **all nine fixed 2026-07-25/26** in the final commits of that phase (see each
 bug's Notes for the exact fix).
 
 **M4 sprint work (#53–#74): 22 issues — 12 Closed** (found and fixed inside the sprint), **10 Open**
 (the M5 backlog). Every pre-#75 Open issue has an owner and a target in
-[§ M5 bug plan](#m5-bug-plan--every-open-bug-resolved-or-closed).
+[§ Backlog plan](#backlog-plan--every-open-bug-resolved-or-closed).
 
 **One issue per root cause.** Where several defects shared a cause or a fix location they are batched
 into one issue and listed inside it — 51 individual defects became these 22 issues. Fixing them one at
@@ -25,10 +30,11 @@ per-finding severity in [SECURITY_XSS_PROMPT_INJECTION.md](./SECURITY_XSS_PROMPT
 
 ---
 
-## GitHub Issues — TODO
+## Issue tracker
 
-Actions to take on the GitHub Issues tracker. `scripts/sync-github-issues.sh` automates the M4 rows
-(see [§ Filing these on GitHub](#filing-these-on-github)).
+Every bug in this ledger was mirrored to the development-time issue tracker (a private GitHub
+instance) and is closed there. New reports go to the public repository's Issues tab; this file stays
+the record for the bugs below.
 
 | Action | Issue | What to do |
 |--------|-------|------------|
@@ -196,7 +202,7 @@ most of it exists because we went looking, not because it surfaced in use. The t
 but unlike #65–#74, **all nine were fixed the same sprint** rather than deferred: entrypoint detection
 broadened past HTTP shapes, unparsed languages force-disclosed, run-status/pause semantics made
 truthful, a statement-timeout retry, the fullscreen exit control, and the viewport-reset-on-select all
-landed in the pre-submission commits. See each bug's Notes for the exact fix.
+landed in the final commits of that phase. See each bug's Notes for the exact fix.
 
 **Regression check: nothing closed in M2 or M3 has re-opened.** The three M3 fixes with the highest
 regression risk — run control (#50), incremental staleness (#52) and receipt citations (#45) — each
@@ -317,7 +323,7 @@ same day.
 
 ---
 
-## M5 bug plan — every Open bug resolved or closed
+## Backlog plan — every Open bug resolved or closed
 
 **Commitment for the final release: 26 Open → 0 Open.** Every item is either fixed or closed
 Won't-Fix with a stated reason. Sequenced by risk, not by number.
@@ -357,8 +363,8 @@ Won't-Fix with a stated reason. Sequenced by risk, not by number.
 - **Invitation emails** (part of **#72**) — needs an email provider we have not provisioned. The likely outcome is relabelling the action "Create invitation" with a share-the-link hint and closing the email half Won't-Fix. Decline and leave-project still ship.
 
 **Standing rule for M5:** anything found in a walkthrough gets filed the same day, with a priority,
-before any fix work starts. That is how #65–#74 came to exist rather than being discovered during
-grading.
+before any fix work starts. That is how #65–#74 came to exist rather than being discovered by
+users.
 
 ---
 
@@ -370,7 +376,7 @@ grading.
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/lib/encryption.ts |
@@ -445,7 +451,7 @@ why a regression here would be silent. Full backend suite green; `npx tsc --noEm
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | backend/src/api/middleware/project-access.ts |
@@ -476,7 +482,7 @@ GET /api/projects/not-a-uuid with valid auth token.
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/lib/github.ts (createAppJwt) |
@@ -543,7 +549,7 @@ non-PEM file, and neither source configured. Full backend suite green; `npx tsc 
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date closed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed — absorbed by #66 (M5): the endpoint was deleted |
 | File / area | backend/src/api/routes/auth.ts |
@@ -581,7 +587,7 @@ signup surface left to validate. `backend/test/api/auth.test.ts` asserts the rou
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date closed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed — absorbed by #66 (M5): the endpoint was deleted |
 | File / area | backend/src/api/routes/auth.ts |
@@ -617,7 +623,7 @@ the only policy.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/contexts/ProjectContext.tsx |
@@ -662,7 +668,7 @@ work and are left alone; they belong to the #74 polish tail, not here.)
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed |
 | File / area | frontend/src/lib/api.ts |
@@ -705,7 +711,7 @@ notice a regression here, which is exactly why it is pinned.
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/api/routes/github.ts, backend/src/api/routes/projects.ts |
@@ -798,7 +804,7 @@ through `GET /repos` and asserts the exact status map `{0: 403, "0x2329": 400, "
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/api/routes/projects.ts |
@@ -857,7 +863,7 @@ asserts the generated statement contains `privacy_mode = $2` and nothing else, w
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date closed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed — did not reproduce; verified against the live DB and pinned (M5 batch 8) |
 | File / area | backend/src/api/routes/projects.ts + migrations |
@@ -946,7 +952,7 @@ matter. **No schema change was made.**
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend/src/pages/TeamPage.tsx |
@@ -984,7 +990,7 @@ invitation surfaces at different paths is a naming inconsistency, not a broken p
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend/src/App.test.tsx |
@@ -1014,7 +1020,7 @@ npm run test -w frontend (old test).
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed |
 | File / area | frontend/src/lib/saveGithubToken.ts (removed), POST /auth/github/save-token (removed) |
@@ -1048,7 +1054,7 @@ Two problems in the old save-token flow:
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/pages/InvitationsPage.tsx |
@@ -1092,7 +1098,7 @@ looks exactly like a fresh one, so this regression is silent by construction.
 |-------|-------|
 | Date created | 2026-06-19 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed — Fixed (M5 batch 8) |
 | File / area | backend/src/api/app.ts |
@@ -1147,7 +1153,7 @@ the expected arrays with slashes trimmed; development still yields `["http://loc
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx + onboarding routes |
@@ -1177,7 +1183,7 @@ Open onboarding section → Click Mark Reviewed → Refresh page — status lost
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | backend/src/worker/summaryWorker.ts (~line 537) |
@@ -1210,7 +1216,7 @@ Observed in testing: 3+ developer packages appear immediately. Increases OpenRou
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/contexts/AuthContext.tsx, frontend/src/pages/AccountSettingsPage.tsx, frontend/src/pages/ImportPage.tsx, backend/src/api/routes/auth.ts, backend/src/api/routes/github.ts, backend/src/api/routes/projects.ts, backend/src/lib/github-connection.ts |
@@ -1259,7 +1265,7 @@ Several related failures in the GitHub link / repo-import path:
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx handleRegenerateSection |
@@ -1292,7 +1298,7 @@ Wire to future regenerate endpoint or hide button until implemented.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx + onboarding routes |
@@ -1322,7 +1328,7 @@ Click Export on onboarding page.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | backend/src/worker/engine/graphBuilder.ts resolveSpecifier |
@@ -1352,7 +1358,7 @@ Run graphBuilder tests on simple fixture before fix — 9 tests skipped/failing.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed |
 | File / area | frontend/src/pages/OnboardingPage.tsx |
@@ -1406,7 +1412,7 @@ manufacture the false empty state #68 is about.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed |
 | File / area | frontend/src/pages/GraphPage.test.tsx |
@@ -1436,7 +1442,7 @@ Run frontend tests in production-like env without mocks.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P5 |
 | State | Closed |
 | File / area | frontend/src/App.tsx, frontend/src/components/ProjectLayout.tsx |
@@ -1499,7 +1505,7 @@ and the retry button re-renders the same page.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P5 |
 | State | Closed — fixed 2026-07-26 (M5) |
 | File / area | backend/src/worker/engine/__tests__/graphBuilder.test.ts |
@@ -1564,7 +1570,7 @@ resolution is broken again`. Restored source: full suite 855 passing.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/App.tsx route architecture → EmptyStubPage |
@@ -1593,7 +1599,7 @@ Open project → Architecture tab.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | backend/src/worker/summaryWorker.ts buildContext (~line 172) |
@@ -1626,7 +1632,7 @@ Role packages differ mainly via prompts; ranking context is not role-filtered.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | backend/src/worker/engine/sectionValidator.ts + worker/index.ts |
@@ -1659,7 +1665,7 @@ Unit tests cover helpers; end-to-end re-analysis incomplete.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-06-19 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P5 |
 | State | Closed |
 | File / area | backend/src/worker/engine/workflowExtractor.ts |
@@ -1692,7 +1698,7 @@ Accepted M2 scope gap. Walkthrough UI works on simplified extraction. Full call-
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15, user report) |
+| Reported by | OnboardBuddies (user report) |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend/src/pages/ProjectOverviewPage.tsx, backend analysis-status route |
@@ -1722,7 +1728,7 @@ Root causes: (1) 5-role generation fan-out created five sequential jobs (bug #17
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-08 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | backend/src/worker/semantic/recordStore.ts insertRecord |
@@ -1752,7 +1758,7 @@ Caught by the Phase 5 end-to-end caching checks. Fix: supersede only within the 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-08 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | backend/src/worker/semantic/refinementPass.ts |
@@ -1782,7 +1788,7 @@ Fix: the refinement pass unions the original record's receipt ids into the refin
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend/src/lib/graphData.ts, frontend/src/lib/onboardingData.ts |
@@ -1812,7 +1818,7 @@ M3 finalizes features: mock fallbacks removed along with the mock data files, th
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15, user report) |
+| Reported by | OnboardBuddies (user report) |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend/src/lib/graphLayout.ts |
@@ -1842,7 +1848,7 @@ Replaced with dagre (Sugiyama layered layout): rank assignment, crossing minimiz
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed |
 | File / area | frontend prose styles (@tailwindcss/typography defaults) |
@@ -1872,7 +1878,7 @@ Fixed (2026-07-10): prose override `prose-code:before:content-none prose-code:af
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P5 |
 | State | Closed — fixed 2026-07-26 (M5) |
 | File / area | backend/src/api/routes/tutorials.ts, worker/generation/tutorialGenerator.ts, worker/summaryWorker.ts, worker/incrementalAnalyzer.ts, frontend/src/pages/WalkthroughTab.tsx |
@@ -1947,7 +1953,7 @@ snapshot, and both directions of the settle predicate.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-10 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | File / area | Supabase GitHub auth provider config; frontend/src/pages/AuthCallbackPage.tsx |
@@ -2013,7 +2019,7 @@ actually take (sign in the original way, then link GitHub from Account Settings)
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | File / area | backend/src/worker/semantic/*, generation/*, ai/aiClient.ts |
@@ -2049,7 +2055,7 @@ Expected effect on the same run: analysis LLM phases ~23 min → ~4 min, generat
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | File / area | engine/astParser.ts, evidenceGraphBuilder.ts, entrypointDetector.ts, symbolExtractor.ts, new tsconfigPaths.ts |
@@ -2085,7 +2091,7 @@ Verified on this repo (clean copy, no node_modules): calls edges 19-equivalent �
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | generation/sectionSpecs.ts, sectionGenerator.ts |
@@ -2111,7 +2117,7 @@ Fixed (2026-07-11): canonical `SECTION_TITLES` map (Design.md package structure)
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend OnboardingPage.tsx |
@@ -2137,7 +2143,7 @@ Fixed (2026-07-11): the reader polls every 5s while the package is generating (w
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend ProjectCard.tsx, lib/pipelineProgress.ts |
@@ -2163,7 +2169,7 @@ Fixed (2026-07-11): the combined pipeline progress (analysis 0–70%, generation
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | frontend ProjectSettingsPage.tsx |
@@ -2189,7 +2195,7 @@ Fixed (2026-07-11): sliders use the API's `critical_for_*` keys with readable la
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | generation/citationValidator.ts |
@@ -2215,7 +2221,7 @@ Fixed (2026-07-11): distribution-based grade — >30% weak claims → low; ≥60
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | generation/sectionGenerator.ts |
@@ -2242,7 +2248,7 @@ Fixed (2026-07-11): receipts are aliased r1, r2, … in the prompt and mapped ba
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | File / area | engine/symbolExtractor.ts, entrypointDetector.ts, workflowExtractor.ts, evidenceGraphBuilder.ts, behaviorSignals.ts |
@@ -2280,7 +2286,7 @@ Verified live on CourseInsights: re-analysis at the same commit went from 0 → 
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | worker/summaryWorker.ts, new generation/deterministicSectionGenerator.ts, api/routes/onboarding.ts, api/routes/projects.ts |
@@ -2314,7 +2320,7 @@ Fixed (2026-07-11):
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | pages/OnboardingPage.tsx, worker/summaryWorker.ts |
@@ -2340,7 +2346,7 @@ Fixed (2026-07-11): reader shows a dismissible error banner with the API's messa
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | frontend lib/tourState.ts (new), DashboardPage.tsx, ProjectLayout.tsx, OnboardingPage.tsx |
@@ -2366,7 +2372,7 @@ Fixed (2026-07-11): dismissal keys are per-account (`…:<userId>`, shared helpe
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-12 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | File / area | worker/ai/checkpoints.ts, worker/index.ts, worker/summaryWorker.ts, lib/queue.ts, api/routes/projects.ts, migration 002, ProjectOverviewPage.tsx, AnalysisRunPanel.tsx |
@@ -2398,7 +2404,7 @@ Verified live: paused a run mid-download → worker logged "stopped by kill swit
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-11 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | File / area | ReceiptViewer.tsx, OnboardingPage.tsx, api/routes/onboarding.ts, retrieval/retrievalService.ts |
@@ -2424,7 +2430,7 @@ Fixed (2026-07-11): snippet capped at 40vh with two-way scrolling inside a wider
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-12 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P2 |
 | State | Closed |
 | File / area | worker/incrementalAnalyzer.ts, engine/repoIngester.ts, worker/index.ts, AnalysisRunPanel.tsx |
@@ -2453,7 +2459,7 @@ Verified live end-to-end on a real project: symbol-hash change → `symbolsChang
 # Milestone 4 bugs (#53–#74)
 
 Found between 2026-07-16 and 2026-07-25. **#53–#64 were fixed inside the sprint; #65–#74 are the
-open backlog** carried into M5 (see [§ M5 bug plan](#m5-bug-plan--every-open-bug-resolved-or-closed)).
+open backlog** carried into M5 (see [§ Backlog plan](#backlog-plan--every-open-bug-resolved-or-closed)).
 
 Each entry is one GitHub issue. Where several defects shared a root cause or a fix location, they
 are batched into one issue and listed inside it — closing them one at a time would have meant
@@ -2468,7 +2474,7 @@ twenty near-identical PRs touching the same three files.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-16 |
-| Reported by | OnboardBuddies (Team 15), from M3 TA/peer feedback |
+| Reported by | OnboardBuddies, from user feedback |
 | Priority | P2 |
 | State | Closed |
 | Area | Project workspace — package resolution, analysis concurrency, tab wiring |
@@ -2514,7 +2520,7 @@ Regression-covered by 17 package-resolution tests and 4 concurrency tests.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-16 |
-| Reported by | OnboardBuddies (Team 15), from M3 feedback |
+| Reported by | OnboardBuddies, from user feedback |
 | Priority | P3 |
 | State | Closed |
 | Area | Account settings, auth entry flow |
@@ -2547,7 +2553,7 @@ signed-in users stay put and are only transferred when they deliberately open si
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-16 |
-| Reported by | OnboardBuddies (Team 15), from M3 feedback |
+| Reported by | OnboardBuddies, from user feedback |
 | Priority | P3 |
 | State | Closed |
 | Area | Deterministic (AI-disabled) generation |
@@ -2579,7 +2585,7 @@ and an explicit "AI explanations are off" banner.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-16 |
-| Reported by | OnboardBuddies (Team 15), from M3 feedback |
+| Reported by | OnboardBuddies, from user feedback |
 | Priority | P4 |
 | State | Closed |
 | Area | Theme, keyboard shortcuts |
@@ -2612,7 +2618,7 @@ tracked in #74.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-23 |
-| Reported by | OnboardBuddies (Team 15), onboarding content audit |
+| Reported by | OnboardBuddies, onboarding content audit |
 | Priority | P2 |
 | State | Closed |
 | Area | Onboarding reader — receipts, citations, review state |
@@ -2659,7 +2665,7 @@ extracted and covered by 19 tests so the values cannot be faked again.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-23 |
-| Reported by | OnboardBuddies (Team 15), onboarding content audit |
+| Reported by | OnboardBuddies, onboarding content audit |
 | Priority | P2 |
 | State | Closed |
 | Area | Section generation — prompts, specs, diagrams, evidence filtering |
@@ -2708,7 +2714,7 @@ where the model ships a summary and skips the enumeration — that alone took on
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-24 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | Area | Entry-point and side-effect detection |
@@ -2749,7 +2755,7 @@ Unknowns became findable work instead of invisible holes.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-24 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | Area | Section and tutorial caches |
@@ -2797,7 +2803,7 @@ fix.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-24 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P1 |
 | State | Closed |
 | Area | Worker lifecycle, queue connection |
@@ -2833,7 +2839,7 @@ exiting, so a budget trip now fails only its own job.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-24 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P3 |
 | State | Closed |
 | Area | Workflow extraction, evidence graph |
@@ -2870,7 +2876,7 @@ of the same shape; and repeat or type-only imports collapse into one weighted ed
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), internal security assessment (authorized, own application) |
+| Reported by | OnboardBuddies, internal security assessment (authorized, own application) |
 | Priority | P2 |
 | State | Closed |
 | Area | Frontend rendering, nginx, LLM prompts, GitHub and archive handling |
@@ -2925,7 +2931,7 @@ it describes.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-24 |
-| Reported by | OnboardBuddies (Team 15), caught by the new security tests before merge |
+| Reported by | OnboardBuddies, caught by the new security tests before merge |
 | Priority | P0 |
 | State | Closed |
 | Area | Archive extraction, prompt sanitizing, markdown export |
@@ -2969,7 +2975,7 @@ and 3 were caught the same way.
 |-------|-------|
 | Date created | 2026-07-22 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15), security & UX audit |
+| Reported by | OnboardBuddies, security & UX audit |
 | Priority | P2 |
 | State | Closed — Fixed (M5 batch 1) |
 | Area | API — onboarding sections, receipts, workflow walkthrough |
@@ -3059,7 +3065,7 @@ against the pre-fix code (200/200/pass) and pass after.
 |-------|-------|
 | Date created | 2026-07-22 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15), security & UX audit |
+| Reported by | OnboardBuddies, security & UX audit |
 | Priority | P2 |
 | State | Closed — Fixed (M5 batch 1) |
 | Area | API — auth routes, invitations |
@@ -3163,7 +3169,7 @@ once the map grows past 5,000 entries rather than being left to accumulate.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P2 |
 | State | Closed — defects 1 and 2 fixed 2026-07-26 (M5 batch 2), defects 3 and 4 fixed 2026-07-29 (M5 batch 7) |
 | Area | Import wizard, GitHub repo/branch listing |
@@ -3275,7 +3281,7 @@ round trip only.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P2 |
 | State | Closed — Sahib, M5 batch 3 |
 | Area | Frontend data layer and error states |
@@ -3396,7 +3402,7 @@ neither paints while the first fetch is in flight.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P2 |
 | State | Closed — fixed 2026-07-26 (M5 batch 2) |
 | Area | Worker job lifecycle |
@@ -3507,7 +3513,7 @@ unreachable Redis never rejects — ioredis reconnects forever by design.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P2 |
 | State | Closed — half 1 fixed in M4, half 2 fixed 2026-07-26 (M5 batch 3) |
 | Area | Dependency graph — grouped view aggregation, search |
@@ -3592,7 +3598,7 @@ typing "logger". Both were confirmed to **fail** against the pre-fix
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit + visual audit (the two HIGH items) |
+| Reported by | OnboardBuddies, UX audit + visual audit (the two HIGH items) |
 | Priority | P3 |
 | State | Closed — fixed/verified in M5 batch 7 (2026-07-29) |
 | Area | Routing, theme tokens, motion, keyboard reachability |
@@ -3721,7 +3727,7 @@ value actually compiled. Both themes were walked in a browser (see the batch-7 p
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P3 |
 | State | Closed — fixed 2026-07-29 (M5 batch 7); the email half Won't-Fix (W1) |
 | Area | Invitations, membership, ownership |
@@ -3802,7 +3808,7 @@ green**. Suite coverage lives in `members.test.ts`, `invitations.test.ts`,
 |-------|-------|
 | Date created | 2026-07-22 |
 | Date fixed | 2026-07-26 |
-| Reported by | OnboardBuddies (Team 15), UX audit |
+| Reported by | OnboardBuddies, UX audit |
 | Priority | P3 |
 | State | Fixed — M5 |
 | Area | Frontend build, nginx |
@@ -3814,7 +3820,7 @@ The API origin is configurable per deployment.
 ## Actual behavior
 
 The API origin is inlined into the JavaScript bundle at build time and the build takes no argument
-for it, so the image is pinned to `localhost:3000`. **Not a blocker for grading** — the documented
+for it, so the image is pinned to `localhost:3000`. **Not a release blocker** — the documented
 Docker Compose setup is exactly that case — but it blocks any non-localhost deployment, and it is why
 the Content-Security-Policy has to name `localhost:3000` explicitly instead of `'self'`.
 
@@ -3856,7 +3862,7 @@ variables when nothing is set.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-22 |
-| Reported by | OnboardBuddies (Team 15) |
+| Reported by | OnboardBuddies |
 | Priority | P4 |
 | State | Closed — fixed/verified in M5 batch 7 (2026-07-29) |
 | Area | Frontend and backend, various |
@@ -3983,7 +3989,7 @@ under **#71**, which is where the "measured, not eyeballed" bar was set.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P1 |
 | State | Closed |
 | Area | Backend — worker pipeline, `analysis_snapshots.status`, `lib/projectStatus.ts` |
@@ -4035,7 +4041,7 @@ Found and re-verified in UX_AUDIT_FINDINGS.md §18.6 (audit doc survives only in
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P1 |
 | State | Closed |
 | Area | Backend — worker persistence, Supabase transaction-mode pooler |
@@ -4079,7 +4085,7 @@ the single biggest reliability number in M4, and it is invisible to the user bec
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P2 |
 | State | Closed |
 | Area | Backend — `worker/generation`, structured-output validation |
@@ -4123,7 +4129,7 @@ is a policy choice, not an architectural constraint.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P1 |
 | State | Closed |
 | Area | Backend — `worker/engine/entrypointDetector.ts`; Frontend — Workflows empty state |
@@ -4185,7 +4191,7 @@ HTTP routes. Validated: MasterPokedex 10→26 entrypoints, StudyFlow 5→22 effe
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P1 |
 | State | Closed |
 | Area | Backend — section generation; Frontend — reader trust strip, Architecture map |
@@ -4242,7 +4248,7 @@ subsystem is named" flipped from red to green on FloowForge.
 | Field | Value |
 |-------|-------|
 | Date created | 2026-07-25 |
-| Reported by | OnboardBuddies (Team 15) — eleven-project audit |
+| Reported by | OnboardBuddies — eleven-project audit |
 | Priority | P1 |
 | State | Closed |
 | Area | Frontend — WorkflowsPage, CapabilitiesPage; Backend — snapshot status semantics |
@@ -4624,30 +4630,13 @@ reader-navigation change, not an error-state one; it belongs to the #74 polish t
 
 ## Filing these on GitHub
 
-**Done — all 83 bugs (#1–#83) are filed on `github.students.cs.ubc.ca/CPSC455-2026S/team15`.**
+**Done: every bug in this ledger was mirrored to the development-time issue tracker (private) and
+is closed there; this ledger is the public record.**
 #1–#52 were filed manually in an earlier session. #53–#83 were filed on 2026-07-25 (GitHub issues
-#76–#106; issue numbers don't equal Bug N — see note below); #53–#64 were closed with a fix-note
+#76–#106; issue numbers don't equal Bug N); #53–#64 were closed with a fix-note
 comment, #65–#83 left Open per this document's State column. Labels: `P0`–`P5` on every issue,
 `milestone-4` on #53–#74 only (#75–#83 are the 2026-07-25 audit findings, not M4 sprint work),
 `security` on #63–#66.
 
-To re-sync after future edits to this document:
-
-```sh
-gh auth login -h github.students.cs.ubc.ca                  # re-authenticate first
-scripts/sync-github-issues.sh --dry-run --from 53 --to 83   # prints every gh command it would run
-scripts/sync-github-issues.sh --from <N> --to <M>           # files/closes only the new or changed range
-```
-
-**Never run `--from 1`.** #1–#52 were filed manually (not via this script) before this document
-existed in its current form, and 9 of those titles carry a stray leading space — `" Bug 1: …"`,
-`" Bug 3: …"`, `" Bug 8: …"`, `" Bug 11: …"`, `" Bug 16: …"`, `" Bug 19: …"`, `" Bug 23: …"`,
-`" Bug 26: …"`, `" Bug 37: …"` — that the script's exact-string title dedup will not match against
-the clean `"Bug N: …"` it constructs from this doc. A `--from 1` run reports those 9 as new and
-files duplicates. If #1–#52 ever need re-syncing, fix the 9 titles on GitHub first (strip the
-leading space) or dedup by number instead of exact title before running below #53.
-
-The script reads the `## [P…][State] Bug N: …` blocks straight out of this file, so this document
-stays the single source of truth and the tracker cannot drift from it. Its title-based dedup does a
-byte-exact match against existing issue titles — if a bug's title here is ever edited after filing,
-re-running the script will create a duplicate rather than updating the existing issue.
+This document stays the single source of truth: the tracker was populated from the
+`## [P…][State] Bug N: …` blocks above, never the other way round.

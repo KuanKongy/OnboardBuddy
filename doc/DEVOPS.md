@@ -5,7 +5,7 @@
 OnboardBuddy is a monorepo with three top-level directories:
 
 ```
-team15/
+onboardbuddy/
 ├── frontend/          React 19 + Vite + Tailwind CSS SPA
 ├── backend/           Express 5 + TypeScript API and BullMQ worker
 ├── doc/               Design docs and this guide
@@ -26,34 +26,30 @@ no local Redis.
 
 ---
 
-## Database change policy for M5 (read before writing a migration)
+## Database change policy (read before writing a migration)
 
-**The M4 submission must stay testable for the whole of M5.** A TA can clone the `Milestone4`
-branch, bring it up with the `.env` files from Canvas, and point it at the same Supabase project we
-are still developing against — so the schema is shared between a graded, frozen release and an
-actively changing one.
+**The deployed build and local builds share one Supabase project**, so a migration lands under
+code that is still running. Prefer solving the problem in application code, in a jsonb column that
+already exists (`metadata`, `generation_context`, `checkpoint`, `budget_usage`, `score_breakdown`),
+or by deriving the value at read time.
 
-**The rule: do not change the database during M5.** Prefer solving the problem in application code,
-in a jsonb column that already exists (`metadata`, `generation_context`, `checkpoint`,
-`budget_usage`, `score_breakdown`), or by deriving the value at read time.
-
-**If a change is genuinely unavoidable, it must be backwards compatible with M4's code**, which
-means all of:
+**When a schema change is genuinely needed, it must be backwards compatible with the build currently
+deployed**, which means all of:
 
 - **Additive only.** New nullable columns, new tables, new indexes. Never drop or rename a column or
   table, never narrow a type, never add a `NOT NULL` without a default, never tighten a `CHECK` that
-  existing rows or M4's code paths could violate.
-- **M4's queries keep working unchanged.** M4 selects named columns and writes rows without the new
-  field; both must still succeed. A new column has to have a sensible default or be nullable.
+  existing rows or the deployed code paths could violate.
+- **Existing queries keep working unchanged.** The deployed build selects named columns and writes
+  rows without the new field; both must still succeed. A new column has to have a sensible default or
+  be nullable.
 - **No destructive backfill.** Backfill into new space, never overwrite existing values.
-- **Reversible.** Ship a `DOWN` alongside the `UP`, and confirm M4 still runs after the `UP` is
-  applied — not just after the `DOWN`.
-- **Written down.** Add it to the migration folder with a comment naming why it could not be avoided,
-  and note it in the M5 section of the README so the TA is not surprised by a schema they did not
-  submit.
+- **Reversible.** Ship a `DOWN` alongside the `UP`, and confirm the deployed build still runs after the
+  `UP` is applied, not just after the `DOWN`.
+- **Written down.** Add it to the migration folder with a comment naming why it was needed, and note
+  it in this guide.
 
-The practical test before writing any migration: *if the TA checks out `Milestone4` tomorrow and
-runs it against this database, does it still work?* If the honest answer is "probably", that is a no.
+The practical test before writing any migration: *if the currently deployed build runs against this
+database tomorrow, does it still work?* If the honest answer is "probably", that is a no.
 
 ## External Services
 
@@ -121,8 +117,8 @@ Ephemeral — losing data here only means re-enqueuing pending jobs.
 **What it does:** Supabase delegates GitHub sign-in to the GitHub App's own
 OAuth credentials (see the next section — one app for login AND repo access).
 Users see a single GitHub consent screen and are redirected back to Supabase.
-The separately registered OAuth App this project used before Milestone 5 is
-retired; `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` env vars are gone with it
+The separately registered OAuth App this project used previously is retired;
+`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` env vars are gone with it
 (the backend never read them — they only ever lived in the Supabase dashboard).
 
 The Supabase provider config holds the GitHub App's Client ID/secret, and the
@@ -193,12 +189,12 @@ them in either of two places:
 
 #### Latency model (2026-07 overhaul)
 
-**M5 gates (cold runs only; warm/incremental runs don't count):** cold first
+**Latency targets (cold runs only; warm/incremental runs don't count):** cold first
 import ≤ 9:00 analysis, cold re-import ≤ 5:00 analysis; end-to-end adds ~1:00
 of generation. The benchmark case is our own repository (2.3M tokens, 268
 files): analyze ~4:16, ~5:17 end-to-end cold, ~$0.35. (The working document
 that tracked these measurements, `ONBOARDING_QUALITY_LATENCY_PLAN.md`, was
-removed from `doc/` at the final release; it remains in git history.)
+removed from `doc/` in August 2026; it remains in git history.)
 
 The pipeline is sized for a flash-class 1M-context model and a REMOTE
 Postgres: throughput comes from *moderately sized batches × high
@@ -237,12 +233,12 @@ per-call bound, ~65k max output).
   (`carriedForward` in the `semantic_symbols` phase metrics).
 - **Benchmarking:** `node scripts/latency-report.cjs <snapshot_id>` inside a
   backend container prints per-phase wall-clock + per-call rollups.
-- **Prompt-version freeze (M5, 2026-07-28):** `SECTION_PROMPT_VERSION`,
-  `TUTORIAL_PROMPT_VERSION` and `PROMPT_VERSIONS.*` are frozen for the rest
-  of M5 unless a change is deliberately paid for. Every bump voids the
-  semantic-record carry-forward AND the section cache in one stroke — the
-  07-25 bumps (`section-v6→v7`, `tutorial-v2→v3→v4`) are why every run that
-  week was fully cold. A bump must say so in its commit message.
+- **Prompt-version freeze (2026-07-28):** `SECTION_PROMPT_VERSION`,
+  `TUTORIAL_PROMPT_VERSION` and `PROMPT_VERSIONS.*` are frozen unless a
+  change is deliberately paid for. Every bump voids the semantic-record
+  carry-forward AND the section cache in one stroke — the 07-25 bumps
+  (`section-v6→v7`, `tutorial-v2→v3→v4`) are why every run that week was
+  fully cold. A bump must say so in its commit message.
 
 Defaults live in `backend/src/worker/ai/modelTiers.ts`
 (`defaultTierModels()`); the coarse per-tier price table used for the cost
@@ -257,23 +253,24 @@ decided by the SHAPE of `EMBEDDINGS_MODEL` (`worker/ai/embeddingProfiles.ts`):
 
 | Model id shape | Route | Key | Body |
 |---|---|---|---|
-| `vendor/model` (e.g. `perplexity/pplx-embed-v1-4b`, this deployment, $0.03/M) | OpenRouter `/embeddings` | `OPENROUTER_API_KEY` | ZDR provider prefs (`zdr`, `data_collection` — same envs as chat), `encoding_format: float`, no `dimensions` |
+| `vendor/model` (e.g. `qwen/qwen3-embedding-8b`, this deployment) | OpenRouter `/embeddings` | `OPENROUTER_API_KEY` | ZDR provider prefs (`zdr`, `data_collection` — same envs as chat), `encoding_format: float`, no `dimensions` |
 | bare (e.g. `text-embedding-3-small`, code default, $0.02/M) | `EMBEDDINGS_BASE_URL` (OpenAI direct) | `EMBEDDINGS_API_KEY` | `dimensions: 1536` |
 
-The DB column is frozen at `vector(1536)` (M5 policy above), so OpenRouter-
-route vectors longer than 1536 are MRL-truncated to the leading 1536 dims and
-L2-normalized before insert (pplx-embed is Matryoshka-trained and natively
-unnormalized; cosine `<=>` needs unit vectors). Rows are keyed
+The DB column is frozen at `vector(1536)` (policy above), so
+OpenRouter-route vectors longer than 1536 are MRL-truncated to the leading
+1536 dims and L2-normalized before insert (qwen3-embedding-8b is
+Matryoshka-trained, natively 4096-dim and unnormalized; cosine `<=>` needs
+unit vectors; pplx-embed, the previous model, was 2560). Rows are keyed
 `unique(record_id, view_type, model)`, and retrieval detects per snapshot
 which model wrote its vectors, embeds the query with that same model, and
 filters the seed search on `e.model` — so pre-switch snapshots (and anything
-the TA's M4 build writes) keep working after a model flip.
+an older build writes) keep working after a model flip.
 
-**M4 coexistence caveat:** `semantic_records` is a project-scoped cache. If
-the M5 build re-analyzes a project and the M4 build (whose retrieval has no
-model filter) then queries it, M4 silently ranks 3-small and pplx vectors
-against each other — no crash, degraded ordering. Don't point the M4 build at
-projects re-analyzed by M5.
+**Older-build coexistence caveat:** `semantic_records` is a project-scoped
+cache. If a newer build re-analyzes a project and an older build (whose
+retrieval has no model filter) then queries it, the older build silently
+ranks vectors from different models against each other: no crash, degraded
+ordering. Don't point an older build at projects re-analyzed by a newer one.
 
 **What data it holds:** None — embeddings are stored in PostgreSQL (pgvector).
 
@@ -281,7 +278,7 @@ projects re-analyzed by M5.
 |---|---|---|
 | `EMBEDDINGS_API_KEY` | `backend/.env` | OpenAI key (bare-model route; keep it for pre-switch snapshots) |
 | `EMBEDDINGS_BASE_URL` | `backend/.env` | `https://api.openai.com/v1` (bare-model route only) |
-| `EMBEDDINGS_MODEL` | `backend/.env` | this deployment: `perplexity/pplx-embed-v1-4b` (code default `text-embedding-3-small`) |
+| `EMBEDDINGS_MODEL` | `backend/.env` | this deployment: `qwen/qwen3-embedding-8b` (code default `text-embedding-3-small`) |
 | `EMBED_BATCH_SIZE` | `backend/.env` | inputs per API request (default 128); the escape hatch if an upstream rejects the batch |
 | `EMBED_WRITE_CONCURRENCY` | `backend/.env` | concurrent INSERT writers per job (default 2 — 8-way self-contention on the HNSW index is the measured failure mode, see the 2026-07-28 latency audit) |
 | `EMBED_INSERT_CHUNK` | `backend/.env` | rows per INSERT statement (default 64) |
@@ -480,7 +477,7 @@ Login and repo access share ONE GitHub App (the one created in the next
 section). A GitHub App carries its own OAuth credentials and speaks the same
 `login/oauth/authorize` protocol an OAuth App would, so Supabase's GitHub
 provider works with it directly; the separately registered OAuth App this
-project used before Milestone 5 is retired.
+project used previously is retired.
 
 1. Create the GitHub App first (next section), then on its settings page:
    - **Account permissions → Email addresses: Read-only** — REQUIRED.
@@ -867,7 +864,7 @@ all.
 ## Runtime configuration (how the frontend learns its API origin)
 
 Vite inlines `import.meta.env.VITE_*` into the JavaScript **at build time**, and
-the production image is nginx serving that static bundle. Until M5 that meant
+the production image is nginx serving that static bundle. Previously that meant
 one image could only ever talk to one API origin — `localhost:3000` — which made
 a hosted deploy impossible, because Railway's `*.up.railway.app` API hostname
 only exists *after* the image does (issue #73). It is also why the CSP had to

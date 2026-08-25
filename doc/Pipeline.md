@@ -169,7 +169,7 @@ Two LLM tiers plus embeddings, each a configurable model list (currently one mod
 | --- | --- | --- |
 | `cheap` | ALL structured record work: symbol/file/module/service/system/workflow records, capabilities, refinement, claim critique, reranking | `OPENROUTER_MODEL_CHEAP` (this deployment: `google/gemini-2.5-flash-lite` under auto model rotation; see DEVOPS "Latency model") |
 | `strong` | user-facing prose: sections, tutorials, Q&A | `OPENROUTER_MODEL_STRONG` (this deployment: `google/gemini-2.5-flash-lite`; settings can pin e.g. deepseek) |
-| `embedding` | multi-view embeddings | `EMBEDDINGS_MODEL` (this deployment: `perplexity/pplx-embed-v1-4b` via OpenRouter+ZDR, 2560 dims MRL-truncated to 1536 + L2-normalized; code default `text-embedding-3-small`, 1536 dims OpenAI-direct). Retrieval is model-aware per snapshot: it detects which model wrote a snapshot's vectors, embeds the query with that model, and filters the seed search on `e.model` — mixed-model snapshots and the M4 build's 3-small rows stay queryable. |
+| `embedding` | multi-view embeddings | `EMBEDDINGS_MODEL` (this deployment: `qwen/qwen3-embedding-8b` via OpenRouter+ZDR, 4096 dims MRL-truncated to 1536 + L2-normalized; code default `text-embedding-3-small`, 1536 dims OpenAI-direct). Retrieval is model-aware per snapshot: it detects which model wrote a snapshot's vectors, embeds the query with that model, and filters the seed search on `e.model` — mixed-model snapshots and older snapshots' 3-small rows stay queryable. |
 
 The split is measured, not aspirational: structured extraction wants a model that emits valid JSON fast (small models via Groq do), while section/tutorial prose quality tracks the stronger model. Chat requests carry OpenRouter `provider.sort` routing (default `throughput`) and a hard per-attempt deadline (`LLM_REQUEST_TIMEOUT_MS`, 240s default); structured-output validation failures re-roll a fresh sample (up to 3) since malformed JSON is stochastic.
 
@@ -1292,7 +1292,7 @@ A role's ranking = weighted sum over view scores using `ranking_weight_configs` 
 
 # Multi-view Embeddings
 
-One row per (usable record, view, model), pgvector 1536, HNSW index. This deployment embeds with `perplexity/pplx-embed-v1-4b` (OpenRouter, ZDR prefs, 2560 native dims MRL-truncated to 1536 + L2-normalized); rows written by the code-default `text-embedding-3-small` coexist under the same unique key, and retrieval picks the query model per snapshot (see the tier table above). Embedding text is rendered **deterministically** from record fields — never freeform:
+One row per (usable record, view, model), pgvector 1536, HNSW index. This deployment embeds with `qwen/qwen3-embedding-8b` (OpenRouter, ZDR prefs, 4096 native dims MRL-truncated to 1536 + L2-normalized); rows written by the code-default `text-embedding-3-small` coexist under the same unique key, and retrieval picks the query model per snapshot (see the tier table above). Embedding text is rendered **deterministically** from record fields — never freeform:
 
 ```txt
 purpose view:     name, kind, purpose, behavior, responsibilities

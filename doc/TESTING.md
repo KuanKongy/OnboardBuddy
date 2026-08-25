@@ -1,9 +1,9 @@
 # What our tests cover
 
-**1,406 automated tests — 980 backend, 426 frontend** — plus 9 Playwright browser spec files that the
+**1,440 automated tests — 1,004 backend, 436 frontend** — plus 9 Playwright browser spec files that the
 one-command run reports as *skipped* rather than pretending to have run them. This document explains
-what each group protects, why it exists, and how it runs. For the hands-on walkthrough of the final
-release, see [TESTPLAN.md](./TESTPLAN.md).
+what each group protects, why it exists, and how it runs. For the hands-on walkthrough, see
+[TESTPLAN.md](./TESTPLAN.md).
 
 ## Run everything
 
@@ -34,20 +34,20 @@ at a glance where the coverage is and what broke. This is the literal, unedited 
   AREA                                                  PASSED   FAILED  SKIPPED    RESULT
   ────────────────────────────────────────────────────────────────────────────────────────
   Backend · security (hostile input)                        83        0        0      PASS
-  Backend · analysis pipeline                              299        0        0      PASS
-  Backend · AI, caching & model routing                    135        0        0      PASS
+  Backend · analysis pipeline                              302        0        0      PASS
+  Backend · AI, caching & model routing                    156        0        0      PASS
   Backend · document generation                            196        0        0      PASS
   Backend · API & auth (HTTP)                              227        0        0      PASS
   Backend · unit (libs, queue, crypto)                      35        0        0      PASS
   Backend · other (unclassified files)                       5        0        0      PASS
-  Frontend · unit (components, pages, safe rendering)      426        0        0      PASS
+  Frontend · unit (components, pages, safe rendering)      436        0        0      PASS
   E2E · Playwright (browser)                                 0        0        9   SKIPPED
   ────────────────────────────────────────────────────────────────────────────────────────
-  TOTAL                                                   1406        0        9      PASS
+  TOTAL                                                   1440        0        9      PASS
 
   Counts are parsed from each runner's own machine-readable output:
-    mocha      → /tmp/onboardbuddy-test-results/backend-mocha.json  (980 tests across 96 files, exit 0)
-    vitest     → /tmp/onboardbuddy-test-results/frontend-vitest.json  (426 tests across 69 files, exit 0)
+    mocha      → /tmp/onboardbuddy-test-results/backend-mocha.json  (1004 tests across 98 files, exit 0)
+    vitest     → /tmp/onboardbuddy-test-results/frontend-vitest.json  (436 tests across 70 files, exit 0)
     playwright → not run — 9 spec file(s) found; playwright could not list tests here
 
   NOTE:
@@ -55,7 +55,7 @@ at a glance where the coverage is and what broke. This is the literal, unedited 
       src/api/lib/__tests__/gapSummary.test.ts
       src/retrieval/__tests__/modelDetection.test.ts
 
-  Overall: PASS — 1406 tests passed, 0 failed. Exit code 0.
+  Overall: PASS — 1440 tests passed, 0 failed. Exit code 0.
 ```
 
 The full spec output from both runners still scrolls past above it; the table is only the summary.
@@ -115,11 +115,11 @@ npx playwright install chromium     # once
 RUN_E2E=1 npm test                  # summary then executes them and reports real pass/fail
 ```
 
-**Growth:** M2 `137 + 20` → M3 `321 + 25` → M4 `759 + 147` → M5 `980 + 426`. The M4 jump is the
-security suite, the rebuilt document generation, and a regression test for every bug fixed during the
-sprint; the M5 jump is a regression test for every bug closed out of the M4 backlog, plus the
-frontend pages and flows finished in M5. The table is regenerated on every run, so the numbers above
-are a snapshot — the command always prints the current ones.
+**Growth:** the suite grew in four steps, 157 → 346 → 906 → 1,440. The third step added the security
+suite, the rebuilt document generation, and a regression test for every bug fixed in that round; the
+fourth is a regression test for every bug closed out of the backlog, plus the frontend pages and
+flows finished last. The table is regenerated on every run, so the numbers above are a snapshot; the
+command always prints the current ones.
 
 ## Two things worth knowing about how these are written
 
@@ -127,17 +127,17 @@ are a snapshot — the command always prints the current ones.
 the same functions the production worker invokes, against small sample repositories committed to the
 repo. So a test passing means the shipped code path works, not that a mock does.
 
-**Failures we have actually had get their own test.** Every bug fixed in M4 left a test behind. Three
+**Failures we have actually had get their own test.** Every bug fixed left a test behind. Three
 of them are worth naming because they were *silent* failures — an empty document served from a cache,
 a subsystem that traced to nothing, a security fix that only worked on a laptop. Silent failures are
 the ones a manual pass will not catch, so they are the ones most worth automating.
 
 ---
 
-# Backend — 980 tests
+# Backend — 1,004 tests
 
 > The per-group counts below were audited when this document was written and have grown since as
-> M5 bug fixes added regression tests; the summary table above is always the current truth. The
+> bug fixes added regression tests; the summary table above is always the current truth. The
 > groups exist to explain what each area protects, not to reconcile to the total.
 
 ## 1. Reading the code (167 tests)
@@ -250,7 +250,7 @@ and every push costs a full re-analysis.
 | Tests | Covers |
 |------:|--------|
 | 6 | A changed function body propagating up through file → module → subsystem; a whitespace-only change invalidating **nothing**; removed files and symbols; stale flags |
-| 5 | Regression tests for the M4 graph fixes: flows terminate instead of looping back, near-duplicate flows suppressed, page loads ranked below server flows, repeated imports not inflating dependency counts |
+| 5 | Regression tests for the graph fixes: flows terminate instead of looping back, near-duplicate flows suppressed, page loads ranked below server flows, repeated imports not inflating dependency counts |
 | 3 | The watchdog that detects a worker which has stopped consuming and recreates it |
 
 ## 7. The API: permissions and contracts (167 tests)
@@ -311,10 +311,10 @@ in the graph and another in the document, or an export that quietly drops what t
 
 ---
 
-# Frontend — 426 tests
+# Frontend — 436 tests
 
-> As with the backend, the per-group counts below predate the M5 additions (page tests for the team
-> lifecycle, settings automation, and the pages finished in M5); the summary table is the current truth.
+> As with the backend, the per-group counts below predate the later additions (page tests for the team
+> lifecycle, settings automation, and the pages finished last); the summary table is the current truth.
 
 Vitest with Testing Library. Supabase and every API call are mocked, so no backend is needed.
 
