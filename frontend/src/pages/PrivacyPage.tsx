@@ -38,10 +38,10 @@ export function PrivacyPage() {
       <div className="space-y-4">
         <Card>
           <CardContent className="space-y-2.5 p-5 text-[0.875rem] leading-relaxed text-muted-foreground">
-            <p className="font-medium text-foreground">Effective date: August 5, 2026</p>
+            <p className="font-medium text-foreground">Effective date: September 1, 2026</p>
             <p>
-              OnboardBuddy is built and operated by its development team as a university course
-              project. There is no separate company behind it and no dedicated privacy office, so
+              OnboardBuddy is built and operated by its development team as an independent
+              project. There is no company behind it and no dedicated privacy office, so
               this policy names the team itself as responsible for the handling described below.
               Questions about this policy, or about data held under your account, are best raised
               as an issue on the project's repository, which is where the team answers them.

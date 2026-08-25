@@ -147,7 +147,7 @@ const CONFIDENCE_WORD: Record<ConfidenceLevel, string> = { high: "High", medium:
 const CONFIDENCE_MEANING: Record<ConfidenceLevel, string> = {
   high: "Every tracked claim held up in validation, and most cite receipts from the code itself. Nothing had to be downgraded.",
   medium:
-    "The section held up overall, but some claims lean on weaker support, such as docs instead of code, or confidence was capped because the grader was less sure. Keep the receipts nearby.",
+    "The section held up overall, but some claims lean on weaker support, such as docs instead of code, or confidence was capped because the validator was less sure. Keep the receipts nearby.",
   low: "A sizeable share of claims failed validation: they cited nothing, cited support that could not be verified, or were not tracked at all. Verify against the cited files before relying on this.",
 };
 

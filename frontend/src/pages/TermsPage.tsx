@@ -3,7 +3,7 @@ import { PublicPageShell } from "@/components/PublicPageShell";
 import { Card, CardContent } from "@/components/ui/card";
 
 /**
- * Plain-language terms for a university course project: honest about what the
+ * Plain-language terms for an independent project: honest about what the
  * service is, what users promise, and what nobody should rely on. Public by
  * design, linked from the landing footer. Copy rule: no em dashes.
  */
@@ -37,7 +37,7 @@ export function TermsPage() {
             OnboardBuddy analyzes a GitHub repository you connect and generates onboarding
             documentation from it: a role-based handbook, dependency and architecture maps, traced
             workflows, and tutorials, with every claim cited to the code it came from. It is built
-            and operated as a university course project by its student team.
+            and operated by a small independent team; there is no company behind it.
           </p>
         </Section>
 
@@ -89,11 +89,11 @@ export function TermsPage() {
 
         <Section id="availability" title="Availability and warranty">
           <p>
-            OnboardBuddy is provided as is, without warranties of any kind, as an academic
-            project. It may be unavailable, rate-limited, changed, or shut down at any time,
-            including at the end of the course. Export anything you want to keep; the handbook
-            export exists for exactly that. To the extent the law allows, the team is not liable
-            for damages arising from use of the service.
+            OnboardBuddy is provided as is, without warranties of any kind, as an independent
+            project. It may be unavailable, rate-limited, changed, or shut down at any time.
+            Export anything you want to keep; the handbook export exists for exactly that. To
+            the extent the law allows, the team is not liable for damages arising from use of
+            the service.
           </p>
         </Section>
 
