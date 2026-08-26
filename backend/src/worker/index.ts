@@ -10,7 +10,7 @@ dns.setDefaultResultOrder('ipv4first');
 
 import { Worker, Job } from 'bullmq';
 import { startQueueWatchdog } from '../lib/queueWatchdog.js';
-import { ANALYSIS_QUEUE, connection, getAnalysisQueue, getSummaryQueue } from '../lib/queue.js';
+import { ANALYSIS_QUEUE, connection, getAnalysisQueue, getSummaryQueue, idleBlockSeconds } from '../lib/queue.js';
 import type { AnalysisJobData, SummaryJobData } from '../lib/queue.js';
 import { getSummaryWorker, stopSummaryWatchdog } from './summaryWorker.js';
 import { getCommitSha, downloadZipball, getInstallationToken, getRepo } from '../lib/github.js';
@@ -1118,8 +1118,10 @@ function createAnalysisWorker(): Worker<AnalysisJobData> {
       // raising analysis throughput silently doubled generation throughput and
       // the shared pg pool paid for both. Pool sizing: src/lib/db.ts.
       concurrency: envInt('WORKER_CONCURRENCY', 4),
-      drainDelay: envInt('WORKER_POLL_INTERVAL_MS', 30000),
-      stalledInterval: 120_000,
+      // SECONDS — BullMQ's drainDelay unit; the ms-sized value passed here
+      // before disabled BullMQ's dead-socket guard for hours (lib/queue.ts).
+      drainDelay: idleBlockSeconds(),
+      stalledInterval: 300_000,
       lockDuration: 600_000,
       removeOnComplete: { count: 5 },
       removeOnFail: { count: 5 },
@@ -1165,10 +1167,12 @@ process.on('uncaughtException', (err) => {
 const analysisQueue = getAnalysisQueue();
 const stopAnalysisWatchdog = startQueueWatchdog({
   queueName: ANALYSIS_QUEUE,
-  sample: async () => ({
-    waiting: await analysisQueue.getWaitingCount(),
-    active: await analysisQueue.getActiveCount(),
-  }),
+  sample: async () => {
+    // One getJobCounts = 4 Redis commands vs 7 for the two count calls; 'wait'
+    // skips the paused list, which this app never uses (no queue.pause()).
+    const counts = await analysisQueue.getJobCounts('wait', 'active');
+    return { waiting: counts.wait ?? 0, active: counts.active ?? 0 };
+  },
   recreate: async () => {
     await worker.close().catch(() => {});
     worker = createAnalysisWorker();

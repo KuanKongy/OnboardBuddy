@@ -20,15 +20,24 @@ stored credential expiration to manage.
 
 ## BullMQ Cost Optimization
 
-**Decision:** Set `drainDelay: 30000`, `stalledInterval: 120000`,
-`lockDuration: 600000` on both workers.
+**Decision:** `drainDelay: 300` — BullMQ's unit is **seconds**
+(`WORKER_IDLE_BLOCK_SECONDS`, default 300, floor 30) — plus
+`stalledInterval: 300000` and `lockDuration: 600000` on both workers; the
+dead-consumer watchdog samples every 300 s with a single
+`getJobCounts('wait', 'active')` (4 Redis commands instead of 7).
 
-**Rationale:** BullMQ v5 uses a marker-based system with ZSET signals. When a job
-is enqueued, the worker wakes immediately via the signal. The `drainDelay` only
-applies when no signal arrives (idle queue). Setting it to 30s reduces idle Redis
-commands by ~6x vs the 5s default, saving cost on Upstash pay-as-you-go. Analysis
-jobs are user-triggered and infrequent, so worst-case 30s extra latency is
-acceptable.
+**Rationale:** BullMQ v5 wakes a worker instantly when a job is enqueued (the
+marker interrupts the blocking `BZPOPMIN`), so `drainDelay` only governs idle
+wake-ups. The workers originally passed 30000 / 5000 believing the unit was
+milliseconds, which made an idle worker block for hours and disabled BullMQ's
+own dead-socket guard (reconnect when a blocking call gets no response within
+`drainDelay + 1 s`) — the "listening but deaf" state the watchdog was written
+to work around. At 300 s that guard replaces a dead blocking socket within
+5 min, proactively, and the watchdog relaxes from 60 s to 300 s as the
+backstop (≤10 min) instead of the only defence. Click-to-done time is
+unchanged in every scenario; crash recovery still comes from the Postgres
+reconciler (3–5 min, untouched). Idle floor on Upstash pay-as-you-go: ~11k
+commands/day on the primary region (was ~31k).
 
 ## Database: PostgreSQL Only (No MongoDB)
 

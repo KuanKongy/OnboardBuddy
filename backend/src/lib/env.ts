@@ -7,8 +7,8 @@
  * than 0"), so one bad env line kills the worker at boot instead of falling
  * back. Anything that is not a positive integer resolves to `fallback`.
  */
-export function envInt(name: string, fallback: number): number {
-  const raw = process.env[name];
+export function envInt(name: string, fallback: number, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;

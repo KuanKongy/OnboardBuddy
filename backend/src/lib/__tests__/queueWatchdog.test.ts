@@ -1,7 +1,11 @@
 import { expect } from 'chai';
-import { shouldRecreate, startQueueWatchdog, type WatchdogSample } from '../queueWatchdog';
+import { WATCHDOG_INTERVAL_MS, shouldRecreate, startQueueWatchdog, type WatchdogSample } from '../queueWatchdog';
 
 describe('queueWatchdog (dead-consumer self-heal)', () => {
+  it('defaults to a 5-minute cadence — the backstop behind BullMQ\'s own ≤5-min socket heal', () => {
+    expect(WATCHDOG_INTERVAL_MS).to.equal(300_000);
+  });
+
   it('shouldRecreate only on two consecutive zombie samples', () => {
     const zombie: WatchdogSample = { waiting: 3, active: 0 };
     const healthy: WatchdogSample = { waiting: 0, active: 0 };

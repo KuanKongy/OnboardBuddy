@@ -1,4 +1,5 @@
 import { Queue, QueueOptions } from 'bullmq';
+import { envInt } from './env.js';
 
 // Resilience against cloud Redis (Upstash) dropping idle/blocking sockets: a
 // worker whose blocking connection dies silently sits "listening" forever
@@ -78,6 +79,44 @@ export function getAnalysisQueue(): Queue {
 
 export function getSummaryQueue(): Queue {
   return (summaryQueueInstance ??= new Queue(SUMMARY_QUEUE, queueOpts));
+}
+
+// BullMQ's Worker `drainDelay` is in SECONDS (constructor default 5), not
+// milliseconds. Both workers used to pass ms-sized values (30000 / 5000)
+// believing otherwise, so an idle worker blocked for hours between wake-ups
+// and BullMQ's own dead-socket guard — reconnect when a blocking call gets no
+// response within drainDelay + 1s — effectively never fired. That is the
+// "listening but deaf" state described in RESILIENCE above; with the unit
+// fixed, BullMQ replaces a dead blocking socket within one idle block,
+// proactively, and the watchdog (lib/queueWatchdog.ts) becomes the backstop
+// rather than the only defence. Job pickup stays instant regardless:
+// Queue.add writes a marker that interrupts the block.
+//
+// New env name on purpose: WORKER_POLL_INTERVAL_MS is 30000/5000 in existing
+// deployments, and a value meant as milliseconds silently becoming a 30s/5s
+// hot poll against the shared pay-per-command database is exactly the mistake
+// to guard against. Hence the fresh name and the 30s floor.
+export function resolveIdleBlockSeconds(
+  env: NodeJS.ProcessEnv = process.env,
+  warn: (msg: string) => void = console.warn,
+): number {
+  if (env.WORKER_POLL_INTERVAL_MS !== undefined) {
+    warn(
+      '[queue] WORKER_POLL_INTERVAL_MS is no longer read (BullMQ drainDelay is in seconds, ' +
+        'not milliseconds) — remove it and set WORKER_IDLE_BLOCK_SECONDS (seconds, default 300) instead.',
+    );
+  }
+  return Math.max(30, envInt('WORKER_IDLE_BLOCK_SECONDS', 300, env));
+}
+
+let idleBlockSecondsMemo: number | undefined;
+
+/**
+ * Memoised so the two worker modules share one resolution and one warning;
+ * the API (which also imports this module) never calls it and so never warns.
+ */
+export function idleBlockSeconds(): number {
+  return (idleBlockSecondsMemo ??= resolveIdleBlockSeconds());
 }
 
 export interface AnalysisJobData {

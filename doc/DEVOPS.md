@@ -291,7 +291,7 @@ Upstash Redis cost:
 
 | Env var | Default | Description |
 |---|---|---|
-| `WORKER_POLL_INTERVAL_MS` | `30000` | BullMQ `drainDelay`: how long to wait between idle polls. Jobs still picked up instantly via ZSET signal. |
+| `WORKER_IDLE_BLOCK_SECONDS` | `300` | BullMQ `drainDelay` in **seconds** (floor 30): how long an idle worker blocks between wake-ups, which bounds how fast a dead blocking socket is replaced. Jobs still picked up instantly via marker signal. The old `WORKER_POLL_INTERVAL_MS` is ignored with a boot warning. |
 | `WORKER_CONCURRENCY` | `4` | Max parallel **analysis** runs per worker process |
 | `SUMMARY_CONCURRENCY` | `4` | Max parallel **package generations** per worker process (same process — `worker/index.ts` imports `summaryWorker.js`) |
 | `LLM_MAX_CONCURRENCY` | `12` | Parallel AI calls per run (per `AiClient` semaphore — **per job, not global**) |
@@ -331,9 +331,22 @@ mechanisms now cover it, in `backend/src/worker/jobRecovery.ts` and
 `npm run`: as PID 1, npm's signal forwarding is unreliable and the kernel drops
 default-action signals to PID 1 entirely, so SIGTERM never reached the handler.
 
-**Cost note:** With `drainDelay: 30000`, idle Redis commands drop ~6x compared
-to the BullMQ default of 5000ms. For sustained usage, switch to Upstash Fixed
-plan ($10/month) for unlimited commands.
+**Cost note:** BullMQ's `drainDelay` is in **seconds**, so the idle block is
+300 s (`WORKER_IDLE_BLOCK_SECONDS`), the watchdog samples every 300 s with a
+single `getJobCounts` call (4 commands), and the stalled sweep runs every
+300 s. Expected idle Upstash traffic per worker process:
+
+| Source | Commands/day |
+|---|---|
+| Watchdog (2 queues × 288 ticks × 4) | ~2.3k |
+| Stalled sweep (2 workers × 288 × 7) | ~4k |
+| Idle wake-ups (2 workers × 288 × ~8) | ~4.6k |
+| Reconnect chatter | ≤0.3k |
+| **Primary region total** | **~11k** (≈ $0.07/month PAYG) |
+
+Stay on Pay-as-you-go — a $10/month Fixed plan is >100× this floor. A read
+region (Global DB) bills its own share of the same traffic while nothing reads
+from it; removing it removes that share.
 
 ### 8. Connection pooling (Supabase transaction mode)
 
@@ -428,7 +441,7 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `PG_POOL_MAX` | `backend/.env` | Per-process pg pool cap (code default `30`; 10 for api, 30 for worker) | Set manually (see "Connection pooling" above) |
 | `REDIS_URL` | `backend/.env` | Upstash TCP/TLS connection string. Required when `NODE_ENV=production` (or `REDIS_HOST`) | Upstash Console → Database → Details |
 | `QUEUE_SUFFIX` | `backend/.env` | BullMQ queue-name suffix. Empty locally; `-prod` in production. **Must match between api and worker** | Set manually |
-| `WORKER_POLL_INTERVAL_MS` | `backend/.env` | Worker poll interval in ms (default `30000`) | Set manually |
+| `WORKER_IDLE_BLOCK_SECONDS` | `backend/.env` | Idle block between BullMQ wake-ups, in seconds (default `300`, floor `30`). Replaces `WORKER_POLL_INTERVAL_MS` | Set manually |
 | `GITHUB_CLIENT_ID` | (none) | **Retired.** Login runs through the GitHub App's OAuth; no backend code reads this | Lives only in Supabase → Authentication → Providers → GitHub |
 | `GITHUB_CLIENT_SECRET` | (none) | **Retired.** Same as above | Lives only in the Supabase dashboard |
 | `GITHUB_APP_ID` | `backend/.env` | GitHub App numeric ID | github.com → Settings → Developer settings → GitHub Apps |

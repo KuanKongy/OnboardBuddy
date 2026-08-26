@@ -8,9 +8,9 @@
  * revalidate, replace content, keep the old generation run for audit.
  */
 
-import { Worker, Job, Queue } from 'bullmq';
+import { Worker, Job } from 'bullmq';
 import { startQueueWatchdog } from '../lib/queueWatchdog.js';
-import { SUMMARY_QUEUE, connection, getSummaryQueue } from '../lib/queue.js';
+import { SUMMARY_QUEUE, connection, getSummaryQueue, idleBlockSeconds } from '../lib/queue.js';
 import type { SummaryJobData } from '../lib/queue.js';
 import { query } from '../lib/db.js';
 import { envInt } from '../lib/env.js';
@@ -817,8 +817,10 @@ function createSummaryWorker(): Worker<SummaryJobData> {
       // drew on one pg pool. Each job additionally fans out SECTION_CONCURRENCY
       // sections internally; pool sizing for the combination: src/lib/db.ts.
       concurrency: envInt('SUMMARY_CONCURRENCY', 4),
-      drainDelay: 5000,
-      stalledInterval: 120_000,
+      // SECONDS — BullMQ's drainDelay unit (see lib/queue.ts); the old
+      // hard-coded "5000ms" actually meant 83 minutes.
+      drainDelay: idleBlockSeconds(),
+      stalledInterval: 300_000,
       lockDuration: 600_000,
       removeOnComplete: { count: 5 },
       removeOnFail: { count: 5 },
@@ -853,14 +855,17 @@ export function getSummaryWorker(): Worker<SummaryJobData> {
 }
 
 // Dead-consumer self-heal (see lib/queueWatchdog.ts): recreate the consumer
-// in-process when queued jobs sit while nothing is active.
-const summaryQueueForWatchdog = new Queue(SUMMARY_QUEUE, { connection });
+// in-process when queued jobs sit while nothing is active. Samples through
+// the shared getSummaryQueue() handle — every BullMQ Queue opens its own
+// Redis connection (same reasoning as worker/index.ts).
 export const stopSummaryWatchdog = startQueueWatchdog({
   queueName: SUMMARY_QUEUE,
-  sample: async () => ({
-    waiting: await summaryQueueForWatchdog.getWaitingCount(),
-    active: await summaryQueueForWatchdog.getActiveCount(),
-  }),
+  sample: async () => {
+    // One getJobCounts = 4 Redis commands vs 7 for the two count calls; 'wait'
+    // skips the paused list, which this app never uses (no queue.pause()).
+    const counts = await getSummaryQueue().getJobCounts('wait', 'active');
+    return { waiting: counts.wait ?? 0, active: counts.active ?? 0 };
+  },
   recreate: async () => {
     await summaryWorker.close().catch(() => {});
     summaryWorker = createSummaryWorker();
