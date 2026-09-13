@@ -27,11 +27,11 @@ vi.mock("@/lib/api", () => ({
 
 const { PrivacyPage } = await import("./PrivacyPage");
 
-async function renderPrivacy() {
+async function renderPrivacy(entry = "/privacy") {
   let container!: HTMLElement;
   await act(async () => {
     const view = render(
-      <MemoryRouter initialEntries={["/privacy"]}>
+      <MemoryRouter initialEntries={[entry]}>
         <PrivacyPage />
       </MemoryRouter>,
     );
@@ -68,6 +68,33 @@ describe("PrivacyPage", () => {
     const modes = document.getElementById("modes");
     expect(modes).not.toBeNull();
     expect(modes!.getAttribute("aria-labelledby")).toBe("modes-h");
+  });
+
+  it("scrolls the hash target into view on a deep link", async () => {
+    // jsdom implements neither scrollIntoView nor rAF-driven paints, and the
+    // browser automation harness suspends smooth scrolling in occluded
+    // windows, so this is the one place the deep-link scroll can be pinned:
+    // the hook must call scrollIntoView on #modes after mount.
+    const scrolledTo: string[] = [];
+    const proto = Element.prototype as unknown as { scrollIntoView?: (this: Element, opts?: unknown) => void };
+    const original = proto.scrollIntoView;
+    proto.scrollIntoView = function (this: Element) {
+      scrolledTo.push(this.id);
+    };
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
+    try {
+      await renderPrivacy("/privacy#modes");
+      expect(scrolledTo).toContain("modes");
+    } finally {
+      raf.mockRestore();
+      if (original) proto.scrollIntoView = original;
+      else delete proto.scrollIntoView;
+    }
   });
 
   it("keeps the public copy em-dash-free", async () => {

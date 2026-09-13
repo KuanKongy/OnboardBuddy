@@ -16,6 +16,16 @@ export function useScrollToHash(): void {
 
   useEffect(() => {
     if (!hash) return;
-    document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
+    // One frame later, not immediately: on a cross-page navigation this child
+    // effect fires before usePageChrome's (parent effects run after children),
+    // whose focus(#main) call follows in the same flush. Deferring one frame
+    // starts the scroll after that focus and after layout settles, so the two
+    // can never interact. (When verifying this in an automated browser, note
+    // that Chromium suspends SMOOTH scrolling in occluded windows entirely,
+    // landing anchors included; the jsdom test pins the behavior instead.)
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
   }, [hash, key]);
 }

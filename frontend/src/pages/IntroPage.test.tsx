@@ -169,16 +169,24 @@ describe("IntroPage", () => {
   it("scrolls to the section named in the location hash", () => {
     // React Router does not scroll on hash navigation and jsdom has no
     // scrollIntoView at all, so the effect is only observable through a stub.
+    // useScrollToHash defers the scroll by one animation frame; run it inline.
     const proto = HTMLElement.prototype as unknown as { scrollIntoView?: () => void };
     const original = proto.scrollIntoView;
     const scrolledTo: Element[] = [];
     proto.scrollIntoView = function (this: Element) {
       scrolledTo.push(this);
     };
+    const raf = vi
+      .spyOn(window, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback) => {
+        cb(0);
+        return 0;
+      });
     try {
       renderPage(["/#how"]);
       expect(scrolledTo).toContain(document.getElementById("how"));
     } finally {
+      raf.mockRestore();
       if (original) proto.scrollIntoView = original;
       else delete proto.scrollIntoView;
     }
