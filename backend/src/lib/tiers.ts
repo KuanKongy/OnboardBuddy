@@ -11,7 +11,7 @@
  * `dev` is the hidden unlimited tier (DEV_TIER_EMAILS allowlist). `blocked` is
  * the abuse block state.
  */
-import { envNum } from './env.js';
+import { envInt, envNum } from './env.js';
 
 export type Tier = 'free' | 'pro' | 'max' | 'dev' | 'blocked';
 
@@ -52,6 +52,37 @@ export function tierLimits(tier: Tier, env: NodeJS.ProcessEnv = process.env): Ti
     default:
       return { monthlyCredits: freeMonthlyCredits(env), rateCredits: 1, rateWindowHours: 120, maxConcurrent: 1 };
   }
+}
+
+/**
+ * Thresholds for the free-tier multi-account detector in
+ * services/creditGate.ts. All THREE must trip at once on a single device
+ * before any free-tier spend is refused, because each one alone is an honest
+ * shape: a shared laptop has several accounts, a workshop creates a dozen
+ * accounts in an afternoon, and one person spending their own free budget is
+ * the product working. Only the combination (same device, several accounts
+ * born together, combined spend already past a multiple of one free budget)
+ * describes budget farming. Env-overridable so the owner can tighten or
+ * loosen without a deploy.
+ */
+export interface AbuseThresholds {
+  /** Distinct accounts on one device needed before the shape is even considered. */
+  minAccounts: number;
+  /** How close together `minAccounts` of those accounts must have been created. */
+  creationSpanDays: number;
+  /** Combined monthly spend, in multiples of one free monthly budget. */
+  spendMultiplier: number;
+  /** Trailing window of device activity the detector looks at. */
+  windowDays: number;
+}
+
+export function abuseThresholds(env: NodeJS.ProcessEnv = process.env): AbuseThresholds {
+  return {
+    minAccounts: envInt('ABUSE_MIN_ACCOUNTS', 3, env),
+    creationSpanDays: envInt('ABUSE_CREATION_SPAN_DAYS', 7, env),
+    spendMultiplier: envNum('ABUSE_SPEND_MULTIPLIER', 2, env),
+    windowDays: envInt('ABUSE_WINDOW_DAYS', 30, env),
+  };
 }
 
 function devEmails(env: NodeJS.ProcessEnv): Set<string> {

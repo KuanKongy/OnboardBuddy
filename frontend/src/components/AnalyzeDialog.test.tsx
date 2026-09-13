@@ -46,15 +46,22 @@ const PROJECT = {
   },
 } satisfies ProjectData;
 
+/**
+ * What POST /analyze rejects with for the case under test. Each test sets this
+ * before rendering; the default is the monthly-credit case.
+ */
+let analyzeRejection: ApiError;
+
 beforeEach(() => {
+  analyzeRejection = new ApiError("Monthly analysis credits exhausted", 429, {
+    code: "monthly_exhausted",
+    monthResetAt: MONTH_RESET_AT,
+  });
   mockApi.mockReset();
   mockApi.mockImplementation(async (path: string) => {
-    // The one call under test: the run is refused for an exhausted monthly credit.
+    // The one call under test: the run is refused.
     if (path.includes("/analyze")) {
-      throw new ApiError("Monthly analysis credits exhausted", 429, {
-        code: "monthly_exhausted",
-        monthResetAt: MONTH_RESET_AT,
-      });
+      throw analyzeRejection;
     }
     // Everything the dialog and its form load on open, answered quietly with the
     // GET /me/credit contract the CreditMeter reads.
@@ -80,17 +87,47 @@ beforeEach(() => {
   });
 });
 
+function renderAndStart() {
+  render(
+    <MemoryRouter>
+      <AnalyzeDialog project={PROJECT} open onOpenChange={() => {}} onStarted={() => {}} />
+    </MemoryRouter>,
+  );
+  return screen.findByRole("button", { name: /start analysis/i });
+}
+
 describe("AnalyzeDialog — credit rejections", () => {
   it("shows a friendly monthly-credit box, with a /pricing link, on monthly_exhausted", async () => {
-    render(
-      <MemoryRouter>
-        <AnalyzeDialog project={PROJECT} open onOpenChange={() => {}} onStarted={() => {}} />
-      </MemoryRouter>,
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: /start analysis/i }));
+    fireEvent.click(await renderAndStart());
 
     expect(await screen.findByText(/used all of this month's analysis credits/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute("href", "/pricing");
+  });
+
+  /**
+   * The abuse detector's 403 is the one rejection a falsely-flagged user has to
+   * be able to act on, so the box must route them to a human rather than read
+   * as a dead end. An unrecognised code would fall through to the raw-error
+   * path, which says nothing about what to do next.
+   */
+  it("offers a contact route, not a dead end, on abuse_detected", async () => {
+    analyzeRejection = new ApiError("Free usage on this device is paused", 403, {
+      code: "abuse_detected",
+    });
+
+    fireEvent.click(await renderAndStart());
+
+    expect(await screen.findByText(/free usage on this device is paused/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /contact us for review/i })).toHaveAttribute("href", "/contact");
+  });
+
+  it("tells a stale tab to reload on client_required", async () => {
+    analyzeRejection = new ApiError("Please use the OnboardBuddy app", 403, {
+      code: "client_required",
+    });
+
+    fireEvent.click(await renderAndStart());
+
+    expect(await screen.findByText(/reload the page/i)).toBeInTheDocument();
   });
 });

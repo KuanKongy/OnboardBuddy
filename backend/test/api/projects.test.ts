@@ -357,10 +357,57 @@ describe("DELETE /api/projects/:id", () => {
 });
 
 describe("POST /api/projects/:id/analyze", () => {
+  afterEach(resetTestHarness);
+
   it("returns 401 when unauthenticated", async () => {
     const res = await request(app).post("/api/projects/some-uuid/analyze");
 
     expect(res.status).to.equal(401);
+  });
+
+  /**
+   * The multi-account detector keys on the client's stored device id, so a
+   * free-tier spend that sends no X-Device-Id would opt out of it by simply
+   * dropping a header. Checked through the route, not the middleware in
+   * isolation: the 403 has to survive requireProjectAccess and the real header
+   * plumbing to mean anything.
+   */
+  it("refuses a free-tier spend with no X-Device-Id, and lets the same request through with one", async () => {
+    installTestAuth();
+    mockQuery((text) => {
+      if (text.includes("FROM project_members")) {
+        return {
+          rows: [{
+            project_id: TEST_PROJECT_ID, user_id: "u1",
+            permission_tier: "owner", developer_role: "general", default_package_id: null,
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const refused = await request(app)
+      .post(`/api/projects/${TEST_PROJECT_ID}/analyze`)
+      .set({ Authorization: "Bearer valid-test-token" })
+      .send({});
+
+    expect(refused.status).to.equal(403);
+    expect(refused.body.code).to.equal("client_required");
+
+    const stub = stubPoolClient(() => ({ rows: [] }));
+    try {
+      const accepted = await request(app)
+        .post(`/api/projects/${TEST_PROJECT_ID}/analyze`)
+        .set(authHeader())
+        .send({});
+
+      // Past the credit gate: the stubbed transaction finds no project row, so
+      // the 404 is proof the request reached the handler's own logic.
+      expect(accepted.status).to.equal(404);
+      expect(accepted.body.code).to.equal(undefined);
+    } finally {
+      stub.restore();
+    }
   });
 });
 

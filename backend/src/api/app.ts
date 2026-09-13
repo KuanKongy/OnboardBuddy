@@ -48,9 +48,22 @@ export function resolveCorsOrigins(env: NodeJS.ProcessEnv = process.env): string
 export function createApp() {
   const app = express();
 
+  // Railway (and any other platform edge) terminates TLS and forwards, so
+  // without this `req.ip` is the proxy's address for every caller on earth:
+  // clientIp() in middleware/rateLimit.ts would lump the whole internet into
+  // one rate-limit bucket, and the anti-abuse IP signal would record a single
+  // meaningless value. `1` trusts exactly one hop — the platform's own proxy —
+  // so a client cannot forge its address by sending its own x-forwarded-for,
+  // which a `true` here would let it do. A local run has no proxy in front and
+  // is unaffected (there is no x-forwarded-for to read).
+  app.set("trust proxy", 1);
+
   // No cookie-based auth flow exists anywhere in this API (verified:
   // no `cookie` usage under src/api) — auth is a Bearer JWT in a header, so
   // `credentials: true` was dead weight a cross-site page cannot exploit.
+  // No allowedHeaders list on purpose: cors() reflects the browser's
+  // Access-Control-Request-Headers, so custom request headers (Authorization,
+  // X-Device-Id, X-Device-Fp) pass preflight without a list to keep in sync.
   app.use(
     cors({
       origin: resolveCorsOrigins(),

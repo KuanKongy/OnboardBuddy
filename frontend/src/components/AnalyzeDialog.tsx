@@ -98,6 +98,8 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
         code === "rate_limited" ||
         code === "analysis_in_progress" ||
         code === "blocked" ||
+        code === "abuse_detected" ||
+        code === "client_required" ||
         code === "github_required"
       ) {
         setErrorCode(code);
@@ -222,6 +224,27 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
               <Link to="/contact" className="font-medium text-primary hover:underline">
                 Contact us
               </Link>
+            </span>
+          </div>
+        )}
+        {errorCode === "abuse_detected" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              Free usage on this device is paused while we review unusual multi-account
+              activity.{" "}
+              <Link to="/contact" className="font-medium text-primary hover:underline">
+                Contact us for review
+              </Link>
+            </span>
+          </div>
+        )}
+        {errorCode === "client_required" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              Please use the OnboardBuddy app for this action. If you are in the app,
+              reload the page.
             </span>
           </div>
         )}

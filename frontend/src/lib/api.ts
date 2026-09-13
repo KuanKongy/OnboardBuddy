@@ -1,3 +1,4 @@
+import { getDeviceFp, getDeviceId } from "./deviceId";
 import { clearGithubReturnTarget } from "./githubReturnTarget";
 import { runtimeConfig } from "./runtimeConfig";
 import { supabase } from "./supabase";
@@ -30,6 +31,32 @@ async function getAccessToken(): Promise<string | null> {
 // succeeds rather than on SIGNED_IN — this module has no subscription.
 let signedOutOnFinal401 = false;
 
+/**
+ * The fingerprint hash is computed ONCE at module load and attached from then
+ * on. Deliberately not awaited per request: hashing is fast but asynchronous,
+ * and making every call site wait on it would add a microtask hop to reads that
+ * used to start immediately. The first few requests of a page load may go out
+ * without X-Device-Fp, which costs nothing - it is evidence only, and
+ * X-Device-Id (synchronous, the value the server actually gates on) is always
+ * there.
+ */
+let deviceFp: string | null = null;
+void getDeviceFp().then((fp) => {
+  deviceFp = fp;
+});
+
+/** Never let an identifier problem break a request: a dropped header is recoverable. */
+function deviceHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  try {
+    headers["X-Device-Id"] = getDeviceId();
+  } catch {
+    // getDeviceId already swallows storage failures; this is the last net.
+  }
+  if (deviceFp) headers["X-Device-Fp"] = deviceFp;
+  return headers;
+}
+
 async function signOutOnce(): Promise<void> {
   if (signedOutOnFinal401) return;
   signedOutOnFinal401 = true;
@@ -56,6 +83,11 @@ export async function apiFetch(
   // an explicit `headers` entry from the caller still wins.
   const headers: Record<string, string> = {
     ...(options.body != null ? { "Content-Type": "application/json" } : {}),
+    // Anti-abuse device signals on every request, including reads: GET
+    // /me/credit is where most of the device history comes from, because the
+    // meter loads far more often than anything spends. An explicit `headers`
+    // entry from the caller still wins.
+    ...deviceHeaders(),
     ...(options.headers as Record<string, string>),
   };
   if (token) {

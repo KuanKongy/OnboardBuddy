@@ -54,6 +54,23 @@ describe("apiFetch headers (#7)", () => {
 
     expect(headersOf(0)["Content-Type"]).toBe("text/plain");
   });
+
+  /**
+   * X-Device-Id is what the backend's multi-account detector keys on, and a
+   * free-tier spend without it is refused outright (403 client_required). So
+   * dropping this header would not degrade anything gracefully: it would break
+   * Analyze for every free account at once, with nothing in this suite to say
+   * why. Reads carry it too - GET /me/credit is where most device history comes
+   * from, because the meter loads far more often than anything spends.
+   */
+  it("sends a stable X-Device-Id on reads and writes alike", async () => {
+    await apiFetch("/me/credit");
+    await apiFetch("/projects/p1/analyze", { method: "POST", body: "{}" });
+
+    const id = headersOf(0)["X-Device-Id"];
+    expect(id).toMatch(/^[A-Za-z0-9._:-]{8,64}$/);
+    expect(headersOf(1)["X-Device-Id"]).toBe(id);
+  });
 });
 
 // Exactly one signOut: a page load fires several requests and they all 401 together.

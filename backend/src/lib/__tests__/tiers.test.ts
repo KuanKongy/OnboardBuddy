@@ -1,5 +1,5 @@
 import { expect } from 'chai';
-import { resolveTier, tierLimits, cadPerUsd, freeMonthlyCredits } from '../tiers.js';
+import { resolveTier, tierLimits, cadPerUsd, freeMonthlyCredits, abuseThresholds } from '../tiers.js';
 
 describe('tiers', () => {
   describe('resolveTier', () => {
@@ -39,6 +39,25 @@ describe('tiers', () => {
       expect(cadPerUsd({} as NodeJS.ProcessEnv)).to.equal(1.38);
       expect(cadPerUsd({ CAD_PER_USD: '1' } as NodeJS.ProcessEnv)).to.equal(1);
       expect(cadPerUsd({ CAD_PER_USD: 'garbage' } as NodeJS.ProcessEnv)).to.equal(1.38);
+    });
+  });
+
+  // A typo in one of these must not silently loosen the detector to 0, which
+  // would flag every device that presented one account.
+  describe('abuseThresholds', () => {
+    it('defaults to 3 accounts / 7 days / 2x budget / 30-day window', () => {
+      expect(abuseThresholds({} as NodeJS.ProcessEnv)).to.deep.equal({
+        minAccounts: 3, creationSpanDays: 7, spendMultiplier: 2, windowDays: 30,
+      });
+    });
+
+    it('each threshold is env-overridable, and junk falls back to the default', () => {
+      const env = { ABUSE_MIN_ACCOUNTS: '5', ABUSE_CREATION_SPAN_DAYS: '3', ABUSE_SPEND_MULTIPLIER: '1.5', ABUSE_WINDOW_DAYS: '90' } as NodeJS.ProcessEnv;
+      expect(abuseThresholds(env)).to.deep.equal({
+        minAccounts: 5, creationSpanDays: 3, spendMultiplier: 1.5, windowDays: 90,
+      });
+      expect(abuseThresholds({ ABUSE_MIN_ACCOUNTS: '0', ABUSE_SPEND_MULTIPLIER: 'x' } as NodeJS.ProcessEnv))
+        .to.deep.include({ minAccounts: 3, spendMultiplier: 2 });
     });
   });
 });

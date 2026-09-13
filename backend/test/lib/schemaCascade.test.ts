@@ -32,7 +32,11 @@ const MIGRATIONS_DIR = path.join(
  * *user*, not a project. Adding a table here is a deliberate statement that its
  * rows must outlive the projects that reference them.
  */
-const NOT_PROJECT_SCOPED = ["github_connections", "github_installations", "users"];
+// user_signals outlives more than the project: its FK to users is
+// `on delete set null` precisely so a device's history survives the account
+// being deleted, which is what stops delete-and-recreate from resetting the
+// multi-account detector.
+const NOT_PROJECT_SCOPED = ["github_connections", "github_installations", "user_signals", "users"];
 
 interface ForeignKey {
   child: string;

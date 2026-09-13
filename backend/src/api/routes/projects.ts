@@ -5,6 +5,7 @@ import { requireProjectAccess } from "../middleware/project-access.js";
 import { requireDailyCredit } from "../middleware/requireDailyCredit.js";
 import { notifyNonDevAnalysis } from "../services/analysisAlert.js";
 import { checkCredit, creditRejection, type CreditStatus } from "../services/creditGate.js";
+import { extractClientSignals, hashClientSignals } from "../services/signals.js";
 import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import { parseInstallationId } from "../lib/installationId.js";
 import { languageDisplayName } from "../lib/languageDisplay.js";
@@ -1304,11 +1305,16 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), requ
     // Authoritative credit check, on the transaction client under the advisory
     // lock: sees committed spend and in-flight jobs, so a burst of concurrent
     // starts cannot slip past the budget. The middleware pre-check already ran;
-    // this closes the race.
+    // this closes the race. The device signals go through too, so the same
+    // multi-account detector applies here: concurrent starts from a farm of
+    // accounts are exactly the burst this lock exists to serialize, and the
+    // middleware's verdict is minutes stale by comparison.
     const creditStatus: CreditStatus = await checkCredit(
       userId,
       req.user?.email,
       (text, params) => client.query(text, params as unknown[]),
+      new Date(),
+      { deviceHash: hashClientSignals(extractClientSignals(req)).deviceHash },
     );
     if (!creditStatus.allowed) {
       await client.query("ROLLBACK");

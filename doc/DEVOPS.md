@@ -462,6 +462,11 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `ALERT_EMAIL_TO` | `backend/.env` | Recipient of the owner alert | Set manually (your inbox) |
 | `ALERT_EMAIL_FROM` | `backend/.env` | Verified sender for the alert (Resend needs a verified domain in prod) | Set manually; defaults to the resend.dev sandbox |
 | `ALERT_THROTTLE_MINUTES` | `backend/.env` | Minimum minutes between alerts for the same user (default `60`), so a raid cannot flood the inbox | Set manually |
+| `SIGNAL_HASH_SALT` | `backend/.env` | Optional salt for the stored anti-abuse hashes. Defaults to a value derived from `TOKEN_ENCRYPTION_KEY` | Generate like `TOKEN_ENCRYPTION_KEY` |
+| `ABUSE_MIN_ACCOUNTS` | `backend/.env` | Accounts on one device before the multi-account detector considers the shape (default `3`) | Set manually |
+| `ABUSE_CREATION_SPAN_DAYS` | `backend/.env` | How close together those accounts must have been created (default `7`) | Set manually |
+| `ABUSE_SPEND_MULTIPLIER` | `backend/.env` | Combined month spend that trips the flag, in multiples of one free budget (default `2`) | Set manually |
+| `ABUSE_WINDOW_DAYS` | `backend/.env` | Trailing window of device activity the detector reads (default `30`) | Set manually |
 | `VITE_API_URL` | `frontend/.env` | Backend API URL | `http://localhost:3000/api` for local dev |
 | `VITE_SUPABASE_URL` | `frontend/.env` | Supabase project URL (same as `SUPABASE_URL`) | Supabase → Settings → Data API |
 | `VITE_SUPABASE_ANON_KEY` | `frontend/.env` | Supabase publishable (anon) key | Supabase → Settings → API Keys → Publishable key |
@@ -492,6 +497,56 @@ month returns `429 { code: 'monthly_exhausted' }`, the rate window returns
 feature), and a project with no GitHub installation returns `400 github_required`.
 There is no payment flow: Pro/Max are assigned by hand (no Stripe, by design).
 `GET /api/me/credit` returns the caller's live status for the UI meter.
+
+### Free-tier multi-account detection
+
+Accounts are free, so the cheapest way to spend the owner's AI balance is a
+handful of signups on one laptop. Limits stay strictly **per account** anyway:
+nothing below pools, shares, or reduces anyone's budget. What it adds is a
+detector.
+
+The frontend sends two headers on every API call: `X-Device-Id`, a random UUID
+the browser stores in `localStorage`, and `X-Device-Fp`, a hash over passive
+browser properties. The backend hashes both, plus the request IP, into
+`user_signals` (migration `002`). Free-tier spend is refused only when **all
+three** of these hold for the caller's device, over the trailing
+`ABUSE_WINDOW_DAYS`:
+
+1. at least `ABUSE_MIN_ACCOUNTS` distinct accounts were seen on that device,
+2. at least that many of them were *created* within `ABUSE_CREATION_SPAN_DAYS`
+   of each other, and
+3. their combined spend this UTC month is at least `ABUSE_SPEND_MULTIPLIER` x
+   one free monthly budget.
+
+Any one or two of those is an honest shape — a shared family laptop, a workshop
+signing up together, someone spending the free credits they were given — so none
+of them is acted on alone. The refusal is `403 { code: 'abuse_detected' }`, and
+the UI offers the contact page.
+
+Two properties worth knowing before you debug it:
+
+- **Only the device id can refuse a request.** The fingerprint and IP hashes are
+  recorded as evidence for a human reading the table and are read by no decision.
+  A campus or an office is one shared IP and a row of near-identical laptops;
+  gating on that would lock out real users for a stranger's behaviour.
+- **The flag is computed live and never stored.** It is recomputed from windowed
+  queries per request and is never written to `users.tier`, so it clears itself
+  once the activity ages out of the window. There is nothing to un-flag by hand.
+  The `user_signals` FK to `users` is `on delete set null` on purpose: deleting
+  the account must not erase the device's history, or delete-and-recreate defeats
+  the whole thing.
+
+Because the device id is the only enforcement key, a free-tier request that sends
+no `X-Device-Id` is refused with `403 { code: 'client_required' }` — otherwise
+opting out would be as easy as dropping a header. This affects **non-browser
+free-tier callers** (curl, scripts, integration tests): send a stable
+`X-Device-Id` of your own, or use an account on a paid tier or `DEV_TIER_EMAILS`,
+neither of which is ever asked for the header. The owner gets one email per
+flagged device per process lifetime (a restart can re-send).
+
+`app.set('trust proxy', 1)` in `src/api/app.ts` is what makes `req.ip` the real
+client address behind Railway's proxy rather than the proxy's own — the IP signal
+and the per-client rate limiter both depend on it.
 
 ---
 
