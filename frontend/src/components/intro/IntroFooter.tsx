@@ -26,10 +26,7 @@ export function IntroFooter() {
             Privacy Policy
           </Link>
           <Link to="/terms" className="text-muted-foreground transition-colors hover:text-foreground">
-            Terms
-          </Link>
-          <Link to="/login" className="text-muted-foreground transition-colors hover:text-foreground">
-            Sign in
+            Terms of Service
           </Link>
         </nav>
       </div>

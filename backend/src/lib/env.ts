@@ -13,3 +13,15 @@ export function envInt(name: string, fallback: number, env: NodeJS.ProcessEnv = 
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+/**
+ * Like envInt but allows any positive (possibly fractional) number - for dollar
+ * knobs such as FREE_DAILY_CREDIT_USD where cents matter. Anything that is not a
+ * finite number greater than 0 resolves to `fallback`.
+ */
+export function envNum(name: string, fallback: number, env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}

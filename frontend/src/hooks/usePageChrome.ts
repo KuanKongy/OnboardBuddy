@@ -78,6 +78,22 @@ export function usePageChrome(): void {
     // would undo both.
     if (previous === null || previous === pathname) return;
 
+    // A real navigation to a fresh path should start at the top: the router
+    // does not reset the window scroll on its own, so a public page opened from
+    // a scrolled position kept it. Skip it when a hash is present so a deep
+    // link to a section (IntroPage's anchors) still scrolls to that section.
+    // Read window.location.hash rather than the router hash to keep this effect
+    // firing on pathname change only, not on same-page hash changes.
+    // try/catch: some environments (jsdom in tests) define scrollTo but throw
+    // "Not implemented" from it, which would surface as an effect error.
+    if (!window.location.hash) {
+      try {
+        window.scrollTo(0, 0);
+      } catch {
+        /* no-op where scrollTo is unavailable */
+      }
+    }
+
     // preventScroll: the region starts at the top of the new page anyway, and
     // scrolling to it fights the router's own scroll restoration.
     document.getElementById(MAIN_REGION_ID)?.focus({ preventScroll: true });

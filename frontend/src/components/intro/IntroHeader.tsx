@@ -9,11 +9,15 @@ import { useAuth } from "@/contexts/AuthContext";
 // every public page: from /privacy or /terms they route home to the section.
 // Rendered as router Links, so the click is a client-side navigation and
 // IntroPage's hash effect does the scrolling (a plain <a> reloaded the app).
+// Pricing and Contact are their own pages, not anchors, so they carry a bare
+// route with no hash and simply navigate there.
 const SECTION_LINKS = [
   { href: "/#product", label: "Product" },
   { href: "/#how", label: "How it works" },
   { href: "/#privacy", label: "Privacy" },
   { href: "/#pipeline", label: "Pipeline" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/contact", label: "Contact" },
 ];
 
 /**

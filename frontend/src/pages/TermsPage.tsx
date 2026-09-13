@@ -29,7 +29,7 @@ export function TermsPage() {
   return (
     <PublicPageShell
       title="Terms of Service"
-      subtitle="Plain-language terms for using OnboardBuddy."
+      subtitle="The terms that govern your use of OnboardBuddy."
     >
       <div className="space-y-4">
         <Section id="service" title="What OnboardBuddy is">
@@ -97,9 +97,9 @@ export function TermsPage() {
           </p>
         </Section>
 
-        <Section id="termination" title="Ending things">
+        <Section id="termination" title="Termination">
           <p>
-            You can stop at any time: uninstall the GitHub App to cut repository access, delete
+            You may stop at any time: uninstall the GitHub App to cut repository access, delete
             individual projects, or delete your account, which permanently removes your profile
             and every project you own. The team may suspend accounts that break these terms.
           </p>
@@ -109,6 +109,17 @@ export function TermsPage() {
           <p>
             These terms may change as the project evolves; the current version always lives at
             this address. Continued use after a change means the new terms apply.
+          </p>
+          <p>
+            Questions about these terms may be directed to the team through the{" "}
+            <Link to="/contact" className="text-primary hover:underline">
+              Contact
+            </Link>{" "}
+            page or by email at{" "}
+            <a href="mailto:khanhpronam@gmail.com" className="text-primary hover:underline">
+              khanhpronam@gmail.com
+            </a>
+            .
           </p>
         </Section>
       </div>

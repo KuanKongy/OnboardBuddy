@@ -38,13 +38,21 @@ export function PrivacyPage() {
       <div className="space-y-4">
         <Card>
           <CardContent className="space-y-2.5 p-5 text-[0.875rem] leading-relaxed text-muted-foreground">
-            <p className="font-medium text-foreground">Effective date: September 1, 2026</p>
+            <p className="font-medium text-foreground">Effective date: September 4, 2026</p>
             <p>
               OnboardBuddy is built and operated by its development team as an independent
               project. There is no company behind it and no dedicated privacy office, so
               this policy names the team itself as responsible for the handling described below.
-              Questions about this policy, or about data held under your account, are best raised
-              as an issue on the project's repository, which is where the team answers them.
+              Questions about this policy, or about data held under your account, may be directed
+              to the team through the{" "}
+              <Link to="/contact" className="text-primary hover:underline">
+                Contact
+              </Link>{" "}
+              page or by email at{" "}
+              <a href="mailto:khanhpronam@gmail.com" className="text-primary hover:underline">
+                khanhpronam@gmail.com
+              </a>
+              .
             </p>
           </CardContent>
         </Card>
@@ -149,8 +157,8 @@ export function PrivacyPage() {
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
               Generated artifacts and run history persist until the project or the account they
-              belong to is deleted. They are not expired on a timer, because a handbook that
-              disappeared on its own would be worse than no handbook.
+              belong to is deleted. They are not expired on a timer, so a project's documentation
+              remains available until it is explicitly removed.
             </li>
             <li>
               The temporary repository archive and the working directory extracted from it are
@@ -161,18 +169,25 @@ export function PrivacyPage() {
               repository content, and completed jobs are dropped once a short recent-jobs window
               moves past them.
             </li>
+            <li>
+              Access credentials are encrypted at rest. Your GitHub App token and any optional
+              per-project bring-your-own LLM API key are encrypted with a server-held key
+              (configured as <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.75rem] text-foreground">TOKEN_ENCRYPTION_KEY</code>)
+              before they are written to the database, and are decrypted only in memory when a run
+              needs them.
+            </li>
           </ul>
         </Section>
 
         <Section id="processors" title="Sub-processors">
           <p>
-            Four services process data on OnboardBuddy's behalf. Each is listed with what it
+            Seven services process data on OnboardBuddy's behalf. Each is listed with what it
             does and what reaches it.
           </p>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>
               <span className="font-medium text-foreground">Supabase:</span> authentication and
-              the database holding generated artifacts, account data, and project settings.
+              the Postgres database holding generated artifacts, account data, and project settings.
             </li>
             <li>
               <span className="font-medium text-foreground">GitHub:</span> sign-in identity and
@@ -187,6 +202,19 @@ export function PrivacyPage() {
               <span className="font-medium text-foreground">Upstash Redis:</span> the job queue
               that carries analysis and generation jobs; it holds job identifiers and parameters,
               not repository content.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Resend:</span> transactional email. When
+              a user starts an analysis, an alert is sent to the operator, and the subject line of
+              that alert contains the user's email address.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Railway:</span> hosting for the backend
+              API and the analysis worker, which process repository content during a run.
+            </li>
+            <li>
+              <span className="font-medium text-foreground">Vercel:</span> hosting for the frontend
+              web application served to your browser.
             </li>
           </ul>
         </Section>

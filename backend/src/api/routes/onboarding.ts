@@ -18,6 +18,7 @@ import {
 } from "../lib/receiptPresentation.js";
 import { groupGaps, summarizeGaps, type RawGap } from "../lib/gapSummary.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { requireDailyCredit } from "../middleware/requireDailyCredit.js";
 import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import {
   BadPackageParamError,
@@ -36,7 +37,7 @@ export const onboardingRouter = Router({ mergeParams: true });
  * revalidates, and replaces the content in the same package; old
  * generation runs stay for audit.
  */
-onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), requireUuidParam("sectionId"), async (req, res) => {
+onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("owner", "admin"), requireUuidParam("sectionId"), requireDailyCredit, async (req, res) => {
   try {
     const projectId = String(req.params.id);
     const { sectionId } = req.params;
@@ -116,7 +117,7 @@ onboardingRouter.post("/sections/:sectionId/regenerate", requireProjectAccess("o
  * existing package: the cheap answer to "N sections are stale" when a full
  * rebuild would pay to regenerate the eleven that are still current.
  */
-onboardingRouter.post("/generate", requireProjectAccess(), async (req, res) => {
+onboardingRouter.post("/generate", requireProjectAccess(), requireDailyCredit, async (req, res) => {
   try {
     const projectId = String(req.params.id);
     const userId = req.user!.id;

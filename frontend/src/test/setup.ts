@@ -26,3 +26,10 @@ Object.defineProperty(window, "matchMedia", {
     dispatchEvent: () => false,
   }),
 });
+
+// jsdom does not implement window.scrollTo; it logs a "Not implemented" error
+// (via its virtual console) whenever code calls it, e.g. the scroll-to-top on
+// route change in usePageChrome. Stub it to a no-op so that runner noise, and
+// any chance of it escalating the run, is gone. Scroll behavior is not under
+// test here.
+window.scrollTo = (() => {}) as typeof window.scrollTo;

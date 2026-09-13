@@ -455,9 +455,43 @@ the row-guarded kill switch/reconciler are already multi-worker-safe. Tuning:
 | `OPENROUTER_BASE_URL` | `backend/.env` | OpenRouter base URL | `https://openrouter.ai/api/v1` (static) |
 | `OPENROUTER_MODEL` | `backend/.env` | LLM model identifier | openrouter.ai → Models |
 | `TOKEN_ENCRYPTION_KEY` | `backend/.env` | 32-byte hex key for encrypting GitHub tokens at rest | Generate: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `FREE_MONTHLY_CREDITS` | `backend/.env` | Free-tier monthly credit budget (default `5`; 1 credit = CA$1 of AI spend). Pro/Max budgets are code constants in `src/lib/tiers.ts` | Set manually |
+| `CAD_PER_USD` | `backend/.env` | AI cost is USD, credits are CA$; USD spend is multiplied by this (default `1.38`) | Set manually |
+| `DEV_TIER_EMAILS` | `backend/.env` | Comma-separated emails granted the hidden unlimited `dev` tier on login (wins over stored `users.tier`) | Set manually |
+| `RESEND_API_KEY` | `backend/.env` | Resend key for the non-dev "analysis started" owner alert. Unset = alert logged and skipped | resend.com → API Keys |
+| `ALERT_EMAIL_TO` | `backend/.env` | Recipient of the owner alert | Set manually (your inbox) |
+| `ALERT_EMAIL_FROM` | `backend/.env` | Verified sender for the alert (Resend needs a verified domain in prod) | Set manually; defaults to the resend.dev sandbox |
+| `ALERT_THROTTLE_MINUTES` | `backend/.env` | Minimum minutes between alerts for the same user (default `60`), so a raid cannot flood the inbox | Set manually |
 | `VITE_API_URL` | `frontend/.env` | Backend API URL | `http://localhost:3000/api` for local dev |
 | `VITE_SUPABASE_URL` | `frontend/.env` | Supabase project URL (same as `SUPABASE_URL`) | Supabase → Settings → Data API |
 | `VITE_SUPABASE_ANON_KEY` | `frontend/.env` | Supabase publishable (anon) key | Supabase → Settings → API Keys → Publishable key |
+
+### Subscription tiers and the credit gate
+
+A "credit" is one Canadian dollar of AI spend. Every AI-spending endpoint
+(analyze, preflight, resume, summarize, generate, regenerate) is gated by
+`requireDailyCredit` (`backend/src/api/middleware/requireDailyCredit.ts`), and
+the analyze endpoint additionally re-checks inside its transaction under a
+per-user advisory lock (the race-safe money guard). Limits are in
+`src/lib/tiers.ts`:
+
+| Tier | Monthly budget | Rate cap | How to assign |
+|---|---|---|---|
+| `free` (default) | `FREE_MONTHLY_CREDITS` (env, default 5) | 1 credit / 5 days | default for every new account |
+| `pro` | 30 | 2 credits / day | `update users set tier='pro' where email=...` |
+| `max` | 100 | 5 credits / 12h | `update users set tier='max' where email=...` |
+| `dev` (hidden) | unlimited | unlimited | add the email to `DEV_TIER_EMAILS` (no DB edit) |
+| `blocked` | 0 | 0 | `update users set tier='blocked' where email=...` |
+
+Spend is `SUM(ai_generation_runs.estimated_cost_usd)` for the user's runs
+(attributed via `analysis_jobs.requested_by`) since the start of the UTC month
+and within the rolling rate window, multiplied by `CAD_PER_USD`. Exhausting the
+month returns `429 { code: 'monthly_exhausted' }`, the rate window returns
+`429 rate_limited`, a second simultaneous analysis returns
+`429 analysis_in_progress` (a hidden per-user serialization, not a pricing
+feature), and a project with no GitHub installation returns `400 github_required`.
+There is no payment flow: Pro/Max are assigned by hand (no Stripe, by design).
+`GET /api/me/credit` returns the caller's live status for the UI meter.
 
 ---
 

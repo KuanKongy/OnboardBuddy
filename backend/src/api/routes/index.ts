@@ -14,6 +14,7 @@ import { progressRouter } from "./progress.js";
 import { llmKeysRouter } from "./llmKeys.js";
 import { askRouter } from "./ask.js";
 import { internalChatRouter } from "./internalChat.js";
+import { meRouter } from "./me.js";
 import { requireAuth } from "../middleware/auth.js";
 import { askRateLimit } from "../middleware/askRateLimit.js";
 
@@ -21,6 +22,7 @@ export const apiRouter = Router();
 
 apiRouter.use("/health", healthRouter);
 apiRouter.use("/auth", authRouter);
+apiRouter.use("/me", requireAuth, meRouter);
 apiRouter.use("/github", requireAuth, githubRouter);
 apiRouter.use("/projects", requireAuth, projectsRouter);
 // Two invitation surfaces on purpose: this one is the invitee's inbox, authorized

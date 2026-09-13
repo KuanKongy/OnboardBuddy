@@ -1,4 +1,4 @@
-import { ChevronDown, Loader2, Sparkles } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, apiFetch } from "@/lib/api";
@@ -9,6 +9,7 @@ import {
   type AnalyzeConfig,
 } from "@/components/AnalyzeConfigForm";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
+import { CreditMeter } from "@/components/CreditMeter";
 import type { ProjectData } from "@/contexts/ProjectContext";
 import { PRIVACY_MODES } from "@/lib/privacyModes";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,12 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  /** A recognised credit/access rejection from the analyze route, branched on
+   *  err.body.code, so each gets its own friendly box instead of a raw message.
+   *  resetAt carries whichever reset the code names: monthResetAt for the
+   *  monthly cap, rateResetAt for the pace cap. */
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [resetAt, setResetAt] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
   /** A repository with no commits: the run would fail in ingestion, so the
@@ -49,6 +56,8 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     resetPreflight();
     setError("");
     setConflict(false);
+    setErrorCode(null);
+    setResetAt(null);
     setConfirmed(false);
     setConfig({ ...DEFAULT_ANALYZE_CONFIG, role: initialRole ?? "" });
   }, [open, projectId, initialRole]);
@@ -60,6 +69,10 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     // A tuple conflict is config-specific too — editing the config may
     // resolve it (different branch/commit/scope runs in parallel).
     setConflict(false);
+    // A credit/access rejection is not config-specific, but clearing it on edit
+    // keeps the dialog from carrying a stale box into the next attempt.
+    setErrorCode(null);
+    setResetAt(null);
     setConfirmed(false);
   }
 
@@ -67,6 +80,8 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
     setStarting(true);
     setError("");
     setConflict(false);
+    setErrorCode(null);
+    setResetAt(null);
     try {
       const data = (await apiFetch(`/projects/${projectId}/analyze`, {
         method: "POST",
@@ -75,8 +90,26 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
       onOpenChange(false);
       onStarted(data.analysis.id);
     } catch (err) {
+      const code = err instanceof ApiError && typeof err.body?.code === "string" ? err.body.code : null;
       if (err instanceof ApiError && err.status === 409) {
         setConflict(true);
+      } else if (
+        code === "monthly_exhausted" ||
+        code === "rate_limited" ||
+        code === "analysis_in_progress" ||
+        code === "blocked" ||
+        code === "github_required"
+      ) {
+        setErrorCode(code);
+        // Each cap-rejection names its own reset instant: the monthly cap carries
+        // monthResetAt, the pace cap carries rateResetAt.
+        if (err instanceof ApiError) {
+          if (code === "monthly_exhausted" && typeof err.body?.monthResetAt === "string") {
+            setResetAt(err.body.monthResetAt);
+          } else if (code === "rate_limited" && typeof err.body?.rateResetAt === "string") {
+            setResetAt(err.body.rateResetAt);
+          }
+        }
       } else {
         setError(err instanceof Error ? err.message : "Failed to start analysis");
       }
@@ -137,6 +170,9 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
             );
           })()}
         </div>
+        {/* This month's analysis credit, so the reader sees what is left before
+            they start. Fails quiet, so it adds nothing when it cannot load. */}
+        <CreditMeter />
         {conflict && (
           <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
             <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin text-warning" />
@@ -144,6 +180,59 @@ export function AnalyzeDialog({ project, open, onOpenChange, onStarted, initialR
               This exact scope and commit are already being analyzed; that run's progress
               is on the Project Overview. Change the branch, commit, or scope to start
               another run in parallel.
+            </span>
+          </div>
+        )}
+        {errorCode === "monthly_exhausted" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              You have used all of this month's analysis credits.
+              {resetAt ? ` They reset on ${new Date(resetAt).toLocaleDateString()}.` : ""}{" "}
+              <Link to="/pricing" className="font-medium text-primary hover:underline">
+                See plans
+              </Link>
+            </span>
+          </div>
+        )}
+        {errorCode === "rate_limited" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              You are running analyses faster than your plan's pace allows.
+              {resetAt
+                ? ` The next one can start ${new Date(resetAt).toLocaleString()}.`
+                : " Your pace resets shortly."}
+            </span>
+          </div>
+        )}
+        {errorCode === "analysis_in_progress" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              An analysis is already running on your account. It will free up shortly.
+            </span>
+          </div>
+        )}
+        {errorCode === "blocked" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              Analysis is not available on your account right now.{" "}
+              <Link to="/contact" className="font-medium text-primary hover:underline">
+                Contact us
+              </Link>
+            </span>
+          </div>
+        )}
+        {errorCode === "github_required" && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-xs text-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            <span>
+              Connect GitHub to run an analysis.{" "}
+              <Link to="/settings" className="font-medium text-primary hover:underline">
+                Connect GitHub in Account settings
+              </Link>
             </span>
           </div>
         )}

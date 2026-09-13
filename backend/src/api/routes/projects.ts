@@ -2,6 +2,9 @@ import { Router } from "express";
 import type { PoolClient } from "pg";
 import { pool, query } from "../../lib/db.js";
 import { requireProjectAccess } from "../middleware/project-access.js";
+import { requireDailyCredit } from "../middleware/requireDailyCredit.js";
+import { notifyNonDevAnalysis } from "../services/analysisAlert.js";
+import { checkCredit, creditRejection, type CreditStatus } from "../services/creditGate.js";
 import { requireUuidParam } from "../middleware/requireUuidParam.js";
 import { parseInstallationId } from "../lib/installationId.js";
 import { languageDisplayName } from "../lib/languageDisplay.js";
@@ -573,7 +576,7 @@ projectsRouter.delete("/:id", requireProjectAccess("owner"), async (req, res) =>
   }
 });
 
-projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/summarize", requireProjectAccess("owner", "admin"), requireDailyCredit, async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
@@ -909,7 +912,7 @@ projectsRouter.post("/:id/analysis-jobs/:jobId/stop", requireProjectAccess("owne
 
 // Resume a paused run — or retry a failed/stalled one — on the SAME job row:
 // checkpoints live there, so the worker skips everything already persisted.
-projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), requireUuidParam("jobId"), async (req, res) => {
+projectsRouter.post("/:id/analysis-jobs/:jobId/resume", requireProjectAccess("owner", "admin"), requireUuidParam("jobId"), requireDailyCredit, async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const jobId = String(req.params.jobId);
@@ -1140,7 +1143,7 @@ projectsRouter.get("/:id/scopes", requireProjectAccess(), async (req, res) => {
 // Preflight: builds the analysis preview (inventory, estimates, cost tier,
 // privacy summary) without mutating any snapshot. The preview lands on the
 // job's checkpoint, returned by /analysis-status.
-projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), requireDailyCredit, async (req, res) => {
   try {
     const projectId = req.params.id as string;
     const userId = req.user!.id;
@@ -1218,7 +1221,7 @@ projectsRouter.post("/:id/preflight", requireProjectAccess("owner", "admin"), as
   }
 });
 
-projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), async (req, res) => {
+projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), requireDailyCredit, async (req, res) => {
   const client = await pool.connect();
   try {
     const projectId = req.params.id as string;
@@ -1262,8 +1265,15 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
 
     await client.query("BEGIN");
 
+    // Serialize this user's concurrent analyze requests so the credit check
+    // below reads current committed spend and in-flight rows (the dollar cap
+    // reads recorded spend, which lags a run). Released automatically at COMMIT
+    // or ROLLBACK. This is the authoritative, race-safe money guard behind the
+    // requireDailyCredit pre-check middleware.
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))", [userId]);
+
     const projectResult = await client.query(
-      `SELECT id, branch FROM projects WHERE id = $1 FOR UPDATE`,
+      `SELECT id, branch, repo_full_name, github_installation_id FROM projects WHERE id = $1 FOR UPDATE`,
       [projectId],
     );
     if (projectResult.rows.length === 0) {
@@ -1272,7 +1282,40 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
       return;
     }
 
-    const project = projectResult.rows[0] as { id: string; branch: string };
+    const project = projectResult.rows[0] as {
+      id: string;
+      branch: string;
+      repo_full_name: string;
+      github_installation_id: string | null;
+    };
+
+    // Reading a package needs no GitHub, but running an analysis does: the
+    // worker mints an installation token to fetch the repo. Fail here with a
+    // clear code instead of letting the job die deep in the worker.
+    if (!project.github_installation_id) {
+      await client.query("ROLLBACK");
+      res.status(400).json({
+        error: "Connect GitHub to run an analysis.",
+        code: "github_required",
+      });
+      return;
+    }
+
+    // Authoritative credit check, on the transaction client under the advisory
+    // lock: sees committed spend and in-flight jobs, so a burst of concurrent
+    // starts cannot slip past the budget. The middleware pre-check already ran;
+    // this closes the race.
+    const creditStatus: CreditStatus = await checkCredit(
+      userId,
+      req.user?.email,
+      (text, params) => client.query(text, params as unknown[]),
+    );
+    if (!creditStatus.allowed) {
+      await client.query("ROLLBACK");
+      const { http, body } = creditRejection(creditStatus);
+      res.status(http).json(body);
+      return;
+    }
 
     await client.query(
       `UPDATE projects SET status = 'analyzing' WHERE id = $1`,
@@ -1339,6 +1382,16 @@ projectsRouter.post("/:id/analyze", requireProjectAccess("owner", "admin"), asyn
         mode: prepared.jobType === 'incremental_update' ? "incremental" : "initial",
         branch: branch ?? project.branch,
       },
+    });
+
+    // Owner tripwire: a non-dev account started a real analysis. Fire-and-forget
+    // and throttled per user, using the authoritative in-txn credit status.
+    notifyNonDevAnalysis({
+      userId,
+      email: req.user?.email,
+      projectName: project.repo_full_name,
+      repoFullName: project.repo_full_name,
+      status: creditStatus,
     });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});

@@ -28,6 +28,8 @@ import { FaqPage } from "@/pages/FaqPage";
 import { HelpPage } from "@/pages/HelpPage";
 import { PrivacyPage } from "@/pages/PrivacyPage";
 import { TermsPage } from "@/pages/TermsPage";
+import { PricingPage } from "@/pages/PricingPage";
+import { ContactPage } from "@/pages/ContactPage";
 import { ImportPage } from "@/pages/ImportPage";
 import { IntroPage } from "@/pages/IntroPage";
 import { InvitationsPage } from "@/pages/InvitationsPage";
@@ -254,6 +256,8 @@ export default function App() {
           <Route path="/faq" element={<FaqPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
+          <Route path="/pricing" element={<PricingPage />} />
+          <Route path="/contact" element={<ContactPage />} />
 
           {import.meta.env.DEV && <Route path="/dev/graph/:id" element={<GraphPage />} />}
 
