@@ -2,11 +2,9 @@ import { act, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 /**
- * /privacy is a policy page a visitor reads before signing up, so it has to
- * stand on its own: the public shell rather than app chrome that would bounce
- * every click to /login, a "Last updated" date (a policy without one is not a
- * policy), a stable #modes anchor (the landing page deep-links to it), and
- * none of the em dashes the public pages do not use.
+ * /terms mirrors /privacy: a public legal page that must stand on its own.
+ * Public shell, a "Last updated" date, the clauses a commercial ToS cannot
+ * skip (warranty, liability, governing law), and no em dashes.
  */
 
 const authState = vi.hoisted(() => ({
@@ -25,14 +23,14 @@ vi.mock("@/lib/api", () => ({
   ApiError: class ApiError extends Error {},
 }));
 
-const { PrivacyPage } = await import("./PrivacyPage");
+const { TermsPage } = await import("./TermsPage");
 
-async function renderPrivacy() {
+async function renderTerms() {
   let container!: HTMLElement;
   await act(async () => {
     const view = render(
-      <MemoryRouter initialEntries={["/privacy"]}>
-        <PrivacyPage />
+      <MemoryRouter initialEntries={["/terms"]}>
+        <TermsPage />
       </MemoryRouter>,
     );
     container = view.container;
@@ -40,38 +38,38 @@ async function renderPrivacy() {
   return container;
 }
 
-describe("PrivacyPage", () => {
+describe("TermsPage", () => {
   beforeEach(() => {
     apiFetch.mockClear();
     authState.current = { user: null, loading: false, signOut: vi.fn() };
   });
 
   it("renders on the public shell with no app sidebar", async () => {
-    await renderPrivacy();
+    await renderTerms();
 
     const header = within(screen.getByRole("banner"));
     expect(header.getByRole("link", { name: /get started/i })).toBeInTheDocument();
-    expect(header.getByRole("link", { name: /sign in/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("Sidebar navigation")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /^privacy policy$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^terms of service$/i })).toBeInTheDocument();
   });
 
   it("states when it was last updated", async () => {
-    await renderPrivacy();
+    await renderTerms();
 
     expect(screen.getByText(/^Last updated: /)).toBeInTheDocument();
   });
 
-  it("keeps the #modes anchor the landing page deep-links to", async () => {
-    await renderPrivacy();
+  it("carries the load-bearing commercial clauses", async () => {
+    await renderTerms();
 
-    const modes = document.getElementById("modes");
-    expect(modes).not.toBeNull();
-    expect(modes!.getAttribute("aria-labelledby")).toBe("modes-h");
+    expect(screen.getByRole("heading", { name: /disclaimer of warranty/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /limitation of liability/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /governing law/i })).toBeInTheDocument();
+    expect(screen.getByText(/British Columbia/)).toBeInTheDocument();
   });
 
   it("keeps the public copy em-dash-free", async () => {
-    const container = await renderPrivacy();
+    const container = await renderTerms();
 
     expect(container.textContent).not.toContain("—");
   });
