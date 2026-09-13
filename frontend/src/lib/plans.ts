@@ -63,7 +63,6 @@ export const PLANS: Plan[] = [
       "Team invitations with no seat limits",
       "Handbook export",
       "Bring your own OpenRouter key",
-      "Community support on GitHub",
     ],
     cta: { label: "Get started", to: "/signup" },
   },
@@ -76,9 +75,16 @@ export const PLANS: Plan[] = [
     monthlyCredits: "30 credits / month",
     pace: "Up to 2 credits per day",
     featuresHeading: "Everything in Free and:",
+    // The multipliers restate the enforced credit strings (30/5 and 100/5):
+    // change those and these must follow. The rest are the planned paid
+    // features the maintainer picked on 2026-09-12.
     features: [
+      "6x the free analysis budget",
+      "Unused credits roll over",
+      "Scheduled doc refresh",
+      "Custom onboarding roles",
+      "Slack and Discord notifications",
       "Priority in the analysis queue",
-      "Email support from the maintainer",
       "Early access to new features",
     ],
     cta: { label: "Coming soon", disabled: true },
@@ -93,10 +99,13 @@ export const PLANS: Plan[] = [
     pace: "Up to 5 credits per 12 hours",
     featuresHeading: "Everything in Pro, plus:",
     features: [
+      "20x the free analysis budget",
+      "Higher budgets for huge repositories",
+      "Multi-repo projects",
+      "PR impact notes",
+      "Confluence and Notion sync",
+      "Onboarding progress tracking",
       "Highest queue priority",
-      "API access",
-      "A say in the roadmap",
-      "A direct line to the maintainer",
     ],
     cta: { label: "Coming soon", disabled: true },
   },

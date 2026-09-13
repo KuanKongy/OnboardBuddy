@@ -1,25 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowRight, Bug, Handshake, MessageCircle } from "lucide-react";
+import { ArrowRight, Github, Linkedin, Mail } from "lucide-react";
 import { PublicPageShell } from "@/components/PublicPageShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { copyToClipboard } from "@/lib/clipboard";
 import { CONTACT } from "@/lib/contact";
 
 /**
- * Public contact page. Its only job is to route a visitor to the right channel
- * in one click: questions go to GitHub Discussions, bugs to the issue tracker,
- * collaboration to Nam directly (email or LinkedIn). "Email Nam" copies the
+ * Public contact page: three actual destinations (the GitHub repo, Nam's
+ * LinkedIn, and email), not abstract channels. "Send an email" copies the
  * address and confirms with a toast rather than opening mailto, because a
  * machine without a configured mail client turns mailto into a dead end; if
- * the copy fails, mailto is the fallback. Team credit is reduced to a one-line
- * attribution so nothing competes with the three channels.
+ * the copy fails, mailto is the fallback. Team credit is one footer line.
  * Copy rule: no em dashes.
  */
 
 const EMAIL_HREF = `mailto:${CONTACT.email}`;
-const ISSUES_HREF = "https://github.com/KuanKongy/OnboardBuddy/issues/new";
-const DISCUSSIONS_HREF = "https://github.com/KuanKongy/OnboardBuddy/discussions";
+const REPO_HREF = "https://github.com/KuanKongy/OnboardBuddy";
 
 const ARROW_LINK =
   "inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline";
@@ -27,11 +24,10 @@ const ARROW_LINK =
 const TOAST_MS = 2500;
 
 /**
- * One channel: icon, heading, the single question that tells a visitor whether
- * this is their card, and the action row pinned to the card's floor so the
- * three rows align across the grid.
+ * One destination: icon, name, what belongs there, and the action pinned to
+ * the card's floor so the three actions align across the grid.
  */
-function ChannelCard({
+function DestinationCard({
   icon,
   heading,
   body,
@@ -52,18 +48,9 @@ function ChannelCard({
         <h2 className="mt-3 text-base font-semibold text-foreground">{heading}</h2>
         <p className="mt-1 text-[0.875rem] leading-relaxed text-muted-foreground">{body}</p>
 
-        <div className="mt-4 flex flex-1 flex-wrap items-end gap-x-4 gap-y-1">{children}</div>
+        <div className="mt-4 flex flex-1 items-end">{children}</div>
       </CardContent>
     </Card>
-  );
-}
-
-function ArrowLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <a href={href} className={ARROW_LINK} target="_blank" rel="noopener noreferrer">
-      {children}
-      <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-    </a>
   );
 }
 
@@ -78,7 +65,7 @@ export function ContactPage() {
     [],
   );
 
-  async function emailNam() {
+  async function sendEmail() {
     if (!(await copyToClipboard(CONTACT.email))) {
       window.location.href = EMAIL_HREF;
       return;
@@ -90,74 +77,53 @@ export function ContactPage() {
 
   return (
     <PublicPageShell
-      title="Contact"
-      subtitle="Have a question, found a bug, or want to get in touch?"
+      title="Get in touch"
+      subtitle="Found a bug, have an idea, or want to talk about OnboardBuddy?"
     >
       <div className="grid gap-4 md:grid-cols-3">
-        <ChannelCard
-          icon={<MessageCircle className="h-5 w-5" />}
-          heading="Questions &amp; Feedback"
-          body="Have feedback about OnboardBuddy or an idea for a feature?"
+        <DestinationCard
+          icon={<Github className="h-5 w-5" />}
+          heading="GitHub"
+          body="Follow development, browse the source, open an issue, or contribute."
         >
-          <ArrowLink href={DISCUSSIONS_HREF}>Start a discussion</ArrowLink>
-        </ChannelCard>
-        <ChannelCard
-          icon={<Bug className="h-5 w-5" />}
-          heading="Bug Report"
-          body="Something isn't working as expected?"
+          <a href={REPO_HREF} className={ARROW_LINK} target="_blank" rel="noopener noreferrer">
+            View on GitHub
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
+        </DestinationCard>
+        <DestinationCard
+          icon={<Linkedin className="h-5 w-5" />}
+          heading="LinkedIn"
+          body="Connect with Nam and follow the person behind the project."
         >
-          <ArrowLink href={ISSUES_HREF}>Report an issue</ArrowLink>
-        </ChannelCard>
-        <ChannelCard
-          icon={<Handshake className="h-5 w-5" />}
-          heading="Collaboration"
-          body="Interested in the project, contributing, or working together?"
+          <a
+            href={CONTACT.linkedin}
+            className={ARROW_LINK}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Connect on LinkedIn
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+          </a>
+        </DestinationCard>
+        <DestinationCard
+          icon={<Mail className="h-5 w-5" />}
+          heading="Email"
+          body="For anything that doesn't fit GitHub: questions, feedback, or collaboration."
         >
-          <button type="button" onClick={emailNam} className={ARROW_LINK}>
-            Email Nam
+          <button type="button" onClick={sendEmail} className={ARROW_LINK}>
+            Send an email
             <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
-          <ArrowLink href={CONTACT.linkedin}>Contact Nam</ArrowLink>
-        </ChannelCard>
+        </DestinationCard>
       </div>
 
       {/* Team credit lives here, as a footnote rather than a section, so the
-          three channels above stay the point of the page. */}
+          three destinations above stay the point of the page. */}
       <div className="mt-8 text-center">
         <p className="text-[0.875rem] font-medium text-foreground">OnboardBuddy</p>
         <p className="mt-1 text-[0.8125rem] leading-relaxed text-muted-foreground">
-          An independent project by the OnboardBuddies team, currently maintained by Nam Le.
-        </p>
-        <p className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[0.8125rem]">
-          <a
-            href={CONTACT.github}
-            className="font-medium text-primary hover:underline"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            GitHub
-          </a>
-          <span className="text-muted-foreground" aria-hidden="true">
-            &middot;
-          </span>
-          <a
-            href={CONTACT.linkedin}
-            className="font-medium text-primary hover:underline"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            LinkedIn
-          </a>
-          <span className="text-muted-foreground" aria-hidden="true">
-            &middot;
-          </span>
-          <button
-            type="button"
-            onClick={emailNam}
-            className="font-medium text-primary hover:underline"
-          >
-            Email
-          </button>
+          An independent project by the OnboardBuddies team, maintained by Nam Le.
         </p>
       </div>
 

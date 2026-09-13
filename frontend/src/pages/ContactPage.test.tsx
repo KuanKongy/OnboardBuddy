@@ -2,11 +2,10 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 /**
- * The contact page is a router, not an About page: three channels (questions
- * to GitHub Discussions, bugs to the issue tracker, collaboration to Nam by
- * copied email or LinkedIn). These assertions pin the destinations, the
- * copy-with-toast behaviour, and the removal of the old About content (team
- * roster, copy-to-clipboard pills) so it cannot creep back.
+ * The contact page lists three actual destinations (GitHub repo, LinkedIn,
+ * email) rather than abstract channels. These assertions pin the destinations,
+ * the copy-with-toast email behaviour, and the removal of the old About
+ * content (team roster, copy-to-clipboard pills) so it cannot creep back.
  */
 
 const authState = vi.hoisted(() => ({
@@ -38,32 +37,32 @@ async function renderContact() {
 }
 
 describe("ContactPage", () => {
-  it("offers the three contact channels", async () => {
-    await renderContact();
-
-    expect(screen.getByText("Questions & Feedback")).toBeInTheDocument();
-    expect(screen.getByText("Bug Report")).toBeInTheDocument();
-    expect(screen.getByText("Collaboration")).toBeInTheDocument();
+  beforeEach(() => {
+    copyToClipboard.mockClear();
   });
 
-  it("points each channel at its own destination", async () => {
+  it("titles itself as the way to get in touch", async () => {
     await renderContact();
 
-    const discussLink = screen.getByRole("link", { name: /^Start a discussion/ });
-    expect(discussLink).toHaveAttribute(
-      "href",
-      "https://github.com/KuanKongy/OnboardBuddy/discussions",
-    );
-    expect(discussLink).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("heading", { name: "Get in touch" })).toBeInTheDocument();
+  });
 
-    const issueLink = screen.getByRole("link", { name: /^Report an issue/ });
-    expect(issueLink).toHaveAttribute(
-      "href",
-      "https://github.com/KuanKongy/OnboardBuddy/issues/new",
-    );
-    expect(issueLink).toHaveAttribute("target", "_blank");
+  it("offers the three destinations", async () => {
+    await renderContact();
 
-    const linkedInLink = screen.getByRole("link", { name: /^Contact Nam/ });
+    expect(screen.getByRole("heading", { name: "GitHub" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "LinkedIn" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Email" })).toBeInTheDocument();
+  });
+
+  it("points each destination at the real thing", async () => {
+    await renderContact();
+
+    const repoLink = screen.getByRole("link", { name: /^View on GitHub/ });
+    expect(repoLink).toHaveAttribute("href", "https://github.com/KuanKongy/OnboardBuddy");
+    expect(repoLink).toHaveAttribute("target", "_blank");
+
+    const linkedInLink = screen.getByRole("link", { name: /^Connect on LinkedIn/ });
     expect(linkedInLink).toHaveAttribute("href", "https://www.linkedin.com/in/kuankongy/");
     expect(linkedInLink).toHaveAttribute("target", "_blank");
   });
@@ -71,20 +70,12 @@ describe("ContactPage", () => {
   it("copies the email and confirms with a toast", async () => {
     await renderContact();
 
-    const emailButton = screen.getByRole("button", { name: /^Email Nam/ });
     await act(async () => {
-      fireEvent.click(emailButton);
+      fireEvent.click(screen.getByRole("button", { name: /^Send an email/ }));
     });
 
     expect(copyToClipboard).toHaveBeenCalledWith("khanhpronam@gmail.com");
     expect(screen.getByRole("status")).toHaveTextContent("Email copied to clipboard");
-
-    // The footer "Email" button shares the same behaviour.
-    copyToClipboard.mockClear();
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Email" }));
-    });
-    expect(copyToClipboard).toHaveBeenCalledWith("khanhpronam@gmail.com");
   });
 
   it("credits the team in one attribution line", async () => {
@@ -101,13 +92,6 @@ describe("ContactPage", () => {
     for (const name of ["Eugene N.", "Sahib R.", "Bradley S."]) {
       expect(container.textContent).not.toContain(name);
     }
-  });
-
-  it("drops all active/inactive status language", async () => {
-    const container = await renderContact();
-
-    expect(container.textContent).not.toMatch(/Active/i);
-    expect(container.textContent).not.toMatch(/Inactive/i);
   });
 
   it("keeps the public copy em-dash-free", async () => {
