@@ -2,10 +2,10 @@ import { act, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 /**
- * The contact page frames the team, not the product: Nam is the maintainer and
- * the one point of contact, so only his card carries contact pills; the rest of
- * the team is credited by name with no role, no status, and no contact of their
- * own. These assertions pin exactly that split, and that no phone is published.
+ * The contact page is a router, not an About page: three channels (feedback,
+ * bugs, collaboration) each pointing at exactly one destination. These
+ * assertions pin the three destinations, and pin the removal of the old About
+ * content (team roster, copy-to-clipboard pills) so it cannot creep back.
  */
 
 const authState = vi.hoisted(() => ({
@@ -33,29 +33,50 @@ async function renderContact() {
 }
 
 describe("ContactPage", () => {
-  it("presents Nam as the maintainer with one row of email, LinkedIn, and GitHub", async () => {
+  it("offers the three contact channels", async () => {
     await renderContact();
 
-    expect(screen.getByText("Nam Le")).toBeInTheDocument();
-    expect(screen.getByText("Maintainer")).toBeInTheDocument();
-
-    // Exactly three contact pills, all Nam's: email, LinkedIn, GitHub. No phone.
-    const copyPills = screen.getAllByRole("button", { name: /^Copy / });
-    expect(copyPills).toHaveLength(3);
-    expect(screen.getByRole("button", { name: "Copy email" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy LinkedIn" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Copy GitHub" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy phone" })).not.toBeInTheDocument();
+    expect(screen.getByText("Questions & Feedback")).toBeInTheDocument();
+    expect(screen.getByText("Bug Report")).toBeInTheDocument();
+    expect(screen.getByText("Collaboration")).toBeInTheDocument();
   });
 
-  it("credits the rest of the team by name, with no role, status, or contact", async () => {
+  it("points each channel at its own destination", async () => {
     await renderContact();
 
+    // Feedback and collaboration share the inbox but carry distinct subjects,
+    // so a mis-wired subject line shows up here rather than in Nam's inbox.
+    expect(screen.getByRole("link", { name: /^Email us/ })).toHaveAttribute(
+      "href",
+      "mailto:khanhpronam@gmail.com?subject=OnboardBuddy%20feedback",
+    );
+    expect(screen.getByRole("link", { name: /^Contact Nam/ })).toHaveAttribute(
+      "href",
+      "mailto:khanhpronam@gmail.com?subject=OnboardBuddy%20collaboration",
+    );
+
+    const issueLink = screen.getByRole("link", { name: /^Report an issue/ });
+    expect(issueLink).toHaveAttribute(
+      "href",
+      "https://github.com/KuanKongy/OnboardBuddy/issues/new",
+    );
+    expect(issueLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("credits the team in one attribution line", async () => {
+    const container = await renderContact();
+
+    expect(container.textContent).toContain("Nam Le");
+    expect(container.textContent).toContain("OnboardBuddies");
+  });
+
+  it("drops the old About content: roster and copy pills", async () => {
+    const container = await renderContact();
+
+    expect(screen.queryAllByRole("button", { name: /^Copy / })).toHaveLength(0);
     for (const name of ["Eugene N.", "Sahib R.", "Bradley S."]) {
-      expect(screen.getByText(name)).toBeInTheDocument();
+      expect(container.textContent).not.toContain(name);
     }
-    // Only Nam carries pills; nobody else adds one, so the total stays three.
-    expect(screen.getAllByRole("button", { name: /^Copy / })).toHaveLength(3);
   });
 
   it("drops all active/inactive status language", async () => {
