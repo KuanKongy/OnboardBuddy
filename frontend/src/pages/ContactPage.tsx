@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { ArrowRight, Github, Linkedin, Mail } from "lucide-react";
+import { ArrowRight, Github, Linkedin, Mail, X } from "lucide-react";
 import { PublicPageShell } from "@/components/PublicPageShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { copyToClipboard } from "@/lib/clipboard";
@@ -22,6 +22,8 @@ const ARROW_LINK =
   "inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline";
 
 const TOAST_MS = 2500;
+/** Must match the transition duration on the toast so unmount waits for the fade. */
+const TOAST_FADE_MS = 300;
 
 /**
  * One destination: icon, name, what belongs there, and the action pinned to
@@ -55,24 +57,37 @@ function DestinationCard({
 }
 
 export function ContactPage() {
+  // The toast keeps its message mounted through the exit fade: `visible`
+  // drives the CSS transition, `toast` drives mounting, and the unmount waits
+  // TOAST_FADE_MS after `visible` drops so the fade-out is seen, not cut.
   const [toast, setToast] = useState<string | null>(null);
-  const toastTimer = useRef<number | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const timers = useRef<number[]>([]);
 
-  useEffect(
-    () => () => {
-      if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    },
-    [],
-  );
+  function clearTimers() {
+    for (const id of timers.current) window.clearTimeout(id);
+    timers.current = [];
+  }
+
+  useEffect(() => clearTimers, []);
+
+  function hideToast() {
+    clearTimers();
+    setToastVisible(false);
+    timers.current.push(window.setTimeout(() => setToast(null), TOAST_FADE_MS));
+  }
 
   async function sendEmail() {
     if (!(await copyToClipboard(CONTACT.email))) {
       window.location.href = EMAIL_HREF;
       return;
     }
+    clearTimers();
     setToast("Email copied to clipboard");
-    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setToast(null), TOAST_MS);
+    // One tick between mounting (hidden) and showing, so the entrance
+    // transitions instead of popping.
+    timers.current.push(window.setTimeout(() => setToastVisible(true), 20));
+    timers.current.push(window.setTimeout(hideToast, TOAST_MS));
   }
 
   return (
@@ -127,16 +142,30 @@ export function ContactPage() {
         </p>
       </div>
 
-      {/* Always-mounted live region so the copy confirmation is announced. */}
+      {/* Always-mounted live region so the copy confirmation is announced.
+          Bottom-right in the brand primary blue (theme-aware, same as the
+          buttons), fading and sliding in and out; the X dismisses early. */}
       <div
         role="status"
         aria-live="polite"
-        className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center"
+        className="pointer-events-none fixed bottom-4 right-4 z-50 sm:bottom-6 sm:right-6"
       >
         {toast ? (
-          <span className="rounded-full border border-border bg-card px-4 py-2 text-[0.8125rem] font-medium text-foreground shadow-lg">
+          <div
+            className={`pointer-events-auto flex items-center gap-1.5 rounded-lg bg-primary py-2.5 pl-5 pr-2.5 text-sm font-semibold text-primary-foreground shadow-lg transition-all duration-300 motion-reduce:transition-none ${
+              toastVisible ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
+            }`}
+          >
             {toast}
-          </span>
+            <button
+              type="button"
+              onClick={hideToast}
+              aria-label="Dismiss"
+              className="cursor-pointer rounded-md p-1 opacity-80 transition-colors hover:bg-primary-foreground/15 hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground/60"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
         ) : null}
       </div>
     </PublicPageShell>

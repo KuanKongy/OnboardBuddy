@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 /**
@@ -76,6 +76,21 @@ describe("ContactPage", () => {
 
     expect(copyToClipboard).toHaveBeenCalledWith("khanhpronam@gmail.com");
     expect(screen.getByRole("status")).toHaveTextContent("Email copied to clipboard");
+  });
+
+  it("dismisses the toast early via the X", async () => {
+    await renderContact();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Send an email/ }));
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Email copied to clipboard");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    });
+    // The message unmounts only after the exit fade finishes.
+    await waitFor(() => expect(screen.queryByText("Email copied to clipboard")).toBeNull());
   });
 
   it("credits the team in one attribution line", async () => {
