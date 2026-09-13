@@ -7,7 +7,8 @@ import { PLANS } from "@/lib/plans";
  * Dev tier. The two enforced facts (monthly credits and pace) are asserted from
  * lib/plans.ts, not retyped here, so this pins that the page renders what that
  * module holds. The old concurrency line and the "Recommended" highlight are
- * both gone, and the preview tiers show a disabled "Coming soon", not a link.
+ * both gone, and Pro and Max show a disabled "Coming soon", not a link: they
+ * now carry a stated price but still have no checkout.
  */
 
 const authState = vi.hoisted(() => ({
@@ -57,6 +58,22 @@ describe("PricingPage", () => {
     for (const plan of PLANS) {
       expect(screen.getByText(plan.monthlyCredits)).toBeInTheDocument();
       expect(screen.getByText(plan.pace)).toBeInTheDocument();
+    }
+  });
+
+  it("prices every plan instead of hiding Pro and Max behind a preview label", async () => {
+    const container = await renderPricing();
+
+    expect(screen.getByText("CA$25")).toBeInTheDocument();
+    expect(screen.getByText("CA$80")).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/In preview/i);
+  });
+
+  it("labels each plan's perk list", async () => {
+    await renderPricing();
+
+    for (const plan of PLANS) {
+      expect(screen.getByText(plan.featuresHeading as string)).toBeInTheDocument();
     }
   });
 
