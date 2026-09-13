@@ -1,8 +1,9 @@
-import { AlertTriangle, Github, HelpCircle, Link2, Loader2, LogOut, Mail, Pencil, Save, Shield, Trash2, Unplug } from "lucide-react";
+import { AlertTriangle, CreditCard, Github, HelpCircle, Link2, Loader2, LogOut, Mail, Pencil, Save, Shield, Trash2, Unplug, Wallet } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiFetch } from "@/lib/api";
+import { ca, resetsRelative, type Credit } from "@/lib/credit";
 import { supabase } from "@/lib/supabase";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AVATAR_URL_HELP, isSafeAvatarUrl, safeAvatarSrc } from "@/lib/avatarUrl";
@@ -22,6 +23,23 @@ import { hotkeysEnabled, setHotkeysEnabled } from "@/hooks/useHotkeys";
 
 function initials(name: string): string {
   return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?";
+}
+
+/** Plan names exactly as the pricing page writes them. `dev` is the internal
+ *  unlimited tier, and a tier this mirror has not learned yet (the backend also
+ *  carries an abuse-block state) falls back to its raw name rather than to a
+ *  blank row. */
+const TIER_LABEL: Record<string, string> = {
+  free: "Free",
+  pro: "Pro",
+  max: "Max",
+  dev: "Unlimited (dev)",
+};
+
+/** The rate window, in the unit a reader would say: the Free tier's 120 hours is
+ *  "5 days" on the pricing page, not "120 hours". */
+function windowLabel(hours: number): string {
+  return hours >= 24 && hours % 24 === 0 ? `${hours / 24}-day` : `${hours}-hour`;
 }
 
 export function AccountSettingsPage() {
@@ -281,6 +299,31 @@ export function AccountSettingsPage() {
       .finally(() => setAppConnectionLoading(false));
   }, []);
 
+  // ── Plan & usage (GET /me/credit, the same contract the analyze dialog's
+  // meter reads). One shot on mount; the `live` guard keeps a resolve after
+  // unmount from setting state. Unlike the dialog's meter this one does NOT
+  // fail silent: the reader came here to see their usage, so a failed fetch
+  // says so instead of leaving an empty card. ──
+  const [credit, setCredit] = useState<Credit | null>(null);
+  const [creditFailed, setCreditFailed] = useState(false);
+  // Typed amount for the (not yet live) top-up. Kept in state only so the field
+  // behaves like a real input; there is no checkout to send it to.
+  const [topUpAmount, setTopUpAmount] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    apiFetch("/me/credit")
+      .then((data: Credit) => {
+        if (live) setCredit(data);
+      })
+      .catch(() => {
+        if (live) setCreditFailed(true);
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   async function handleDisconnect() {
     setDisconnecting(true);
     setDisconnectError("");
@@ -300,6 +343,13 @@ export function AccountSettingsPage() {
   // location.state by AccountCard); direct visits fall back to the dashboard.
   const location = useLocation();
   const from = (location.state as { from?: string } | null)?.from;
+
+  // Usage bar geometry. `monthlyCredits` is null only on the unlimited dev tier,
+  // which gets a line of copy instead of a bar it could never fill.
+  const unlimitedPlan = !!credit && (credit.tier === "dev" || credit.monthlyCredits === null);
+  const monthlyLimit = credit?.monthlyCredits ?? 0;
+  const monthlyUsed = credit?.monthlyUsed ?? 0;
+  const monthlyPct = monthlyLimit > 0 ? Math.min(100, Math.max(0, (monthlyUsed / monthlyLimit) * 100)) : 0;
 
   const sections: SettingsSection[] = [
     {
@@ -562,6 +612,133 @@ export function AccountSettingsPage() {
       ),
     },
     {
+      id: "settings-usage",
+      label: "Usage",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Current plan</h3>
+              {creditFailed ? (
+                <p className="text-xs text-muted-foreground">Usage unavailable right now.</p>
+              ) : !credit ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading usage...
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <Wallet className="h-3.5 w-3.5 text-foreground" />
+                      <span className="font-medium text-foreground">
+                        {TIER_LABEL[credit.tier] ?? credit.tier}
+                      </span>
+                    </div>
+                    <Link to="/pricing" className="text-xs text-primary hover:underline">
+                      See plans
+                    </Link>
+                  </div>
+                  {unlimitedPlan ? (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      No monthly credit limit on this account.
+                    </p>
+                  ) : (
+                    <div className="mt-2">
+                      <div className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+                        <span>
+                          <span className="font-medium text-foreground">{ca(credit.monthlyUsed)}</span> of{" "}
+                          {monthlyLimit} credits used this month
+                        </span>
+                        <span>resets {resetsRelative(credit.monthResetAt)}</span>
+                      </div>
+                      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-border">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            credit.monthlyUsed >= monthlyLimit ? "bg-danger" : "bg-primary"
+                          }`}
+                          style={{ width: `${monthlyPct}%` }}
+                        />
+                      </div>
+                      {/* The pace (rolling-window rate cap) is the second limit the
+                          backend enforces, so it is shown here even when the month
+                          has room — unlike the analyze dialog's meter, which only
+                          raises it when it is the binding constraint. */}
+                      {credit.rateCredits !== null && credit.rateWindowHours !== null && (
+                        <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                          Pace: {ca(credit.rateUsed)} of {credit.rateCredits}{" "}
+                          {credit.rateCredits === 1 ? "credit" : "credits"} used in the current{" "}
+                          {windowLabel(credit.rateWindowHours)} window
+                          {credit.rateResetAt ? `, next slot ${resetsRelative(credit.rateResetAt)}` : ""}.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Add credits</h3>
+              {/* A real field on a dead button: the amount is typeable so the
+                  intent is clear, but there is no checkout behind it yet, so
+                  nothing is submitted and no request is made. */}
+              <div className="flex flex-wrap items-end gap-2">
+                <div>
+                  <Label htmlFor="add-credits" className="text-[0.6875rem] text-muted-foreground">
+                    Amount (CAD)
+                  </Label>
+                  <Input
+                    id="add-credits"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={topUpAmount}
+                    onChange={(e) => setTopUpAmount(e.target.value)}
+                    placeholder="10"
+                    className="mt-1 h-8 w-28 text-[0.8125rem]"
+                  />
+                </div>
+                <Button size="sm" disabled>
+                  Coming soon
+                </Button>
+              </div>
+              <p className="mt-1.5 text-[0.6875rem] text-muted-foreground">
+                1 credit = CA$1. Top-ups are not live yet; your plan's monthly credits are what
+                counts today.
+              </p>
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
+      id: "settings-billing",
+      label: "Billing",
+      children: (
+        <>
+          <Card>
+            <CardContent className="p-3">
+              <h3 className="mb-2 text-xs font-medium text-foreground">Billing</h3>
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
+                <CreditCard className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground" />
+                <span>
+                  Billing and subscription management are coming soon. Payments are not live yet,
+                  so nothing on this account is charged and there is no card to manage. What each
+                  plan includes is described on the{" "}
+                  <Link to="/pricing" className="text-primary hover:underline">
+                    pricing page
+                  </Link>
+                  .
+                </span>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ),
+    },
+    {
       id: "settings-preferences",
       label: "Preferences",
       children: (
@@ -681,7 +858,7 @@ export function AccountSettingsPage() {
         <PageHeader
           className="mb-3"
           title="Account Settings"
-          subtitle="Your profile, GitHub connection, and account access."
+          subtitle="Your profile, GitHub connection, plan usage, and account access."
           actions={<BackLink to={from ?? "/dashboard"} label={from ? "Back" : "Back to dashboard"} />}
         />
       </div>

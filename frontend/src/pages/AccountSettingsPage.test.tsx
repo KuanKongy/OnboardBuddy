@@ -24,8 +24,31 @@ vi.mock("@/lib/supabase", () => ({
   },
 }));
 
+// A healthy free-tier credit status, the GET /me/credit contract the Usage
+// section reads (same shape as AnalyzeDialog.test.tsx, but with the month still
+// open). The reset is computed forward so the copy takes the real "in Nd" path
+// rather than the past-instant "soon" fallback.
+const CREDIT = {
+  tier: "free",
+  monthlyCredits: 5,
+  monthlyUsed: 2,
+  monthlyRemaining: 3,
+  monthResetAt: new Date(Date.now() + 12 * 86_400_000).toISOString(),
+  rateCredits: 1,
+  rateWindowHours: 120,
+  rateUsed: 0,
+  rateResetAt: null,
+  inFlight: 0,
+  allowed: true,
+  reason: "ok",
+};
+
 vi.mock("@/lib/api", () => ({
-  apiFetch: vi.fn(async () => ({ user: { github_connected: false, github_username: null } })),
+  apiFetch: vi.fn(async (path: string) =>
+    path === "/me/credit"
+      ? CREDIT
+      : { user: { github_connected: false, github_username: null } },
+  ),
 }));
 
 vi.mock("@/contexts/AuthContext", () => ({
@@ -81,6 +104,33 @@ describe("AccountSettingsPage — add email sign-in (#74/F10)", () => {
     await user.type(screen.getByLabelText("Confirm password"), "hunter2hunter2{Enter}");
 
     await waitFor(() => expect(updateUser).toHaveBeenCalledWith({ password: "hunter2hunter2" }));
+  });
+});
+
+describe("AccountSettingsPage — plan, usage and billing", () => {
+  beforeEach(() => {
+    authUser.identities = [{ provider: "github", identity_data: { user_name: "octo" } }];
+    authUser.providers = ["github"];
+  });
+
+  /**
+   * The Usage section is the only place a signed-in user sees what their plan
+   * allows and what they have spent, and both numbers come from the server, not
+   * from copy. A silent regression here (the fetch dropped, the tier mislabelled)
+   * looks like a perfectly fine page, hence the test. The two "coming soon"
+   * affordances are asserted as inert on purpose: payments are not live, and a
+   * top-up button that looks clickable is a worse bug than a missing one.
+   */
+  it("shows the plan, the month's spend, and inert coming-soon billing controls", async () => {
+    await renderPage();
+
+    expect(await screen.findByText("Free")).toBeInTheDocument();
+    expect(screen.getByText(/of 5 credits used this month/i)).toBeInTheDocument();
+    expect(screen.getByText("CA$2.00")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /see plans/i })).toHaveAttribute("href", "/pricing");
+
+    expect(screen.getByRole("button", { name: /coming soon/i })).toBeDisabled();
+    expect(screen.getByText(/billing and subscription management are coming soon/i)).toBeInTheDocument();
   });
 });
 
