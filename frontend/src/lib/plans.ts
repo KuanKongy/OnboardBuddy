@@ -7,8 +7,15 @@
  * facts per plan are actually enforced by the backend credit system, and they
  * are the only two shown as facts: the monthly credit allotment and the pace
  * (the rolling-window rate cap; see the /me/credit contract). A credit is CA$1
- * of analysis. The `features` list is marketing perks, and for Pro/Max those
- * are aspirational.
+ * of analysis.
+ *
+ * Feature rows follow one rule (fact-checked 2026-09-12): Free lists only what
+ * every account can genuinely do today (all depths and privacy modes, teams
+ * with no seat caps, export, BYO key: none of it is tier-gated in code), and
+ * Pro/Max list only launch commitments that are straightforwardly buildable
+ * (queue priority, API keys, maintainer support). Never list something Free
+ * already has as a paid perk, and never invent a tier gate the backend does
+ * not enforce.
  *
  * All three plans now state a price, but only Free is purchasable: Pro and Max
  * have no checkout, so their CTA stays a disabled label rather than a link.
@@ -31,7 +38,7 @@ export interface Plan {
   pace: string;
   /** Lead-in above the perk list, e.g. "Includes:". */
   featuresHeading?: string;
-  /** Perks beyond the two enforced facts. Aspirational for Pro and Max. */
+  /** Perks beyond the two enforced facts. True today for Free; launch commitments for Pro/Max. */
   features: string[];
   /**
    * Call to action. A `to` route makes it a link; `disabled` makes it a dead
@@ -50,7 +57,14 @@ export const PLANS: Plan[] = [
     monthlyCredits: "5 credits / month",
     pace: "Up to 1 credit every 5 days",
     featuresHeading: "Includes:",
-    features: ["Standard analysis depth", "Community support"],
+    features: [
+      "Cited handbook, workflows, and tutorials",
+      "Every analysis depth and privacy mode",
+      "Team invitations with no seat limits",
+      "Handbook export",
+      "Bring your own OpenRouter key",
+      "Community support on GitHub",
+    ],
     cta: { label: "Get started", to: "/signup" },
   },
   {
@@ -63,11 +77,9 @@ export const PLANS: Plan[] = [
     pace: "Up to 2 credits per day",
     featuresHeading: "Everything in Free and:",
     features: [
-      "Deeper default depth",
-      "Private analyses",
-      "Priority processing",
-      "Larger repositories",
-      "Faster support",
+      "Priority in the analysis queue",
+      "Email support from the maintainer",
+      "Early access to new features",
     ],
     cta: { label: "Coming soon", disabled: true },
   },
@@ -81,11 +93,10 @@ export const PLANS: Plan[] = [
     pace: "Up to 5 credits per 12 hours",
     featuresHeading: "Everything in Pro, plus:",
     features: [
-      "Team seats",
-      "SSO",
-      "Custom model selection",
+      "Highest queue priority",
       "API access",
-      "Dedicated support",
+      "A say in the roadmap",
+      "A direct line to the maintainer",
     ],
     cta: { label: "Coming soon", disabled: true },
   },

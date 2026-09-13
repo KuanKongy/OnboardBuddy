@@ -1,21 +1,26 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 /**
- * The contact page is a router, not an About page: three channels (feedback,
- * bugs, collaboration) each pointing at exactly one destination. These
- * assertions pin the three destinations, and pin the removal of the old About
- * content (team roster, copy-to-clipboard pills) so it cannot creep back.
+ * The contact page is a router, not an About page: three channels (questions
+ * to GitHub Discussions, bugs to the issue tracker, collaboration to Nam by
+ * copied email or LinkedIn). These assertions pin the destinations, the
+ * copy-with-toast behaviour, and the removal of the old About content (team
+ * roster, copy-to-clipboard pills) so it cannot creep back.
  */
 
 const authState = vi.hoisted(() => ({
   current: { user: null as { id: string } | null, loading: false, signOut: vi.fn() },
 }));
 
+const copyToClipboard = vi.hoisted(() => vi.fn(async () => true));
+
 vi.mock("@/contexts/AuthContext", () => ({
   useAuth: () => authState.current,
   AuthProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
+
+vi.mock("@/lib/clipboard", () => ({ copyToClipboard }));
 
 const { ContactPage } = await import("./ContactPage");
 
@@ -44,16 +49,12 @@ describe("ContactPage", () => {
   it("points each channel at its own destination", async () => {
     await renderContact();
 
-    // Feedback and collaboration share the inbox but carry distinct subjects,
-    // so a mis-wired subject line shows up here rather than in Nam's inbox.
-    expect(screen.getByRole("link", { name: /^Email us/ })).toHaveAttribute(
+    const discussLink = screen.getByRole("link", { name: /^Start a discussion/ });
+    expect(discussLink).toHaveAttribute(
       "href",
-      "mailto:khanhpronam@gmail.com?subject=OnboardBuddy%20feedback",
+      "https://github.com/KuanKongy/OnboardBuddy/discussions",
     );
-    expect(screen.getByRole("link", { name: /^Contact Nam/ })).toHaveAttribute(
-      "href",
-      "mailto:khanhpronam@gmail.com?subject=OnboardBuddy%20collaboration",
-    );
+    expect(discussLink).toHaveAttribute("target", "_blank");
 
     const issueLink = screen.getByRole("link", { name: /^Report an issue/ });
     expect(issueLink).toHaveAttribute(
@@ -61,6 +62,29 @@ describe("ContactPage", () => {
       "https://github.com/KuanKongy/OnboardBuddy/issues/new",
     );
     expect(issueLink).toHaveAttribute("target", "_blank");
+
+    const linkedInLink = screen.getByRole("link", { name: /^Contact Nam/ });
+    expect(linkedInLink).toHaveAttribute("href", "https://www.linkedin.com/in/kuankongy/");
+    expect(linkedInLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("copies the email and confirms with a toast", async () => {
+    await renderContact();
+
+    const emailButton = screen.getByRole("button", { name: /^Email Nam/ });
+    await act(async () => {
+      fireEvent.click(emailButton);
+    });
+
+    expect(copyToClipboard).toHaveBeenCalledWith("khanhpronam@gmail.com");
+    expect(screen.getByRole("status")).toHaveTextContent("Email copied to clipboard");
+
+    // The footer "Email" button shares the same behaviour.
+    copyToClipboard.mockClear();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Email" }));
+    });
+    expect(copyToClipboard).toHaveBeenCalledWith("khanhpronam@gmail.com");
   });
 
   it("credits the team in one attribution line", async () => {

@@ -192,6 +192,22 @@ describe("IntroPage", () => {
     }
   });
 
+  it("scrolls to the top when the header brand is clicked", () => {
+    renderPage();
+    // Same-path clicks change no pathname, so only the brand's own handler
+    // can reset the scroll; pin that it does.
+    const scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+    try {
+      const brand = within(screen.getByRole("banner"))
+        .getAllByRole("link")
+        .find((link) => link.getAttribute("href") === "/")!;
+      fireEvent.click(brand);
+      expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ top: 0 }));
+    } finally {
+      scrollTo.mockRestore();
+    }
+  });
+
   it("renders the three privacy modes from the shared module", () => {
     renderPage();
     const section = document.getElementById("privacy")!;

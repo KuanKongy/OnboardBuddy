@@ -1,6 +1,6 @@
 import { Check, Gauge, Wallet } from "lucide-react";
 import { Link } from "react-router-dom";
-import { LogoMark } from "@/components/BrandLogo";
+import { LogoMark, type LogoMarkVariant } from "@/components/BrandLogo";
 import { PublicPageShell } from "@/components/PublicPageShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -26,6 +26,13 @@ import { PLANS, type Plan } from "@/lib/plans";
 const FACT_BOX =
   "flex min-h-[3.75rem] items-center gap-2 rounded-lg border border-foreground/10 px-3 py-2 dark:border-white/10";
 
+/** The smiley works harder as the tier rises: neutral, wink, starry-eyed. */
+const MARK_VARIANT: Record<Plan["id"], LogoMarkVariant> = {
+  free: "classic",
+  pro: "wink",
+  max: "star",
+};
+
 function PlanCard({ plan }: { plan: Plan }) {
   return (
     <Card className="h-full transition-colors duration-300 hover:border-[#2659f4]/30">
@@ -33,7 +40,7 @@ function PlanCard({ plan }: { plan: Plan }) {
         {/* Decorative: the mark repeats on every card, so it is hidden from
             assistive tech rather than read out three times. */}
         <span aria-hidden="true">
-          <LogoMark className="h-7 w-7" />
+          <LogoMark className="h-7 w-7" variant={MARK_VARIANT[plan.id]} />
         </span>
 
         <h2 className="mt-4 text-base font-semibold text-foreground">{plan.name}</h2>

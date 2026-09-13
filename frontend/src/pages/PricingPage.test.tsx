@@ -111,4 +111,14 @@ describe("PricingPage", () => {
     expect(screen.getByText("1 credit = CA$1 of analysis.")).toBeInTheDocument();
     expect(container.textContent).not.toContain("—");
   });
+
+  it("gives each tier its own smiley", async () => {
+    const container = await renderPricing();
+
+    // Scoped to main: the header renders a fourth, classic mark of its own.
+    const variants = [...container.querySelector("main")!.querySelectorAll("svg[data-variant]")].map(
+      (el) => el.getAttribute("data-variant"),
+    );
+    expect(variants).toEqual(["classic", "wink", "star"]);
+  });
 });

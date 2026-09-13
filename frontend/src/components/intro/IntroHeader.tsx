@@ -4,6 +4,7 @@ import { LogoMark, LogoWordmark } from "@/components/BrandLogo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
+import { scrollBehavior } from "@/lib/motion";
 
 // Absolute (/#x) rather than bare (#x) anchors so the same header works on
 // every public page: from /privacy or /terms they route home to the section.
@@ -32,7 +33,14 @@ export function IntroHeader() {
   return (
     <header className="sticky top-0 z-40 border-b border-border/40 bg-background/75 backdrop-blur-md">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link to="/" className="flex items-center gap-2 transition-opacity hover:opacity-80">
+        {/* The scroll handler covers what navigation cannot: clicking the brand
+            while already on "/" (or on "/#section") changes no pathname, so
+            nothing else would reset the scroll position. */}
+        <Link
+          to="/"
+          onClick={() => window.scrollTo({ top: 0, behavior: scrollBehavior() })}
+          className="flex items-center gap-2 transition-opacity hover:opacity-80"
+        >
           <LogoMark className="h-7 w-7" />
           <LogoWordmark className="text-[0.9375rem]" />
         </Link>
