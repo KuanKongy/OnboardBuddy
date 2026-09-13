@@ -23,6 +23,8 @@ const PATH_TITLES: Record<string, string> = {
   "/faq": "FAQ",
   "/privacy": "Privacy & AI transparency",
   "/terms": "Terms of Service",
+  "/pricing": "Pricing",
+  "/contact": "Contact",
   "/dashboard": "Dashboard",
   "/github/oauth/callback": "Connecting GitHub",
   "/github/setup": "Connecting GitHub",

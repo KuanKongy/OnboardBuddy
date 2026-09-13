@@ -219,7 +219,8 @@ describe("IntroPage", () => {
     // the real anchor that carries the href.
     const breakdown = screen.getAllByRole("link", { name: "Full privacy breakdown, mode by mode" });
     expect(breakdown).toHaveLength(2);
-    expect(breakdown.some((el) => el.getAttribute("href") === "/privacy")).toBe(true);
+    // Deep link straight to the privacy-modes section, not the top of the page.
+    expect(breakdown.some((el) => el.getAttribute("href") === "/privacy#modes")).toBe(true);
     expect(document.querySelector('a[href="/terms"]')).not.toBeNull();
   });
 });

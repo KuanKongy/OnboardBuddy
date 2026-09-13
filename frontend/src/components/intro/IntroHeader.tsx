@@ -14,7 +14,7 @@ import { useAuth } from "@/contexts/AuthContext";
 const SECTION_LINKS = [
   { href: "/#product", label: "Product" },
   { href: "/#how", label: "How it works" },
-  { href: "/#privacy", label: "Privacy" },
+  { href: "/#privacy", label: "Privacy Controls" },
   { href: "/#pipeline", label: "Pipeline" },
   { href: "/pricing", label: "Pricing" },
   { href: "/contact", label: "Contact" },

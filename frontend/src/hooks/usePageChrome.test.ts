@@ -8,6 +8,9 @@ describe("pageTitleFor", () => {
     expect(pageTitleFor("/login")).toBe("Log in · OnboardBuddy");
     expect(pageTitleFor("/privacy")).toBe("Privacy & AI transparency · OnboardBuddy");
     expect(pageTitleFor("/terms")).toBe("Terms of Service · OnboardBuddy");
+    // Regression guard: these two rendered fine but titled themselves 404 once.
+    expect(pageTitleFor("/pricing")).toBe("Pricing · OnboardBuddy");
+    expect(pageTitleFor("/contact")).toBe("Contact · OnboardBuddy");
     expect(pageTitleFor("/import")).toBe("Import repository · OnboardBuddy");
     expect(pageTitleFor("/projects/abc-123")).toBe("Project overview · OnboardBuddy");
     expect(pageTitleFor("/projects/abc-123/onboarding")).toBe("Your onboarding · OnboardBuddy");

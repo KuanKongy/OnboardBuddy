@@ -63,12 +63,12 @@ export function PrivacySection() {
           onClick={(e) => {
             if ((e.target as Element).closest("a")) return;
             if (window.getSelection()?.toString()) return;
-            navigate("/privacy");
+            navigate("/privacy#modes");
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              navigate("/privacy");
+              navigate("/privacy#modes");
             }
           }}
           className="block cursor-pointer select-text rounded-xl border border-foreground/10 bg-card/70 p-6 backdrop-blur-sm transition-colors duration-300 hover:border-[#2659f4]/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-white/10"
@@ -91,7 +91,7 @@ export function PrivacySection() {
             </IconRow>
           </ul>
           <Link
-            to="/privacy"
+            to="/privacy#modes"
             onClick={(e) => e.stopPropagation()}
             className="mt-4 inline-flex items-center gap-1 text-[0.8125rem] font-medium text-primary hover:underline"
           >

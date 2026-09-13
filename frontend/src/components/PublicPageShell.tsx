@@ -4,6 +4,7 @@ import { IntroHeader } from "@/components/intro/IntroHeader";
 import { LivingBackground } from "@/components/intro/LivingBackground";
 import { SkipToContent } from "@/components/SkipToContent";
 import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
+import { useScrollToHash } from "@/hooks/useScrollToHash";
 
 /**
  * Chrome for public content pages (/help signed-out, /privacy, /terms): the
@@ -11,7 +12,8 @@ import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
  * intro background renders behind it, but with the aurora lights off, so
  * content pages get the base mesh (dot grid + vignette) and stay quiet. The
  * title block is left-aligned like every in-app tab, the column centered like
- * the reader.
+ * the reader. Hash deep links (/privacy#modes from the landing page) scroll to
+ * their section via useScrollToHash.
  */
 export function PublicPageShell({
   title,
@@ -22,6 +24,8 @@ export function PublicPageShell({
   subtitle?: string;
   children: ReactNode;
 }) {
+  useScrollToHash();
+
   return (
     <div className="relative isolate flex min-h-screen flex-col bg-background text-foreground">
       <SkipToContent />

@@ -1,5 +1,3 @@
-import { useEffect } from "react";
-import { useLocation } from "react-router-dom";
 import { ClosingSection } from "@/components/intro/ClosingSection";
 import { CostSection } from "@/components/intro/CostSection";
 import { HeroSection } from "@/components/intro/HeroSection";
@@ -14,7 +12,7 @@ import { ShowcaseSection } from "@/components/intro/ShowcaseSection";
 import { StatStrip } from "@/components/intro/StatStrip";
 import { SkipToContent } from "@/components/SkipToContent";
 import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
-import { scrollBehavior } from "@/lib/motion";
+import { useScrollToHash } from "@/hooks/useScrollToHash";
 
 /**
  * The public landing page. Signed-in visitors are NOT auto-redirected — the
@@ -26,16 +24,7 @@ import { scrollBehavior } from "@/lib/motion";
  * defines it, never retyped.
  */
 export function IntroPage() {
-  const { hash, key } = useLocation();
-
-  // React Router never scrolls on hash navigation, and on a full load the
-  // browser resolves the fragment before these sections exist. Keyed on the
-  // location key as well, so clicking "Pipeline" again while already on "/"
-  // scrolls again instead of being a no-op.
-  useEffect(() => {
-    if (!hash) return;
-    document.getElementById(hash.slice(1))?.scrollIntoView({ behavior: scrollBehavior(), block: "start" });
-  }, [hash, key]);
+  useScrollToHash();
 
   return (
     <div className="relative isolate min-h-screen bg-background text-foreground">
