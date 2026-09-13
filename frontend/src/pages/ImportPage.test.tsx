@@ -119,6 +119,24 @@ vi.mock("@/lib/api", () => {
       if (path.endsWith("/settings")) return {};
       if (path.endsWith("/analyze")) { analyzeCalls.push(path); return { analysis: { id: "job-1" } }; }
       if (path.startsWith("/projects/")) return { project: apiState.projectRow };
+      // The GET /me/credit contract the step-2 CreditMeter reads: a fresh free
+      // account with the full month ahead of it.
+      if (path === "/me/credit") {
+        return {
+          tier: "free",
+          monthlyCredits: 5,
+          monthlyUsed: 0,
+          monthlyRemaining: 5,
+          monthResetAt: new Date(Date.now() + 18 * 24 * 3600 * 1000).toISOString(),
+          rateCredits: 1,
+          rateWindowHours: 120,
+          rateUsed: 0,
+          rateResetAt: null,
+          inFlight: 0,
+          allowed: true,
+          reason: "ok",
+        };
+      }
       return {};
     }),
   };
@@ -320,6 +338,18 @@ describe("ImportPage — the oversized-repo cost gate (bug #67)", () => {
     await waitFor(() => expect(screen.getByText(/analyzable files/)).toBeInTheDocument());
     // Once the real numbers exist the generic notice steps aside.
     expect(screen.queryByText("What gets analysed")).not.toBeInTheDocument();
+  });
+});
+
+describe("ImportPage — step 2 shows this month's credit", () => {
+  it("renders the same credit meter the analyze dialog shows", async () => {
+    const user = userEvent.setup();
+    await reachConfigureStep(user);
+
+    // The first analysis is a spend decision like any other; the remaining
+    // balance has to be visible here, not only in the AnalyzeDialog.
+    await waitFor(() => expect(screen.getByText(/of 5 credits used this month/)).toBeInTheDocument());
+    expect(screen.getByText("CA$0.00")).toBeInTheDocument();
   });
 });
 

@@ -32,6 +32,7 @@ import { AppTour, type TourStep } from "@/components/AppTour";
 import { BackLink } from "@/components/BackLink";
 import { PageHeader } from "@/components/PageHeader";
 import { PreflightPreviewCard, usePreflight } from "@/components/PreflightPreview";
+import { CreditMeter } from "@/components/CreditMeter";
 import { useAuth } from "@/contexts/AuthContext";
 import { ApiError, apiFetch } from "@/lib/api";
 import { consumeTourRequest, dismissTour, tourDismissed } from "@/lib/tourState";
@@ -590,6 +591,10 @@ export function ImportPage() {
                   onAcknowledgedChange={setConfirmed}
                 />
               )}
+
+              {/* Same credit read as AnalyzeDialog: the first analysis is still a
+                  spend decision, so the remaining balance belongs next to Start. */}
+              <CreditMeter />
 
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button variant="ghost" size="sm" onClick={() => navigate(`/projects/${createdProjectId}`)}>
