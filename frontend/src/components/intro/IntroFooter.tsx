@@ -25,9 +25,6 @@ export function IntroFooter() {
           <Link to="/terms" className="text-muted-foreground transition-colors hover:text-foreground">
             Terms of Service
           </Link>
-          <Link to="/contact" className="text-muted-foreground transition-colors hover:text-foreground">
-            Contact
-          </Link>
         </nav>
       </div>
       <p className="mt-8 text-center text-xs text-muted-foreground">
