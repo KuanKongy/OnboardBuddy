@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  /* OG card, 1200x630. Left: headline sized for the thumbnail, one sub-line,
+     four points led by the privacy claim (wordings match PrivacySection /
+     PrivacyPage). Right: a miniature of the DASHBOARD Architecture page —
+     ClusterNode component cards (kind dot, tinted kind chip, responsibility
+     line, count chip, labelled crit bar, side handles) in the page's
+     left-to-right flow with directed arrows, under its search-and-legend
+     toolbar. Palette is the dark-theme --node-* set from styles.css. */
+  @font-face {
+    font-family: "Inter";
+    src: url(data:font/woff2;base64,@@FONT_B64@@) format("woff2");
+    font-weight: 100 900;
+    font-style: normal;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: "Inter", system-ui, sans-serif;
+    color: #fff;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .card { position: relative; width: 1200px; height: 630px; overflow: hidden;
+    background: linear-gradient(135deg, #0d1a36 0%, #0a1122 62%, #091020 100%); }
+  .dots { position: absolute; inset: 0;
+    background-image: radial-gradient(rgba(160,180,220,.13) 1px, transparent 1.3px);
+    background-size: 26px 26px; }
+  .glow-window { position: absolute; right: -150px; top: 40px; width: 720px; height: 580px;
+    background: radial-gradient(ellipse 50% 45% at 50% 50%, rgba(38,89,244,.3), transparent 70%); }
+  .glow-text { position: absolute; left: -180px; top: -200px; width: 700px; height: 540px;
+    background: radial-gradient(ellipse 50% 50% at 50% 50%, rgba(38,89,244,.15), transparent 70%); }
+
+  .left { position: absolute; left: 50px; top: 52px; width: 620px; }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand svg { width: 44px; height: 42px; }
+  .brand .word { font-size: 31px; font-weight: 650; letter-spacing: -0.015em; }
+  .brand .word b { font-weight: 650; color: #4b78ff; }
+
+  h1 { margin-top: 36px; font-size: 58px; line-height: 1.1; font-weight: 730;
+    letter-spacing: -0.028em; color: #f4f7fd; }
+  h1 .ev { color: #4b78ff; }
+
+  .sub { margin-top: 24px; font-size: 24.5px; line-height: 1.42; font-weight: 460;
+    color: #9db0d4; max-width: 580px; }
+  .sub b { color: #e9eef9; font-weight: 600; }
+
+  .points { margin-top: 34px; display: grid; gap: 20px; }
+  .point { display: flex; align-items: center; gap: 14px;
+    font-size: 24px; font-weight: 480; color: #b7c5e2; }
+  .point b { color: #e9eef9; font-weight: 620; }
+  .point b.ev { color: #4b78ff; }
+  .point svg { width: 27px; height: 27px; flex: none; }
+
+  /* ── app window: the dashboard Architecture page, miniature ─ */
+  .win { position: absolute; right: 50px; top: 105px; width: 494px; height: 420px;
+    border-radius: 18px; border: 1px solid rgba(255,255,255,.12);
+    background: rgba(17,27,50,.92);
+    box-shadow: 0 40px 90px rgba(4,8,20,.6), 0 0 0 1px rgba(38,89,244,.08), inset 0 1px 0 rgba(255,255,255,.06); }
+  .win-head { display: flex; align-items: center; gap: 9px; height: 46px; padding: 0 15px;
+    border-bottom: 1px solid rgba(255,255,255,.09); }
+  .win-head svg { width: 18px; height: 17px; }
+  .repo { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.5px; color: #93a5c8; white-space: nowrap; }
+  .badge { margin-left: auto; font-size: 9.5px; font-weight: 500; color: #a9b8d6;
+    border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 3px 7px; white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  .view { font-size: 11.5px; font-weight: 540; color: #eef2fa;
+    background: rgba(255,255,255,.09); border-radius: 6px; padding: 4px 9px; white-space: nowrap; }
+
+  .toolbar { display: flex; align-items: center; gap: 11px; padding: 9px 14px 0; }
+  .searchbox { display: flex; align-items: center; gap: 6px;
+    border: 1px solid rgba(255,255,255,.13); background: rgba(255,255,255,.04);
+    border-radius: 7px; padding: 5px 8px; font-size: 10px; color: #7488ac; white-space: nowrap; }
+  .searchbox svg { width: 10px; height: 10px; }
+  .legend { display: flex; align-items: center; gap: 10px; font-size: 9.5px; color: #8ea2c6; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .legend i { width: 6px; height: 6px; border-radius: 50%; }
+
+  .stage { position: relative; height: 296px; }
+  .edges { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  .ccard { position: absolute; width: 144px; border: 1px solid rgba(255,255,255,.13);
+    border-radius: 9px; background: #111c36; box-shadow: 0 2px 10px rgba(4,8,20,.45); }
+  .handle { position: absolute; top: 50%; width: 5px; height: 5px; border-radius: 50%;
+    background: #5a6a8c; transform: translateY(-50%); }
+  .handle.l { left: -2.5px; }
+  .handle.r { right: -2.5px; }
+  .ccard-head { display: flex; align-items: center; gap: 5px; padding: 7px 8px 0; }
+  .ccard-head .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .ccard-head .name { flex: 1; font-size: 10.5px; font-weight: 640; color: #eef2fa; line-height: 1.15; }
+  .kchip { font-size: 7px; font-weight: 650; letter-spacing: 0.06em; padding: 2.5px 4.5px;
+    border-radius: 4px; color: #eef2fa; white-space: nowrap; }
+  .ccard-resp { padding: 4px 8px 0; font-size: 9px; line-height: 1.35; color: #8ea2c6; }
+  .ccard-foot { margin-top: 7px; display: flex; align-items: center; gap: 5px;
+    border-top: 1px solid rgba(255,255,255,.08); padding: 5px 8px 6px; }
+  .count { background: rgba(255,255,255,.07); border-radius: 4px; padding: 2px 5px;
+    font-size: 8.5px; color: #a9b8d6; font-variant-numeric: tabular-nums; }
+  .crit { margin-left: auto; display: flex; align-items: center; gap: 4px;
+    font-size: 8px; color: #8ea2c6; font-variant-numeric: tabular-nums; }
+  .crit .bar { width: 26px; height: 4.5px; border: 1px solid rgba(255,255,255,.15);
+    background: rgba(255,255,255,.06); border-radius: 99px; overflow: hidden; }
+  .crit .fill { display: block; height: 100%; border-radius: 99px; }
+
+  .win-foot { display: flex; align-items: center; gap: 8px; height: 46px; padding: 0 15px;
+    border-top: 1px solid rgba(255,255,255,.09); font-size: 12.5px; color: #8ea2c6; }
+  .cite { font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11.5px; color: #dbe3f3;
+    background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.14);
+    border-radius: 6px; padding: 3.5px 7px; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="dots"></div>
+  <div class="glow-text"></div>
+  <div class="glow-window"></div>
+
+  <div class="left">
+    <div class="brand">
+      <svg viewBox="110 5 164 156">
+        <circle cx="140" cy="41" r="22" fill="#2659f4"/>
+        <circle cx="244" cy="40" r="21" fill="#ffffff"/>
+        <path d="M249.4 83.1 A58 58 0 0 1 204.1 131.7" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round"/>
+        <path d="M134.6 83.1 A58 58 0 0 0 198.1 132.7" fill="none" stroke="#2659f4" stroke-width="28" stroke-linecap="round"/>
+      </svg>
+      <div class="word">Onboard<b>Buddy</b></div>
+    </div>
+
+    <h1>Onboarding grounded<br>in <span class="ev">code evidence</span>.</h1>
+
+    <p class="sub">Import a <b>GitHub repository</b>, get a <b>role&#8209;aware onboarding handbook</b>.</p>
+
+    <div class="points">
+      <div class="point">@@SHIELD@@<span><b class="ev">Zero data retention</b>: <b>no copy</b> of your repo kept</span></div>
+      <div class="point">@@CHECK@@<span><b>Every claim cited</b> to <b>file and line</b></span></div>
+      <div class="point">@@CHECK@@<span><b class="ev">Deterministic analysis</b> before any model is asked</span></div>
+      <div class="point">@@CHECK@@<span><b>Dependency graph</b>, <b>architecture map</b>, <b>tutorials</b></span></div>
+    </div>
+  </div>
+
+  <div class="win">
+    <div class="win-head">
+      <svg viewBox="110 5 164 156">
+        <circle cx="140" cy="41" r="22" fill="#2659f4"/>
+        <circle cx="244" cy="40" r="21" fill="#ffffff"/>
+        <path d="M249.4 83.1 A58 58 0 0 1 204.1 131.7" fill="none" stroke="#ffffff" stroke-width="28" stroke-linecap="round"/>
+        <path d="M134.6 83.1 A58 58 0 0 0 198.1 132.7" fill="none" stroke="#2659f4" stroke-width="28" stroke-linecap="round"/>
+      </svg>
+      <span class="repo">acme/storefront</span>
+      <span class="badge">4 components &middot; 4 connections</span>
+      <span class="view">Architecture</span>
+    </div>
+
+    <div class="toolbar">
+      <span class="searchbox">
+        <svg viewBox="0 0 24 24" fill="none"><circle cx="10.5" cy="10.5" r="6.5" stroke="#7488ac" stroke-width="2"/><path d="M15.5 15.5 L20 20" stroke="#7488ac" stroke-width="2" stroke-linecap="round"/></svg>
+        Search components or files&hellip;
+      </span>
+      <span class="legend">
+        <span><i style="background: oklch(0.72 0.15 300)"></i>Frontend UI</span>
+        <span><i style="background: oklch(0.68 0.17 259)"></i>API layer</span>
+        <span><i style="background: oklch(0.74 0.15 158)"></i>Database</span>
+        <span><i style="background: oklch(0.78 0.14 80)"></i>Worker</span>
+      </span>
+    </div>
+
+    <div class="stage">
+      <svg class="edges" viewBox="0 0 494 296">
+        <defs>
+          <marker id="arr" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+            <path d="M0 0 L7 3.5 L0 7 Z" fill="rgba(150,166,196,.55)"/>
+          </marker>
+        </defs>
+        <!-- Snake: Web client → HTTP API → Job workers → Persistence, with the
+             direct API → Persistence dependency cutting the diagonal. -->
+        <path d="M184 76 L294 76" stroke="rgba(150,166,196,.5)" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+        <path d="M372 126 L372 170" stroke="rgba(150,166,196,.5)" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+        <path d="M296 224 L188 224" stroke="rgba(150,166,196,.5)" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+        <path d="M298 120 L184 172" stroke="rgba(150,166,196,.5)" stroke-width="1.5" fill="none" marker-end="url(#arr)"/>
+      </svg>
+
+      <!-- Web client (Frontend UI) -->
+      <div class="ccard" style="left: 36px; top: 28px;">
+        <span class="handle l"></span><span class="handle r"></span>
+        <div class="ccard-head">
+          <span class="dot" style="background: oklch(0.72 0.15 300)"></span>
+          <span class="name">Web client</span>
+          <span class="kchip" style="background: color-mix(in oklab, oklch(0.72 0.15 300) 16%, transparent)">UI</span>
+        </div>
+        <p class="ccard-resp">Screens, routing and client state.</p>
+        <div class="ccard-foot">
+          <span class="count">4 files</span>
+          <span class="crit"><span class="bar"><span class="fill" style="width:62%; background: oklch(0.72 0.15 300)"></span></span>crit 62</span>
+        </div>
+      </div>
+
+      <!-- HTTP API (API layer) -->
+      <div class="ccard" style="left: 300px; top: 28px;">
+        <span class="handle l"></span><span class="handle r"></span>
+        <div class="ccard-head">
+          <span class="dot" style="background: oklch(0.68 0.17 259)"></span>
+          <span class="name">HTTP API</span>
+          <span class="kchip" style="background: color-mix(in oklab, oklch(0.68 0.17 259) 16%, transparent)">API</span>
+        </div>
+        <p class="ccard-resp">Request handling and auth checks.</p>
+        <div class="ccard-foot">
+          <span class="count">3 files</span>
+          <span class="crit"><span class="bar"><span class="fill" style="width:91%; background: oklch(0.68 0.17 259)"></span></span>crit 91</span>
+        </div>
+      </div>
+
+      <!-- Persistence (Database) -->
+      <div class="ccard" style="left: 36px; top: 176px;">
+        <span class="handle l"></span><span class="handle r"></span>
+        <div class="ccard-head">
+          <span class="dot" style="background: oklch(0.74 0.15 158)"></span>
+          <span class="name">Persistence</span>
+          <span class="kchip" style="background: color-mix(in oklab, oklch(0.74 0.15 158) 16%, transparent)">DATA</span>
+        </div>
+        <p class="ccard-resp">Schema, queries and migrations.</p>
+        <div class="ccard-foot">
+          <span class="count">2 files</span>
+          <span class="crit"><span class="bar"><span class="fill" style="width:78%; background: oklch(0.74 0.15 158)"></span></span>crit 78</span>
+        </div>
+      </div>
+
+      <!-- Job workers (Worker) -->
+      <div class="ccard" style="left: 300px; top: 176px;">
+        <span class="handle l"></span><span class="handle r"></span>
+        <div class="ccard-head">
+          <span class="dot" style="background: oklch(0.78 0.14 80)"></span>
+          <span class="name">Job workers</span>
+          <span class="kchip" style="background: color-mix(in oklab, oklch(0.78 0.14 80) 16%, transparent)">WORKER</span>
+        </div>
+        <p class="ccard-resp">Queued background processing.</p>
+        <div class="ccard-foot">
+          <span class="count">3 files</span>
+          <span class="crit"><span class="bar"><span class="fill" style="width:54%; background: oklch(0.78 0.14 80)"></span></span>crit 54</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="win-foot">
+      <span>Cited in the handbook</span>
+      <span style="flex:1"></span>
+      <span class="cite">auth.ts:52</span>
+      <span class="cite">routes.ts:24</span>
+      <span class="cite">db.ts:118</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>
