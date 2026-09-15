@@ -1,5 +1,5 @@
 import { GitBranch, Users, Workflow } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Reveal } from "@/components/intro/Reveal";
 import { SectionShell } from "@/components/intro/SectionShell";
 
@@ -13,11 +13,10 @@ export function HowItWorks() {
     >
       <Reveal className="relative">
         {/* The connecting line draws itself once the section reveals; the
-            arbitrary variant keys off the Reveal wrapper gaining .reveal-in.
-            top-12 = the step cards' p-6 plus half the h-12 icon tile. */}
+            arbitrary variant keys off the Reveal wrapper gaining .reveal-in. */}
         <div
           aria-hidden="true"
-          className="absolute left-[16%] right-[16%] top-12 hidden h-px origin-left scale-x-0 bg-gradient-to-r from-[#2659f4]/50 via-[#7c66f0]/40 to-[color:var(--node-ui)]/50 transition-transform duration-1000 ease-out [transition-delay:350ms] sm:block [.reveal-in_&]:scale-x-100"
+          className="absolute left-[16%] right-[16%] top-6 hidden h-px origin-left scale-x-0 bg-gradient-to-r from-[#2659f4]/50 via-[#7c66f0]/40 to-[color:var(--node-ui)]/50 transition-transform duration-1000 ease-out [transition-delay:350ms] sm:block [.reveal-in_&]:scale-x-100"
         />
         <div className="grid gap-10 sm:grid-cols-3 sm:gap-6">
           <Step
@@ -46,24 +45,12 @@ export function HowItWorks() {
   );
 }
 
-/** A faint card at rest so the hover target reads as a card, with the same
- *  hover treatment as the bento SpotCards: lift, border glow and the
- *  mouse-following spotlight the .spot-card pseudo-element reads. */
+/** Only the icon tile is the hover target: a clearly bounded node on the
+ *  connecting line, so there is no ambiguity about where the effect lives. */
 function Step({ n, icon, title, children }: { n: number; icon: ReactNode; title: string; children: ReactNode }) {
-  const ref = useRef<HTMLDivElement | null>(null);
   return (
-    <div
-      ref={ref}
-      onMouseMove={(event) => {
-        const el = ref.current;
-        if (!el) return;
-        const rect = el.getBoundingClientRect();
-        el.style.setProperty("--mx", `${event.clientX - rect.left}px`);
-        el.style.setProperty("--my", `${event.clientY - rect.top}px`);
-      }}
-      className="spot-card group relative rounded-xl border border-foreground/10 bg-card/40 p-6 text-center transition-all duration-300 hover:-translate-y-1 hover:border-[#2659f4]/40 hover:bg-card/70 hover:shadow-lg hover:shadow-[#2659f4]/10 dark:border-white/10"
-    >
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm transition-colors duration-300 group-hover:border-[#2659f4]/40 dark:border-white/10">
+    <div className="relative text-center">
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm transition-all duration-300 hover:scale-110 hover:border-[#2659f4]/60 hover:bg-[#2659f4]/15 hover:shadow-lg hover:shadow-[#2659f4]/25 dark:border-white/10">
         {icon}
       </div>
       <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-primary">Step {n}</p>
