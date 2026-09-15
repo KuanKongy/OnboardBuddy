@@ -50,7 +50,9 @@ export function HowItWorks() {
 function Step({ n, icon, title, children }: { n: number; icon: ReactNode; title: string; children: ReactNode }) {
   return (
     <div className="relative text-center">
-      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm transition-all duration-300 hover:scale-110 hover:border-[#2659f4]/60 hover:bg-[#2659f4]/15 hover:shadow-lg hover:shadow-[#2659f4]/25 dark:border-white/10">
+      {/* The hover fill stays opaque (blue mixed into --card, not alpha blue)
+          so the connecting line behind the tile cannot show through. */}
+      <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl border border-foreground/10 bg-card text-primary shadow-sm transition-all duration-300 hover:scale-110 hover:border-[#2659f4]/60 hover:bg-[color-mix(in_oklab,#2659f4_15%,var(--card))] hover:shadow-lg hover:shadow-[#2659f4]/25 dark:border-white/10">
         {icon}
       </div>
       <p className="mb-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-primary">Step {n}</p>
