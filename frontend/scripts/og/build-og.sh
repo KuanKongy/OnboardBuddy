@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Regenerates public/og.png from og-template.html.
 #
-# The template uses the footer tagline, fictional files from heroStoryData.ts
-# and the dark-theme --node-* palette from styles.css. If any of those change,
-# update the template to match, then rerun this script.
+# The template uses the footer tagline and the dark-theme --node-* palette
+# from styles.css. If either changes, update the template to match, then
+# rerun this script.
 #
 # Renders at 2x and ships the full 2400x1260 PNG (same 1.91:1 ratio): sharper
 # on retina previews, and at ~1MB still well under the scrapers' 8MB cap.

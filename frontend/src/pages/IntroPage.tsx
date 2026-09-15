@@ -9,7 +9,6 @@ import { PillarGrid } from "@/components/intro/PillarGrid";
 import { PipelineSection } from "@/components/intro/PipelineSection";
 import { PrivacySection } from "@/components/intro/PrivacySection";
 import { ShowcaseSection } from "@/components/intro/ShowcaseSection";
-import { StatStrip } from "@/components/intro/StatStrip";
 import { SkipToContent } from "@/components/SkipToContent";
 import { MAIN_REGION_ID } from "@/hooks/usePageChrome";
 import { useScrollToHash } from "@/hooks/useScrollToHash";
@@ -33,7 +32,6 @@ export function IntroPage() {
       <IntroHeader />
       <main id={MAIN_REGION_ID} tabIndex={-1} className="outline-none">
         <HeroSection />
-        <StatStrip />
         <PillarGrid />
         <HowItWorks />
         <PrivacySection />

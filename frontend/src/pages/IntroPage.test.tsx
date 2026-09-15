@@ -63,19 +63,11 @@ describe("IntroPage", () => {
     expect(document.querySelector('a[href="/signup"]')).toBeNull();
   });
 
-  it("computes the stat strip from the source modules", () => {
-    renderPage();
-    // A phase-list change must fail HERE loudly rather than silently
-    // rewriting the marketing numbers.
-    expect(PHASE_ORDER).toHaveLength(16);
-    const facts = screen.getByRole("region", { name: "Product facts" });
-    expect(within(facts).getByText(String(PHASE_ORDER.length))).toBeInTheDocument();
-    expect(within(facts).getByText("pipeline phases")).toBeInTheDocument();
-    expect(within(facts).getByText("handbook sections")).toBeInTheDocument();
-  });
-
   it("renders all 16 phases and dims the skipped seven under AI disabled", () => {
     renderPage();
+    // A phase-list change must fail HERE loudly rather than silently
+    // rewriting the marketing copy computed from PHASE_ORDER.
+    expect(PHASE_ORDER).toHaveLength(16);
     const section = document.getElementById("pipeline")!;
     expect(section).not.toBeNull();
 
