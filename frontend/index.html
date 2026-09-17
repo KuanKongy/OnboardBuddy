@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Relative on purpose: Vite resolves it from this file and emits a
+         content-hashed /assets/favicon-*.svg, so the icon URL is unique to
+         this app. A public/ /favicon.svg shares its URL with every other app
+         run on localhost:5173, and the browser shows whichever it cached. -->
+    <link rel="icon" type="image/svg+xml" href="./src/assets/favicon.svg" />
     <!-- crossorigin is mandatory on font preloads even same-origin; without it
          the browser fetches the font twice (preload and CSS use different
          credential modes). Only the roman face is preloaded; italic is rare
@@ -34,7 +38,7 @@
     <meta name="twitter:image" content="https://onboardbuddy.dev/og.png" />
     <!-- Browser UI colour per scheme. Hexes are the current `--background`
          tokens converted from OKLCH (frontend/src/styles.css); a token change
-         has to be mirrored here, and in public/favicon.svg, whose background
+         has to be mirrored here, and in src/assets/favicon.svg, whose background
          rect is painted with the dark hex below. -->
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15181f" />
