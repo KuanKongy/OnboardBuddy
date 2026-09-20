@@ -1,0 +1,73 @@
+name: Keep Alive
+
+on:
+  schedule:
+    # Once every 24h. Off the hour on purpose: GitHub queues every :00 cron at
+    # once and sheds the backlog under load. Supabase pauses a free project
+    # after 7 idle days, so daily leaves six days of slack for a skipped run.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keep-alive
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # Keeps the Railway API warm and fails loudly if it is down. VITE_API_URL
+      # already carries the /api suffix (https://<host>.up.railway.app/api).
+      - name: Ping API health
+        env:
+          API_URL: ${{ secrets.VITE_API_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_URL}" ]; then
+            echo "::error::VITE_API_URL secret is empty — nothing to ping."
+            exit 1
+          fi
+          url="${API_URL%/}/health"
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
+            --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
+            "$url")
+          echo "GET $url -> $code"
+          cat /tmp/health.json || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::API health check returned $code."
+            exit 1
+          fi
+
+      # /api/health answers from memory and never opens a DB connection, so it
+      # cannot hold off the free-tier pause on its own. This select does: an
+      # anon-key read of one row is real query traffic against Postgres. RLS
+      # keeps the response empty (200 with []), which is the expected result.
+      - name: Touch Supabase Postgres
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          # Any table in the public schema works; swap it if users is ever renamed.
+          TABLE: users
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_ANON_KEY}" ]; then
+            echo "::error::VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY secrets are empty."
+            exit 1
+          fi
+          url="${SUPABASE_URL%/}/rest/v1/${TABLE}?select=id&limit=1"
+          code=$(curl -sS -o /tmp/db.json -w '%{http_code}' \
+            --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "$url")
+          echo "GET /rest/v1/${TABLE} -> $code"
+          case "$code" in
+            200) echo "Postgres answered — inactivity timer reset." ;;
+            401|403) echo "::error::Anon key rejected ($code) — no query reached Postgres."; exit 1 ;;
+            404) echo "::error::Table ${TABLE} is not exposed over PostgREST ($code)."; exit 1 ;;
+            *) echo "::error::Unexpected status $code from Supabase."; cat /tmp/db.json || true; exit 1 ;;
+          esac
