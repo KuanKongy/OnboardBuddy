@@ -56,7 +56,7 @@ jobs:
           esac
 
       # Keeps the Railway API warm and fails loudly if it is down. VITE_API_URL
-      # already carries the /api suffix (https://<host>.up.railway.app/api).
+      # works with or without the /api suffix, same as the frontend resolver.
       # Runs even when the Supabase step failed, so one outage never hides the
       # other service's state.
       - name: Ping API health
@@ -74,7 +74,9 @@ jobs:
               echo "::error::VITE_API_URL secret holds the dev value — set it to the Railway URL."
               exit 1 ;;
           esac
-          url="${API_URL%/}/health"
+          base="${API_URL%/}"
+          case "$base" in */api) ;; *) base="$base/api" ;; esac
+          url="$base/health"
           code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
             --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
             "$url")

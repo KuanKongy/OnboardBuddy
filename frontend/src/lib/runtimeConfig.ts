@@ -99,8 +99,12 @@ export function resolveRuntimeConfig(
 
   // `apiFetch` composes `${apiUrl}${path}` with paths that start with "/", so a
   // trailing slash would produce "//projects" and a 404 that is annoying to
-  // diagnose. Normalising here means a deployer can paste either form.
+  // diagnose. The backend mounts every route under /api, so a bare origin is
+  // completed too. Normalising here means a deployer can paste either form.
   config.apiUrl = config.apiUrl.replace(/\/+$/, "");
+  if (config.apiUrl !== "" && !config.apiUrl.endsWith("/api")) {
+    config.apiUrl += "/api";
+  }
 
   return { config, missing, source: fromRuntime ? "runtime" : "build" };
 }

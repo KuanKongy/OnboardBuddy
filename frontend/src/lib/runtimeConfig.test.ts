@@ -88,6 +88,20 @@ describe("resolveRuntimeConfig", () => {
     expect(resolveRuntimeConfig({ apiUrl: "/api//" }, {}).config.apiUrl).toBe("/api");
   });
 
+  it("appends /api to a bare origin so both forms of the value work", () => {
+    expect(resolveRuntimeConfig({ apiUrl: "https://api.example.com" }, {}).config.apiUrl).toBe(
+      "https://api.example.com/api",
+    );
+    expect(resolveRuntimeConfig({ apiUrl: "https://api.example.com/" }, {}).config.apiUrl).toBe(
+      "https://api.example.com/api",
+    );
+    // Already suffixed and empty values stay untouched.
+    expect(resolveRuntimeConfig({ apiUrl: "https://api.example.com/api" }, {}).config.apiUrl).toBe(
+      "https://api.example.com/api",
+    );
+    expect(resolveRuntimeConfig({ apiUrl: "" }, {}).config.apiUrl).toBe("");
+  });
+
   it("ignores an array or a primitive in the global and falls back to build env", () => {
     for (const bogus of [[], "nope", 7, true]) {
       expect(resolveRuntimeConfig(bogus, BUILD_ENV).source).toBe("build");
