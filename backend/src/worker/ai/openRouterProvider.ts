@@ -166,6 +166,7 @@ export class OpenRouterProvider implements AiProvider {
       ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(Object.keys(providerPrefs).length > 0 ? { provider: providerPrefs } : {}),
+      ...reasoningPrefs(),
     };
   }
 
@@ -269,6 +270,17 @@ export class OpenRouterProvider implements AiProvider {
  * same env knobs — a second copy of this logic is exactly how one route ends
  * up quietly leaving ZDR behind.
  */
+/**
+ * glm-5.3-flash and deepseek-v4.1-flash reason by default: billed as output
+ * and eating into max_tokens (JSON truncation risk on large batches).
+ * effort 'low' zeroes it on both; non-reasoning models ignore the param, and
+ * some endpoints 400 on enabled:false. OPENROUTER_REASONING_EFFORT="" omits it.
+ */
+export function reasoningPrefs(): Record<string, unknown> {
+  const effort = process.env.OPENROUTER_REASONING_EFFORT ?? 'low';
+  return effort === '' ? {} : { reasoning: { effort } };
+}
+
 export function openRouterProviderPrefs(): Record<string, unknown> {
   const sort = process.env.OPENROUTER_PROVIDER_SORT ?? 'throughput';
   const zdr = (process.env.OPENROUTER_ZDR ?? 'true') !== 'false';
