@@ -166,7 +166,7 @@ export class OpenRouterProvider implements AiProvider {
       ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(Object.keys(providerPrefs).length > 0 ? { provider: providerPrefs } : {}),
-      ...reasoningPrefs(),
+      ...reasoningPrefs(req.model),
     };
   }
 
@@ -271,14 +271,20 @@ export class OpenRouterProvider implements AiProvider {
  * up quietly leaving ZDR behind.
  */
 /**
- * glm-5.3-flash and deepseek-v4.1-flash reason by default: billed as output
- * and eating into max_tokens (JSON truncation risk on large batches).
- * effort 'low' zeroes it on both; non-reasoning models ignore the param, and
- * some endpoints 400 on enabled:false. OPENROUTER_REASONING_EFFORT="" omits it.
+ * glm and deepseek reason by default: billed as output, eats max_tokens
+ * (JSON truncation on large batches). Minima measured per family 2026-11-02:
+ * deepseek needs enabled:false (effort low/minimal still rambled to the
+ * token cap on Together); glm 400s on enabled:false, effort 'minimal'
+ * zeroes it. Unknown models get nothing — effort params can switch
+ * reasoning ON for models that default off. OPENROUTER_REASONING_EFFORT
+ * overrides glm's effort; "" omits the param everywhere.
  */
-export function reasoningPrefs(): Record<string, unknown> {
-  const effort = process.env.OPENROUTER_REASONING_EFFORT ?? 'low';
-  return effort === '' ? {} : { reasoning: { effort } };
+export function reasoningPrefs(model: string): Record<string, unknown> {
+  const effort = process.env.OPENROUTER_REASONING_EFFORT ?? 'minimal';
+  if (effort === '') return {};
+  if (model.startsWith('deepseek/')) return { reasoning: { enabled: false } };
+  if (model.startsWith('z-ai/')) return { reasoning: { effort } };
+  return {};
 }
 
 export function openRouterProviderPrefs(): Record<string, unknown> {

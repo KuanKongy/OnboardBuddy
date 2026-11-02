@@ -1,7 +1,7 @@
 import { expect } from 'chai';
 import { __setQueryForTests } from '../../../lib/db.js';
 import { ProviderError, StructuredOutputError } from '../provider.js';
-import { OpenRouterProvider, coerceNullArrays, humanizeProviderErrorBody, parseRetryAfterMs } from '../openRouterProvider.js';
+import { OpenRouterProvider, coerceNullArrays, humanizeProviderErrorBody, parseRetryAfterMs, reasoningPrefs } from '../openRouterProvider.js';
 import { validateAgainstSchema, extractJson } from '../jsonSchemaValidator.js';
 import { resolveTierConfig, defaultTierModels, estimateCostUsd, DEFAULT_FAILURE_BEHAVIOR } from '../modelTiers.js';
 import { canonicalJson, computeInputHash } from '../generationRuns.js';
@@ -68,6 +68,25 @@ describe('phase 4 — model tiers', () => {
     expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.545, 1e-9);
     expect(estimateCostUsd('strong', 1_000_000, 1_000_000, 'deepseek/deepseek-v4-flash')).to.be.closeTo(0.27, 1e-9);
     expect(estimateCostUsd('cheap', 1_000_000, 0, 'some/unknown-model')).to.be.closeTo(0.029, 1e-9);
+  });
+
+  it('reasoningPrefs: per-family minima, nothing for unknown models, "" omits', () => {
+    const saved = process.env.OPENROUTER_REASONING_EFFORT;
+    try {
+      delete process.env.OPENROUTER_REASONING_EFFORT;
+      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash')).to.deep.equal({ reasoning: { enabled: false } });
+      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({ reasoning: { effort: 'minimal' } });
+      expect(reasoningPrefs('meta-llama/llama-4-scout')).to.deep.equal({});
+      expect(reasoningPrefs('anthropic/claude-sonnet-4.5')).to.deep.equal({});
+      process.env.OPENROUTER_REASONING_EFFORT = 'low';
+      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({ reasoning: { effort: 'low' } });
+      process.env.OPENROUTER_REASONING_EFFORT = '';
+      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash')).to.deep.equal({});
+      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({});
+    } finally {
+      if (saved === undefined) delete process.env.OPENROUTER_REASONING_EFFORT;
+      else process.env.OPENROUTER_REASONING_EFFORT = saved;
+    }
   });
 });
 
