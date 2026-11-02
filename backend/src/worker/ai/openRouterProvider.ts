@@ -260,8 +260,8 @@ export class OpenRouterProvider implements AiProvider {
  * if the /embeddings route rejects `sort`).
  * Privacy filter (user decision 2026-07-24): route ONLY to Zero Data
  * Retention endpoints — OpenRouter enforces `zdr: true` server-side
- * (verified live: all three rotation models route under it; gemini →
- * Google, deepseek → Novita, scout → Groq). data_collection 'deny' rides
+ * (re-verified 2026-11-02: glm-5.3-flash and deepseek-v4.1-flash each have
+ * 60+ ZDR endpoints with structured outputs). data_collection 'deny' rides
  * along as belt-and-braces. Set OPENROUTER_ZDR=false /
  * OPENROUTER_DATA_COLLECTION="" to loosen.
  *

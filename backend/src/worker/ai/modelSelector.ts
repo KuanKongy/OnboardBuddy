@@ -34,8 +34,8 @@ export interface CandidateModel {
 
 /** The three models the user chose for rotation. */
 export const AUTO_CANDIDATES: CandidateModel[] = [
-  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
-  { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
+  { id: 'z-ai/glm-5.3-flash', label: 'GLM-5.3 Flash' },
+  { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash' },
   { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout' },
 ];
 
@@ -178,7 +178,7 @@ export async function selectModel(opts: SelectModelOptions = {}): Promise<ModelS
   if (cached && now - cached.selectedAtMs < CACHE_TTL_MS) return cached;
 
   const fallback: ModelSelection = {
-    model: process.env.OPENROUTER_MODEL_CHEAP ?? 'google/gemini-2.5-flash-lite',
+    model: process.env.OPENROUTER_MODEL_CHEAP ?? 'z-ai/glm-5.3-flash',
     rankings: [],
     sticky: false,
     providerOrder: [],

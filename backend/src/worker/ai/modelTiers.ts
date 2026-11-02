@@ -21,16 +21,17 @@ export interface TierConfig {
  *     EMBEDDINGS_MODEL in backend/.env — any OpenRouter model id works.
  *  2. Per project: project_settings.model_tier_overrides, e.g.
  *     {"strong": ["anthropic/claude-sonnet-4.5"]} (PUT /projects/:id/settings).
- * Both tiers default to DeepSeek V4 Flash (1M context, 65,536 max output,
- * $0.09/M in, $0.18/M out): a full analysis costs cents, and the batch sizes
- * in engine/budgets.ts are tuned to its context/output caps. Point the
- * strong tier at a premium model only when quality is worth the price.
+ * Cheap defaults to GLM-5.3 Flash (1M context, 131,072 max output, $0.029/M
+ * in, $0.092/M out); strong to DeepSeek V4.1 Flash (1M context, $0.045/M in,
+ * $0.50/M out). Batch sizes in engine/budgets.ts were tuned to 65,536-output
+ * models; both current caps are larger, so the batches stay valid — keep
+ * them small, they are output-bound.
  */
 export function defaultTierModels(): Record<ModelTier, string[]> {
   return {
     // Legacy OPENROUTER_MODEL keeps working as the cheap-tier default.
-    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'google/gemini-2.5-flash-lite'],
-    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'google/gemini-2.5-flash-lite'],
+    cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'z-ai/glm-5.3-flash'],
+    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'deepseek/deepseek-v4.1-flash'],
     embedding: [process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'],
   };
 }
@@ -41,9 +42,9 @@ export function defaultTierModels(): Record<ModelTier, string[]> {
  * structured-output pipeline (strict JSON, omission handling, price row).
  */
 export const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
-  { id: 'auto', label: 'Auto: fastest private provider right now (gemini/deepseek/scout)' },
-  { id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite (fast, 1M context)' },
-  { id: 'deepseek/deepseek-v4-flash', label: 'DeepSeek V4 Flash (1M context)' },
+  { id: 'auto', label: 'Auto: fastest private provider right now (glm/deepseek/scout)' },
+  { id: 'z-ai/glm-5.3-flash', label: 'GLM-5.3 Flash (cheapest, 1M context)' },
+  { id: 'deepseek/deepseek-v4.1-flash', label: 'DeepSeek V4.1 Flash (fastest, 1M context)' },
   { id: 'meta-llama/llama-4-scout', label: 'Llama 4 Scout (fastest bursts, smaller context)' },
 ];
 
@@ -101,9 +102,12 @@ export function resolveTierConfig(overrides?: {
 // Known models get exact rows; unknown models fall back to their tier row
 // (keep tier rows in sync with the defaultTierModels() defaults).
 const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> = {
+  'z-ai/glm-5.3-flash': { input: 0.029, output: 0.092 },
+  'deepseek/deepseek-v4.1-flash': { input: 0.045, output: 0.5 },
+  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
+  // Replaced defaults, kept so pre-2026-11 run history still prices exactly.
   'google/gemini-2.5-flash-lite': { input: 0.1, output: 0.4 },
   'deepseek/deepseek-v4-flash': { input: 0.09, output: 0.18 },
-  'meta-llama/llama-4-scout': { input: 0.11, output: 0.34 },
   // Embedding models bill input only. Both are listed because M4 and M5
   // snapshots coexist for the whole milestone, so the run history shows rows
   // priced at both — the tier row alone would misprice whichever is not it.
@@ -112,8 +116,8 @@ const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> =
 };
 
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
-  cheap: { input: 0.1, output: 0.4 },
-  strong: { input: 0.1, output: 0.4 },
+  cheap: { input: 0.029, output: 0.092 },
+  strong: { input: 0.045, output: 0.5 },
   embedding: { input: 0.02, output: 0 },
 };
 

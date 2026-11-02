@@ -42,34 +42,34 @@ describe('modelSelector', () => {
 
   it('picks the fastest model across candidates', async () => {
     const fetchImpl = fetchFor({
-      'google/gemini-2.5-flash-lite': [ep({ throughputP50: 140, tag: 'vertex' })],
-      'deepseek/deepseek-v4-flash': [ep({ throughputP50: 80, tag: 'baidu' })],
+      'z-ai/glm-5.3-flash': [ep({ throughputP50: 140, tag: 'vertex' })],
+      'deepseek/deepseek-v4.1-flash': [ep({ throughputP50: 80, tag: 'baidu' })],
       'meta-llama/llama-4-scout': [ep({ throughputP50: 60, tag: 'kluster' })],
     });
     const sel = await selectModel({ fetchImpl, incumbent: null });
-    expect(sel.model).to.equal('google/gemini-2.5-flash-lite');
+    expect(sel.model).to.equal('z-ai/glm-5.3-flash');
     expect(sel.providerOrder[0]).to.equal('vertex');
     expect(sel.sticky).to.equal(false);
   });
 
   it('stickiness: the incumbent keeps the slot unless a rival is 1.25x faster', async () => {
     const fetchImpl = fetchFor({
-      'google/gemini-2.5-flash-lite': [ep({ throughputP50: 110 })],
-      'deepseek/deepseek-v4-flash': [ep({ throughputP50: 100 })],
+      'z-ai/glm-5.3-flash': [ep({ throughputP50: 110 })],
+      'deepseek/deepseek-v4.1-flash': [ep({ throughputP50: 100 })],
       'meta-llama/llama-4-scout': [],
     });
-    const sel = await selectModel({ fetchImpl, incumbent: 'deepseek/deepseek-v4-flash' });
-    expect(sel.model).to.equal('deepseek/deepseek-v4-flash');
+    const sel = await selectModel({ fetchImpl, incumbent: 'deepseek/deepseek-v4.1-flash' });
+    expect(sel.model).to.equal('deepseek/deepseek-v4.1-flash');
     expect(sel.sticky).to.equal(true);
 
     __resetSelectionCacheForTests();
     const fetchImpl2 = fetchFor({
-      'google/gemini-2.5-flash-lite': [ep({ throughputP50: 200 })],
-      'deepseek/deepseek-v4-flash': [ep({ throughputP50: 100 })],
+      'z-ai/glm-5.3-flash': [ep({ throughputP50: 200 })],
+      'deepseek/deepseek-v4.1-flash': [ep({ throughputP50: 100 })],
       'meta-llama/llama-4-scout': [],
     });
-    const sel2 = await selectModel({ fetchImpl: fetchImpl2, incumbent: 'deepseek/deepseek-v4-flash' });
-    expect(sel2.model).to.equal('google/gemini-2.5-flash-lite');
+    const sel2 = await selectModel({ fetchImpl: fetchImpl2, incumbent: 'deepseek/deepseek-v4.1-flash' });
+    expect(sel2.model).to.equal('z-ai/glm-5.3-flash');
     expect(sel2.sticky).to.equal(false);
   });
 
@@ -82,13 +82,13 @@ describe('modelSelector', () => {
 
   it('overridesForSelection puts the winner first with ranked fallbacks on both tiers', async () => {
     const fetchImpl = fetchFor({
-      'google/gemini-2.5-flash-lite': [ep({ throughputP50: 90 })],
-      'deepseek/deepseek-v4-flash': [ep({ throughputP50: 140 })],
+      'z-ai/glm-5.3-flash': [ep({ throughputP50: 90 })],
+      'deepseek/deepseek-v4.1-flash': [ep({ throughputP50: 140 })],
       'meta-llama/llama-4-scout': [ep({ throughputP50: 50 })],
     });
     const sel = await selectModel({ fetchImpl, incumbent: null });
     const o = overridesForSelection(sel);
-    expect(o.cheap[0]).to.equal('deepseek/deepseek-v4-flash');
+    expect(o.cheap[0]).to.equal('deepseek/deepseek-v4.1-flash');
     expect(o.cheap).to.deep.equal(o.strong);
     expect(o.cheap).to.include('meta-llama/llama-4-scout');
   });
@@ -97,7 +97,7 @@ describe('modelSelector', () => {
     expect(isAutoSelection(undefined)).to.equal(true);
     expect(isAutoSelection({})).to.equal(true);
     expect(isAutoSelection({ cheap: ['auto'], strong: ['auto'] })).to.equal(true);
-    expect(isAutoSelection({ cheap: ['google/gemini-2.5-flash-lite'] })).to.equal(false);
+    expect(isAutoSelection({ cheap: ['z-ai/glm-5.3-flash'] })).to.equal(false);
   });
 
   // The probe read OPENROUTER_API_KEY directly, so a project running on its own
@@ -112,8 +112,8 @@ describe('modelSelector', () => {
     });
 
     const oneCandidate = () => ({
-      'google/gemini-2.5-flash-lite': [ep({ throughputP50: 100 })],
-      'deepseek/deepseek-v4-flash': [],
+      'z-ai/glm-5.3-flash': [ep({ throughputP50: 100 })],
+      'deepseek/deepseek-v4.1-flash': [],
       'meta-llama/llama-4-scout': [],
     });
 
@@ -128,7 +128,7 @@ describe('modelSelector', () => {
         fetchImpl: fetchFor(oneCandidate(), seenAuth), projectId: 'proj-1', incumbent: null,
       });
 
-      expect(sel.model).to.equal('google/gemini-2.5-flash-lite');
+      expect(sel.model).to.equal('z-ai/glm-5.3-flash');
       expect(seenAuth).to.have.length(3);
       expect(new Set(seenAuth)).to.deep.equal(new Set(['Bearer sk-project']));
     });
@@ -142,7 +142,7 @@ describe('modelSelector', () => {
         fetchImpl: fetchFor(oneCandidate(), seenAuth), projectId: 'proj-1', incumbent: null,
       });
 
-      expect(sel.model).to.equal('google/gemini-2.5-flash-lite');
+      expect(sel.model).to.equal('z-ai/glm-5.3-flash');
       expect(new Set(seenAuth)).to.deep.equal(new Set(['Bearer sk-server']));
     });
   });

@@ -55,8 +55,9 @@ export const DEPTH_SELECTION_RATIO: Record<SemanticDepth, number> = {
   full: 1.0,
 };
 
-// Batching hard limits for the symbol semantic pass, sized for the
-// deepseek-v4-flash tier (1M input context / 65,536 output cap). Batches
+// Batching hard limits for the symbol semantic pass, sized for 65,536-output
+// models (tuned on deepseek-v4-flash; current defaults have larger caps, but
+// the sizing still holds — do not enlarge). Batches
 // are OUTPUT-bound, not input-bound: records are ~300-500 output tokens
 // each and MEASURED decode through OpenRouter is only ~30-120 tok/s, so a
 // 32-symbol batch (~15k output) ran 4-9 minutes and long outputs started
@@ -81,10 +82,11 @@ export const TUTORIAL_COUNT_ESTIMATE = 4;
 
 // Coarse per-million-token blended prices used ONLY for the preflight cost
 // tier; real cost accounting happens per call in ai_generation_runs.
-// Both chat tiers default to google/gemini-2.5-flash-lite ($0.10/M in,
-// $0.40/M out — ~0.18 blended at the observed ~3:1 input:output ratio).
-export const EST_PRICE_PER_MTOK_CHEAP_USD = 0.18;
-export const EST_PRICE_PER_MTOK_STRONG_USD = 0.18;
+// Cheap defaults to z-ai/glm-5.3-flash ($0.029/M in, $0.092/M out), strong
+// to deepseek/deepseek-v4.1-flash ($0.045/M in, $0.50/M out) — blended at
+// the observed ~3:1 input:output ratio.
+export const EST_PRICE_PER_MTOK_CHEAP_USD = 0.05;
+export const EST_PRICE_PER_MTOK_STRONG_USD = 0.16;
 
 export const COST_TIER_THRESHOLDS_USD = { medium: 2, high: 15 };
 

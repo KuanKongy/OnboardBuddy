@@ -50,8 +50,8 @@ const WEIGHT_VIEWS = [
 const DEFAULT_ANALYSIS_MODEL = "auto";
 const SELECTABLE_MODELS: Array<{ id: string; label: string }> = [
   { id: "auto", label: "Auto: fastest private provider right now" },
-  { id: "google/gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite (fast, 1M context)" },
-  { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash (1M context)" },
+  { id: "z-ai/glm-5.3-flash", label: "GLM-5.3 Flash (cheapest, 1M context)" },
+  { id: "deepseek/deepseek-v4.1-flash", label: "DeepSeek V4.1 Flash (fastest, 1M context)" },
   { id: "meta-llama/llama-4-scout", label: "Llama 4 Scout (fastest bursts, smaller context)" },
 ];
 
