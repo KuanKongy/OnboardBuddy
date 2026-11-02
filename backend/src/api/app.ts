@@ -4,6 +4,7 @@ import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import { apiRouter } from "./routes/index.js";
 import { githubWebhookRouter } from "./routes/githubWebhook.js";
+import { healthRouter } from "./routes/health.js";
 
 const DEV_ORIGIN = "http://localhost:5173";
 
@@ -77,6 +78,10 @@ export function createApp() {
   // so every route below is covered.
   app.use(compression());
   app.use(express.json());
+
+  // Root alias for platform healthchecks and uptime monitors; every other
+  // route lives under /api only.
+  app.use("/health", healthRouter);
 
   app.use("/api", apiRouter);
 
