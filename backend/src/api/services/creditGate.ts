@@ -75,7 +75,7 @@ export interface CreditStatus {
 }
 
 /** Minimal query surface so tests can inject a fake (and the analyze txn can pass its client). */
-export type QueryFn = (text: string, params?: unknown[]) => Promise<{ rows: any[] }>;
+export type QueryFn = (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }>;
 
 export function startOfUtcMonth(now: Date = new Date()): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
