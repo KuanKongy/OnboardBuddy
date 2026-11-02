@@ -166,7 +166,7 @@ export class OpenRouterProvider implements AiProvider {
       ...(req.maxOutputTokens !== undefined ? { max_tokens: req.maxOutputTokens } : {}),
       ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
       ...(Object.keys(providerPrefs).length > 0 ? { provider: providerPrefs } : {}),
-      ...reasoningPrefs(req.model),
+      ...reasoningPrefs(req.model, req.tier),
     };
   }
 
@@ -271,18 +271,20 @@ export class OpenRouterProvider implements AiProvider {
  * up quietly leaving ZDR behind.
  */
 /**
- * glm and deepseek reason by default: billed as output, eats max_tokens
- * (JSON truncation on large batches). Minima measured per family 2026-11-02:
- * deepseek needs enabled:false (effort low/minimal still rambled to the
- * token cap on Together); glm 400s on enabled:false, effort 'minimal'
- * zeroes it. Unknown models get nothing — effort params can switch
- * reasoning ON for models that default off. OPENROUTER_REASONING_EFFORT
- * overrides glm's effort; "" omits the param everywhere.
+ * Per-tier reasoning policy (measured 2026-11-02). Cheap tier matches the
+ * old gemini baseline (no thinking): glm gets effort 'minimal' (its
+ * endpoints 400 on enabled:false). Strong tier keeps the model's native
+ * thinking — except deepseek, whose thinking emits invalid JSON on every
+ * sampled provider (rambles to the token cap), so it stays off on all
+ * tiers: a correctness cap, not a quality choice. Unknown models get
+ * nothing — effort params can switch reasoning ON for default-off models.
+ * OPENROUTER_REASONING_EFFORT overrides glm's cheap effort; "" omits all.
  */
-export function reasoningPrefs(model: string): Record<string, unknown> {
+export function reasoningPrefs(model: string, tier?: 'cheap' | 'strong'): Record<string, unknown> {
   const effort = process.env.OPENROUTER_REASONING_EFFORT ?? 'minimal';
   if (effort === '') return {};
   if (model.startsWith('deepseek/')) return { reasoning: { enabled: false } };
+  if (tier === 'strong') return {};
   if (model.startsWith('z-ai/')) return { reasoning: { effort } };
   return {};
 }

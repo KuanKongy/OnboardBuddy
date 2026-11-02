@@ -82,11 +82,11 @@ export const TUTORIAL_COUNT_ESTIMATE = 4;
 
 // Coarse per-million-token blended prices used ONLY for the preflight cost
 // tier; real cost accounting happens per call in ai_generation_runs.
-// Cheap defaults to z-ai/glm-5.3-flash ($0.029/M in, $0.092/M out), strong
-// to deepseek/deepseek-v4.1-flash ($0.045/M in, $0.50/M out) — blended at
-// the observed ~3:1 input:output ratio.
+// Both tiers default to z-ai/glm-5.3-flash ($0.029/M in, $0.092/M out),
+// blended at the observed ~3:1 input:output ratio; strong runs with native
+// thinking, which inflates output tokens.
 export const EST_PRICE_PER_MTOK_CHEAP_USD = 0.05;
-export const EST_PRICE_PER_MTOK_STRONG_USD = 0.16;
+export const EST_PRICE_PER_MTOK_STRONG_USD = 0.07;
 
 export const COST_TIER_THRESHOLDS_USD = { medium: 2, high: 15 };
 

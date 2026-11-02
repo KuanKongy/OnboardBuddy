@@ -61,28 +61,29 @@ describe('phase 4 — model tiers', () => {
   });
 
   it('cost estimates scale with tokens and tier', () => {
-    // Tier fallback rows track the tier defaults (cheap: glm-5.3-flash
-    // $0.029/$0.092, strong: deepseek-v4.1-flash $0.045/$0.50 per Mtok);
-    // known models get exact rows via the model param.
+    // Tier fallback rows track the tier defaults (both glm-5.3-flash,
+    // $0.029/$0.092 per Mtok); known models get exact rows via the model param.
     expect(estimateCostUsd('cheap', 1_000_000, 0)).to.be.closeTo(0.029, 1e-9);
-    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.545, 1e-9);
+    expect(estimateCostUsd('strong', 1_000_000, 1_000_000)).to.be.closeTo(0.121, 1e-9);
     expect(estimateCostUsd('strong', 1_000_000, 1_000_000, 'deepseek/deepseek-v4-flash')).to.be.closeTo(0.27, 1e-9);
     expect(estimateCostUsd('cheap', 1_000_000, 0, 'some/unknown-model')).to.be.closeTo(0.029, 1e-9);
   });
 
-  it('reasoningPrefs: per-family minima, nothing for unknown models, "" omits', () => {
+  it('reasoningPrefs: cheap minimized, strong thinks (except deepseek), "" omits', () => {
     const saved = process.env.OPENROUTER_REASONING_EFFORT;
     try {
       delete process.env.OPENROUTER_REASONING_EFFORT;
-      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash')).to.deep.equal({ reasoning: { enabled: false } });
-      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({ reasoning: { effort: 'minimal' } });
-      expect(reasoningPrefs('meta-llama/llama-4-scout')).to.deep.equal({});
-      expect(reasoningPrefs('anthropic/claude-sonnet-4.5')).to.deep.equal({});
+      expect(reasoningPrefs('z-ai/glm-5.3-flash', 'cheap')).to.deep.equal({ reasoning: { effort: 'minimal' } });
+      expect(reasoningPrefs('z-ai/glm-5.3-flash', 'strong')).to.deep.equal({});
+      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash', 'cheap')).to.deep.equal({ reasoning: { enabled: false } });
+      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash', 'strong')).to.deep.equal({ reasoning: { enabled: false } });
+      expect(reasoningPrefs('meta-llama/llama-4-scout', 'cheap')).to.deep.equal({});
+      expect(reasoningPrefs('anthropic/claude-sonnet-4.5', 'strong')).to.deep.equal({});
       process.env.OPENROUTER_REASONING_EFFORT = 'low';
-      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({ reasoning: { effort: 'low' } });
+      expect(reasoningPrefs('z-ai/glm-5.3-flash', 'cheap')).to.deep.equal({ reasoning: { effort: 'low' } });
       process.env.OPENROUTER_REASONING_EFFORT = '';
-      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash')).to.deep.equal({});
-      expect(reasoningPrefs('z-ai/glm-5.3-flash')).to.deep.equal({});
+      expect(reasoningPrefs('z-ai/glm-5.3-flash', 'cheap')).to.deep.equal({});
+      expect(reasoningPrefs('deepseek/deepseek-v4.1-flash', 'strong')).to.deep.equal({});
     } finally {
       if (saved === undefined) delete process.env.OPENROUTER_REASONING_EFFORT;
       else process.env.OPENROUTER_REASONING_EFFORT = saved;

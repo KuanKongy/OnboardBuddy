@@ -310,7 +310,7 @@ export class AiClient {
     const runId = await startRun(identity);
     const startedAt = Date.now();
     try {
-      const base = { model, messages, maxOutputTokens: req.maxOutputTokens, temperature: req.temperature };
+      const base = { model, messages, maxOutputTokens: req.maxOutputTokens, temperature: req.temperature, tier: req.tier };
       let content: string;
       let value: T | null = null;
       let usage: TokenUsage;

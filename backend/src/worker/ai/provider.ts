@@ -16,6 +16,8 @@ export interface CompletionRequest {
   messages: ChatMessage[];
   maxOutputTokens?: number;
   temperature?: number;
+  /** Drives per-tier reasoning config; absent = treated as cheap. */
+  tier?: 'cheap' | 'strong';
 }
 
 export interface TokenUsage {

@@ -21,17 +21,17 @@ export interface TierConfig {
  *     EMBEDDINGS_MODEL in backend/.env — any OpenRouter model id works.
  *  2. Per project: project_settings.model_tier_overrides, e.g.
  *     {"strong": ["anthropic/claude-sonnet-4.5"]} (PUT /projects/:id/settings).
- * Cheap defaults to GLM-5.3 Flash (1M context, 131,072 max output, $0.029/M
- * in, $0.092/M out); strong to DeepSeek V4.1 Flash (1M context, $0.045/M in,
- * $0.50/M out). Batch sizes in engine/budgets.ts were tuned to 65,536-output
- * models; both current caps are larger, so the batches stay valid — keep
- * them small, they are output-bound.
+ * Both tiers default to GLM-5.3 Flash (1M context, 131,072 max output,
+ * $0.029/M in, $0.092/M out): cheap runs it with thinking off (gemini-era
+ * baseline), strong keeps its native thinking (see reasoningPrefs). Batch
+ * sizes in engine/budgets.ts were tuned to 65,536-output models; the cap is
+ * larger, so the batches stay valid — keep them small, they are output-bound.
  */
 export function defaultTierModels(): Record<ModelTier, string[]> {
   return {
     // Legacy OPENROUTER_MODEL keeps working as the cheap-tier default.
     cheap: [process.env.OPENROUTER_MODEL_CHEAP ?? process.env.OPENROUTER_MODEL ?? 'z-ai/glm-5.3-flash'],
-    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'deepseek/deepseek-v4.1-flash'],
+    strong: [process.env.OPENROUTER_MODEL_STRONG ?? 'z-ai/glm-5.3-flash'],
     embedding: [process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'],
   };
 }
@@ -117,7 +117,7 @@ const MODEL_PRICES_PER_MTOK: Record<string, { input: number; output: number }> =
 
 const TIER_PRICES_PER_MTOK: Record<ModelTier, { input: number; output: number }> = {
   cheap: { input: 0.029, output: 0.092 },
-  strong: { input: 0.045, output: 0.5 },
+  strong: { input: 0.029, output: 0.092 },
   embedding: { input: 0.02, output: 0 },
 };
 
