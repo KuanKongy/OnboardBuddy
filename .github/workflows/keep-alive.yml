@@ -19,31 +19,8 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      # Keeps the Railway API warm and fails loudly if it is down. VITE_API_URL
-      # already carries the /api suffix (https://<host>.up.railway.app/api).
-      - name: Ping API health
-        env:
-          API_URL: ${{ secrets.VITE_API_URL }}
-        run: |
-          set -euo pipefail
-          if [ -z "${API_URL}" ]; then
-            echo "::error::VITE_API_URL secret is empty — nothing to ping."
-            exit 1
-          fi
-          url="${API_URL%/}/health"
-          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
-            --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
-            "$url")
-          echo "GET $url -> $code"
-          cat /tmp/health.json || true
-          echo
-          if [ "$code" != "200" ]; then
-            echo "::error::API health check returned $code."
-            exit 1
-          fi
-
-      # /api/health answers from memory and never opens a DB connection, so it
-      # cannot hold off the free-tier pause on its own. This select does: an
+      # This is the step that holds off the free-tier pause, so it runs first:
+      # /api/health answers from memory and never opens a DB connection, but an
       # anon-key read of one row is real query traffic against Postgres. RLS
       # keeps the response empty (200 with []), which is the expected result.
       - name: Touch Supabase Postgres
@@ -58,6 +35,12 @@ jobs:
             echo "::error::VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY secrets are empty."
             exit 1
           fi
+          # The secrets share names with frontend/.env, which holds dev values.
+          case "${SUPABASE_URL}" in
+            *localhost*|*127.0.0.1*|*mdexrahwgznmhdicgtql*)
+              echo "::error::VITE_SUPABASE_URL secret holds the dev value — set it to the prod project URL."
+              exit 1 ;;
+          esac
           url="${SUPABASE_URL%/}/rest/v1/${TABLE}?select=id&limit=1"
           code=$(curl -sS -o /tmp/db.json -w '%{http_code}' \
             --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
@@ -71,3 +54,34 @@ jobs:
             404) echo "::error::Table ${TABLE} is not exposed over PostgREST ($code)."; exit 1 ;;
             *) echo "::error::Unexpected status $code from Supabase."; cat /tmp/db.json || true; exit 1 ;;
           esac
+
+      # Keeps the Railway API warm and fails loudly if it is down. VITE_API_URL
+      # already carries the /api suffix (https://<host>.up.railway.app/api).
+      # Runs even when the Supabase step failed, so one outage never hides the
+      # other service's state.
+      - name: Ping API health
+        if: ${{ !cancelled() }}
+        env:
+          API_URL: ${{ secrets.VITE_API_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${API_URL}" ]; then
+            echo "::error::VITE_API_URL secret is empty — nothing to ping."
+            exit 1
+          fi
+          case "${API_URL}" in
+            *localhost*|*127.0.0.1*)
+              echo "::error::VITE_API_URL secret holds the dev value — set it to the Railway URL."
+              exit 1 ;;
+          esac
+          url="${API_URL%/}/health"
+          code=$(curl -sS -o /tmp/health.json -w '%{http_code}' \
+            --retry 5 --retry-delay 10 --retry-all-errors --max-time 30 \
+            "$url")
+          echo "GET $url -> $code"
+          cat /tmp/health.json || true
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::API health check returned $code."
+            exit 1
+          fi
